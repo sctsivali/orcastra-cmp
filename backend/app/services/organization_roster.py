@@ -14,7 +14,7 @@ change is not sent there for a partner, and the next sync would quietly undo it.
 from typing import Dict, List
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db_models import Organization, OrganizationMember
@@ -62,7 +62,7 @@ async def synced_partner_orgs(db: AsyncSession, member_email: str, org_ids: List
         select(Organization.id, Organization.slug)
         .join(OrganizationMember, OrganizationMember.organization_id == Organization.id)
         .where(
-            OrganizationMember.user_email == member_email,
+            func.lower(OrganizationMember.user_email) == (member_email or "").strip().lower(),
             OrganizationMember.organization_id.in_(sorted(set(org_ids))),
             OrganizationMember.role.in_(RUNNING_ROLES),
             Organization.source == "orcahub",

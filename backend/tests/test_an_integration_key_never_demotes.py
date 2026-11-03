@@ -235,8 +235,13 @@ async def test_admin_removal_route_reports_unconfirmed_authentik_revoke(
         async def remove_user_from_all_roles(self, _email: str) -> bool:
             return False
 
+    class Deleted:
+        @staticmethod
+        def all() -> list:
+            return [(1,)]
+
     class FakeDb:
-        execute = AsyncMock()
+        execute = AsyncMock(return_value=Deleted())
         commit = AsyncMock()
 
     monkeypatch.setattr(user_groups, "resolve_roles", lambda _user: [Role.ADMIN])

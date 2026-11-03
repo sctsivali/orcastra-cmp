@@ -155,24 +155,37 @@ async def push_members_to_orcahub(
 async def push_member_removal_to_orcahub(
     db: AsyncSession,
     user_email: str,
+    org_ids: List[int],
 ) -> bool:
     """
-    Push removal of a user from ALL orgs to OrcaHub.
-    Finds all OrcaHub-synced orgs this user was in and sends remove action.
+    Tell OrcaHub a user left the given organizations, for those OrcaHub syncs with a key.
+
+    important: only the organizations the removal actually left. This once sent "remove" to every
+    keyed OrcaHub organization, so a partner clearing a tenant from its own organization also
+    dropped that person from another partner's organization on the next sync.
+
+    note: the callback carries no organization id, so OrcaHub reads the key; two removed
+    organizations on one key get one call.
     """
-    # find all orcahub-sourced orgs
+    if not org_ids:
+        return True
     result = await db.execute(
         select(Organization).where(
             and_(
+                Organization.id.in_(sorted(set(org_ids))),
                 Organization.source == "orcahub",
                 Organization.api_key_id.isnot(None),
             )
-        )
+        ).order_by(Organization.id)
     )
     orgs = result.scalars().all()
 
     success = True
+    pushed_keys: set = set()
     for org in orgs:
+        if org.api_key_id in pushed_keys:
+            continue
+        pushed_keys.add(org.api_key_id)
         result = await push_members_to_orcahub(
             db,
             org.id,

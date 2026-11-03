@@ -5,8 +5,9 @@ requests are being verified with keys the backend could not refresh. Degraded wh
 API (role and group sync) fails. The browser reaches the IdP on its own path, which the backend
 cannot see; a sign-in can still fail while this reads healthy, never the reverse.
 
-important: never `authentik_sync.get_sync_status()` here. It creates missing role groups (a POST)
-on its way to answering, and this runs every 30 seconds.
+important: never `authentik_sync.get_sync_status()` here. It runs three group searches per call
+(it once also created missing role groups), and this runs every 30 seconds; the token probe below
+answers the same question with one cached read.
 """
 
 from __future__ import annotations

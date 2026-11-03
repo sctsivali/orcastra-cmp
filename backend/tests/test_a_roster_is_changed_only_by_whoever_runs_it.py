@@ -82,7 +82,7 @@ def fenced(monkeypatch: pytest.MonkeyPatch) -> List[int]:
 def pushes(monkeypatch: pytest.MonkeyPatch) -> List[str]:
     sent: List[str] = []
 
-    async def _push(_db: Any, email: str) -> bool:
+    async def _push(_db: Any, email: str, _org_ids: List[int]) -> bool:
         sent.append(email)
         return True
 
@@ -199,7 +199,7 @@ async def test_a_removal_that_only_meets_orcahub_partner_rows_is_refused(pushes:
 
 
 async def test_a_removal_that_reaches_no_org_the_caller_runs_says_so(pushes: List[str]) -> None:
-    """The list shows a partner every org it belongs to, a tenant row included."""
+    """A name typed by hand that the caller runs no organization for: the list never shows it."""
     db = await _db()
     with pytest.raises(HTTPException) as caught:
         await user_groups.remove_user_from_all(RUNNER, user=_user(BUYER), db=db)

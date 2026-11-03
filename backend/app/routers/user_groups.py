@@ -11,8 +11,8 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
+from pydantic import BaseModel, EmailStr, Field, field_validator
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -20,7 +20,7 @@ from app.core.dependencies import AuthenticatedUser, require_partner
 from app.core.rbac import Role, resolve_roles, get_highest_role
 from app.models.db_models import OrganizationMember, Organization
 from app.services.authentik_sync import get_authentik_sync
-from app.services.cluster_parties import RUNNING_ROLES
+from app.services.cluster_parties import RUNNING_ROLES, run_orgs
 from app.services.organization_roster import synced_partner_orgs, synced_partner_refusal
 
 router = APIRouter(
@@ -36,14 +36,33 @@ router = APIRouter(
 
 class UserGroupEntry(BaseModel):
     user_email: str
-    role: str  # admin | partner | tenant
-    organizations: list[dict] = []  # [{id, name, slug}]
+    role: str  # admin | partner | tenant, the highest across organizations
+    organizations: list[dict] = []  # [{id, name, slug, role}]
+
+
+# The legacy "member" row reads as tenant everywhere else (org_scope, the cluster parties).
+_ROLE_PRIORITY = {"admin": 2, "partner": 1, "tenant": 0}
+
+
+def _display_role(role: str) -> str:
+    return "tenant" if role == "member" else role
+
+
+def _normalized_email(email: str) -> str:
+    """Authentik matches an email case-insensitively, so one person is one lowercase string here."""
+    return (email or "").strip().lower()
 
 
 class AssignRoleRequest(BaseModel):
     user_email: EmailStr = Field(..., max_length=255)
     role: str = Field(..., pattern="^(admin|partner|tenant)$")
     organization_id: Optional[int] = None  # required for partner/tenant
+
+    @field_validator("user_email", mode="before")
+    @classmethod
+    def _strip(cls, value: object) -> object:
+        # A pasted address often carries a space either side; EmailStr refuses it rather than trims.
+        return value.strip() if isinstance(value, str) else value
 
 
 class AssignRoleResponse(BaseModel):
@@ -85,52 +104,39 @@ async def list_user_groups(
             Organization.slug,
         )
         .join(Organization, Organization.id == OrganizationMember.organization_id)
-        .order_by(OrganizationMember.user_email)
+        .order_by(func.lower(OrganizationMember.user_email), Organization.name)
     )
 
-    # partner: restrict to orgs they created or belong to
+    # important: a partner sees the rosters of the organizations it runs, the same set assign and
+    # remove act on. Any membership used to count, so a partner who only bought from another
+    # partner read that seller's whole customer list.
     if highest != Role.ADMIN:
-        from sqlalchemy import or_ as sa_or
-        partner_org_ids = (
-            select(Organization.id).where(
-                Organization.is_active == True,
-                sa_or(
-                    Organization.created_by == user.email,
-                    Organization.id.in_(
-                        select(OrganizationMember.organization_id)
-                        .where(OrganizationMember.user_email == user.email)
-                    ),
-                ),
-            )
-        )
-        base_query = base_query.where(
-            OrganizationMember.organization_id.in_(partner_org_ids)
-        )
+        caller_orgs = sorted(await run_orgs(db, user.email))
+        if not caller_orgs:
+            return []
+        base_query = base_query.where(OrganizationMember.organization_id.in_(caller_orgs))
 
     result = await db.execute(base_query)
 
     rows = result.fetchall()
 
-    # aggregate by user
+    # aggregate by user; a row typed before emails were lowercased still lands on its person
     user_map: dict[str, UserGroupEntry] = {}
     for email, role, org_id, org_name, org_slug in rows:
-        if email not in user_map:
-            # normalize legacy "member" role to "tenant"
-            display_role = role if role != "member" else "tenant"
-            user_map[email] = UserGroupEntry(
-                user_email=email,
-                role=display_role,
-                organizations=[],
-            )
-        # track highest role ("member" is legacy fallback → treat as tenant)
-        role_priority = {"admin": 2, "partner": 1, "tenant": 0, "member": 0}
-        if role_priority.get(role, 0) > role_priority.get(user_map[email].role, 0):
-            user_map[email].role = role if role != "member" else "tenant"
-
-        user_map[email].organizations.append({
+        key = _normalized_email(email)
+        org_role = _display_role(role)
+        entry = user_map.get(key)
+        if entry is None:
+            entry = user_map[key] = UserGroupEntry(user_email=key, role=org_role, organizations=[])
+        elif _ROLE_PRIORITY.get(org_role, 0) > _ROLE_PRIORITY.get(entry.role, 0):
+            entry.role = org_role
+        if any(org["id"] == org_id for org in entry.organizations):
+            continue
+        entry.organizations.append({
             "id": org_id,
             "name": org_name,
             "slug": org_slug,
+            "role": org_role,
         })
 
     return list(user_map.values())
@@ -149,6 +155,7 @@ async def assign_user_role(
     """
     roles = resolve_roles(user)
     highest = get_highest_role(roles)
+    target_email = _normalized_email(body.user_email)
 
     # partner restrictions
     if highest != Role.ADMIN:
@@ -193,7 +200,7 @@ async def assign_user_role(
         # only move someone who is not already an admin or another partner. An unknown answer
         # is refused rather than assumed empty, so an Authentik outage cannot be used as the
         # opening.
-        current_groups = await get_authentik_sync().get_user_role_groups(body.user_email)
+        current_groups = await get_authentik_sync().get_user_role_groups(target_email)
         if current_groups is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -227,17 +234,17 @@ async def assign_user_role(
         existing = await db.execute(
             select(OrganizationMember).where(
                 OrganizationMember.organization_id == body.organization_id,
-                OrganizationMember.user_email == body.user_email,
+                func.lower(OrganizationMember.user_email) == target_email,
             )
         )
-        member = existing.scalar_one_or_none()
+        member = existing.scalars().first()
         member_role = body.role
         if member:
             member.role = member_role
         else:
             db.add(OrganizationMember(
                 organization_id=body.organization_id,
-                user_email=body.user_email,
+                user_email=target_email,
                 role=member_role,
                 invited_by=user.email,
             ))
@@ -245,7 +252,7 @@ async def assign_user_role(
 
     # push to Authentik
     sync_svc = get_authentik_sync()
-    synced = await sync_svc.sync_user_role(body.user_email, body.role)
+    synced = await sync_svc.sync_user_role(target_email, body.role)
 
     # push to OrcaHub (non-blocking, best-effort)
     if body.organization_id:
@@ -254,13 +261,13 @@ async def assign_user_role(
             await push_members_to_orcahub(
                 db,
                 body.organization_id,
-                [{"email": body.user_email, "role": body.role, "action": "upsert"}],
+                [{"email": target_email, "role": body.role, "action": "upsert"}],
             )
         except Exception as e:
             logger.warning(f"OrcaHub push failed (non-blocking): {e}")
 
     return AssignRoleResponse(
-        user_email=body.user_email,
+        user_email=target_email,
         role=body.role,
         organization_id=body.organization_id,
         authentik_synced=synced,
@@ -279,6 +286,8 @@ async def remove_user_from_all(
     """
     roles = resolve_roles(user)
     highest = get_highest_role(roles)
+    user_email = _normalized_email(user_email)
+    same_person = func.lower(OrganizationMember.user_email) == user_email
 
     from sqlalchemy import delete
 
@@ -287,46 +296,30 @@ async def remove_user_from_all(
         # admin: remove from all orgs
         removed = await db.execute(
             delete(OrganizationMember)
-            .where(OrganizationMember.user_email == user_email)
+            .where(same_person)
             .returning(OrganizationMember.organization_id)
         )
     else:
-        # partner: only remove from orgs they own/belong to
-        from sqlalchemy import or_ as sa_or
-        partner_org_ids = (
-            select(Organization.id).where(
-                Organization.is_active == True,
-                sa_or(
-                    Organization.created_by == user.email,
-                    Organization.id.in_(
-                        select(OrganizationMember.organization_id)
-                        .where(
-                            OrganizationMember.user_email == user.email,
-                            OrganizationMember.role.in_(RUNNING_ROLES),
-                        )
-                    ),
-                ),
-            )
-        )
+        # partner: only the organizations it runs (created, or a partner row there)
         # important: OrcaHub owns the roster of an organization it synced and lets only a platform
         # admin remove a partner there, so the next sync would quietly bring such a row back. Those
         # rows are kept and named, and the rest of the caller's organizations are still cleared.
-        caller_orgs = set((await db.execute(partner_org_ids)).scalars().all())
+        caller_orgs = set(await run_orgs(db, user.email))
         kept = await synced_partner_orgs(db, user_email, sorted(caller_orgs))
         removed = await db.execute(
             delete(OrganizationMember)
             .where(
-                OrganizationMember.user_email == user_email,
+                same_person,
                 OrganizationMember.organization_id.in_(sorted(caller_orgs - set(kept))),
             )
             .returning(OrganizationMember.organization_id)
         )
-    removed_rows = removed.all()
-    if kept and not removed_rows:
+    removed_org_ids = sorted({row[0] for row in removed.all()})
+    if kept and not removed_org_ids:
         raise HTTPException(status_code=409, detail=synced_partner_refusal(user_email, list(kept.values())))
-    # note: the list shows a partner every org the user belongs to, a tenant row included, while a
-    # removal reaches only the orgs the caller runs. Say so rather than answer success for nothing.
-    if highest != Role.ADMIN and not removed_rows:
+    # note: a removal reaches only the orgs the caller runs, which is also all its list shows; a
+    # name typed by hand that matches none of them says so rather than answering success.
+    if highest != Role.ADMIN and not removed_org_ids:
         raise HTTPException(
             status_code=404, detail=f"{user_email} is not a member of any organization you run"
         )
@@ -341,10 +334,10 @@ async def remove_user_from_all(
                 detail="Authentik role removal was not confirmed; retry this operation",
             )
 
-    # push removal to OrcaHub (non-blocking, best-effort)
+    # push removal to OrcaHub for the organizations just left (non-blocking, best-effort)
     try:
         from app.services.orcahub_sync import push_member_removal_to_orcahub
-        await push_member_removal_to_orcahub(db, user_email)
+        await push_member_removal_to_orcahub(db, user_email, removed_org_ids)
     except Exception as e:
         logger.warning(f"OrcaHub removal push failed (non-blocking): {e}")
 
@@ -372,7 +365,7 @@ async def get_sync_status(
     if not enabled:
         details = "Not configured. Set AUTHENTIK_API_URL and AUTHENTIK_API_TOKEN to enable sync"
     elif not connected:
-        details = f"Configured but unreachable: {error}" if error else "Configured but unreachable"
+        details = f"Configured but unreachable ({error})" if error else "Configured but unreachable"
     else:
         details = f"{len(groups)} role group(s) ready"
 

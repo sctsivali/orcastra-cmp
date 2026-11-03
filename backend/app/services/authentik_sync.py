@@ -277,21 +277,37 @@ class AuthentikSyncService:
             return ok
 
     async def get_sync_status(self) -> dict:
-        """Check Authentik API connectivity and group status."""
+        """Whether role sync can reach Authentik, and which role groups exist. Read-only.
+
+        important: never _ensure_role_groups_exist here. It creates missing groups, role_admin as a
+        superuser, and the User Groups screen polls this every 30 seconds as a partner. The write
+        paths create groups when they first need one. `error` is a short reason, never the raw
+        exception, because the answer reaches partners.
+        """
         if not self.enabled:
             return {"enabled": False, "connected": False, "groups": {}}
 
+        groups: dict[str, str] = {}
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                group_map = await self._ensure_role_groups_exist(client)
-                return {
-                    "enabled": True,
-                    "connected": True,
-                    "groups": group_map,
-                }
-        except Exception as e:
-            logger.error(f"Authentik sync status check failed: {e}")
-            return {"enabled": True, "connected": False, "error": str(e)}
+                for group_name in ROLE_GROUPS:
+                    resp = await client.get(
+                        f"{self.api_url}/core/groups/",
+                        params={"search": group_name},
+                        headers=self._headers(),
+                    )
+                    if resp.status_code in (401, 403):
+                        return {"enabled": True, "connected": False, "error": "token refused"}
+                    if resp.status_code != 200:
+                        return {"enabled": True, "connected": False, "error": f"HTTP {resp.status_code}"}
+                    results = resp.json().get("results", [])
+                    match = next((g for g in results if g.get("name") == group_name), None)
+                    if match:
+                        groups[group_name] = match["pk"]
+        except Exception as e:  # noqa: BLE001 - reported as unreachable, logged in full here only
+            logger.error("Authentik sync status check failed: %s", e)
+            return {"enabled": True, "connected": False, "error": "no answer"}
+        return {"enabled": True, "connected": True, "groups": groups}
 
 
 # singleton

@@ -352,7 +352,7 @@ def idp(monkeypatch):
         "keys_held": True, "key_count": 1, "age_seconds": 60, "serving_stale": state["stale"],
         "max_stale_seconds": 86400})
     monkeypatch.setattr("app.services.authentik_sync.AuthentikSyncService.get_sync_status",
-                        lambda *a, **k: pytest.fail("the probe must never call get_sync_status (it POSTs)"),
+                        lambda *a, **k: pytest.fail("the probe must never call get_sync_status (three searches per tick)"),
                         raising=False)
     yield SimpleNamespace(state=state, calls=calls)
     identity.reset()
