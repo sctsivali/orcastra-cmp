@@ -170,14 +170,52 @@ async def test_an_admin_lists_every_membership_with_each_orgs_role() -> None:
 
 # ── one person, one email, whatever the case ──────────────────────────────────────────────────
 
-async def test_an_assigned_email_is_stored_lowercase_and_matches_its_existing_row(authentik, orcahub) -> None:
+async def test_an_assigned_email_matches_its_existing_row_whatever_its_case(authentik, orcahub) -> None:
     db = await _db()
     request = user_groups.AssignRoleRequest(user_email="  Tenant@Example.COM ", role="tenant", organization_id=1)
     await user_groups.assign_user_role(request, user=_user(ADMIN, "role_admin"), db=db)
     rows = (await db.execute(select(OrganizationMember.user_email).where(
         OrganizationMember.organization_id == 1))).scalars().all()
     assert sorted(rows) == sorted([RUNNER, T, CO]), "no second row for the same person"
-    assert authentik.calls == [f"sync:{T}:tenant"]
+    assert authentik.calls == ["sync:Tenant@example.com:tenant"]
+
+
+async def test_a_new_address_keeps_the_case_it_was_typed_with(authentik, orcahub) -> None:
+    """The authorization paths compare the token's email exactly, so a row is stored as typed.
+
+    important: lowercasing it would lock out an account whose identity provider email has capitals.
+    """
+    db = await _db()
+    for spelled in ("New.Person@Example.com", "new.person@EXAMPLE.com"):
+        answer = await user_groups.assign_user_role(
+            user_groups.AssignRoleRequest(user_email=spelled, role="tenant", organization_id=1),
+            user=_user(ADMIN, "role_admin"), db=db)
+        assert answer.organization_id == 1
+    rows = (await db.execute(select(OrganizationMember.user_email).where(
+        OrganizationMember.organization_id == 1, OrganizationMember.user_email.ilike("new.person%")))).scalars().all()
+    assert rows == ["New.Person@example.com"]
+
+
+@pytest.mark.parametrize("blank", ["", " ", "%20", "no-at-sign", "a b@example.com"])
+async def test_a_removal_path_that_is_not_an_address_is_refused(authentik, orcahub, blank: str) -> None:
+    db = await _db()
+    with pytest.raises(HTTPException) as caught:
+        await user_groups.remove_user_from_all(blank, user=_user(ADMIN, "role_admin"), db=db)
+    assert caught.value.status_code == 422
+    assert authentik.calls == [] and orcahub == []
+
+
+async def test_a_key_the_person_still_holds_a_row_on_is_not_told_to_remove_them(authentik, orcahub) -> None:
+    """The callback names no organization, so OrcaHub reads the key. A key the person still sits
+    under, in an organization the removal did not reach, hears nothing."""
+    db = await _db()
+    db.add(Organization(id=6, name="Seller Other", slug="seller-other", source="orcahub", external_id="e6",
+                        api_key_id="oak_runner", created_by="system", is_active=True))
+    db.add(OrganizationMember(organization_id=6, user_email=T, role="tenant"))
+    await db.commit()
+    await user_groups.remove_user_from_all(T, user=_user(RUNNER), db=db)
+    assert await _orgs_of(db, T) == [4, 6]
+    assert orcahub == [], "oak_runner still carries the person in org 6"
 
 
 async def test_a_removal_matches_the_row_whatever_case_the_path_carries(authentik, orcahub) -> None:

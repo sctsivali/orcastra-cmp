@@ -67,37 +67,58 @@ def _is_count(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-async def _read(
-    client: httpx.AsyncClient, api_url: str, headers: Mapping[str, str], email: str
-) -> RoleReading:
-    wanted = email.strip().lower()
-    if not wanted:
-        return unknown_role("email_missing")
+@dataclass(frozen=True)
+class AccountLookup:
+    """The one account carrying an email (`pk`), or None with why: "user_not_found" is the only
+    answer that means no account carries it; every other reason means it could not be told."""
 
-    search = await client.get(f"{api_url}/core/users/", params={"search": email}, headers=dict(headers))
+    pk: Optional[int]
+    reason: str
+
+
+async def find_account(
+    client: httpx.AsyncClient, api_url: str, headers: Mapping[str, str], email: str
+) -> AccountLookup:
+    """Find the single account carrying `email`, strictly. Shared by the role read and the removal."""
+    wanted = (email or "").strip().lower()
+    if not wanted:
+        # note: an empty search lists every account, and one with no email would match it.
+        return AccountLookup(None, "email_missing")
+
+    search = await client.get(f"{api_url}/core/users/", params={"search": email.strip()}, headers=dict(headers))
     if search.status_code != 200:
-        return unknown_role("user_search_failed")
+        return AccountLookup(None, "user_search_failed")
     page = _json_object(search)
     results = page.get("results") if page else None
     if not isinstance(results, list) or not all(isinstance(user, dict) for user in results):
-        return unknown_role("user_search_unreadable")
+        return AccountLookup(None, "user_search_unreadable")
     pagination = page.get("pagination") if page else None
     count = pagination.get("count") if isinstance(pagination, dict) else None
     # important: a second account with this email on a page not returned would go unseen
     if not _is_count(count) or count != len(results):
-        return unknown_role("user_search_incomplete")
+        return AccountLookup(None, "user_search_incomplete")
 
     matches = [
         user for user in results
         if isinstance(user.get("email"), str) and user["email"].strip().lower() == wanted
     ]
     if not matches:
-        return unknown_role("user_not_found")
+        return AccountLookup(None, "user_not_found")
     if len(matches) > 1:
-        return unknown_role("email_ambiguous")
+        return AccountLookup(None, "email_ambiguous")
     pk = matches[0].get("pk")
     if not _is_count(pk):
-        return unknown_role("user_search_unreadable")
+        return AccountLookup(None, "user_search_unreadable")
+    return AccountLookup(pk, "found")
+
+
+async def _read(
+    client: httpx.AsyncClient, api_url: str, headers: Mapping[str, str], email: str
+) -> RoleReading:
+    account = await find_account(client, api_url, headers, email)
+    if account.pk is None:
+        return unknown_role(account.reason)
+    pk = account.pk
 
     detail = await client.get(f"{api_url}/core/users/{pk}/", headers=dict(headers))
     if detail.status_code != 200:

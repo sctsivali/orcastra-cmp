@@ -9,11 +9,11 @@ import logging
 from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
-from sqlalchemy import select, and_
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_key_expiry import classify_key
-from app.models.db_models import Organization
+from app.models.db_models import Organization, OrganizationMember
 from app.services.integration_callback_url import bound_callback_url
 
 logger = logging.getLogger(__name__)
@@ -180,8 +180,20 @@ async def push_member_removal_to_orcahub(
     )
     orgs = result.scalars().all()
 
+    # important: a key the person still sits under, in an organization this removal did not reach
+    # (another partner's, or a synced partner row it kept), hears nothing, since OrcaHub would read
+    # "remove" for the whole key.
+    still_held = set((await db.execute(
+        select(Organization.api_key_id)
+        .join(OrganizationMember, OrganizationMember.organization_id == Organization.id)
+        .where(
+            func.lower(OrganizationMember.user_email) == (user_email or "").strip().lower(),
+            Organization.api_key_id.in_([org.api_key_id for org in orgs]),
+        )
+    )).scalars().all())
+
     success = True
-    pushed_keys: set = set()
+    pushed_keys: set = set(still_held)
     for org in orgs:
         if org.api_key_id in pushed_keys:
             continue

@@ -121,7 +121,8 @@ class _Recorder:
                 return httpx.Response(200, json={"results": [{"name": name, "pk": f"pk-{name}"}]})
             if path.endswith("/core/users/"):
                 email = request.url.params.get("search", "")
-                return httpx.Response(200, json={"results": [{"email": email, "pk": 42}]})
+                # the shape Authentik's pagination class answers, count included
+                return httpx.Response(200, json={"pagination": {"count": 1}, "results": [{"email": email, "pk": 42}]})
             if path.endswith("/core/users/42/"):
                 return httpx.Response(200, json={"groups_obj": [{"name": g} for g in sorted(self.held)]})
             if request.method == "POST" and "/core/groups/pk-" in path:

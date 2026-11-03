@@ -83,10 +83,12 @@ async def test_the_status_route_names_no_raw_exception(monkeypatch: pytest.Monke
 # the dialog reported a failure for a removal that had happened.
 
 
-def _directory(users_status: int, users: List[dict]):
+def _directory(users_status: int, users: List[dict], count: int = -1):
+    total = len(users) if count < 0 else count
+
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/core/users/"):
-            return httpx.Response(users_status, json={"results": users})
+            return httpx.Response(users_status, json={"pagination": {"count": total}, "results": users})
         if request.url.path.endswith("/core/groups/") and request.method == "GET":
             name = request.url.params.get("search")
             return httpx.Response(200, json={"results": [{"pk": f"pk-{name}", "name": name}]})
@@ -104,3 +106,26 @@ async def test_a_failed_account_search_is_still_not_confirmed(monkeypatch: pytes
     seen = _authentik_http(monkeypatch, _directory(503, []))
     assert await _service().remove_user_from_all_roles("someone@example.com") is False
     assert "POST" not in seen
+
+
+async def test_a_search_page_that_does_not_hold_every_match_is_not_confirmed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Authentik's search matches substrings, so near-matches can push the account to a later page."""
+    near = [{"email": f"admin{i}@example.com", "pk": i} for i in range(20)]
+    seen = _authentik_http(monkeypatch, _directory(200, near, count=21))
+    assert await _service().remove_user_from_all_roles("admin@example.com") is False
+    assert "POST" not in seen
+
+
+async def test_two_accounts_with_one_email_are_not_confirmed(monkeypatch: pytest.MonkeyPatch) -> None:
+    twins = [{"email": "Admin@Example.com", "pk": 1}, {"email": " admin@example.com", "pk": 2}]
+    seen = _authentik_http(monkeypatch, _directory(200, twins))
+    assert await _service().remove_user_from_all_roles("admin@example.com") is False
+    assert "POST" not in seen, "stripping one twin and answering done would leave the other its roles"
+
+
+@pytest.mark.parametrize("blank", ["", " ", "\t"])
+async def test_a_blank_email_matches_no_account(monkeypatch: pytest.MonkeyPatch, blank: str) -> None:
+    """An empty search lists every account, and a service account with no email would have matched it."""
+    seen = _authentik_http(monkeypatch, _directory(200, [{"email": None, "pk": 3}, {"email": "", "pk": 4}]))
+    assert await _service().remove_user_from_all_roles(blank) is False
+    assert seen.count("GET") <= 3 and "POST" not in seen

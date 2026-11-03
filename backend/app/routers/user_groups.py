@@ -48,9 +48,18 @@ def _display_role(role: str) -> str:
     return "tenant" if role == "member" else role
 
 
-def _normalized_email(email: str) -> str:
-    """Authentik matches an email case-insensitively, so one person is one lowercase string here."""
+def _match_key(email: str) -> str:
+    """How two spellings of one address compare. Authentik matches an email case-insensitively.
+
+    important: for comparing only. A row keeps the address as typed, because the authorization
+    paths compare a token's email exactly, and a lowercased row would lock out an account whose
+    identity provider email has capitals.
+    """
     return (email or "").strip().lower()
+
+
+def _plausible_address(email: str) -> bool:
+    return 0 < len(email) <= 255 and "@" in email and not any(c.isspace() for c in email)
 
 
 class AssignRoleRequest(BaseModel):
@@ -123,11 +132,11 @@ async def list_user_groups(
     # aggregate by user; a row typed before emails were lowercased still lands on its person
     user_map: dict[str, UserGroupEntry] = {}
     for email, role, org_id, org_name, org_slug in rows:
-        key = _normalized_email(email)
+        key = _match_key(email)
         org_role = _display_role(role)
         entry = user_map.get(key)
         if entry is None:
-            entry = user_map[key] = UserGroupEntry(user_email=key, role=org_role, organizations=[])
+            entry = user_map[key] = UserGroupEntry(user_email=email, role=org_role, organizations=[])
         elif _ROLE_PRIORITY.get(org_role, 0) > _ROLE_PRIORITY.get(entry.role, 0):
             entry.role = org_role
         if any(org["id"] == org_id for org in entry.organizations):
@@ -155,7 +164,8 @@ async def assign_user_role(
     """
     roles = resolve_roles(user)
     highest = get_highest_role(roles)
-    target_email = _normalized_email(body.user_email)
+    # As typed (the validator trimmed it, EmailStr lowercased the domain); compared case-insensitively.
+    target_email = body.user_email
 
     # partner restrictions
     if highest != Role.ADMIN:
@@ -234,7 +244,7 @@ async def assign_user_role(
         existing = await db.execute(
             select(OrganizationMember).where(
                 OrganizationMember.organization_id == body.organization_id,
-                func.lower(OrganizationMember.user_email) == target_email,
+                func.lower(OrganizationMember.user_email) == _match_key(target_email),
             )
         )
         member = existing.scalars().first()
@@ -286,8 +296,12 @@ async def remove_user_from_all(
     """
     roles = resolve_roles(user)
     highest = get_highest_role(roles)
-    user_email = _normalized_email(user_email)
-    same_person = func.lower(OrganizationMember.user_email) == user_email
+    user_email = (user_email or "").strip()
+    # important: refused at the boundary. A blank path once reached the identity provider as an
+    # empty search, which lists every account.
+    if not _plausible_address(user_email):
+        raise HTTPException(status_code=422, detail="Give the email address of the user to remove")
+    same_person = func.lower(OrganizationMember.user_email) == _match_key(user_email)
 
     from sqlalchemy import delete
 
