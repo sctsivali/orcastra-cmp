@@ -117,8 +117,10 @@ export function NavigationProgressProvider({ children }: { children: React.React
       if (!raw || raw.startsWith("#")) return;
       const url = new URL(anchor.href, window.location.href);
       if (url.origin !== window.location.origin) return;
-      // Same destination means no commit, so nothing would ever clear the bar.
-      if (url.pathname === window.location.pathname && url.search === window.location.search) {
+      // Only a pathname change clears the bar, so a link that stays on this path (the same
+      // destination, or a section switch that rewrites the query in place) would hold it up until
+      // the watchdog.
+      if (url.pathname === window.location.pathname) {
         return;
       }
       setLinkPending(true);
