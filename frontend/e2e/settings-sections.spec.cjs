@@ -26,6 +26,11 @@ for (const role of ["admin", "partner"]) {
 
     const nav = "Integrations sections";
     await expect(sectionLink(page, nav, "Desktop Control")).toHaveAttribute("aria-current", "true");
+    // Every section is on screen at every width: a horizontal scroller once hid the third one
+    // entirely on a phone, which is the discoverability this switcher exists for.
+    for (const label of ["API Keys", "Synced Organizations", "Desktop Control"]) {
+      await expect(sectionLink(page, nav, label)).toBeInViewport({ ratio: 1 });
+    }
     await expect(page.getByRole("heading", { name: "Desktop Control", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Create API Key" })).toHaveCount(0);
     // one tabpanel, the Settings one: the sections are links, not a nested tablist

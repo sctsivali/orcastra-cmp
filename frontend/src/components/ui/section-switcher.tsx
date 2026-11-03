@@ -22,6 +22,10 @@ export interface SectionSwitcherItem<S extends string> {
  * (?section=), opens in a new tab on a modifier click and is walked by Back, which is navigation;
  * and a nested role="tab" set inside the Settings tabpanel is what the harness counts as a tab.
  * Underlined rather than pilled, so it reads as a level below the Settings tabs above it.
+ *
+ * important: the links wrap rather than scroll. A horizontal scroller hid the third section
+ * entirely at 390px, with nothing on screen to say it existed, which is the problem the switcher
+ * exists to solve. The shared rule under the row starts at sm, where one row holds every link.
  */
 export function SectionSwitcher<S extends string>({
   label,
@@ -41,8 +45,8 @@ export function SectionSwitcher<S extends string>({
   navRef?: React.Ref<HTMLElement>;
 }) {
   return (
-    <nav ref={navRef} aria-label={label} className={cn("max-w-full overflow-x-auto border-b scroll-mt-20", className)}>
-      <ul className="flex w-max items-end gap-1">
+    <nav ref={navRef} aria-label={label} className={cn("scroll-mt-20 sm:border-b", className)}>
+      <ul className="flex flex-wrap items-end gap-1">
         {items.map((item) => {
           const current = item.id === active;
           const Icon = item.icon;
