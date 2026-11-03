@@ -39,7 +39,7 @@ from app.services.interactive_relay import (
     OutputWindow,
     close_browser,
 )
-from app.services.lxd_ws import SessionSetupError, connection_material, open_lxd_socket, redact, session_io
+from app.services.lxd_ws import SessionSetupError, open_lxd_socket, redact, session_io, socket_material
 from app.services.migration_fence import MigrationFenceConflict, guard_instance_mutation
 from app.services.session_models import new_session_id
 from app.services.session_tracker import SessionProtocol, get_session_tracker
@@ -176,14 +176,14 @@ class ConsoleProxy:
 
         record = await store.wait_for(group)
         if record and record.get("data_url"):
-            base, ssl_context = await session_io(connection_material, self.host, label=f"console.material:{self.host}", host=self.host)
+            base, ssl_context, pin = await session_io(socket_material, self.host, label=f"console.material:{self.host}", host=self.host)
             if not self._is_own_display(record, base):
                 logger.warning("A SPICE record for %s named another display; this channel opens its own", self._label)
                 await self._run_own_operation(started)
                 return
             self.role = "member"
             self._operation_id = str(record["operation_id"])
-            self.data_ws = await open_lxd_socket(record["data_url"], ssl_context, timeout=_CONNECT_TIMEOUT_SECONDS)
+            self.data_ws = await open_lxd_socket(record["data_url"], ssl_context, pin=pin, timeout=_CONNECT_TIMEOUT_SECONDS)
             self._log_ready(started)
             flush = asyncio.create_task(self._flush_member_bytes(store, group))
             try:
@@ -311,11 +311,11 @@ class ConsoleProxy:
             except Exception as exc:  # noqa: BLE001 - without it a takeover reads as a drop
                 logger.debug("SPICE display mark failed: %s", type(exc).__name__)
 
-        _, ssl_context = await session_io(connection_material, self.host, label=f"console.material:{self.host}", host=self.host)
+        _, ssl_context, pin = await session_io(socket_material, self.host, label=f"console.material:{self.host}", host=self.host)
         # note: control first. LXD ends a console operation whose control socket never arrives,
         # and a VGA data socket is what makes LXD dial QEMU's SPICE socket.
-        self.control_ws = await open_lxd_socket(info["control_url"], ssl_context, timeout=_CONNECT_TIMEOUT_SECONDS, max_size=1024 * 1024)
-        self.data_ws = await open_lxd_socket(info["ws_url"], ssl_context, timeout=_CONNECT_TIMEOUT_SECONDS)
+        self.control_ws = await open_lxd_socket(info["control_url"], ssl_context, pin=pin, timeout=_CONNECT_TIMEOUT_SECONDS, max_size=1024 * 1024)
+        self.data_ws = await open_lxd_socket(info["ws_url"], ssl_context, pin=pin, timeout=_CONNECT_TIMEOUT_SECONDS)
         if self._session:
             tracker.mark_connected(self._session.session_id)
         return info

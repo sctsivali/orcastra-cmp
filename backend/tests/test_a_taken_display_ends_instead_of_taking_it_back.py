@@ -55,7 +55,7 @@ class Cluster:
             "control_url": f"wss://cluster/1.0/operations/op-{n}/websocket?secret=control-{n}",
         }
 
-    async def open_socket(self, url: str, _ssl: Any, *, timeout: float, max_size: Any = None) -> FakeLxdSocket:
+    async def open_socket(self, url: str, _ssl: Any, *, pin: str, timeout: float, max_size: Any = None) -> FakeLxdSocket:
         self.events.append(f"socket {url.rsplit('secret=', 1)[-1]}")
         if self.refuse_data and "secret=data" in url:
             raise ConnectionError("LXD refused the data socket")
@@ -91,7 +91,7 @@ def cluster(monkeypatch):
     set_spice_session_store(store)
     monkeypatch.setattr(console_proxy, "guard_instance_mutation", admitted)
     monkeypatch.setattr(console_proxy, "session_io", run_inline)
-    monkeypatch.setattr(console_proxy, "connection_material", lambda host: ("wss://cluster", object()))
+    monkeypatch.setattr(console_proxy, "socket_material", lambda host: ("wss://cluster", object(), "pin"))
     monkeypatch.setattr(console_proxy, "open_lxd_socket", cluster.open_socket)
     monkeypatch.setattr(console_proxy, "get_console_service", lambda: Service())
     monkeypatch.setattr(console_proxy, "get_session_tracker", lambda: FakeTracker())

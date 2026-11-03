@@ -40,13 +40,13 @@ def lxd(monkeypatch):
             state["size"] = (width, height)
             return {"operation_id": "exec-1", "ws_url": "wss://c/data", "control_url": "wss://c/control"}
 
-    async def open_socket(url, _ssl, *, timeout, max_size=None):
+    async def open_socket(url, _ssl, *, pin, timeout, max_size=None):
         sockets[url] = FakeLxdSocket(url)
         return sockets[url]
 
     monkeypatch.setattr(terminal_proxy, "guard_instance_mutation", admitted)
     monkeypatch.setattr(terminal_proxy, "session_io", run_inline)
-    monkeypatch.setattr(terminal_proxy, "connection_material", lambda host: ("wss://c", object()))
+    monkeypatch.setattr(terminal_proxy, "socket_material", lambda host: ("wss://c", object(), "pin"))
     monkeypatch.setattr(terminal_proxy, "open_lxd_socket", open_socket)
     monkeypatch.setattr(terminal_proxy, "get_terminal_service", lambda: Service())
     monkeypatch.setattr(terminal_proxy, "get_session_tracker", lambda: tracker)

@@ -34,7 +34,7 @@ from app.services.interactive_relay import (
     plain_text,
     close_browser,
 )
-from app.services.lxd_ws import SessionSetupError, connection_material, open_lxd_socket, redact, session_io
+from app.services.lxd_ws import SessionSetupError, open_lxd_socket, redact, session_io, socket_material
 from app.services.migration_fence import MigrationFenceConflict, guard_instance_mutation
 from app.services.session_models import new_session_id
 from app.services.session_tracker import SessionProtocol, get_session_tracker
@@ -93,12 +93,12 @@ class TerminalProxy:
                 "instance": self.instance_name,
                 "host": self.host,
             })
-            _, ssl_context = await session_io(
-                connection_material, self.host, label=f"terminal.material:{self.host}", host=self.host,
+            _, ssl_context, pin = await session_io(
+                socket_material, self.host, label=f"terminal.material:{self.host}", host=self.host,
             )
             self.data_ws, self.control_ws = await asyncio.gather(
-                open_lxd_socket(info["ws_url"], ssl_context, timeout=_CONNECT_TIMEOUT_SECONDS),
-                open_lxd_socket(info["control_url"], ssl_context, timeout=_CONNECT_TIMEOUT_SECONDS, max_size=1024 * 1024),
+                open_lxd_socket(info["ws_url"], ssl_context, pin=pin, timeout=_CONNECT_TIMEOUT_SECONDS),
+                open_lxd_socket(info["control_url"], ssl_context, pin=pin, timeout=_CONNECT_TIMEOUT_SECONDS, max_size=1024 * 1024),
             )
             if self._session:
                 get_session_tracker().mark_connected(self._session.session_id)

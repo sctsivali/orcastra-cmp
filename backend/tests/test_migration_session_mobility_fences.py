@@ -512,7 +512,7 @@ async def test_interactive_session_releases_admission_before_websocket_lifetime(
     monkeypatch.setattr(module, "guard_instance_mutation", guarded)
     monkeypatch.setattr(module, "get_session_tracker", lambda: tracker)
     monkeypatch.setattr(module, "session_io", inline)
-    monkeypatch.setattr(module, "connection_material", material)
+    monkeypatch.setattr(module, "socket_material", material)
     if kind == "console":
         monkeypatch.setattr(console_proxy, "get_console_service", lambda: service)
         monkeypatch.setattr(console_proxy, "get_activity_logger", lambda: _Activity())

@@ -58,7 +58,7 @@ class Cluster:
         self.operations.append(info)
         return info
 
-    async def open_socket(self, url, _ssl, *, timeout, max_size=None):
+    async def open_socket(self, url, _ssl, *, pin, timeout, max_size=None):
         socket = FakeLxdSocket(url)
         self.sockets.setdefault(url, []).append(socket)
         return socket
@@ -89,7 +89,7 @@ def cluster(monkeypatch):
     activity = Activity()
     monkeypatch.setattr(console_proxy, "guard_instance_mutation", admitted)
     monkeypatch.setattr(console_proxy, "session_io", run_inline)
-    monkeypatch.setattr(console_proxy, "connection_material", lambda host: ("wss://cluster", object()))
+    monkeypatch.setattr(console_proxy, "socket_material", lambda host: ("wss://cluster", object(), "pin"))
     monkeypatch.setattr(console_proxy, "open_lxd_socket", cluster.open_socket)
     monkeypatch.setattr(console_proxy, "get_console_service", lambda: Service())
     monkeypatch.setattr(console_proxy, "get_session_tracker", lambda: tracker)

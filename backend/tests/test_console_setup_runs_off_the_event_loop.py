@@ -20,11 +20,11 @@ def _wire(module, monkeypatch, tracker):
     async def admitted(**_kwargs):
         yield
 
-    async def open_socket(url, _ssl, *, timeout, max_size=None):
+    async def open_socket(url, _ssl, *, pin, timeout, max_size=None):
         return FakeLxdSocket(url)
 
     monkeypatch.setattr(module, "guard_instance_mutation", admitted)
-    monkeypatch.setattr(module, "connection_material", lambda host: ("wss://c", object()))
+    monkeypatch.setattr(module, "socket_material", lambda host: ("wss://c", object(), "pin"))
     monkeypatch.setattr(module, "open_lxd_socket", open_socket)
     monkeypatch.setattr(module, "get_session_tracker", lambda: tracker)
 

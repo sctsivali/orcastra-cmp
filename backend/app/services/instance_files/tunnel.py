@@ -11,7 +11,6 @@ code 103 proceeds.
 """
 
 import asyncio
-import hashlib
 import logging
 import re
 import ssl
@@ -125,14 +124,10 @@ async def _require_supported_server(host: str) -> None:
 
 
 async def _material(host: str) -> Tuple[str, ssl.SSLContext, str]:
-    from app.services.lxd_ws import connection_material, connection_pin, session_io
-
-    def read() -> Tuple[str, ssl.SSLContext, str]:
-        base, context = connection_material(host)
-        return base, context, connection_pin(host)
+    from app.services.lxd_ws import session_io, socket_material
 
     try:
-        base, context, pin = await session_io(read, label="file_tunnel_material", host=host)
+        base, context, pin = await session_io(socket_material, host, label="file_tunnel_material", host=host)
     except BlockingPoolFull as exc:
         raise busy() from exc
     except (BlockingTimeout, ValueError) as exc:
@@ -145,9 +140,10 @@ async def _material(host: str) -> Tuple[str, ssl.SSLContext, str]:
 
 
 def _matches_pin(writer: asyncio.StreamWriter, pin: str) -> bool:
+    from app.services.lxd_ws import der_matches_pin
+
     ssl_object = writer.get_extra_info("ssl_object")
-    der = ssl_object.getpeercert(binary_form=True) if ssl_object is not None else None
-    return bool(der) and hashlib.sha256(der).hexdigest() == pin.replace(":", "").lower()
+    return der_matches_pin(ssl_object.getpeercert(binary_form=True) if ssl_object is not None else None, pin)
 
 
 async def _refused(reader: asyncio.StreamReader, head: bytes, code: int, record: Dict[str, Any]) -> GuestFileError:

@@ -36,13 +36,13 @@ def lxd(monkeypatch):
         def log_activity(self, **kwargs):
             pass
 
-    async def open_socket(url, _ssl, *, timeout, max_size=None):
+    async def open_socket(url, _ssl, *, pin, timeout, max_size=None):
         sockets[url] = FakeLxdSocket(url)
         return sockets[url]
 
     monkeypatch.setattr(console_proxy, "guard_instance_mutation", admitted)
     monkeypatch.setattr(console_proxy, "session_io", run_inline)
-    monkeypatch.setattr(console_proxy, "connection_material", lambda host: ("wss://c", object()))
+    monkeypatch.setattr(console_proxy, "socket_material", lambda host: ("wss://c", object(), "pin"))
     monkeypatch.setattr(console_proxy, "open_lxd_socket", open_socket)
     monkeypatch.setattr(console_proxy, "get_console_service", lambda: Service())
     monkeypatch.setattr(console_proxy, "get_session_tracker", lambda: FakeTracker())

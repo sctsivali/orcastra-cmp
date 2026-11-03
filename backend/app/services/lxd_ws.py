@@ -23,7 +23,9 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, Optional, Tuple, TypeVar
 
-import websockets
+from urllib.parse import urlparse
+
+from websockets.asyncio.client import ClientConnection, connect as ws_connect
 
 from pylxd.exceptions import NotFound
 
@@ -177,6 +179,40 @@ def connection_pin(host: str) -> str:
     return str(info.get("server_fingerprint") or "")
 
 
+def socket_material(host: str) -> Tuple[str, ssl.SSLContext, str]:
+    """``connection_material`` plus the pin its sockets are held to. Blocking."""
+    base, context = connection_material(host)
+    return base, context, connection_pin(host)
+
+
+def der_matches_pin(der: Optional[bytes], pin: str) -> bool:
+    """Whether a peer certificate (DER) is the one ``pin`` names (sha256 hex, colons optional)."""
+    return bool(der) and hashlib.sha256(der).hexdigest() == pin.replace(":", "").lower()
+
+
+CERTIFICATE_MISMATCH = "The cluster presented a certificate that does not match the one enrolled"
+
+
+def pinned_connection(pin: str, refused: Optional[list] = None) -> type:
+    """A websockets `create_connection` class that drops the transport unless the peer is `pin`."""
+    refused = refused if refused is not None else []
+
+    class PinnedConnection(ClientConnection):
+        # important: asyncio calls this once TLS is up and before websockets writes the upgrade
+        # request, which is the line that carries the operation secret. A stranger certificate is
+        # dropped here, so not one byte of that request reaches it. The REST adapter has always
+        # held the pin (FingerprintHTTPAdapter); these sockets were the gap.
+        def connection_made(self, transport: Any) -> None:
+            super().connection_made(transport)
+            ssl_object = transport.get_extra_info("ssl_object")
+            der = ssl_object.getpeercert(binary_form=True) if ssl_object is not None else None
+            if not der_matches_pin(der, pin):
+                refused.append(True)
+                transport.abort()
+
+    return PinnedConnection
+
+
 def ws_base(endpoint: str) -> str:
     """``https://h:p/`` as ``wss://h:p``: the prefix for ``/1.0/operations/<id>/websocket``."""
     return endpoint.replace("https://", "wss://", 1).replace("http://", "ws://", 1).rstrip("/")
@@ -204,31 +240,53 @@ async def open_lxd_socket(
     url: str,
     ssl_context: ssl.SSLContext,
     *,
+    pin: str,
     timeout: float,
     max_size: Optional[int] = 16 * 1024 * 1024,
 ) -> Any:
-    """One WebSocket to an LXD operation.
+    """One WebSocket to an LXD operation, held to the cluster's certificate pin.
+
+    With no pin held (Vault was down when this worker connected) the socket opens unpinned, the
+    rule the REST path follows in ``lxd/pin_enforcement.py``, so a console that works today keeps
+    working through an outage. In that state the REST response that handed out the operation
+    secret was unpinned too, so refusing here alone would protect nothing. The credentials exec,
+    whose stdin is a password, and the file explorer refuse an unpinned cluster before any REST
+    call instead.
 
     note: compression off. SPICE images and PTY bytes either arrive compressed or are tiny, and
     deflate on the event loop only added latency. LXD declines the offer anyway; not sending it
     saves the negotiation.
+
+    note: proxy=None. websockets follows HTTPS_PROXY by default, and a pin is only meaningful on
+    the direct TLS connection to the daemon.
     """
     import asyncio
 
-    return await asyncio.wait_for(
-        websockets.connect(
-            url,
-            ssl=ssl_context,
-            compression=None,
-            open_timeout=timeout,
-            close_timeout=2,
-            ping_interval=LXD_PING_INTERVAL_SECONDS,
-            ping_timeout=LXD_PING_TIMEOUT_SECONDS,
-            max_size=max_size,
-            max_queue=64,
-        ),
-        timeout=timeout + 1,
-    )
+    refused: list = []
+    if not pin:
+        logger.warning("Opening an unpinned LXD socket to %s: no certificate pin is held", urlparse(url).netloc)
+    try:
+        return await asyncio.wait_for(
+            ws_connect(
+                url,
+                ssl=ssl_context,
+                proxy=None,
+                compression=None,
+                open_timeout=timeout,
+                close_timeout=2,
+                ping_interval=LXD_PING_INTERVAL_SECONDS,
+                ping_timeout=LXD_PING_TIMEOUT_SECONDS,
+                max_size=max_size,
+                max_queue=64,
+                create_connection=pinned_connection(pin, refused) if pin else None,
+            ),
+            timeout=timeout + 1,
+        )
+    except Exception:
+        if refused:
+            logger.error("Refused an LXD socket to %s: certificate does not match the pin", urlparse(url).netloc)
+            raise SessionSetupError(CERTIFICATE_MISMATCH, retryable=False) from None
+        raise
 
 
 def operation_urls(base: str, operation: Dict[str, Any]) -> Tuple[str, str, str]:

@@ -33,7 +33,7 @@ urllib3>=2.0.0,<3.0.0  # running 2.8.0
 httpx>=0.27.0,<0.29.0  # running 0.28.1
 
 # WebSocket client (for LXD exec)
-websockets>=12.0,<18.0.0  # running 17.1
+websockets>=15.0,<18.0.0  # running 17.1; 15.0 added the proxy argument the LXD sockets pass
 
 # MCP server (Model Context Protocol), mounted as Streamable HTTP inside this app.
 # important: only the SERVER half is imported. The SDK's client half pulls a second HTTP stack

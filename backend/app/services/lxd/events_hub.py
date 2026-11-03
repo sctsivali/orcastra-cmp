@@ -32,6 +32,7 @@ from typing import Any, Callable, Dict, Optional
 import websockets
 
 from app.services.lxd import health
+from app.services.lxd_ws import connection_pin, pinned_connection
 from app.services.terminal_service import get_terminal_service
 
 logger = logging.getLogger(__name__)
@@ -282,13 +283,19 @@ class LXDEventsHub:
                 ssl_ctx = await asyncio.to_thread(
                     get_terminal_service().get_ssl_context, host
                 )
+                pin = await asyncio.to_thread(connection_pin, host)
                 logger.info(f"[events] connecting upstream {host} -> {ws_url}")
+                # important: held to the cluster's pin like every other LXD socket (lxd_ws), and
+                # never through HTTPS_PROXY. A stranger here could feed forged lifecycle events
+                # to every subscriber and to the connection state this hub writes.
                 async with websockets.connect(
                     ws_url,
                     ssl=ssl_ctx,
                     ping_interval=30,
                     ping_timeout=60,
                     max_size=4 * 1024 * 1024,
+                    proxy=None,
+                    create_connection=pinned_connection(pin) if pin else None,
                 ) as ws:
                     backoff = 1
                     node.connected = True
