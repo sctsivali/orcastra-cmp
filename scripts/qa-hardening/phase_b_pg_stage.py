@@ -38,7 +38,7 @@ LAB = "orcastra-qa-hardening"
 CONTROL_SHA256 = {
     "phase_b_public_pins.json": "5c9ef077e3710c4c653284ca30ea908e2a226b0e7423380ad91a6792b8919663",
     "phase_b_dependencies.json": "ae3928cb920114538565fd3402ce2df2a3aa1e49a925cb735905c2e8541871a0",
-    "phase_b_pg_dependencies.json": "adca58633f0b75dff18be4d4cca1e71ca6e437da4a39685a1c2c3bfdc3a03cf8",
+    "phase_b_pg_dependencies.json": "c10ce4ce6bd7eaf6ba0cbe7569db81d66201b5ffe4850f4cd5ab5fee474a5a47",
 }
 IMAGE_REPOSITORIES = {"postgres": "library/postgres", "python": "library/python"}
 MAX_CONTROL_BYTES = 2 * 1024 ** 2

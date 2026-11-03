@@ -28,8 +28,8 @@
     },
     {
       "path": "backend/requirements.txt",
-      "sha256": "ad36bacbb77ec2ec83d99cf575e7eb5ee998baa395a4bb6ff0657ac0964f52b9",
-      "size": 2521
+      "sha256": "eb1bc845be58da4007c3b245e0cd4f8979a0001f82ee852f1b3f10a8651a78f8",
+      "size": 2573
     }
   ],
   "resolution_helper": {
