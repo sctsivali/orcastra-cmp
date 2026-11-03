@@ -216,9 +216,26 @@ class AuthentikSyncService:
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             group_map = await self._ensure_role_groups_exist(client)
-            user_pk = await self._find_user_pk(client, user_email)
-            if not user_pk:
+            # note: searched here rather than through _find_user_pk, which answers None both for a
+            # failed search and for an email with no account. Only the first is unconfirmed; an
+            # address that never signed in holds no role group, so there is nothing to remove.
+            search = await client.get(
+                f"{self.api_url}/core/users/",
+                params={"search": user_email},
+                headers=self._headers(),
+            )
+            if search.status_code != 200:
+                logger.error("Failed to search Authentik users for removal: HTTP %s", search.status_code)
                 return False
+            wanted = (user_email or "").lower()
+            user = next(
+                (u for u in search.json().get("results", []) if (u.get("email") or "").lower() == wanted),
+                None,
+            )
+            if user is None:
+                logger.info("Removal: %s has no Authentik account, so no role group to leave", user_email)
+                return True
+            user_pk = user["pk"]
 
             for gname, gpk in group_map.items():
                 resp = await client.post(

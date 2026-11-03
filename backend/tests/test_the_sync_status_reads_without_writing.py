@@ -75,3 +75,32 @@ async def test_the_status_route_names_no_raw_exception(monkeypatch: pytest.Monke
     answer = await user_groups.get_sync_status(user=_user("runner@example.com"))
     assert answer.authentik_reachable is False
     assert "10.9.8.7" not in answer.details and "secret-host" not in answer.details
+
+
+# ── an admin removal of an email Authentik has never seen ─────────────────────────────────────
+# An invited address that never signed in has no Authentik account. The removal treated "no such
+# account" as "not confirmed" and answered 502 after the membership rows were already deleted, so
+# the dialog reported a failure for a removal that had happened.
+
+
+def _directory(users_status: int, users: List[dict]):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/core/users/"):
+            return httpx.Response(users_status, json={"results": users})
+        if request.url.path.endswith("/core/groups/") and request.method == "GET":
+            name = request.url.params.get("search")
+            return httpx.Response(200, json={"results": [{"pk": f"pk-{name}", "name": name}]})
+        return httpx.Response(204)
+    return handler
+
+
+async def test_an_email_with_no_account_has_no_roles_to_remove(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _authentik_http(monkeypatch, _directory(200, [{"email": "someone-else@example.com", "pk": 7}]))
+    assert await _service().remove_user_from_all_roles("never-signed-in@example.com") is True
+    assert "POST" not in seen, "nothing to remove, so nothing is written"
+
+
+async def test_a_failed_account_search_is_still_not_confirmed(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _authentik_http(monkeypatch, _directory(503, []))
+    assert await _service().remove_user_from_all_roles("someone@example.com") is False
+    assert "POST" not in seen

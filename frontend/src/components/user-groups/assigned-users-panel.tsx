@@ -183,6 +183,12 @@ function AssignedUsersPanelContent() {
         ? { title: `${userEmail} partly removed`, description: answer.detail }
         : { title: `${userEmail} removed` });
     },
+    // important: read the list again on a refusal too. An administrator's removal commits the
+    // membership rows before it asks the identity provider, so a 502 can follow a removal that
+    // happened, and the row would otherwise stay on screen.
+    onError: () => {
+      void reconcileMutationImpact(queryClient, "user-group.write").catch(() => undefined);
+    },
   });
 
   const orgRequired = role === "partner" || role === "tenant";
