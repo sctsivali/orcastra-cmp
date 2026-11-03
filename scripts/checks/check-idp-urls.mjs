@@ -18,10 +18,10 @@ const { idpAccountSettingsUrl, idpEndSessionUrl } = module;
 
 const CASES = [
   // [why, end-session URL as the operator sets it, expected account settings URL]
-  ['dev IdP', 'https://auth.orca.id/application/o/orcastra-dashboard/end-session/',
-    'https://auth.orca.id/if/user/#/settings'],
-  ['production IdP', 'https://sso.orcastra.io/application/o/orcastra-dashboard/end-session/',
-    'https://sso.orcastra.io/if/user/#/settings'],
+  ['Authentik at the root of its host', 'https://auth.example.com/application/o/orcastra-dashboard/end-session/',
+    'https://auth.example.com/if/user/#/settings'],
+  ['another deployment\'s IdP host', 'https://sso.example.org/application/o/orcastra-dashboard/end-session/',
+    'https://sso.example.org/if/user/#/settings'],
   ['partner IdP on a plain-HTTP address and port',
     'http://10.20.0.11:9000/application/o/orcastra-dashboard/end-session/',
     'http://10.20.0.11:9000/if/user/#/settings'],
@@ -53,12 +53,13 @@ const CASES = [
     'http://[fd00::11]:9000/if/user/#/settings'],
 ];
 
-const SIGN_IN = 'http://100.73.127.75:2025/auth/signin';
-const RETURN = 'post_logout_redirect_uri=http%3A%2F%2F100.73.127.75%3A2025%2Fauth%2Fsignin';
+// note: documentation addresses (RFC 5737, RFC 2606), never a real deployment's.
+const SIGN_IN = 'http://192.0.2.10:2025/auth/signin';
+const RETURN = 'post_logout_redirect_uri=http%3A%2F%2F192.0.2.10%3A2025%2Fauth%2Fsignin';
 const END_SESSION_CASES = [
   // [why, end-session URL as the operator sets it, expected sign-out destination]
-  ['dev IdP', 'https://auth.orca.id/application/o/orcastra-dashboard/end-session/',
-    `https://auth.orca.id/application/o/orcastra-dashboard/end-session/?${RETURN}`],
+  ['Authentik at the root of its host', 'https://auth.example.com/application/o/orcastra-dashboard/end-session/',
+    `https://auth.example.com/application/o/orcastra-dashboard/end-session/?${RETURN}`],
   ['a query the operator set is kept, and the return address is added once',
     'https://sso.example.com/application/o/cmp/end-session/?client_id=abc',
     `https://sso.example.com/application/o/cmp/end-session/?client_id=abc&${RETURN}`],
@@ -71,11 +72,11 @@ const END_SESSION_CASES = [
   ['any OIDC end-session endpoint signs out, not only Authentik',
     'https://kc.example.com/realms/acme/protocol/openid-connect/logout',
     `https://kc.example.com/realms/acme/protocol/openid-connect/logout?${RETURN}`],
-  ['surrounding whitespace is ignored', ' https://auth.orca.id/application/o/x/end-session/\n',
-    `https://auth.orca.id/application/o/x/end-session/?${RETURN}`],
+  ['surrounding whitespace is ignored', ' https://auth.example.com/application/o/x/end-session/\n',
+    `https://auth.example.com/application/o/x/end-session/?${RETURN}`],
   ['unreplaced build placeholder', 'http://NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL_PLACEHOLDER', null],
   ['unset', '', null],
-  ['not a URL', 'auth.orca.id/application/o/x/end-session/', null],
+  ['not a URL', 'auth.example.com/application/o/x/end-session/', null],
   ['javascript scheme', 'javascript:alert(1)//application/o/x/end-session/', null],
 ];
 
