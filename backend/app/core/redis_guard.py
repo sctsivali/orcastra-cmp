@@ -40,6 +40,8 @@ _PROBE_GRACE_SECONDS = 5.0
 # Commands that hand back an object doing its own network I/O later.
 _DEFERRED = frozenset({"pipeline", "register_script"})
 _ITERATORS = frozenset({"scan_iter", "sscan_iter", "hscan_iter", "zscan_iter"})
+# Local bookkeeping that sends nothing: never refused, so shutdown can close the pool mid-outage.
+_LOCAL = frozenset({"close", "get_encoder", "get_connection_kwargs", "get_retry", "set_retry"})
 _FAILURES = (RedisConnectionError, RedisTimeoutError)
 
 
@@ -122,7 +124,7 @@ class GuardedRedis:
 
     def __getattr__(self, name: str) -> Any:
         attr = getattr(self._client, name)
-        if not callable(attr):
+        if not callable(attr) or name in _LOCAL:
             return attr
         if name in _DEFERRED:
             return lambda *args, **kwargs: _Deferred(self, attr(*args, **kwargs))

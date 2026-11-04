@@ -193,6 +193,15 @@ def test_a_failed_probe_opens_another_full_window(setup):
     assert client.calls == ["get", "get"]
 
 
+def test_closing_the_client_is_never_refused(setup):
+    guard, client, _clock = setup
+    client.close = lambda: "closed"
+    client.fail = RedisTimeoutError("t")
+    with pytest.raises(RedisTimeoutError):
+        guard.get("a")
+    assert guard.close() == "closed"
+
+
 def test_a_command_error_from_a_healthy_redis_does_not_trip_it(setup):
     guard, client, _clock = setup
     client.fail = ResponseError("WRONGTYPE Operation against a key holding the wrong kind of value")
