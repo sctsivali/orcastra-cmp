@@ -228,3 +228,26 @@ def test_a_never_started_instance_on_zfs_is_still_refused_with_its_fix(
     result = _capacity(monkeypatch, client, source_used=1 * GiB, target_free=50 * GiB)
     blocker = next(b for b in result.blockers if b["code"] == "source_footprint_unverified")
     assert "never started" in blocker["message"]
+
+
+def test_a_dir_container_with_an_explicit_size_is_still_bounded_by_its_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dir pool does not enforce a container's root size, so 10GiB says nothing about the 40GB
+    it may hold: the size used to stand in as a measurement, skipping the bound and the consent."""
+    client = _dir_client()
+    client.api.instances["workload"].metadata["expanded_devices"]["root"]["size"] = "10GiB"
+
+    result = _capacity(monkeypatch, client, source_used=60 * GiB, target_free=15 * GiB)
+
+    assert result.blockers == []
+    assert any(w["code"] == "source_size_unmeasured" for w in result.warnings)
+
+
+def test_a_dir_virtual_machine_keeps_its_enforced_size() -> None:
+    client = _dir_client()
+    record = client.api.instances["workload"].metadata
+    record["type"] = "virtual-machine"
+    record["expanded_devices"]["root"]["size"] = "10GiB"
+
+    assert _bytes(client) == 10 * GiB

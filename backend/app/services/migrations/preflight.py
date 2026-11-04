@@ -93,13 +93,30 @@ class PreflightResult:
 
     def block(self, code: str, message: str, remediation: str = "") -> None:
         self.blockers.append(
-            {"code": code, "message": message, "remediation": remediation}
+            {"code": code, "message": _bounded(message), "remediation": _bounded(remediation)}
         )
 
     def warn(self, code: str, message: str, remediation: str = "") -> None:
         self.warnings.append(
-            {"code": code, "message": message, "remediation": remediation}
+            {"code": code, "message": _bounded(message), "remediation": _bounded(remediation)}
         )
+
+
+# The API's MigrationIssue fields hold 2000 characters. Bounding here, where an issue is made,
+# keeps the stored, hashed and shown text identical; a longer one used to fail every plan read.
+_ISSUE_TEXT_LIMIT = 2000
+
+
+def _bounded(text: str) -> str:
+    return text if len(text) <= _ISSUE_TEXT_LIMIT else text[: _ISSUE_TEXT_LIMIT - 1] + "…"
+
+
+def name_list(names: Any, limit: int = 10) -> str:
+    """The first `limit` names, then how many more, so a message stays readable at any scale."""
+    values = [str(name) for name in names]
+    if len(values) <= limit:
+        return ", ".join(values)
+    return f"{', '.join(values[:limit])} and {len(values) - limit} more"
 
 
 def _metadata(response: Any, *, resource: str) -> Any:
@@ -523,7 +540,7 @@ def _check_capacity(
         if unstarted:
             result.block(
                 "source_footprint_unverified",
-                f"{', '.join(unstarted)} report no disk usage yet, which LXD does for an instance "
+                f"{name_list(unstarted)} report no disk usage yet, which LXD does for an instance "
                 "that was never started, so the transfer cannot be sized.",
                 "Start and stop the instance once, or give its root disk an explicit size, then run "
                 "preflight again.",
@@ -554,7 +571,7 @@ def _check_capacity(
             ]
             result.warn(
                 UNMEASURED_SIZE_WARNING,
-                f"The size of {', '.join(bounded)} cannot be measured on its dir pool, and target pool "
+                f"The size of {name_list(bounded)} cannot be measured on its dir pool, and target pool "
                 f"'{target_pool}' has less free space than that pool holds in total. The transfer may "
                 "fill the target pool.",
                 "Check the target pool's free space, then confirm the unmeasured size at approval, or "
@@ -577,6 +594,17 @@ def _check_capacity(
 # Drivers that report no per-volume usage without project quotas: LXD answers 0 for every volume on
 # them, so a 0 from one is not a measurement.
 _UNMEASURED_USAGE_DRIVERS = frozenset({"dir"})
+
+
+def _root_pool_unmeasured(client: Any, root: dict[str, Any]) -> bool:
+    pool = root.get("pool")
+    if not isinstance(pool, str) or not pool:
+        return False
+    try:
+        detail = _metadata(client.api.storage_pools[safe_segment(pool)].get(), resource=f"storage pool '{pool}'")
+    except Exception:  # noqa: BLE001 - an unreadable pool keeps the existing sizing
+        return False
+    return isinstance(detail, dict) and detail.get("driver") in _UNMEASURED_USAGE_DRIVERS
 
 
 def _unmeasured_pool_bound(
@@ -648,7 +676,7 @@ def _bound_unmeasured_footprints(
         pools = ", ".join(sorted({f"'{pool}'" for pool, _member in bounds}))
         result.warn(
             "source_footprint_bounded_by_pool",
-            f"{', '.join(bounded)} {'sits' if len(bounded) == 1 else 'sit'} on a dir storage pool, "
+            f"{name_list(bounded)} {'sits' if len(bounded) == 1 else 'sit'} on a dir storage pool, "
             "which does not report how much each "
             f"instance uses, so the transfer is sized by everything pool {pools} holds.",
             "Nothing to do when the target has room for that. A pool that reports usage (zfs, "
@@ -682,6 +710,11 @@ def _instance_transfer_bytes(
         if not isinstance(root, dict):
             return None
         provisioned = parse_lxd_size(root.get("size"))
+        if usage == 0 and instance.get("type") == "container" and _root_pool_unmeasured(client, root):
+            # important: a dir pool reports 0 for every container and does not enforce its root
+            # size, so the size is no measurement: one set to 10GiB may hold 40GB. The pool's own
+            # usage bounds it instead (_bound_unmeasured_footprints), with the consent when needed.
+            return None
         if usage == 0 and provisioned is None:
             # important: 0 is what LXD reports for an instance that was never started (on zfs a
             # clone of its image with no bytes of its own), yet a transfer still writes the whole

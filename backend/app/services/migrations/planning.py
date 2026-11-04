@@ -63,6 +63,19 @@ from .security import canonical_json_hash, canonical_resource_key, sanitize_payl
 from .worker import _schedule, run_migration_job
 
 
+def stored_request_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """The plan request as persisted, which the worker rebuilds and executes.
+
+    important: the mappings hold only infrastructure names (the schema forbids anything else), so
+    they skip the key-based secret redaction. A network named `private` or a profile named
+    `cloud-init` used to be stored as `[redacted]`, and execute then mapped onto that name.
+    """
+    stored = sanitize_payload({key: value for key, value in payload.items() if key != "mappings"})
+    if "mappings" in payload:
+        stored["mappings"] = payload["mappings"]
+    return stored
+
+
 def _require_plan_actor(row: Any, authority: Any) -> None:
     """Conceal plans not pinned to the exact current Authentik actor."""
     try:
@@ -347,12 +360,22 @@ class MigrationPlanningMixin:
         credential, so it is safe for a cluster that has never been proven.
         """
         try:
-            await cluster_pin_state(cluster_id, strict=True)
+            recorded = await cluster_pin_state(cluster_id, strict=True)
         except PinStoreUnavailable as exc:
             raise MigrationConflict(
                 "The certificate store could not be read, so the clusters' identity cannot be "
                 "proven right now. Try again in a moment."
             ) from exc
+        if getattr(self.settings, "read_only_mode", False):
+            # important: recording a pin is a write, and the first one decides which certificate
+            # is trusted. Read-only mode plans against the pin already held and records none.
+            if recorded is None:
+                label = await asyncio.to_thread(_cluster_label, cluster_id)
+                raise MigrationConflict(
+                    f"{label} has no pinned certificate yet. Pinning writes to the certificate "
+                    "store, which read-only mode does not allow. Plan again once read-only mode ends."
+                )
+            return recorded
         try:
             await refresh_pin_for(self.lxd_service, cluster_id)
         except LXDCertificatePinError as exc:
@@ -622,6 +645,11 @@ class MigrationPlanningMixin:
     ) -> MigrationPlan:
         authority = await AuthentikAuthorityVerifier(self.settings).pin_user(user)
         requester_role = authority.role.value
+        if await repository.count_open_plans(self.db, authority.pin.identity.email) >= repository.OPEN_PLAN_LIMIT:
+            raise MigrationConflict(
+                f"You already have {repository.OPEN_PLAN_LIMIT} open migration plans. Start one or "
+                "let it expire before planning another."
+            )
         source_org, target_org = await self._organizations(
             request, user=user, requester_role=requester_role
         )
@@ -669,7 +697,7 @@ class MigrationPlanningMixin:
                 target_name,
             ),
             payload_hash=canonical_json_hash(payload),
-            request_payload=sanitize_payload(payload),
+            request_payload=stored_request_payload(payload),
             preflight_payload=report,
             retention_hours=request.retention_hours,
             checkpoint_requested=request.checkpoint_requested,
@@ -765,7 +793,7 @@ class MigrationPlanningMixin:
                     target_name,
                 ),
                 "payload_hash": canonical_json_hash(merged),
-                "request_payload": sanitize_payload(merged),
+                "request_payload": stored_request_payload(merged),
                 "preflight_payload": report,
                 "retention_hours": request.retention_hours,
                 "checkpoint_requested": request.checkpoint_requested,
