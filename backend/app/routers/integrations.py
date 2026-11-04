@@ -11,6 +11,7 @@ import hmac
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from functools import partial
 from datetime import datetime, timedelta, timezone
@@ -159,7 +160,9 @@ from app.core.org_scope import (
     reconcile_personal_clusters,
     refuse_grants_on_purchased_clusters,
 )
-from app.core.cache import get_cache_manager
+from app.core import swr
+from app.core.cache import CAPACITY_GENERATION_KIND, get_cache_manager, get_resource_list_generation
+from app.core.swr import Built
 from app.core.vault_client import get_vault_client
 from app.core.config import get_settings
 from app.core.database import get_db
@@ -3643,6 +3646,18 @@ async def sync_data(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# OrcaHub polls /integrations/regions about every 2.4 minutes. Each cluster's status read is a
+# few seconds on a busy host, so they run side by side on their own pool, apart from the proxy
+# pool the rest of this API shares, under a wall each.
+_TOTALS_WORKERS = 4
+_TOTALS_EXECUTOR = ThreadPoolExecutor(max_workers=_TOTALS_WORKERS, thread_name_prefix="integration_totals")
+_TOTALS_WALL_SECONDS = 15
+_TOTALS_FRESH_SECONDS = 120
+# Some cluster did not answer: remembered for less, so the next poll reads it again soon.
+_TOTALS_DEGRADED_SECONDS = 30
+_TOTALS_KEYS = ("cpu", "memory", "storage", "gpu", "gpu_cards")
+
+
 async def _integration_hardware_totals(
     lxd_service: LXDService, allowed_clusters: set
 ) -> Dict[str, int]:
@@ -3655,38 +3670,73 @@ async def _integration_hardware_totals(
 
     The GPU total counts compute GPUs, matching every internal surface. This endpoint used to
     return a hardcoded zero for every total, which told partners their GPUs did not exist.
+
+    note: stale-while-revalidate (owner decision 2026-11-04). This read each cluster one after the
+    other on every miss of a plain 120 s cache, so most of OrcaHub's polls waited 2.4 s (p95
+    10.4 s, max 14.6 s on dev, the long ones dialing dead clusters). Now a poll answers from the
+    cache, up to SWR_MAX_STALE_SECONDS past its soft TTL, while one background read replaces it.
+    A read where no cluster answered is not remembered: the old cache kept zeros for 120 s.
     """
-    empty = {"cpu": 0, "memory": 0, "storage": 0, "gpu": 0, "gpu_cards": 0}
+    empty = {key: 0 for key in _TOTALS_KEYS}
     if not allowed_clusters:
         return empty
 
+    clusters = sorted(allowed_clusters)
     cache = get_cache_manager()
-    cache_key = "integration:hardware:" + ",".join(sorted(allowed_clusters))
-    cached = cache.get("api_responses", cache_key)
-    if cached is not None:
-        return cached
+    digest = hashlib.sha256(",".join(clusters).encode()).hexdigest()[:16]
 
-    def _collect() -> Dict[str, int]:
+    async def build() -> Built:
+        statuses = await asyncio.gather(
+            *(
+                run_blocking(
+                    lxd_service.check_node_status,
+                    cluster_id,
+                    timeout=_TOTALS_WALL_SECONDS,
+                    label=f"integration.totals[{cluster_id}]",
+                    executor=_TOTALS_EXECUTOR,
+                    max_in_flight=_TOTALS_WORKERS,
+                )
+                for cluster_id in clusters
+            ),
+            return_exceptions=True,
+        )
         totals = dict(empty)
-        for cluster_id in sorted(allowed_clusters):
-            try:
-                status = lxd_service.check_node_status(cluster_id)
-            except Exception as e:
-                logger.debug(f"Could not read hardware for {cluster_id}: {e}")
+        answered = 0
+        for cluster_id, status in zip(clusters, statuses):
+            if isinstance(status, BaseException):
+                logger.debug(f"Could not read hardware for {cluster_id}: {type(status).__name__}")
                 continue
             resources = status.resources if status.connected else None
             if not resources:
                 continue
+            answered += 1
             totals["cpu"] += resources.cpu_total
             totals["memory"] += resources.memory_total
             totals["storage"] += resources.storage_total
             totals["gpu"] += resources.gpu_total
             totals["gpu_cards"] += resources.gpu_cards_total
-        return totals
+        if answered == 0:
+            fresh_for = None
+        elif answered < len(clusters):
+            fresh_for = _TOTALS_DEGRADED_SECONDS
+        else:
+            fresh_for = _TOTALS_FRESH_SECONDS
+        return Built(value=totals, body=totals, fresh_for=fresh_for)
 
-    totals = await asyncio.to_thread(_collect)
-    cache.set("api_responses", cache_key, totals, ttl=120)
-    return totals
+    served = await swr.serve(
+        cache=cache,
+        # The regions: prefix puts it in the reachability and access sweeps (cache.py).
+        base_key=f"regions:integration_hardware:v1:{digest}",
+        fresh=False,
+        build=build,
+        generation=lambda: (
+            get_resource_list_generation(cache, CAPACITY_GENERATION_KIND),
+            get_resource_list_generation(cache, "regions"),
+        ),
+        label="integration hardware totals",
+    )
+    body = served.value if served.built else served.body
+    return {key: int((body or {}).get(key, 0)) for key in _TOTALS_KEYS}
 
 
 # ============================================
