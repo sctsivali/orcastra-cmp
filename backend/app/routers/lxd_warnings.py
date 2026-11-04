@@ -14,7 +14,7 @@ from pylxd.exceptions import LXDAPIException
 
 from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd import health
-from app.services.lxd.fanout import NodeRead, collect, complete_reasons, known_down, unattempted
+from app.services.lxd.fanout import LATE_FRESH_SECONDS, NodeRead, collect, complete_reasons, gather_clusters, known_down, unattempted
 from app.models.schemas import FanoutReachability
 from app.core.tenant_visibility import tenant_acl_active
 from app.services.lxd_service import (
@@ -172,13 +172,15 @@ async def list_warnings(
     async def build() -> Built:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
-        # Fetch warnings from all nodes in parallel
-        loop = asyncio.get_event_loop()
-        tasks = [
-            loop.run_in_executor(_executor, _fetch_warnings_for_node, lxd_service, node_name)
-            for node_name in nodes_to_query
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Fetch warnings from all nodes in parallel, CLUSTER_WALL_SECONDS each
+        results = await gather_clusters(
+            nodes_to_query,
+            lambda node_name: _fetch_warnings_for_node(lxd_service, node_name),
+            executor=_executor,
+            label="warnings.list",
+            memo_key=f"warnings:host={host}",
+            generation=lambda: get_resource_list_generation(cache, "warnings"),
+        )
         
         # important: two different things make a node absent, and both must be named.
         # A node can fail during the fan-out, or never be asked at all, because
@@ -209,7 +211,10 @@ async def list_warnings(
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
-            node_errors=complete_reasons(unreachable_nodes, fan.node_errors, partial=fan.partial_nodes),
+            late_nodes=fan.late_nodes,
+            node_errors=complete_reasons(
+                unreachable_nodes, fan.node_errors, partial=fan.partial_nodes, late=fan.late_nodes
+            ),
             collected_at=datetime.now(timezone.utc),
         )
         # Same rule as the storage lists: a cluster that could not be reached at all is named
@@ -218,7 +223,7 @@ async def list_warnings(
         cacheable = fan.cacheable_despite_outages and not unattempted(
             seeded, lxd_service.connection_manager
         )
-        ttl = WARNINGS_DEGRADED_TTL if unreachable_nodes else WARNINGS_CACHE_TTL
+        ttl = LATE_FRESH_SECONDS if fan.late_nodes else (WARNINGS_DEGRADED_TTL if unreachable_nodes else WARNINGS_CACHE_TTL)
         if not cacheable:
             logger.info("Not caching warnings list: %s", fan.node_errors or "no node answered")
         return Built(value=response, body=response.model_dump(), fresh_for=ttl if cacheable else None)
@@ -369,12 +374,14 @@ async def get_all_system_warnings(
         # Get LXD warnings
         nodes_to_query = lxd_service.connection_manager.get_node_names()
         
-        loop = asyncio.get_event_loop()
-        tasks = [
-            loop.run_in_executor(_executor, _fetch_warnings_for_node, lxd_service, node_name)
-            for node_name in nodes_to_query
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await gather_clusters(
+            nodes_to_query,
+            lambda node_name: _fetch_warnings_for_node(lxd_service, node_name),
+            executor=_executor,
+            label="warnings.system",
+            memo_key="warnings:system",
+            generation=lambda: get_resource_list_generation(cache, "warnings"),
+        )
 
         # important: the helper returns a NodeRead, not a list. Testing for a list dropped every
         # LXD warning from this feed, so its totals undercounted. Same handling as list_warnings,
@@ -557,7 +564,10 @@ async def get_all_system_warnings(
             "nodes": nodes_to_query,
             "unreachable_nodes": fan.unreachable_nodes,
             "partial_nodes": fan.partial_nodes,
-            "node_errors": complete_reasons(fan.unreachable_nodes, fan.node_errors, partial=fan.partial_nodes),
+            "late_nodes": fan.late_nodes,
+            "node_errors": complete_reasons(
+                fan.unreachable_nodes, fan.node_errors, partial=fan.partial_nodes, late=fan.late_nodes
+            ),
             "collected_at": datetime.now(timezone.utc).isoformat(),
         }
         # important: a feed nobody answered is not "no warnings". Only a read where a cluster
@@ -566,7 +576,8 @@ async def get_all_system_warnings(
         answered = bool(fan.answered) or registry_checked
         if not answered:
             logger.warning("Not caching system warnings: no cluster answered and no registry sweep ran")
-        return Built(value=body, body=body, fresh_for=WARNINGS_CACHE_TTL if answered else None)
+        ttl = LATE_FRESH_SECONDS if fan.late_nodes else WARNINGS_CACHE_TTL
+        return Built(value=body, body=body, fresh_for=ttl if answered else None)
 
     try:
         served = await swr.serve(

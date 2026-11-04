@@ -8,11 +8,10 @@ from typing import Any, Dict, Literal, Optional, List, Tuple
 from urllib.parse import unquote
 import logging
 from datetime import datetime, timezone
-import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd.exceptions import LXDConnectionError
-from app.services.lxd.fanout import NodeRead, collect, complete_reasons, unattempted
+from app.services.lxd.fanout import LATE_FRESH_SECONDS, gather_clusters, NodeRead, collect, complete_reasons, unattempted
 from app.services.lxd.ipam_join import classify, network_facts
 from app.services.lxd.project_scope import (
     ALL_PROJECTS_READ_TIMEOUT,
@@ -162,6 +161,42 @@ def _generation(cache: Any) -> Optional[str]:
     return read() if callable(read) else None
 
 
+# The three reads _read_join_sources makes per cluster run side by side on their own pool, never
+# on the outer per-cluster pool, so a full outer pool cannot wait on itself.
+_JOIN_WORKERS = 12
+_join_executor = ThreadPoolExecutor(max_workers=_JOIN_WORKERS, thread_name_prefix="ipam_join")
+
+
+def _read_project_configs(client: Any, read: NodeRead) -> Dict[str, Dict[str, str]]:
+    try:
+        return list_project_configs(client)
+    except Exception as e:  # noqa: BLE001 - named, not fatal
+        read.lost(f"projects: {type(e).__name__}")
+        return {"default": {}}
+
+
+def _read_networks(client: Any, read: NodeRead) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    try:
+        rows, complete = list_across_projects(client, "networks")
+        if not complete:
+            read.lost("networks: partial read")
+        return {(str(r.get("project") or "default"), str(r.get("name") or "")): r for r in rows}
+    except Exception as e:  # noqa: BLE001
+        read.lost(f"networks: {type(e).__name__}")
+        return {}
+
+
+def _read_instances(client: Any, read: NodeRead) -> Tuple[Dict[Tuple[str, str], InstanceRecord], bool]:
+    try:
+        instance_rows, complete = list_instance_records(client)
+        if not complete:
+            read.lost("instances: partial read")
+        return {(rec.project, rec.name): rec for rec in instance_rows}, complete
+    except Exception as e:  # noqa: BLE001
+        read.lost(f"instances: {type(e).__name__}")
+        return {}, False
+
+
 def _read_join_sources(
     client: Any, node_name: str, read: NodeRead
 ) -> Tuple[Dict[str, Dict[str, str]], Dict[Tuple[str, str], Dict[str, Any]], Dict[Tuple[str, str], InstanceRecord], bool]:
@@ -169,32 +204,16 @@ def _read_join_sources(
 
     A failed read is named on the NodeRead and degrades the join rather than the listing: no
     networks means empty network facts, no instances means every instance row is "unknown".
+
+    note: side by side since 2026-11-04. Read one after the other they summed on central-1
+    (networks 5.3 s, instances 1.3 s at p50 on dev); now the join costs the slowest of the three.
+    Each read keeps its own socket timeouts, so waiting on the futures cannot hang.
     """
-    try:
-        configs = list_project_configs(client)
-    except Exception as e:  # noqa: BLE001 - named, not fatal
-        read.lost(f"projects: {type(e).__name__}")
-        configs = {"default": {}}
-    networks: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    try:
-        rows, complete = list_across_projects(client, "networks")
-        networks = {(str(r.get("project") or "default"), str(r.get("name") or "")): r for r in rows}
-        if not complete:
-            read.lost("networks: partial read")
-    except Exception as e:  # noqa: BLE001
-        read.lost(f"networks: {type(e).__name__}")
-    records: Dict[Tuple[str, str], InstanceRecord] = {}
-    instances_ok = True
-    try:
-        instance_rows, complete = list_instance_records(client)
-        records = {(rec.project, rec.name): rec for rec in instance_rows}
-        if not complete:
-            read.lost("instances: partial read")
-            instances_ok = False
-    except Exception as e:  # noqa: BLE001
-        read.lost(f"instances: {type(e).__name__}")
-        instances_ok = False
-    return configs, networks, records, instances_ok
+    configs = _join_executor.submit(_read_project_configs, client, read)
+    networks = _join_executor.submit(_read_networks, client, read)
+    instances = _join_executor.submit(_read_instances, client, read)
+    records, instances_ok = instances.result()
+    return configs.result(), networks.result(), records, instances_ok
 
 
 def _fetch_ipam_for_node(
@@ -306,13 +325,15 @@ async def list_ipam_allocations(
     async def build() -> Built:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
 
-        # query all nodes in parallel
-        loop = asyncio.get_event_loop()
-        tasks = [
-            loop.run_in_executor(_ipam_executor, _fetch_ipam_for_node, lxd_service, node_name, network)
-            for node_name in nodes_to_query
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # query all nodes in parallel, CLUSTER_WALL_SECONDS each (see fanout.gather_clusters)
+        results = await gather_clusters(
+            nodes_to_query,
+            lambda node_name: _fetch_ipam_for_node(lxd_service, node_name, network),
+            executor=_ipam_executor,
+            label="ipam.list",
+            memo_key=f"ipam:host={host}:network={network}",
+            generation=lambda: _generation(cache),
+        )
 
         # important: two different things make a node absent, and both must be named.
         # A node can fail during the fan-out, or never be asked at all, because
@@ -330,7 +351,7 @@ async def list_ipam_allocations(
         cacheable = fan.cacheable_despite_outages and not unattempted(
             seeded, lxd_service.connection_manager
         )
-        ttl = DEGRADED_CACHE_TTL if unreachable_nodes else 120
+        ttl = LATE_FRESH_SECONDS if fan.late_nodes else (DEGRADED_CACHE_TTL if unreachable_nodes else 120)
 
         all_allocations = [
             allocation for allocation in fan.rows
@@ -349,7 +370,10 @@ async def list_ipam_allocations(
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
-            node_errors=complete_reasons(unreachable_nodes, fan.node_errors, partial=fan.partial_nodes),
+            late_nodes=fan.late_nodes,
+            node_errors=complete_reasons(
+                unreachable_nodes, fan.node_errors, partial=fan.partial_nodes, late=fan.late_nodes
+            ),
             collected_at=datetime.now(timezone.utc),
         )
 

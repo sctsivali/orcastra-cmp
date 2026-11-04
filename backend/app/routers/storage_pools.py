@@ -16,7 +16,7 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.services.lxd import pool_resource_failures
-from app.services.lxd.fanout import NodeRead, collect, complete_reasons, unattempted
+from app.services.lxd.fanout import LATE_FRESH_SECONDS, NodeRead, collect, complete_reasons, gather_clusters, unattempted
 from app.services.lxd.project_scope import ALL_PROJECTS_READ_TIMEOUT
 from app.models.schemas import FanoutReachability
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
@@ -232,12 +232,15 @@ async def list_storage_pools(
     async def build() -> Built:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
-        loop = asyncio.get_event_loop()
-        tasks = [
-            loop.run_in_executor(_executor, _fetch_pools_for_node, lxd_service, node_name)
-            for node_name in nodes_to_query
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # CLUSTER_WALL_SECONDS per cluster (see fanout.gather_clusters)
+        results = await gather_clusters(
+            nodes_to_query,
+            lambda node_name: _fetch_pools_for_node(lxd_service, node_name),
+            executor=_executor,
+            label="storage_pools.list",
+            memo_key=f"storage_pools:host={host}",
+            generation=lambda: get_resource_list_generation(cache, "storage_pools"),
+        )
         
         # important: two different things make a node absent, and both must be named.
         # A node can fail during the fan-out, or never be asked at all, because
@@ -262,7 +265,7 @@ async def list_storage_pools(
         cacheable = fan.cacheable_despite_outages and not unattempted(
             seeded, lxd_service.connection_manager
         )
-        ttl = DEGRADED_CACHE_TTL if unreachable_nodes else 180
+        ttl = LATE_FRESH_SECONDS if fan.late_nodes else (DEGRADED_CACHE_TTL if unreachable_nodes else 180)
 
         # used_by is held to the caller's bound for every role; only a tenant loses the row
         # when nothing they may see uses it.
@@ -278,7 +281,10 @@ async def list_storage_pools(
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
-            node_errors=complete_reasons(unreachable_nodes, fan.node_errors, partial=fan.partial_nodes),
+            late_nodes=fan.late_nodes,
+            node_errors=complete_reasons(
+                unreachable_nodes, fan.node_errors, partial=fan.partial_nodes, late=fan.late_nodes
+            ),
             collected_at=datetime.now(timezone.utc),
         )
 
