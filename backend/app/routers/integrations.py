@@ -56,7 +56,7 @@ from app.services.lxd.proxy import (
 from app.services.activity_logger import get_activity_logger
 from app.services.integration_cluster_state import server_type_name, stamp_cluster_rows
 from app.services.lxd.availability import require_client, unreachable_detail
-from app.services.lxd.fanout import down_text, is_read_timeout, known_down
+from app.services.lxd.fanout import down_text, is_read_timeout, known_down, run_in_slot
 from app.services.lxd.lazy_client import connect_or_get_client
 from app.services.lxd.failover_config import project_failover_config
 from app.services.lxd.limited_write_reach import (
@@ -3688,13 +3688,16 @@ async def _integration_hardware_totals(
     async def build() -> Built:
         statuses = await asyncio.gather(
             *(
-                run_blocking(
+                # Queued for one of the pool's slots, never refused one: a key granting more
+                # clusters than the pool has threads must still count every cluster.
+                run_in_slot(
+                    "integration_totals",
+                    _TOTALS_WORKERS,
                     lxd_service.check_node_status,
                     cluster_id,
                     timeout=_TOTALS_WALL_SECONDS,
                     label=f"integration.totals[{cluster_id}]",
                     executor=_TOTALS_EXECUTOR,
-                    max_in_flight=_TOTALS_WORKERS,
                 )
                 for cluster_id in clusters
             ),

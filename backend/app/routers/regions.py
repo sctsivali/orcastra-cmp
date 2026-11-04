@@ -28,10 +28,10 @@ from app.models.schemas import (
 )
 
 from app.core import swr
-from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from app.core.blocking import BlockingPoolFull, BlockingTimeout
 from app.core.swr import Built
 from app.services.lxd import health, pool_resource_failures
-from app.services.lxd.fanout import LATE_FRESH_SECONDS, known_down
+from app.services.lxd.fanout import LATE_FRESH_SECONDS, known_down, run_in_slot
 from app.services.lxd.freshness import read_resources
 from app.services.lxd.gpu import build_gpu_inventory
 from app.services.lxd.node_resources import aggregate_microcloud_resources
@@ -457,14 +457,17 @@ async def build_regions_overview(
                 # above states, on one module pool rather than a new one per rebuild, under a wall
                 # per cluster. A cluster still reading past it is left out of this answer and named
                 # degraded, so a slow host no longer holds the map.
+                # note: queued for a slot, never refused one (fanout.run_in_slot): a scope with
+                # more clusters than the pool has threads must not lose the rest.
                 tasks = [
-                    run_blocking(
+                    run_in_slot(
+                        "regions_overview",
+                        _REGIONS_WORKERS,
                         _process_cluster,
                         cid,
                         timeout=_CLUSTER_WALL_SECONDS,
                         label=f"regions.overview[{cid}]",
                         executor=_regions_executor,
-                        max_in_flight=_REGIONS_WORKERS,
                     )
                     for cid in cluster_ids
                 ]

@@ -446,7 +446,9 @@ def _late_finished(key: str, entry: _Late, future: "asyncio.Future[Any]", on_don
         return
     entry.value = future.result()
     entry.finished_at = time.monotonic()
-    if on_done is not None:
+    # note: only an entry still held schedules the rebuild. One evicted meanwhile (the memo is
+    # bounded) would otherwise buy a rebuild that cannot use it and reads the cluster again.
+    if on_done is not None and _late_entry(key) is entry:
         on_done()
 
 
@@ -482,6 +484,8 @@ async def gather_clusters(
     from app.core.org_scope import get_scope_cache_key
 
     budget = CLUSTER_WALL_SECONDS if wall is None else wall
+    # A forced refresh (fresh=true) reads every cluster itself: a stand-in is a cached answer.
+    forced = swr.building_forced()
     token = generation() if generation is not None else None
     scope = get_scope_cache_key(f"late:{memo_key}")
     on_done = swr.capture_refresh()
@@ -505,7 +509,7 @@ async def gather_clusters(
 
     async def one(node: str) -> object:
         key = f"{scope}:{node}"
-        entry = _late_entry(key)
+        entry = None if forced else _late_entry(key)
         if entry is not None and entry.generation != token:
             _forget_late(key, entry)
             entry = None
@@ -540,3 +544,43 @@ async def gather_clusters(
             return exc
 
     return list(await asyncio.gather(*(one(node) for node in nodes)))
+
+
+# --- Waiting for a slot rather than being refused one -------------------------------------------
+
+_slots: Dict[Tuple[int, str], asyncio.Semaphore] = {}
+
+
+def _slot(name: str, size: int) -> asyncio.Semaphore:
+    """One semaphore per pool and event loop (each test's asyncio.run has its own loop)."""
+    key = (id(asyncio.get_running_loop()), name)
+    slot = _slots.get(key)
+    if slot is None:
+        slot = _slots[key] = asyncio.Semaphore(size)
+    return slot
+
+
+async def run_in_slot(name: str, size: int, fn: Callable[..., Any], *args: Any, timeout: float, label: str, executor: Any) -> Any:
+    """run_blocking, waiting for one of `size` slots first instead of failing when none is free.
+
+    important: run_blocking's max_in_flight refuses (BlockingPoolFull) at once, so a gather over
+    more clusters than the cap dropped every cluster past it: a key granting five clusters always
+    lost one from its totals. This queues instead, and the wall starts once the call has a slot.
+    A slot is given back when the thread really finishes, not when its wall passes, so a slow
+    cluster cannot let more calls in than the pool has threads.
+    """
+    from app.core.blocking import BlockingTimeout, run_blocking
+
+    slot = _slot(name, size)
+    await slot.acquire()
+    handed_off = False
+    try:
+        return await run_blocking(fn, *args, timeout=timeout, label=label, executor=executor)
+    except BlockingTimeout as exc:
+        if exc.pending is not None:
+            exc.pending.add_done_callback(lambda _future: slot.release())
+            handed_off = True
+        raise
+    finally:
+        if not handed_off:
+            slot.release()

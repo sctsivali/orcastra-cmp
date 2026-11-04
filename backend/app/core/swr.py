@@ -56,6 +56,8 @@ _in_background: contextvars.ContextVar[bool] = contextvars.ContextVar("swr_backg
 # What the build running in this context would store, so a read that finishes after the answer
 # went out (fanout.gather_clusters) can ask for one background read to put it in.
 _building: contextvars.ContextVar[Optional[tuple]] = contextvars.ContextVar("swr_building", default=None)
+# True while a forced refresh (fresh=true) builds: nothing below it may answer from a cache.
+_forced: contextvars.ContextVar[bool] = contextvars.ContextVar("swr_forced", default=False)
 
 
 @dataclass(frozen=True)
@@ -128,7 +130,11 @@ async def serve(
     arrived_at = monotonic()
 
     async def rebuild() -> Served:
-        built = await _build_and_store(cache, key, base_key, build, generation, label)
+        forced = _forced.set(fresh)
+        try:
+            built = await _build_and_store(cache, key, base_key, build, generation, label)
+        finally:
+            _forced.reset(forced)
         return Served(BYPASS if fresh else MISS, value=built.value, body=built.body, age=0.0)
 
     def reread() -> Optional[Served]:
@@ -274,6 +280,11 @@ async def _refresh(
         )
     if wrote:
         lease.release()
+
+
+def building_forced() -> bool:
+    """Whether the build running in this context is a forced refresh (fresh=true)."""
+    return _forced.get()
 
 
 def capture_refresh() -> Optional[Callable[[], None]]:

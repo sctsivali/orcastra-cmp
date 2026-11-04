@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd.exceptions import LXDConnectionError
+from app.core.lxd_names import LXD_NAME_PATTERN
 from app.services.lxd.fanout import LATE_FRESH_SECONDS, gather_clusters, NodeRead, collect, complete_reasons, unattempted
 from app.services.lxd.ipam_join import classify, network_facts
 from app.services.lxd.project_scope import (
@@ -311,7 +312,9 @@ def _fetch_ipam_for_node(
 )
 async def list_ipam_allocations(
     host: Optional[str] = Query(None, description="Filter by a specific cluster"),
-    network: Optional[str] = Query(None, description="Filter by specific network"),
+    # The name pattern keeps an arbitrary string out of the cache and late-read memo keys, where
+    # each distinct value would otherwise buy a fan-out that is never shared.
+    network: Optional[str] = Query(None, pattern=LXD_NAME_PATTERN, description="Filter by specific network"),
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
 ):

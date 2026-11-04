@@ -175,28 +175,38 @@ class ConnectivityMixin:
             # answered the endpoint. No pin yet (a cluster never connected): unchanged, since a
             # probe must not be the thing that mints one.
             get = requests.get
+            session = None
             pin = PinState.from_metadata(metadata)
             if pin is not None and pin.fingerprint:
                 session = requests.Session()
                 session.mount("https://", FingerprintHTTPAdapter(server_fingerprint=pin.fingerprint))
                 get = session.get
-            for attempt in range(2):
-                try:
-                    response = get(
-                        test_url,
-                        cert=(cert_path, key_path),
-                        verify=False,
-                        timeout=(3, 8)
-                    )
-                    break  # got an HTTP response, exit retry loop
-                except requests.exceptions.Timeout as e:
-                    last_error = e
-                    logger.warning(f"Timeout on attempt {attempt + 1} for {cluster_id}")
-                    continue
-                except requests.exceptions.ConnectionError as e:
-                    last_error = e
-                    logger.warning(f"Connection error for {cluster_id}: {e}")
-                    break  # unreachable host - do not retry
+            try:
+                for attempt in range(2):
+                    try:
+                        response = get(
+                            test_url,
+                            cert=(cert_path, key_path),
+                            verify=False,
+                            timeout=(3, 8)
+                        )
+                        break  # got an HTTP response, exit retry loop
+                    except requests.exceptions.SSLError:
+                        # important: SSLError subclasses ConnectionError, so without this it was
+                        # recorded as an offline host below. A refused handshake, a pin mismatch
+                        # included, is a certificate problem: the outer SSLError branch says so.
+                        raise
+                    except requests.exceptions.Timeout as e:
+                        last_error = e
+                        logger.warning(f"Timeout on attempt {attempt + 1} for {cluster_id}")
+                        continue
+                    except requests.exceptions.ConnectionError as e:
+                        last_error = e
+                        logger.warning(f"Connection error for {cluster_id}: {e}")
+                        break  # unreachable host - do not retry
+            finally:
+                if session is not None:
+                    session.close()
 
             if response is None:
                 # important: WARNING, not ERROR. Reached only after the retries above have
