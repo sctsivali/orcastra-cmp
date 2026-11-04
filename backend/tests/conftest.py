@@ -158,6 +158,21 @@ def _isolate_pool_resource_failures():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_cluster_breaker():
+    """Every test starts with no breaker verdict for any cluster.
+
+    note: fan-out reads skip a cluster this worker last saw fail (fanout.known_down), and that
+    memory has no TTL, so a failure one test recorded for "nuc2" made a later test's read of
+    "nuc2" answer offline without dialing its stub.
+    """
+    from app.services.lxd import health
+
+    health.forget_unregistered(())
+    yield
+    health.forget_unregistered(())
+
+
+@pytest.fixture(autouse=True)
 def _isolate_monitoring_history_store():
     """Start every test with an empty history fallback buffer, body memo and import marks.
 
