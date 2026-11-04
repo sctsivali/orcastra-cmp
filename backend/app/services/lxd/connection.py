@@ -17,7 +17,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from app.core.config import get_settings
-from . import breaker_sync, cert_files, health
+from . import breaker_sync, cert_files, health, telemetry
 from .cert_rotation import CertificateRotationMixin
 from .pin_enforcement import CertificatePinMixin
 from .exceptions import (
@@ -256,6 +256,7 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
         server_fingerprint: Optional[str] = None,
         *,
         required_server_fingerprint: Optional[str] = None,
+        cluster_id: Optional[str] = None,
     ) -> None:
         """
         Configure pylxd client's session with larger connection pool.
@@ -293,6 +294,7 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
                 session.mount("http://", adapter)
                 session.mount("https://", adapter)
                 _install_lxd_response_guards(session)
+                telemetry.install_slow_request_log(session, cluster_id)
                 logger.debug(f"Configured client session with pool_maxsize={self.POOL_MAXSIZE}")
             if required_server_fingerprint:
                 require_client_server_fingerprint(
@@ -490,6 +492,7 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
                 cluster_id, health.get_reason(cluster_id),
             )
             return None
+        dial_started = time.monotonic()
         try:
             # Store FULL connection info in memory (for auto-reconnect)
             self._connection_info[cluster_id] = {
@@ -553,6 +556,7 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
                 client,
                 server_fingerprint,
                 required_server_fingerprint=expected_server_fingerprint,
+                cluster_id=cluster_id,
             )
             
             # Cache the client
@@ -563,7 +567,10 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
             if proven:
                 # The other workers may still hold a trip for this cluster; see breaker_sync.
                 breaker_sync.announce_proven(cluster_id)
-            logger.info(f"Connected to cluster {cluster_id} using Vault certificate")
+            logger.info(
+                f"Connected to cluster {cluster_id} using Vault certificate",
+                extra=telemetry.dial_fields(cluster_id, dial_started, "ok"),
+            )
 
             # audit: connection established
             try:
@@ -620,7 +627,10 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
             # for a host the operator already knows is down. Measured on the dev fleet,
             # this one line produced most of 2383 ERROR records in 90 minutes. The router
             # sites were moved for the same reason; this is where the volume actually is.
-            logger.warning(f"Failed to connect to cluster {cluster_id}: {e}")
+            logger.warning(
+                f"Failed to connect to cluster {cluster_id}: {e}",
+                extra=telemetry.dial_fields(cluster_id, dial_started, "offline"),
+            )
             raise LXDConnectionError(f"Cannot connect to {cluster_id}: {str(e)}")
     
     def get_client(
@@ -794,6 +804,7 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
             logger.debug(f"No stored connection info for {cluster_id}, cannot auto-reconnect")
             return None
         
+        dial_started = time.monotonic()
         try:
             info = self._connection_info[cluster_id]
             
@@ -880,12 +891,16 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
                 client,
                 server_fingerprint,
                 required_server_fingerprint=expected_server_fingerprint,
+                cluster_id=cluster_id,
             )
             self._clients[cluster_id] = client
             self._connection_times[cluster_id] = time.time()
             self._slow_validations.pop(cluster_id, None)
             health.clear(cluster_id)
-            logger.info(f"Auto-reconnected to {cluster_id}")
+            logger.info(
+                f"Auto-reconnected to {cluster_id}",
+                extra=telemetry.dial_fields(cluster_id, dial_started, "ok"),
+            )
 
             # audit auto-reconnect events
             try:
@@ -912,7 +927,10 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
             logger.error(f"Cannot prepare TLS credentials for {cluster_id}: backend storage")
             raise
         except Exception as e:
-            logger.warning(f"Auto-reconnect to {cluster_id} failed: {e}")
+            logger.warning(
+                f"Auto-reconnect to {cluster_id} failed: {e}",
+                extra=telemetry.dial_fields(cluster_id, dial_started, "offline"),
+            )
             health.record_failure(cluster_id, f"reconnect failed: {type(e).__name__}")
 
             # audit failed reconnect
