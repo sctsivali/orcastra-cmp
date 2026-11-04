@@ -943,6 +943,8 @@ _CLUSTER_ROW_TIMEOUT_SECONDS = 30.0
 # this many rows in flight a row is refused at once rather than waiting out its wall.
 _CLUSTER_ROW_MAX_IN_FLIGHT = 64
 _ROW_UNFINISHED = "The status check did not finish in time. Refresh to try again."
+# How long a cluster list read stays fresh (see the build below).
+_LIST_FRESH_SECONDS = 30
 _ROW_UNREADABLE = "This cluster's record could not be read. The server log has the detail."
 
 
@@ -1030,7 +1032,11 @@ async def list_clusters(
         finished = not any(c.error_message == _ROW_UNFINISHED for c in clusters)
         if not finished:
             logger.info("Not caching clusters list: a row did not finish in time")
-        return Built(value=response, body=response.model_dump(), fresh_for=180 if finished else None)
+        # Owner decision 2026-11-04: 30 s, was 180. A recovery clears this list at once, a failure
+        # does not, so a cluster going down read online until the entry aged out: 88 s in the
+        # lab, up to 180. Past 30 s a read is served stale and refreshed in the background, so an
+        # open page shows the change on its next look.
+        return Built(value=response, body=response.model_dump(), fresh_for=_LIST_FRESH_SECONDS if finished else None)
 
     try:
         # e1: the body moved into the stale-while-revalidate envelope and gained collected_at.

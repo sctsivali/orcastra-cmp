@@ -251,3 +251,33 @@ def test_a_list_with_an_unfinished_row_is_never_cached(client, monkeypatch) -> N
     monkeypatch.setattr(module, "_cluster_info_blocking", real_row)
     _rows(client)
     assert len(cache.writes) == 1
+
+
+def test_a_finished_list_is_fresh_for_thirty_seconds(client, monkeypatch) -> None:
+    """Owner decision 2026-11-04: a cluster going down shows within about 35 s, not 180.
+
+    A recovery clears the list at once and a failure does not, so after a cluster stopped
+    answering the list read online until its entry aged out: 88 s in the lab, up to 180.
+    """
+    from app.core.swr import SWR_MAX_STALE_SECONDS
+    from app.routers import cluster_registration as module
+
+    class _Cache:
+        def __init__(self) -> None:
+            self.writes: List[Any] = []
+
+        def get(self, namespace: str, key: str) -> Any:
+            return None
+
+        def set(self, namespace: str, key: str, value: Any, ttl: int = 0) -> None:
+            self.writes.append((value, ttl))
+
+    cache = _Cache()
+    monkeypatch.setattr("app.core.cache.get_cache_manager", lambda: cache)
+    monkeypatch.setattr(module, "get_resource_list_generation", lambda *_args, **_kwargs: 1)
+
+    _rows(client)
+
+    [(envelope, ttl)] = cache.writes
+    assert envelope["s"] == 30
+    assert ttl == 30 + SWR_MAX_STALE_SECONDS
