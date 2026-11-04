@@ -8,9 +8,10 @@ from pylxd import Client
 
 from app.core.url_safety import normalize_endpoint
 from app.services.lxd import cert_files, health
-from app.services.lxd.connection import DEFAULT_LXD_TIMEOUT
+from app.services.lxd.connection import DEFAULT_LXD_TIMEOUT, FingerprintHTTPAdapter
 from app.services.lxd.exceptions import LXDLocalStorageError
 
+from .pinning import PinState
 from .types import ConnectionProbe, LXDCertManagerError
 
 logger = logging.getLogger(__name__)
@@ -168,9 +169,20 @@ class ConnectivityMixin:
             # host must not cost 45s on every dashboard fan-out request.
             last_error = None
             response = None
+            # important: held to the registered certificate pin when there is one, like every
+            # other connection to the cluster (connection.FingerprintHTTPAdapter). A bare
+            # requests.get with verify=False presented our client certificate to whatever
+            # answered the endpoint. No pin yet (a cluster never connected): unchanged, since a
+            # probe must not be the thing that mints one.
+            get = requests.get
+            pin = PinState.from_metadata(metadata)
+            if pin is not None and pin.fingerprint:
+                session = requests.Session()
+                session.mount("https://", FingerprintHTTPAdapter(server_fingerprint=pin.fingerprint))
+                get = session.get
             for attempt in range(2):
                 try:
-                    response = requests.get(
+                    response = get(
                         test_url,
                         cert=(cert_path, key_path),
                         verify=False,

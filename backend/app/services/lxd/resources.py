@@ -333,12 +333,13 @@ class ResourceManager:
             status.auth = host_info.get("auth")
             status.environment = public_environment(host_info.get("environment"))
             
-            # Parse tags from server config
-            # Use direct API call to get fresh data (avoid pylxd caching)
+            # Parse tags from server config.
+            # note: from host_info, not a second GET /1.0. The status path asks get_client to
+            # validate, and that probe already replaced host_info with the server's answer in
+            # this same read (connection._validate_connection), so a direct call here repeated
+            # the round trip on every /nodes, monitoring and OrcaHub status read.
             try:
-                response = client.api.get()
-                server_data = response.json()["metadata"]
-                server_config = server_data.get("config", {})
+                server_config = (host_info or {}).get("config", {}) or {}
                 tags_str = server_config.get("user.tags", "")
                 tags = [tag.strip() for tag in tags_str.split(",") if tag.strip()] if tags_str else []
                 status.tags = tags

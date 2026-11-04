@@ -475,8 +475,20 @@ async def get_all_system_warnings(
                         # Check node connectivity. A cluster this worker already knows is down is
                         # reported from that verdict: the healer redials it, not this feed (see
                         # fanout.known_down), and a silent host cost the probe up to 22 s.
-                        down = known_down(cluster_id, getattr(lxd_service, "connection_manager", None))
-                        if down is not None:
+                        manager = getattr(lxd_service, "connection_manager", None)
+                        down = known_down(cluster_id, manager)
+                        pooled = (
+                            manager.get_cached_client(cluster_id)
+                            if down is None and hasattr(manager, "get_cached_client")
+                            else None
+                        )
+                        if pooled is not None:
+                            # A pooled client validated in this read answers the question the
+                            # probe asks (did it answer, does it trust us) without a second TLS
+                            # connect and a fresh Vault read per cluster.
+                            connected = manager.get_client(cluster_id) is not None
+                            error_msg = None if connected else "Cluster is not reachable"
+                        elif down is not None:
                             connected = False
                             error_msg = (
                                 "Certificate not trusted by the cluster"
