@@ -240,6 +240,7 @@ function StoragePoolsContent() {
         noun="storage pools"
         nodes={reach.unreachable}
         partialNodes={reach.partial}
+        lateNodes={reach.late}
         reasons={reach.reasons}
       />
 

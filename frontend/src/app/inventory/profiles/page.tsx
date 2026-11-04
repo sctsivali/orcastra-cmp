@@ -273,6 +273,7 @@ function ProfilesContent() {
         noun="profiles"
         nodes={reach.unreachable}
         partialNodes={reach.partial}
+        lateNodes={reach.late}
         reasons={reach.reasons}
       />
 

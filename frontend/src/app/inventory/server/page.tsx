@@ -161,6 +161,7 @@ export default function ServerPage() {
         noun="server details"
         nodes={reach.unreachable}
         partialNodes={reach.partial}
+        lateNodes={reach.late}
         reasons={reach.reasons}
       />
 

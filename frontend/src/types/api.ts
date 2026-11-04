@@ -967,8 +967,13 @@ export interface FanoutReachability {
   /** Clusters that answered but lost some rows; node_errors names what was lost. */
   partial_nodes?: string[];
   /**
-   * Reason per cluster in either list, prefixed "unreachable:", "forbidden:", "error:" or
-   * "partial:". Absent for Tenant callers, who see the banner without the diagnosis.
+   * Clusters still reading past the backend's per-cluster wait. Their rows come with a later
+   * answer (the backend finishes the read in the background), so the list asks again soon.
+   */
+  late_nodes?: string[];
+  /**
+   * Reason per cluster in these lists, prefixed "unreachable:", "forbidden:", "error:",
+   * "partial:" or "late:". Absent for Tenant callers, who see the banner without the diagnosis.
    */
   node_errors?: Record<string, string>;
 }

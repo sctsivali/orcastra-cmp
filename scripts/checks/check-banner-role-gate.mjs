@@ -155,7 +155,7 @@ const noticeBody = executable.slice(
 const noticeHoles = [...noticeBody.matchAll(/\$\{([^}]*)\}/g)].map((m) => m[1].trim());
 // note: partialNodes, partial and unreachable too. The banner takes two name lists since the
 // partially read clusters joined the unreachable ones in one card, and either is a channel.
-if (noticeHoles.join(',') !== 'noun' || /\b(?:nodes|partialNodes|partial|unreachable|reasons)\b/.test(noticeBody)) {
+if (noticeHoles.join(',') !== 'noun' || /\b(?:nodes|partialNodes|lateNodes|partial|late|unreachable|reasons)\b/.test(noticeBody)) {
   offenders.push('UnreachableNodesNotice prints something other than its noun');
 }
 
@@ -213,7 +213,9 @@ if (roles.join(',') !== 'ADMIN,PARTNER,TENANT') {
 
 // --- 4. no call site invents a second channel -------------------------------------------------
 
-const ALLOWED_PROPS = new Set(['nodes', 'partialNodes', 'noun', 'partialNoun', 'reasons', 'className', 'key']);
+// lateNodes are node names on the same footing as nodes: the banner shows them to Partner and
+// above only, and the tenant notice below never receives them.
+const ALLOWED_PROPS = new Set(['nodes', 'partialNodes', 'lateNodes', 'noun', 'partialNoun', 'reasons', 'className', 'key']);
 // The one noun that is not a literal: a specification category's title, from a fixed list.
 const NOUN_EXPRESSIONS = new Set(['`${category?.title ?? "instance"} specifications`']);
 

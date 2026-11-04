@@ -562,7 +562,12 @@ export function freshParam(endpoint: string, fresh?: boolean): string {
 const staleBodies = new WeakSet<object>();
 
 function noteServedStale(body: unknown, cacheHeader: string | null): void {
-  if (cacheHeader === "stale" && body !== null && typeof body === "object") {
+  if (body === null || typeof body !== "object") return;
+  // note: a body naming a cluster that is still reading (late_nodes) converges the same way: the
+  // backend finishes that read in the background and rebuilds the entry, so looking again in a
+  // few seconds finds its rows. Read off the body, not a header, so a cached copy counts too.
+  const late = (body as { late_nodes?: unknown }).late_nodes;
+  if (cacheHeader === "stale" || (Array.isArray(late) && late.length > 0)) {
     staleBodies.add(body);
   }
 }

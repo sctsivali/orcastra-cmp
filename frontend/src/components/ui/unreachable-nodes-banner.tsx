@@ -12,6 +12,7 @@ import type { FanoutReachability } from "@/types/api";
 export interface Reachability {
   unreachable: string[];
   partial: string[];
+  late: string[];
   reasons?: Record<string, string>;
 }
 
@@ -25,6 +26,7 @@ export function reachabilityOf(payload: unknown): Reachability {
   return {
     unreachable: Array.isArray(data.unreachable_nodes) ? data.unreachable_nodes : [],
     partial: Array.isArray(data.partial_nodes) ? data.partial_nodes : [],
+    late: Array.isArray(data.late_nodes) ? data.late_nodes : [],
     reasons: data.node_errors && typeof data.node_errors === "object" ? data.node_errors : undefined,
   };
 }
@@ -38,6 +40,11 @@ interface UnreachableNodesBannerProps {
    * problems, and neither said how many clusters were short in all.
    */
   partialNodes?: string[] | undefined;
+  /**
+   * Nodes still reading past the backend's per-cluster wait (late_nodes). Not an outage: their
+   * rows arrive with a later answer, so they get their own sentence and are marked in the list.
+   */
+  lateNodes?: string[] | undefined;
   /** What is missing, lowercase plural, ex; "networks", "storage pools". */
   noun: string;
   /**
@@ -60,6 +67,7 @@ interface UnreachableNodesBannerProps {
 type DetailProps = Pick<UnreachableNodesBannerProps, "noun" | "partialNoun" | "reasons" | "className"> & {
   unreachable: string[];
   partial: string[];
+  late: string[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
 };
@@ -69,7 +77,7 @@ type DetailProps = Pick<UnreachableNodesBannerProps, "noun" | "partialNoun" | "r
 const SCROLL_AFTER = 8;
 
 // The API prefixes a reason with its kind. Under "Could not reach" the prefix says nothing twice.
-const REASON_KIND = /^(?:unreachable|forbidden|error|partial):\s*/;
+const REASON_KIND = /^(?:unreachable|forbidden|error|partial|late):\s*/;
 
 /**
  * The sentence for both shapes at once. A partial read says "could not fully read", so a regex on
@@ -83,23 +91,33 @@ function sentenceFor(
   partial: number,
   noun: string,
   partialNoun: string = noun,
+  late: number = 0,
 ): { lead: string; tail: string } {
   const incomplete = "so this list may be incomplete.";
+  // A cluster still reading is not missing for good: its rows come with a later answer.
+  const stillLoading =
+    late > 0 ? ` Still loading ${late} more, shown when ${late === 1 ? "it answers" : "they answer"}.` : "";
+  if (unreachable === 0 && partial === 0) {
+    return {
+      lead: `Still loading ${plural(late, "cluster")}.`,
+      tail: `${late === 1 ? "Its" : "Their"} ${noun} are shown when ${late === 1 ? "it answers" : "they answer"}.`,
+    };
+  }
   if (unreachable > 0 && partial > 0) {
     return {
       lead: `Could not reach ${plural(unreachable, "cluster")} and could not fully read ${partial}.`,
-      tail: `Some ${noun} are not shown, ${incomplete}`,
+      tail: `Some ${noun} are not shown, ${incomplete}${stillLoading}`,
     };
   }
   if (unreachable > 0) {
     return {
       lead: `Could not reach ${plural(unreachable, "cluster")}.`,
-      tail: `${unreachable === 1 ? "Its" : "Their"} ${noun} are not shown, ${incomplete}`,
+      tail: `${unreachable === 1 ? "Its" : "Their"} ${noun} are not shown, ${incomplete}${stillLoading}`,
     };
   }
   return {
     lead: `Could not fully read ${plural(partial, "cluster")}.`,
-    tail: `Some of ${partial === 1 ? "its" : "their"} ${partialNoun} are not shown, ${incomplete}`,
+    tail: `Some of ${partial === 1 ? "its" : "their"} ${partialNoun} are not shown, ${incomplete}${stillLoading}`,
   };
 }
 
@@ -163,6 +181,7 @@ function UnreachableNodesNotice({ noun, className }: { noun: string; className?:
 function UnreachableNodesDetail({
   unreachable,
   partial,
+  late,
   noun,
   partialNoun,
   reasons,
@@ -170,9 +189,10 @@ function UnreachableNodesDetail({
   open,
   onOpenChange,
 }: DetailProps) {
-  const { lead, tail } = sentenceFor(unreachable.length, partial.length, noun, partialNoun);
+  const { lead, tail } = sentenceFor(unreachable.length, partial.length, noun, partialNoun, late.length);
   const partly = new Set(partial);
-  const sorted = [...unreachable, ...partial].sort((a, b) => a.localeCompare(b));
+  const loading = new Set(late);
+  const sorted = [...unreachable, ...partial, ...late].sort((a, b) => a.localeCompare(b));
   const scrolls = sorted.length > SCROLL_AFTER;
 
   return (
@@ -205,7 +225,11 @@ function UnreachableNodesDetail({
               const reason = reasons?.[node]?.replace(REASON_KIND, "");
               // A cluster that answered is marked, so the list can be checked against the
               // sentence: the unmarked rows are the ones that could not be reached at all.
-              const detail = partly.has(node) ? (reason ? `Partly read · ${reason}` : "Partly read") : reason;
+              const detail = partly.has(node)
+                ? (reason ? `Partly read · ${reason}` : "Partly read")
+                : loading.has(node)
+                  ? (reason ? `Still loading · ${reason}` : "Still loading")
+                  : reason;
               return (
                 // note: index in the key. Callers pass node names, which are unique, but a
                 // duplicate string here must not silently drop a row from a warning banner.
@@ -245,6 +269,7 @@ function UnreachableNodesDetail({
 export function UnreachableNodesBanner({
   nodes,
   partialNodes,
+  lateNodes,
   noun,
   partialNoun,
   reasons,
@@ -261,7 +286,9 @@ export function UnreachableNodesBanner({
   // two apart already; this keeps the list naming each cluster once if a caller ever does not.
   const reached = new Set(unreachable);
   const partial = (partialNodes ?? []).filter((node) => !reached.has(node));
-  if (unreachable.length === 0 && partial.length === 0) return null;
+  const partlySet = new Set(partial);
+  const late = (lateNodes ?? []).filter((node) => !reached.has(node) && !partlySet.has(node));
+  if (unreachable.length === 0 && partial.length === 0 && late.length === 0) return null;
 
   // important: nothing, rather than the wrong copy, while the first session read is outstanding.
   // usePermissions reports isLoading only when there is no session to read roles from, which is
@@ -284,6 +311,7 @@ export function UnreachableNodesBanner({
     <UnreachableNodesDetail
       unreachable={unreachable}
       partial={partial}
+      late={late}
       noun={noun}
       partialNoun={partialNoun}
       reasons={reasons}
