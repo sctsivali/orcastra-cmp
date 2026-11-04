@@ -569,10 +569,12 @@ class CacheManager:
         # Images as well: a cluster that answers again brings its image store back into the list.
         # The storage, network and IPAM lists remember an outage too, and would keep naming a
         # recovered cluster for their degraded TTL.
+        # Fleet snapshots name an unreachable cluster as well, and since they are served stale for
+        # up to SWR_MAX_STALE_SECONDS they would otherwise keep naming a recovered one that long.
         self.invalidate_resource_cache(
             "clusters", "projects", "regions", "warnings", "images",
             "storage_pools", "storage_pool_resources", "storage_volumes",
-            "networks", "profiles", "ipam",
+            "networks", "profiles", "ipam", "snapshots_fleet",
         )
         self.delete("vault_list", get_settings().vault_clusters_path.replace("/data/", "/metadata/"))
         self.invalidate_instance_cache()
