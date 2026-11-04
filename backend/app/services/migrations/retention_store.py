@@ -15,6 +15,7 @@ from sqlalchemy import and_, delete, insert, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.migration_models import MigrationJob, MigrationPlan, MigrationResourceLock
+from app.services.project_grants import revoke_project_grants
 
 from .metadata_cutover import InstanceIdentity, move_instance_records
 from .repository import RepositoryConflict, enqueue_event, utcnow
@@ -196,6 +197,7 @@ async def finish_rollback(
     outbox_events: list[dict[str, Any]],
     error_code: Optional[str] = None,
     error_message: Optional[str] = None,
+    revoke_rule_ids: Optional[list[int]] = None,
 ) -> dict[str, int]:
     """End a rollback or an abort: terminal job, every lock released, metadata restored."""
     now = utcnow()
@@ -228,6 +230,16 @@ async def finish_rollback(
             old=target_identity(job),
             new=source_identity(job, uuid=source_uuid),
             organization_id=job.source_organization_id,
+        )
+    if revoke_rule_ids:
+        # As on a project delete: no rule may outlive the project this job created and removed.
+        # On a shared cluster another organization's later project of that name would inherit it.
+        await revoke_project_grants(
+            db,
+            cluster_id=job.target_cluster_id,
+            project_name=job.target_project,
+            commit=False,
+            only_rule_ids=revoke_rule_ids,
         )
     await _events(
         db,

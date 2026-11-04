@@ -48,6 +48,26 @@ class MigrationAuthorityUnavailable(MigrationUnknown):
         self.code = code
 
 
+class MigrationClusterUnavailable(MigrationUnknown):
+    """A cluster, or the store holding its certificate pin, did not answer. Nothing was learned.
+
+    It says nothing about the job's outcome, so a job that had not changed anything yet waits
+    and retries, and one that had backs off and reconciles, instead of entering manual recovery.
+    """
+
+    def __init__(self, message: str, *, code: str = "cluster_unavailable") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class MigrationPreMutationRefusal(MigrationConflict):
+    """The worker refused a queued job before it changed anything, so the job ends cleanly."""
+
+    def __init__(self, message: str, *, code: str = "preflight_blocked") -> None:
+        super().__init__(message)
+        self.code = code
+
+
 class TransferFailed(RuntimeError):
     """The daemon definitively refused or failed a step before any target was activated."""
 

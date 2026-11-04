@@ -5,9 +5,13 @@ from __future__ import annotations
 import asyncio
 import secrets
 import socket
+import time
 from datetime import timedelta
 from typing import Any
 
+import requests
+
+from app.core.blocking import BlockingPoolFull, BlockingTimeout
 from app.core.config import get_settings
 from app.core.database import async_session_maker
 from app.models.migration_models import MigrationJob, MigrationResource
@@ -25,21 +29,37 @@ from .context import (
 from .contracts import (
     MigrationAuthorityError,
     MigrationAuthorityUnavailable,
+    MigrationClusterUnavailable,
     MigrationLeaseLost,
+    MigrationPreMutationRefusal,
     MigrationUnknown,
     _HEARTBEAT_SECONDS,
     _worker_fence,
     logger,
 )
+from .preflight import InventoryReadError
 from .reconciliation import _reconcile, _reconciliation_backoff_values
 from .retention import run_cleanup
 from .retention_store import schedule_due_cleanups
 from .rollback import run_abort, run_rollback
 from .security import MigrationSecurityError, sanitize_error, sanitize_payload
-from .transfer import _perform_copy_or_cutover, resume_after_transfer
+from .transfer import _perform_copy_or_cutover, resume_after_transfer, untouched
 
 _RECOVERY_PHASES = frozenset({"cleaning_up", "rolling_back"})
 _AUTHORITY_RETRY_DELAY = timedelta(seconds=60)
+# A queued job whose cluster stays away this many claims in a row (one a minute) is failed, so a
+# decommissioned cluster cannot hold a concurrency slot forever.
+_PRE_MUTATION_RETRY_LIMIT = 10
+# Calls that never got an answer: connection drops and timeouts on the daemon socket, a migration
+# worker pool that shed the call, and an inventory that could not be read. A queued job retries
+# them; one that may have submitted backs off and reconciles, bounded by the unknown streak.
+_UNANSWERED = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    BlockingTimeout,
+    BlockingPoolFull,
+    InventoryReadError,
+)
 
 activity_logger = get_activity_logger()
 _tasks: set[asyncio.Task[Any]] = set()
@@ -405,22 +425,35 @@ async def run_migration_job(job_id: str, *, allow_mutation: bool = False) -> Non
                 error_message=sanitize_error(exc),
                 event_message="Migration paused because authorization or cluster identity changed.",
             )
-    except (MigrationUnknown, MigrationSecurityError) as exc:
-        values = _reconciliation_backoff_values(
-            job,
-            error_code="operation_outcome_unknown",
-            error_message=sanitize_error(exc),
-        )
-        if values.get("status") == "unknown" and (
-            job.phase in _RECOVERY_PHASES or job.scope == "project"
-        ):
-            # Keep the phase so the retry resumes the same convergent runner.
-            values["phase"] = job.phase
+    except MigrationPreMutationRefusal as exc:
+        # Refused at claim, before any daemon change: end the job so its locks and slot go free.
         await _fenced_job_update(
             job,
             worker_id,
-            **values,
+            phase="failed",
+            status="failure",
+            locked_by=None,
+            lease_expires_at=None,
+            error_code=exc.code,
+            error_message=sanitize_error(exc),
+            terminal=True,
+            event_message="Execution stopped before any change was made.",
         )
+    except MigrationClusterUnavailable as exc:
+        if await _changed_nothing(job):
+            await _retry_queued_later(job, worker_id, exc)
+        else:
+            await _back_off_unknown(job, worker_id, exc)
+    except (MigrationUnknown, MigrationSecurityError) as exc:
+        await _back_off_unknown(job, worker_id, exc)
+    except _UNANSWERED as exc:
+        # A read or connection that did not complete decides nothing, unlike an error a daemon
+        # sent back. It used to reach the catch-all below after one blip.
+        unavailable = MigrationClusterUnavailable(sanitize_error(exc))
+        if await _changed_nothing(job):
+            await _retry_queued_later(job, worker_id, unavailable)
+        else:
+            await _back_off_unknown(job, worker_id, unavailable)
     except Exception as exc:  # noqa: BLE001
         # Only explicit fresh-preflight blockers above are known to precede mutation. Once a
         # worker enters execution, a lost response may hide an accepted daemon operation, so a
@@ -456,10 +489,111 @@ async def run_migration_job(job_id: str, *, allow_mutation: bool = False) -> Non
         logger.warning("Could not deliver migration outbox for %s: %s", job_id, sanitize_error(exc))
 
 
+async def _back_off_unknown(job: MigrationJob, worker_id: str, exc: BaseException) -> None:
+    values = _reconciliation_backoff_values(
+        job,
+        error_code="operation_outcome_unknown",
+        error_message=sanitize_error(exc),
+    )
+    if values.get("status") == "unknown" and (
+        job.phase in _RECOVERY_PHASES or job.scope == "project"
+    ):
+        # Keep the phase so the retry resumes the same convergent runner.
+        values["phase"] = job.phase
+    await _fenced_job_update(
+        job,
+        worker_id,
+        **values,
+    )
+
+
+async def _changed_nothing(job: MigrationJob) -> bool:
+    """Claimed in queued and no resource recorded a submission since.
+
+    important: the journal decides, not `job.phase`. The instance runner writes its phases to the
+    database only, so the claimed object still says queued after the source stopped and the
+    transfer started; a fault there must reconcile, never retry from the start or fail as if
+    nothing had happened (security review F1).
+    """
+    if job.phase != "queued":
+        return False
+    try:
+        return untouched(await _resources(job.job_id))
+    except Exception:  # noqa: BLE001 - an unreadable journal proves nothing; reconcile instead
+        return False
+
+
+async def _retry_queued_later(
+    job: MigrationJob, worker_id: str, exc: MigrationClusterUnavailable
+) -> None:
+    """A queued job changed nothing: wait a minute and claim it again, or give up cleanly."""
+    # note: the persisted state, which the run may have extended (billing_override_audited) since
+    # the claim; writing the claim-time copy back would emit those events a second time.
+    async with async_session_maker() as db:
+        current = await repository.get_job(db, job.job_id)
+    state = dict((current.safe_result if current is not None else job.safe_result) or {})
+    raw = state.get("cluster_unavailable_retries", 0)
+    retries = (raw if isinstance(raw, int) and not isinstance(raw, bool) else 0) + 1
+    if retries > _PRE_MUTATION_RETRY_LIMIT:
+        await _fenced_job_update(
+            job,
+            worker_id,
+            phase="failed",
+            status="failure",
+            locked_by=None,
+            lease_expires_at=None,
+            error_code=exc.code,
+            error_message=sanitize_error(exc),
+            terminal=True,
+            event_message="Execution stopped before any change: a cluster stayed unreachable.",
+        )
+        return
+    async with async_session_maker() as db:
+        await repository.set_job(
+            db,
+            job.job_id,
+            worker_id=worker_id,
+            fence_token=job.fence_token,
+            status="pending",
+            locked_by=None,
+            lease_expires_at=repository.utcnow() + _AUTHORITY_RETRY_DELAY,
+            error_code=exc.code,
+            error_message=sanitize_error(exc),
+            safe_result=sanitize_payload({**state, "cluster_unavailable_retries": retries}),
+        )
+
+
+# One drain stops taking new rows after this long; the rest go back for the next tick. Below the
+# 90 s outbox lease with a 10 s receiver timeout to spare.
+_DRAIN_BUDGET_SECONDS = 30
+
+
+def _monotonic() -> float:
+    return time.monotonic()
+
+
+_last_plan_purge: list[float] = []
+
+
+async def _purge_stale_plans_hourly(db: Any) -> None:
+    now = asyncio.get_running_loop().time()
+    if _last_plan_purge and now - _last_plan_purge[0] < 3600:
+        return
+    _last_plan_purge[:] = [now]
+    try:
+        removed = await repository.purge_stale_plans(db)
+    except Exception as exc:  # noqa: BLE001 - a purge never blocks recovery; it runs again next hour
+        logger.warning("Could not purge stale migration plans: %s", sanitize_error(exc))
+        return
+    if removed:
+        logger.info("Purged %s expired migration plans no job refers to.", removed)
+
+
 async def recover_migration_jobs() -> int:
     """Run one idempotent recovery sweep; database leases arbitrate multiple workers."""
     async with async_session_maker() as db:
         await repository.mark_expired_plans(db)
+        await _purge_stale_plans_hourly(db)
         settings = get_settings()
         await schedule_due_cleanups(
             db,
@@ -491,7 +625,16 @@ async def drain_migration_audits() -> int:
             for job_id in {row.job_id for row in rows}
         }
     delivered = 0
-    for row in rows:
+    started = _monotonic()
+    for index, row in enumerate(rows):
+        if _monotonic() - started > _DRAIN_BUDGET_SECONDS:
+            # important: a slow receiver must not hold the recovery tick, and rows kept past
+            # their 90 s lease were claimed and sent a second time.
+            async with async_session_maker() as db:
+                await repository.release_outbox(
+                    db, [left.event_id for left in rows[index:]], worker_id=worker_id
+                )
+            break
         payload = row.payload or {}
         job = jobs.get(row.job_id)
         try:
@@ -534,5 +677,6 @@ async def drain_migration_audits() -> int:
                     worker_id=worker_id,
                     delivered=False,
                     error=sanitize_error(exc),
+                    attempts=int(getattr(row, "attempts", 1) or 1),
                 )
     return delivered

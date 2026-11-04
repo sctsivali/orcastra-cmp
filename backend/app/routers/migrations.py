@@ -51,6 +51,7 @@ from app.services.migrations.orchestrator import (
     MigrationNotFound,
     _authority_pin,
 )
+from app.services.migrations.contracts import MigrationClusterUnavailable
 from app.services.migrations.metrics import collect_migration_metrics
 from app.services.migrations.presenters import job_response, plan_response
 from app.services.migrations.repository import MigrationListVisibility
@@ -165,6 +166,8 @@ async def _service_call(awaitable: Awaitable[Any]) -> Any:
         ) from exc
     except (MigrationConflict, MigrationSecurityError) as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except MigrationClusterUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -354,7 +357,11 @@ async def get_plan(
     return plan_response(row)
 
 
-@router.patch("/plans/{plan_id}", response_model=MigrationPlanResponse)
+@router.patch(
+    "/plans/{plan_id}",
+    response_model=MigrationPlanResponse,
+    dependencies=[Depends(require_migration_admission)],
+)
 async def patch_plan(
     plan_id: str,
     body: MigrationPlanPatchRequest,

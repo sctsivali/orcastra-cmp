@@ -12,7 +12,10 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from app.core.config import get_settings
+from sqlalchemy import select
+
 from app.core.database import async_session_maker
+from app.models.db_models import TenantPolicyRule
 from app.models.migration_models import MigrationJob, MigrationResource
 
 from . import executor, repository
@@ -189,7 +192,8 @@ async def _start_source_if_needed(
         "source_identity_hash"
     ):
         raise MigrationUnknown(f"Source '{source_name}' no longer matches its pinned identity.")
-    if state.get("source_autostart_fenced"):
+    if state.get("source_autostart_fenced") or state.get("source_autostart_fence_intent"):
+        # note: restoring is safe either way; a fence that never landed is set to the same value.
         original = state.get("original_autostart_local")
         await _assert_mutation_lease()
         operation_id = await _blocking(
@@ -201,7 +205,7 @@ async def _start_source_if_needed(
             label=f"migration.restore_autostart[{source_name}]",
         )
         await _await(source_client, operation_id, job.source_project, "migration.restore_autostart")
-        state = {**state, "source_autostart_fenced": False}
+        state = {**state, "source_autostart_fenced": False, "source_autostart_fence_intent": False}
         await _resource_update(resource.resource_id, state="cleaning", safe_result=state)
     state = await unfence_source_nics(job, resource, state, source_client)
     if state.get("original_status") == "running" and _status(source) != "running":
@@ -227,8 +231,13 @@ async def _start_source_if_needed(
 
 async def remove_created_project_if_empty(
     job: MigrationJob, resources: list[MigrationResource], target_client: Any
-) -> None:
-    """Delete a target project this job created, only when nothing else lives in it."""
+) -> list[int]:
+    """Delete a target project this job created, only when nothing else lives in it.
+
+    Returns the ids of the access rules that named the project when it was deleted, so those go
+    too. They are recorded before the delete: a rollback resumed later revokes only them, never a
+    rule written since for a new project of the same name (security review F3).
+    """
     project_resource = next(
         (
             resource
@@ -239,12 +248,16 @@ async def remove_created_project_if_empty(
         None,
     )
     if project_resource is None:
-        return
+        return []
     record = await _blocking(
         executor.read_project, target_client, project=job.target_project, label="migration.created_project"
     )
-    if record is None or not created_by_job(record, job.job_id):
-        return
+    recorded = [int(rule) for rule in (project_resource.safe_result or {}).get("project_rule_ids") or []]
+    if record is None:
+        # Gone already, for example deleted by an earlier run of this rollback.
+        return recorded
+    if not created_by_job(record, job.job_id):
+        return []
     from . import preflight
 
     inventory = await _blocking(
@@ -254,11 +267,28 @@ async def remove_created_project_if_empty(
         label="migration.created_project_inventory",
     )
     if preflight._occupied_resources(inventory):
-        return
+        return []
+    rule_ids = await _project_rule_ids(job.target_cluster_id, job.target_project)
+    await _resource_update(
+        project_resource.resource_id,
+        safe_result={**(project_resource.safe_result or {}), "project_rule_ids": rule_ids},
+    )
     await _assert_mutation_lease()
     await _blocking(
         executor.delete_project, target_client, project=job.target_project, label="migration.delete_created_project"
     )
+    return rule_ids
+
+
+async def _project_rule_ids(cluster_id: str, project: str) -> list[int]:
+    async with async_session_maker() as db:
+        rows = await db.execute(
+            select(TenantPolicyRule.id).where(
+                TenantPolicyRule.cluster_id == cluster_id,
+                TenantPolicyRule.project_name == project,
+            )
+        )
+        return sorted(int(rule_id) for rule_id in rows.scalars())
 
 
 async def abort_before_activation(
@@ -347,7 +377,7 @@ async def run_abort(
         if state.get("source_identity_hash"):
             state = await _start_source_if_needed(job, resource, state, source_client)
         await _resource_update(resource.resource_id, state="failed", safe_result=state)
-    await remove_created_project_if_empty(job, resources, target_client)
+    project_rules = await remove_created_project_if_empty(job, resources, target_client)
     try:
         async with async_session_maker() as db:
             await finish_rollback(
@@ -363,6 +393,7 @@ async def run_abort(
                 outbox_events=[],
                 error_code=str((job.safe_result or {}).get("abort_code") or "transfer_failed"),
                 error_message=str((job.safe_result or {}).get("abort_reason") or "Transfer failed."),
+                revoke_rule_ids=project_rules,
             )
     except repository.RepositoryConflict as exc:
         raise MigrationLeaseLost(str(exc)) from exc
@@ -432,7 +463,7 @@ async def run_rollback(
         state = await _start_source_if_needed(job, resource, state, source_client)
         source_uuid = ((source.get("config") or {}).get("volatile.uuid")) or source_uuid
         await _resource_update(resource.resource_id, state="completed", safe_result=state)
-    await remove_created_project_if_empty(job, resources, target_client)
+    project_rules = await remove_created_project_if_empty(job, resources, target_client)
     try:
         async with async_session_maker() as db:
             await finish_rollback(
@@ -448,6 +479,7 @@ async def run_rollback(
                 outbox_events=removal_events(
                     job, role="target", occurred_at=repository.utcnow().isoformat()
                 ),
+                revoke_rule_ids=project_rules,
             )
     except repository.RepositoryConflict as exc:
         raise MigrationLeaseLost(str(exc)) from exc

@@ -95,9 +95,27 @@ async def run_project_cleanup(
     resources = await _resources(job.job_id)
     project_resource = next(iter(_of_type(resources, "project")), None)
     known = frozenset((project_resource.safe_result or {}).get("disposable_images") or []) if project_resource else frozenset()
+    deleted_any = any(
+        (resource.safe_result or {}).get("cleanup_submission_intent") for resource in _of_type(resources, "instance")
+    )
+    if deleted_any and await _blocking(
+        executor.read_project, source_client, project=job.source_project, label="migration.cleanup_project_gone"
+    ) is None:
+        # important: an earlier run already deleted the source project (a delete that timed out
+        # but landed, or a worker lost right after it). Only the bookkeeping is left; reading the
+        # missing project's inventory failed every Recheck instead.
+        for resource in resources:
+            await _resource_update(resource.resource_id, state="completed")
+        await _finish(job, worker_id, resources)
+        return
     drift = await _drift(job, resources, source_client, target_client, known_images=known)
     if drift is not None:
-        await _refuse(job, worker_id, *drift)
+        if deleted_any:
+            # Something is already deleted: going back to retention would offer a rollback that
+            # cannot restore it.
+            await _manual_recovery(job, worker_id, code=drift[0], message=drift[1])
+        else:
+            await _refuse(job, worker_id, *drift)
         return
     # The base images are only provable while the instances that name them still exist, so the
     # set is recorded before the first delete and reused if Finalize resumes after a crash.
@@ -113,9 +131,6 @@ async def run_project_cleanup(
             state="cleaning",
             safe_result={**(project_resource.safe_result or {}), "disposable_images": sorted(base_images)},
         )
-    deleted_any = any(
-        (resource.safe_result or {}).get("cleanup_submission_intent") for resource in _of_type(resources, "instance")
-    )
     for resource in _of_type(resources, "instance"):
         state = dict(resource.safe_result or {})
         source_name, _target = _names(resource)
@@ -148,6 +163,10 @@ async def run_project_cleanup(
     for resource in resources:
         if resource.resource_type != "instance":
             await _resource_update(resource.resource_id, state="completed")
+    await _finish(job, worker_id, resources)
+
+
+async def _finish(job: MigrationJob, worker_id: str, resources: list[MigrationResource]) -> None:
     trigger = str((job.safe_result or {}).get("cleanup_trigger") or "finalize")
     try:
         async with async_session_maker() as db:

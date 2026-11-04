@@ -81,7 +81,8 @@ def _available_actions(job: MigrationJob, resources: list[Any]) -> list[Migratio
     if (
         job.phase == "queued"
         and job.status == "pending"
-        and job.lease_expires_at is None
+        # A retry delay is a lease nobody holds; the job can still be cancelled while it waits.
+        and (job.lease_expires_at is None or job.locked_by is None)
         and no_mutation
     ) or (
         job.phase == "cutover_pending" and job.status == "waiting" and no_mutation

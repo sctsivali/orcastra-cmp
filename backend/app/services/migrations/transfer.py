@@ -26,7 +26,13 @@ from .context import (
     _resource_update,
     _resources,
 )
-from .contracts import MigrationAuthorityError, MigrationUnknown, _blocking
+from .contracts import (
+    MigrationAuthorityError,
+    MigrationConflict,
+    MigrationPreMutationRefusal,
+    MigrationUnknown,
+    _blocking,
+)
 from .operation_wait import await_operation, transfer_deadline_seconds
 from .plan_contracts import _target_pool, approved_root_pool
 from .preparation import _ensure_project_target, _prepare_sources
@@ -570,6 +576,28 @@ async def _admit_worker_run(
         )
 
 
+def untouched(resources: list[Any]) -> bool:
+    """No resource recorded a daemon submission or left its first state: nothing was changed."""
+    return all(
+        not resource.operation_refs and resource.state in {"pending", "blocked"}
+        for resource in resources
+    )
+
+
+async def admit_untouched_run(
+    job: MigrationJob, worker_id: str, source_client: Any, report: dict[str, Any]
+) -> None:
+    """`_admit_worker_run` for a job that changed nothing yet: a refusal ends the job cleanly.
+
+    note: for example a dir-pool target that filled up after approval now needs a consent the
+    operator never gave. Waiting cannot fix that, and manual recovery would hold the slot.
+    """
+    try:
+        await _admit_worker_run(job, worker_id, source_client, report)
+    except MigrationConflict as exc:
+        raise MigrationPreMutationRefusal(str(exc), code="acknowledgement_required") from exc
+
+
 async def _perform_copy_or_cutover(
     job: MigrationJob,
     worker_id: str,
@@ -580,9 +608,17 @@ async def _perform_copy_or_cutover(
     request = MigrationPlanCreateRequest.model_validate(plan.request_payload)
     resources = await _resources(job.job_id)
     report = await _fresh_worker_preflight(job, source_client, target_client)
+    queued = job.phase == "queued"
     if report["blockers"]:
+        if queued:
+            raise MigrationPreMutationRefusal(
+                "Fresh preflight found blockers before any change.", code="preflight_blocked"
+            )
         raise RuntimeError("Fresh cutover preflight found blockers or inventory drift.")
-    await _admit_worker_run(job, worker_id, source_client, report)
+    if queued:
+        await admit_untouched_run(job, worker_id, source_client, report)
+    else:
+        await _admit_worker_run(job, worker_id, source_client, report)
     await _fenced_job_update(
         job,
         worker_id,

@@ -14,7 +14,7 @@ from app.services.shared_cluster_audit import serialize_cluster_configuration
 
 from . import repository
 from .authority import AuthentikAuthorityVerifier
-from .context import _authoritative_clients, _job_plan
+from .context import _authoritative_clients, _job_plan, _prove_job_authority
 from .contracts import (
     MigrationAuthorityError,
     MigrationConflict,
@@ -25,6 +25,13 @@ from .project_retention_store import fence_project_for_recovery
 from .retention_store import RETAINED_PHASES, refence_target_for_rollback
 from .security import sanitize_payload
 from .worker import _schedule, run_migration_job
+
+
+# Actions that hand daemon work to the worker or fence a cluster now, so they prove both clusters
+# and their registrations at request time. Release, Cancel and Recheck change no daemon here: a
+# stuck job on a cluster that is gone for good must stay releasable, and Recheck's worker run
+# proves everything again itself.
+_DAEMON_ACTIONS = frozenset({"cutover", "confirm_external_cutover", "rollback", "cleanup"})
 
 
 def _reset_reconciliation_cycle(value: Any) -> dict[str, Any]:
@@ -94,7 +101,10 @@ class MigrationActionsMixin:
         user: Any,
         requester_role: str,
     ) -> MigrationJob:
-        row = await repository.get_job(self.db, job_id, lock=True)
+        # important: every external call (identity provider, certificate store, both daemons)
+        # runs before the row lock. Holding FOR UPDATE across them stalled the worker's heartbeat
+        # behind a slow answer, and repeated requests could pile up on the lock.
+        row = await repository.get_job(self.db, job_id)
         if row is None:
             raise MigrationNotFound("Migration job not found.")
         if row.revision != expected_revision:
@@ -108,19 +118,33 @@ class MigrationActionsMixin:
                 raise MigrationAuthorityError(
                     "The current operator is not affiliated with this migration organization."
                 )
-        # Request ContextVars do not authorize a durable action. Rebuild ownership,
-        # organization affiliation, registration fingerprints, and daemon identity now.
-        await _authoritative_clients(
-            row, current_authority=authority
-        )
+        if action in _DAEMON_ACTIONS:
+            # Request ContextVars do not authorize a durable action. Rebuild ownership,
+            # organization affiliation, registration fingerprints, and daemon identity now.
+            await _authoritative_clients(
+                row, current_authority=authority
+            )
+        elif action != "release":
+            # Cancel and Recheck change no daemon here, but still need current ownership and
+            # standing authority from the database. Release stays admin-only and needs neither,
+            # so a job on a decommissioned or deregistered cluster can always be released.
+            await _prove_job_authority(row, authority)
+        row = await repository.get_job(self.db, job_id, lock=True)
+        if row is None:
+            raise MigrationNotFound("Migration job not found.")
+        if row.revision != expected_revision:
+            raise MigrationConflict("The migration changed. Reload it before acting.")
         now = repository.utcnow()
         values: dict[str, Any]
         terminal = False
         if action == "cancel":
             if row.phase not in {"queued", "cutover_pending"}:
                 raise MigrationConflict("This phase can no longer be cancelled safely.")
+            # note: a retry delay is a lease nobody holds (locked_by is None), not a worker.
             if row.status == "running" or (
-                row.lease_expires_at is not None and row.lease_expires_at > now
+                row.locked_by is not None
+                and row.lease_expires_at is not None
+                and row.lease_expires_at > now
             ):
                 raise MigrationConflict(
                     "Cancellation cannot race an active worker; retry after its lease ends."
@@ -268,6 +292,7 @@ class MigrationActionsMixin:
             self.db,
             row.job_id,
             terminal=terminal,
+            expected_revision=expected_revision,
             event_message=f"Migration action '{action}' was accepted.",
             event_type=f"migration.{action}",
             event_actor=repository.event_actor(_authority_values(authority)),

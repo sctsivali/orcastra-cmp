@@ -241,6 +241,16 @@ async def _fence_source_autostart(
             raise MigrationUnknown(f"Retained source '{source_name}' disappeared.")
         expanded = source.get("expanded_config") or source.get("config") or {}
         if str(expanded.get("boot.autostart") or "").lower() != "true":
+            if state.get("source_autostart_fence_intent") and not state.get("source_autostart_fenced"):
+                # important: the patch landed before a crash or a failed readback. Adopt it, as the
+                # NIC fence does, instead of a contract that reads the fenced value as drift.
+                state = {
+                    **state,
+                    "source_autostart_fenced": True,
+                    "source_definition_hash": executor.instance_fingerprint(source),
+                }
+                await _resource_update(resource.resource_id, state="cutting_over", safe_result=state)
+                transferred[index] = (resource, state, contract)
             continue
         local = (source.get("config") or {}).get("boot.autostart")
         state = {

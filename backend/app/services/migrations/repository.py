@@ -392,7 +392,9 @@ async def revise_plan_preflight(
     """Persist fresh approval evidence as a new revision without accepting execution."""
     now = utcnow()
     ttl_seconds = max(60, int(get_settings().migration_plan_ttl_seconds))
-    row.preflight_payload = sanitize_payload(report)
+    # note: stored as given, like insert_plan and replace_plan. The approval hash covers this exact
+    # report; a sanitized copy differed from it, so every later execute asked to re-approve.
+    row.preflight_payload = report
     row.status = "ready" if not report.get("blockers") else "blocked"
     row.revision += 1
     row.expires_at = now + timedelta(seconds=ttl_seconds)
@@ -405,7 +407,9 @@ async def revise_plan_preflight(
 async def get_job(db: AsyncSession, job_id: str, *, lock: bool = False) -> Optional[MigrationJob]:
     stmt = select(MigrationJob).where(MigrationJob.job_id == job_id)
     if lock:
-        stmt = stmt.with_for_update()
+        # note: populate_existing, or a row this session already read keeps its stale attributes
+        # and a revision check made under the lock would compare against the earlier read.
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
@@ -718,12 +722,16 @@ async def set_job(
     event_reason: Optional[str] = None,
     terminal: bool = False,
     outbox_events: Optional[list[dict[str, Any]]] = None,
+    expected_revision: Optional[int] = None,
     **values: Any,
 ) -> bool:
     now = utcnow()
     if (event_message or outbox_events) and event_actor is None:
         raise RepositoryConflict("Migration event actor is required.")
     predicates = [MigrationJob.job_id == job_id]
+    if expected_revision is not None:
+        # Compare and set: an operator action applies only to the revision it was checked against.
+        predicates.append(MigrationJob.revision == expected_revision)
     if worker_id is not None:
         predicates.extend(
             (
@@ -936,25 +944,80 @@ async def heartbeat(db: AsyncSession, job_id: str, worker_id: str, fence_token: 
 
 
 async def recoverable_job_ids(db: AsyncSession, *, limit: int = 50) -> list[str]:
+    """Claimable jobs, every organization's oldest first, then each one's next, and so on.
+
+    important: a claim refused for want of a slot changes nothing, so ordering by age alone let
+    one organization with more queued jobs than `limit` hold the whole list and starve the rest.
+    """
     now = utcnow()
+    ranked = (
+        select(
+            MigrationJob.job_id,
+            MigrationJob.updated_at,
+            func.row_number()
+            .over(
+                partition_by=MigrationJob.source_organization_id,
+                order_by=MigrationJob.updated_at,
+            )
+            .label("turn"),
+        )
+        .where(
+            MigrationJob.status.in_(CLAIMABLE_STATUSES),
+            or_(
+                MigrationJob.lease_expires_at.is_(None),
+                MigrationJob.lease_expires_at < now,
+            ),
+        )
+        .subquery()
+    )
     return list(
         (
             await db.execute(
-                select(MigrationJob.job_id)
-                .where(
-                    MigrationJob.status.in_(CLAIMABLE_STATUSES),
-                    or_(
-                        MigrationJob.lease_expires_at.is_(None),
-                        MigrationJob.lease_expires_at < now,
-                    ),
-                )
-                .order_by(MigrationJob.updated_at)
+                select(ranked.c.job_id)
+                .order_by(ranked.c.turn, ranked.c.updated_at)
                 .limit(limit)
             )
         )
         .scalars()
         .all()
     )
+
+
+# Owner decision 2026-11-04: an operator keeps at most this many open plans, and an expired plan
+# no job refers to is removed after PLAN_RETENTION. A job's plan stays for its history.
+OPEN_PLAN_LIMIT = 50
+PLAN_RETENTION = timedelta(days=30)
+_OPEN_PLAN_STATUSES = ("draft", "preflighting", "ready", "blocked")
+
+
+async def count_open_plans(db: AsyncSession, requester: str) -> int:
+    return int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(MigrationPlan)
+                .where(
+                    MigrationPlan.requester == requester,
+                    MigrationPlan.status.in_(_OPEN_PLAN_STATUSES),
+                    MigrationPlan.expires_at > utcnow(),
+                )
+            )
+        ).scalar()
+        or 0
+    )
+
+
+async def purge_stale_plans(db: AsyncSession) -> int:
+    referenced = select(MigrationJob.job_id).where(MigrationJob.plan_id == MigrationPlan.plan_id)
+    result = await db.execute(
+        delete(MigrationPlan).where(
+            MigrationPlan.status == "expired",
+            MigrationPlan.updated_at < utcnow() - PLAN_RETENTION,
+            ~referenced.exists(),
+        )
+    )
+    await db.commit()
+    return int(result.rowcount or 0)
 
 
 async def mark_expired_plans(db: AsyncSession) -> int:
@@ -1004,6 +1067,34 @@ async def pending_outbox_rows(db: AsyncSession, *, worker_id: str, limit: int = 
     return rows
 
 
+def outbox_retry_delay(attempts: int) -> timedelta:
+    """30 s after the first failure, doubling, at most an hour: a receiver that is down for long
+    is not called every 30 s forever."""
+    # The exponent is capped first: 30 s doubled seven times already passes the hour.
+    return min(timedelta(seconds=30 * 2 ** min(max(0, attempts - 1), 7)), timedelta(hours=1))
+
+
+async def release_outbox(db: AsyncSession, event_ids: list[str], *, worker_id: str) -> None:
+    """Hand claimed rows back untried, so the next drain takes them without waiting a lease out."""
+    if not event_ids:
+        return
+    await db.execute(
+        update(MigrationAuditOutbox)
+        .where(
+            MigrationAuditOutbox.event_id.in_(event_ids),
+            MigrationAuditOutbox.locked_by == worker_id,
+            MigrationAuditOutbox.status == "delivering",
+        )
+        .values(
+            status="pending",
+            locked_by=None,
+            lease_expires_at=None,
+            attempts=MigrationAuditOutbox.attempts - 1,
+        )
+    )
+    await db.commit()
+
+
 async def finish_outbox(
     db: AsyncSession,
     event_id: str,
@@ -1011,6 +1102,7 @@ async def finish_outbox(
     worker_id: str,
     delivered: bool,
     error: Optional[str] = None,
+    attempts: int = 1,
 ) -> None:
     now = utcnow()
     values: dict[str, Any] = {
@@ -1021,7 +1113,7 @@ async def finish_outbox(
     if delivered:
         values.update(status="delivered", delivered_at=now, next_attempt_at=None)
     else:
-        values.update(status="failed", next_attempt_at=now + timedelta(seconds=30))
+        values.update(status="failed", next_attempt_at=now + outbox_retry_delay(attempts))
     await db.execute(
         update(MigrationAuditOutbox)
         .where(

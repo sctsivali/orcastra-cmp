@@ -51,7 +51,8 @@ def before_fences(source: dict[str, Any], state: Optional[dict[str, Any]]) -> di
         return source
     restored = copy.deepcopy(source)
     config = restored.setdefault("config", {})
-    if state.get("source_autostart_fenced"):
+    # The intent counts too: a fence that landed just before a crash is not recorded as fenced yet.
+    if state.get("source_autostart_fenced") or state.get("source_autostart_fence_intent"):
         original = state.get("original_autostart_local")
         if isinstance(original, str):
             config["boot.autostart"] = original

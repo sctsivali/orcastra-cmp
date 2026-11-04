@@ -53,7 +53,13 @@ from .project_retention_store import enter_project_retention, instance_pairs
 from .rollback import abort_before_activation
 from .security import sanitize_payload
 from .target_contract import TargetContract, mismatches
-from .transfer import _admit_worker_run, _approved_contract_hash, _transfer_staged, build_live_contract
+from .transfer import (
+    _approved_contract_hash,
+    _transfer_staged,
+    admit_untouched_run,
+    build_live_contract,
+    untouched,
+)
 
 
 def _names(resource: MigrationResource) -> tuple[str, str]:
@@ -303,7 +309,8 @@ async def advance(
 ) -> None:
     plan = await _job_plan(job)
     request = MigrationPlanCreateRequest.model_validate(plan.request_payload)
-    instances = _of_type(await _resources(job.job_id), "instance")
+    journal = await _resources(job.job_id)
+    instances = _of_type(journal, "instance")
     activated = any((resource.safe_result or {}).get("target_start_attempted") for resource in instances)
     transferred = bool(instances) and all(
         (resource.safe_result or {}).get("target_identity_hash") for resource in instances
@@ -313,7 +320,9 @@ async def advance(
     ):
         await _resume_activation(job, worker_id, source_client, target_client, request)
         return
-    if job.phase == "queued":
+    # important: also after a Recheck (phase reconciling) of a job that never changed anything.
+    # Skipping these there ran the forward path without the capacity, drift and consent checks.
+    if job.phase == "queued" or untouched(journal):
         report = await _fresh_worker_preflight(job, source_client, target_client)
         if report["blockers"]:
             await _fenced_job_update(
@@ -328,7 +337,7 @@ async def advance(
                 event_message="Execution stopped because fresh preflight found blockers.",
             )
             return
-        await _admit_worker_run(job, worker_id, source_client, report)
+        await admit_untouched_run(job, worker_id, source_client, report)
     try:
         await _enter_phase(job, worker_id, "preparing_target", "Creating the target project and its profiles.")
         resources = await _resources(job.job_id)

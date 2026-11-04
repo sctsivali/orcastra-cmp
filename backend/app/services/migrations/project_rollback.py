@@ -10,6 +10,7 @@ records are pointed back, in that order, each step safe to repeat.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 from app.core.database import async_session_maker
@@ -43,6 +44,9 @@ from .rollback import (
     _status,
     _stop,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def _names(resource: MigrationResource) -> tuple[str, str]:
@@ -150,7 +154,12 @@ async def delete_job_project(
             )
             await _await(client, operation_id, project, "migration.wait_delete_cached_image")
     await _assert_mutation_lease()
-    await _blocking(executor.delete_project, client, project=project, label="migration.delete_project")
+    try:
+        await _blocking(executor.delete_project, client, project=project, label="migration.delete_project")
+    except Exception as exc:  # noqa: BLE001 - settled by the readback below
+        # note: LXD can finish a slow project delete after the request timed out (1184e4bc).
+        # The readback decides; only a project that is still there is a failure.
+        logger.warning("Project delete of %s answered %s; reading it back.", project, type(exc).__name__)
     if await _blocking(executor.read_project, client, project=project, label="migration.project_deleted") is not None:
         raise MigrationUnknown(f"Project '{project}' still exists after its delete.")
 
@@ -189,11 +198,14 @@ async def _finish(
     *,
     rollback: bool,
     project_deleted: bool,
+    source_uuids: Optional[dict[str, Optional[str]]] = None,
 ) -> None:
     for resource in resources:
         if resource.resource_type != "instance":
             await _resource_update(resource.resource_id, state="completed" if rollback else "failed")
-    pairs = instance_pairs(job, resources)
+    # note: the retained sources' uuids, or the snapshot schedules moved back carried a NULL
+    # instance_uuid and no longer matched their instance.
+    pairs = instance_pairs(job, resources, source_uuids=source_uuids)
     state = job.safe_result or {}
     try:
         async with async_session_maker() as db:
@@ -310,6 +322,7 @@ async def run_project_rollback(
     resuming = any(
         (resource.safe_result or {}).get("rollback_delete_submission_intent") for resource in instances
     )
+    source_uuids: dict[str, Optional[str]] = {}
     for resource in instances:
         state = resource.safe_result or {}
         source_name, _target = _names(resource)
@@ -322,6 +335,7 @@ async def run_project_rollback(
                 message=f"Retained source '{source_name}' is missing or was replaced.",
             )
             return
+        source_uuids[source_name] = (source.get("config") or {}).get("volatile.uuid")
     project = await _blocking(
         executor.read_project, target_client, project=job.target_project, label="migration.rollback_project"
     )
@@ -390,7 +404,7 @@ async def run_project_rollback(
         await _resource_update(resource.resource_id, state="completed", safe_result=state)
     if ours:
         await delete_job_project(job, resources, target_client, side="target")
-    await _finish(job, worker_id, resources, rollback=True, project_deleted=True)
+    await _finish(job, worker_id, resources, rollback=True, project_deleted=True, source_uuids=source_uuids)
 
 
 __all__ = [

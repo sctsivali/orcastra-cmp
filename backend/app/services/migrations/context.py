@@ -8,9 +8,8 @@ from app.core.config import get_settings
 from app.core.database import async_session_maker
 from app.models.migration_models import MigrationJob, MigrationPlan, MigrationResource
 from app.models.migration_schemas import MigrationPlanCreateRequest
-from app.services.break_glass_service import cluster_pin_state
+from app.services.break_glass_service import PinStoreUnavailable, cluster_pin_state
 from app.services.instance_job_identity import resolve_instance_job_organization
-from app.services.lxd.availability import require_client
 from app.services.lxd.connection import require_client_server_fingerprint
 from app.services.lxd.exceptions import LXDTransportPinError
 from app.services.lxd_certs.pinning import LXDCertificatePinError
@@ -23,6 +22,7 @@ from .authority import AuthentikAuthorityVerifier, CurrentAuthorityError
 from .contracts import (
     MigrationAuthorityError,
     MigrationAuthorityUnavailable,
+    MigrationClusterUnavailable,
     MigrationLeaseLost,
     _assert_job_plan_pin,
     _authority_pin,
@@ -44,38 +44,8 @@ async def _authoritative_clients(
             if getattr(exc, "retryable", False):
                 raise MigrationAuthorityUnavailable(str(exc), code=exc.code) from exc
             raise MigrationAuthorityError(str(exc), code=exc.code) from exc
-    actor_email = current_authority.pin.identity.email
-    actor_role = current_authority.role.value
     source_fingerprint, target_fingerprint = await _current_job_pins(job)
-    async with async_session_maker() as db:
-        source_owner = await resolve_instance_job_organization(
-            db, cluster_id=job.source_cluster_id, project=job.source_project
-        )
-        target_owner = await resolve_instance_job_organization(
-            db, cluster_id=job.target_cluster_id, project=job.target_project
-        )
-        if (
-            source_owner.resolution != "exact"
-            or target_owner.resolution != "exact"
-            or source_owner.organization_id != job.source_organization_id
-            or target_owner.organization_id != job.target_organization_id
-            or source_owner.organization_id != target_owner.organization_id
-        ):
-            raise MigrationAuthorityError("Project ownership changed or became ambiguous.")
-        if actor_role == "partner":
-            for cluster_id, project in (
-                (job.source_cluster_id, job.source_project),
-                (job.target_cluster_id, job.target_project),
-            ):
-                refusal = await standing_authority_refusal(
-                    db,
-                    actor_email=actor_email,
-                    organization_id=job.source_organization_id,
-                    cluster_id=cluster_id,
-                    project=project,
-                )
-                if refusal is not None:
-                    raise MigrationAuthorityError(refusal.message)
+    await _prove_job_authority(job, current_authority)
     lxd_service = get_lxd_service()
     try:
         return await _bound_clients(job, lxd_service, source_fingerprint, target_fingerprint)
@@ -106,6 +76,44 @@ def _transport_refusal() -> MigrationAuthorityError:
     )
 
 
+async def _prove_job_authority(job: MigrationJob, current_authority: Any) -> None:
+    """The database half of a job's authority: exact project ownership and, for a partner,
+    standing authority on both ends. No daemon or certificate store is contacted, so an action
+    that changes no daemon (Cancel, Recheck) can still prove it while a cluster is down.
+    """
+    actor_email = current_authority.pin.identity.email
+    actor_role = current_authority.role.value
+    async with async_session_maker() as db:
+        source_owner = await resolve_instance_job_organization(
+            db, cluster_id=job.source_cluster_id, project=job.source_project
+        )
+        target_owner = await resolve_instance_job_organization(
+            db, cluster_id=job.target_cluster_id, project=job.target_project
+        )
+        if (
+            source_owner.resolution != "exact"
+            or target_owner.resolution != "exact"
+            or source_owner.organization_id != job.source_organization_id
+            or target_owner.organization_id != job.target_organization_id
+            or source_owner.organization_id != target_owner.organization_id
+        ):
+            raise MigrationAuthorityError("Project ownership changed or became ambiguous.")
+        if actor_role == "partner":
+            for cluster_id, project in (
+                (job.source_cluster_id, job.source_project),
+                (job.target_cluster_id, job.target_project),
+            ):
+                refusal = await standing_authority_refusal(
+                    db,
+                    actor_email=actor_email,
+                    organization_id=job.source_organization_id,
+                    cluster_id=cluster_id,
+                    project=project,
+                )
+                if refusal is not None:
+                    raise MigrationAuthorityError(refusal.message)
+
+
 async def _current_job_pins(job: MigrationJob) -> tuple[Any, Any]:
     """The pins the job's transports bind to now, refusing anything but its own registrations.
 
@@ -113,12 +121,19 @@ async def _current_job_pins(job: MigrationJob) -> tuple[Any, Any]:
     certificate during a long job, which is the same registration; any other change is not.
     One read per cluster answers both questions, so they cannot disagree.
     """
-    source = await cluster_pin_state(job.source_cluster_id)
-    target = (
-        source
-        if job.source_cluster_id == job.target_cluster_id
-        else await cluster_pin_state(job.target_cluster_id)
-    )
+    try:
+        # important: strict, so a sealed or unreachable Vault is a retry, not a changed registration.
+        source = await cluster_pin_state(job.source_cluster_id, strict=True)
+        target = (
+            source
+            if job.source_cluster_id == job.target_cluster_id
+            else await cluster_pin_state(job.target_cluster_id, strict=True)
+        )
+    except PinStoreUnavailable as exc:
+        raise MigrationClusterUnavailable(
+            "The certificate store could not be read, so the clusters' identity cannot be "
+            "proven right now."
+        ) from exc
     if source is None or not source.accepts(job.source_cluster_fingerprint):
         raise MigrationAuthorityError("The source cluster registration changed.")
     if target is None or not target.accepts(job.target_cluster_fingerprint):
@@ -126,10 +141,21 @@ async def _current_job_pins(job: MigrationJob) -> tuple[Any, Any]:
     return source.fingerprint, target.fingerprint
 
 
+def _answering(client: Any, cluster_id: str) -> Any:
+    """``client``, or the migration's own outage signal when the cluster did not answer.
+
+    note: not ``require_client``. Its HTTP 503 means nothing to the worker, whose catch-all then
+    parked a job that had changed nothing in manual recovery, locks and slot held.
+    """
+    if client is None:
+        raise MigrationClusterUnavailable(f"Cluster {cluster_id} did not answer.")
+    return client
+
+
 async def _bound_clients(
     job: MigrationJob, lxd_service: Any, source_fingerprint: Any, target_fingerprint: Any
 ) -> tuple[Any, Any]:
-    source = require_client(
+    source = _answering(
         await client_for(
             lxd_service,
             job.source_cluster_id,
@@ -145,7 +171,7 @@ async def _bound_clients(
                 "One cluster cannot have two approved certificate fingerprints."
             )
         return source, source
-    target = require_client(
+    target = _answering(
         await client_for(
             lxd_service,
             job.target_cluster_id,

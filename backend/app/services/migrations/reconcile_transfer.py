@@ -80,6 +80,7 @@ async def reconcile_staged(
     request = MigrationPlanCreateRequest.model_validate(plan.request_payload)
     root_pool_name = approved_root_pool(plan.preflight_payload or {}) or _target_pool(request)
     abort = False
+    adopted = False
     for resource in instances:
         state = dict(resource.safe_result or {})
         if state.get("target_identity_hash") and state.get("contract_hash"):
@@ -140,6 +141,7 @@ async def reconcile_staged(
             }
         )
         await _resource_update(resource.resource_id, state="ready", safe_result=state)
+        adopted = True
 
     if abort:
         logger.info("Migration %s transfer failed or left no target; aborting.", job.job_id)
@@ -170,7 +172,11 @@ async def reconcile_staged(
         lease_expires_at=None,
         error_code=None,
         error_message=None,
-        safe_result=sanitize_payload({**(job.safe_result or {}), "reconciliation_streak": 0}),
+        # important: only new adoption is progress. Resetting the streak when every target had
+        # been adopted before made a start that keeps failing count as a first attempt forever.
+        safe_result=sanitize_payload(
+            {**(job.safe_result or {}), "reconciliation_streak": 0} if adopted else dict(job.safe_result or {})
+        ),
         event_message="Reconciliation adopted the transferred targets. Resuming activation.",
     )
     return True

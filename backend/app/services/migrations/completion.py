@@ -195,8 +195,10 @@ async def deliver_completion_event(row: MigrationAuditOutbox) -> bool:
         cache = get_cache_manager()
         cache.invalidate_instance_cache()
         # Moves change project usage, tag placement, and tenant visibility as well.
-        cache.invalidate_resource_cache("projects", "project_usage")
-        cache.invalidate_tag_cache()
+        # important: require the shared cache, so a Redis outage fails this row and the outbox
+        # retries it, instead of marking it delivered while those views stay stale.
+        cache.invalidate_resource_cache("projects", "project_usage", require_shared=True)
+        cache.invalidate_tag_cache(require_shared=True)
         return True
 
     cluster_id = _required_text(payload, "cluster_id")

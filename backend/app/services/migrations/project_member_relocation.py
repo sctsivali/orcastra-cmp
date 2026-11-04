@@ -33,7 +33,7 @@ from .plan_contracts import _target_pool
 from .preflight_source import active_instance_operations
 from .project_preparation import watch_recorded
 from .security import sanitize_error, sanitize_payload
-from .transfer import _admit_worker_run, _transfer_member
+from .transfer import _transfer_member, admit_untouched_run, untouched
 
 
 def _name(resource: MigrationResource) -> str:
@@ -271,7 +271,8 @@ async def relocate_members(job: MigrationJob, worker_id: str, client: Any) -> No
     if job.phase == "rolling_back" or (job.safe_result or {}).get("recovery_kind") == "revert":
         await _revert(job, worker_id, client)
         return
-    if job.phase == "queued":
+    # important: also after a Recheck of a job that never moved anything (see project_relocation).
+    if job.phase == "queued" or untouched(await _resources(job.job_id)):
         report = await _fresh_worker_preflight(job, client, client)
         if report["blockers"]:
             await _fenced_job_update(
@@ -286,7 +287,7 @@ async def relocate_members(job: MigrationJob, worker_id: str, client: Any) -> No
                 event_message="Execution stopped because fresh preflight found blockers.",
             )
             return
-        await _admit_worker_run(job, worker_id, client, report)
+        await admit_untouched_run(job, worker_id, client, report)
     if job.phase != "final_sync":
         await _fenced_job_update(
             job, worker_id, phase="final_sync", status="running", event_message="Moving the workloads one at a time."
