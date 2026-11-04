@@ -38,6 +38,7 @@ from app.models.cluster_status import AvailabilityReason, ClusterStatus, derive_
 from app.models.schemas import ClusterAvailability, ClusterAvailabilityResponse
 
 from . import health
+from .fanout import known_down
 from .exceptions import LXDAuthorizationError, LXDConnectionError
 
 logger = logging.getLogger(__name__)
@@ -171,13 +172,25 @@ def breaker_availability(
     display_name: Optional[str] = None,
     endpoint: str = "unknown",
     node_type: Optional[str] = None,
+    connection_manager: Optional[object] = None,
+    include_lapsed: bool = False,
 ) -> Optional[ClusterAvailability]:
     """This worker's breaker verdict on one cluster as an availability row, or None without one.
 
     `checked_at` is when the breaker tripped: replaying a verdict is not a fresh check, so it must
     not be stamped now. The breaker's own reason never reaches the row (see `_availability`).
+
+    `include_lapsed` also answers for a cluster whose trip lapsed while this worker still holds no
+    client for it (see fanout.known_down), so an ordinary probe leaves the redial to the healer.
     """
-    if not health.is_tripped(cluster_id):
+    if health.is_tripped(cluster_id):
+        kind, reason = health.get_kind(cluster_id), health.get_reason(cluster_id)
+    elif include_lapsed and known_down(cluster_id, connection_manager) is not None:
+        verdict = health.last_failure(cluster_id)
+        if verdict is None:
+            return None
+        reason, kind = verdict
+    else:
         return None
     failed_at = health.failure_times().get(cluster_id)
     return _availability(
@@ -185,8 +198,8 @@ def breaker_availability(
         display_name=display_name,
         endpoint=endpoint,
         connected=False,
-        reachable=health.get_kind(cluster_id) == health.KIND_UNAUTHORIZED,
-        error=health.get_reason(cluster_id),
+        reachable=kind == health.KIND_UNAUTHORIZED,
+        error=reason,
         node_type=node_type,
         collected_at=datetime.fromtimestamp(failed_at, timezone.utc) if failed_at else None,
     )
@@ -232,7 +245,12 @@ def probe_cluster(
 
     if not force:
         tripped = breaker_availability(
-            cluster_id, display_name=vault_display_name, endpoint=endpoint, node_type=node_type
+            cluster_id,
+            display_name=vault_display_name,
+            endpoint=endpoint,
+            node_type=node_type,
+            connection_manager=connection_manager,
+            include_lapsed=True,
         )
         if tripped is not None:
             return tripped

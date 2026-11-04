@@ -41,14 +41,15 @@ from app.core.single_flight import single_flight
 from app.core.dependencies import require_tenant
 from app.services.lxd import snapshot_fleet as fleet_service
 from app.services.snapshots import fleet_sizes
-from app.services.lxd.exceptions import LXDConnectionError
+from app.services.lxd.exceptions import LXDAuthorizationError, LXDConnectionError
 from app.services.lxd.lazy_client import connect_or_get_client
 from app.routers.instance_snapshots import (
     _assert_snapshot_surface_enabled,
     _enforce_snapshot_access,
 )
 from app.services.lxd_service import LXDService, get_lxd_service
-from app.services.lxd.fanout import complete_reasons
+from app.services.lxd import health
+from app.services.lxd.fanout import complete_reasons, down_text, known_down
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,24 @@ def _read_one_cluster(
     return fleet_service.read_cluster_snapshots(client, host, project=project)
 
 
+def _read_fleet_cluster(
+    lxd_service: LXDService,
+    host: str,
+    project: Optional[str],
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """As _read_one_cluster, for the fleet form: a cluster this worker knows is down is not dialed.
+
+    note: a request naming one host still dials it (_read_one_cluster), as every single-cluster
+    route does; the fleet form leaves that redial to the healer (see fanout.known_down).
+    """
+    down = known_down(host, getattr(lxd_service, "connection_manager", None))
+    if down is not None:
+        if down == health.KIND_UNAUTHORIZED:
+            raise LXDAuthorizationError(f"{host}: {down_text(down)}")
+        raise LXDConnectionError(f"{host}: {down_text(down)}")
+    return _read_one_cluster(lxd_service, host, project)
+
+
 @router.get(
     "",
     response_model=FleetSnapshotListResponse,
@@ -212,7 +231,7 @@ async def list_fleet_snapshots(
 
     async def _gather(node: str):
         return await run_blocking(
-            _read_one_cluster,
+            _read_one_cluster if host is not None else _read_fleet_cluster,
             lxd_service,
             node,
             project,

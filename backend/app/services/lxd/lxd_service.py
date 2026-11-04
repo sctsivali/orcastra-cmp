@@ -266,7 +266,7 @@ class LXDService:
 
     def _check_single_node_status(self, node_name: str, settings) -> NodeStatus:
         """Check status for a single node (internal helper)."""
-        from app.services.lxd import health
+        from app.services.lxd import fanout, health
 
         # important: read the registration BEFORE the breaker check. Endpoint, display name and
         # type are registry metadata and have nothing to do with reachability, but returning them
@@ -291,6 +291,21 @@ class LXDService:
                 connected=False,
                 reachable=health.get_kind(node_name) == health.KIND_UNAUTHORIZED,
                 error=health.get_reason(node_name) or "Node recently failed - retry later"
+            )
+
+        # A lapsed trip with no pooled client: this worker knows the cluster is down, and the
+        # healer pays the redial rather than this read (see fanout.known_down).
+        down = fanout.known_down(node_name, getattr(self, "connection_manager", None))
+        if down is not None:
+            return NodeStatus(
+                name=node_name,
+                endpoint=endpoint,
+                display_name=registry["display_name"],
+                node_type=registry["node_type"],
+                clustered=registry["clustered"],
+                connected=False,
+                reachable=down == health.KIND_UNAUTHORIZED,
+                error=fanout.down_text(down),
             )
 
         try:

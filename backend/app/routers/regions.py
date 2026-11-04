@@ -29,6 +29,8 @@ from app.models.schemas import (
     ClusterStatus,
 )
 
+from app.services.lxd import health
+from app.services.lxd.fanout import known_down
 from app.services.lxd.freshness import read_resources
 from app.services.lxd.gpu import build_gpu_inventory
 from app.services.lxd.node_resources import aggregate_microcloud_resources
@@ -265,9 +267,15 @@ async def build_regions_overview(
                         instance_count = 0
                         instance_running = 0
                 
+                        # A cluster this worker knows is down and holds no client for: the
+                        # healer redials it, not this read (see fanout.known_down).
+                        down = known_down(cluster_id, getattr(lxd_service, "connection_manager", None))
                         try:
-                            client = lxd_service.connection_manager.get_client(cluster_id)
-                            if client is None:
+                            client = (
+                                None if down is not None
+                                else lxd_service.connection_manager.get_client(cluster_id)
+                            )
+                            if client is None and down is None:
                                 try:
                                     cert_data = cert_manager.get_cluster_certificate(cluster_id)
                                     client = lxd_service.connection_manager.connect_with_vault_cert(
@@ -442,6 +450,8 @@ async def build_regions_overview(
                                 except Exception as e:
                                     logger.warning("Could not list instances on %s: %s", cluster_id, e)
                                     degraded_clusters.add(cluster_id)
+                            elif down == health.KIND_UNAUTHORIZED:
+                                status = ClusterStatus.NOT_AUTHORIZED
                             else:
                                 status = ClusterStatus.OFFLINE
                         except Exception as e:

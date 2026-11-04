@@ -1211,13 +1211,20 @@ class InstanceManager:
         without a redundant liveness probe.
         Returns (vm_list, is_connected, is_complete).
         """
-        from app.services.lxd import health
+        from app.services.lxd import fanout, health
         vms: List[VMInfo] = []
         complete = True
 
         # Skip clusters the shared breaker marked as recently failed.
         if health.is_tripped(node_name):
             logger.debug(f"Skipping {node_name} - recently failed (cached)")
+            return [], False, False
+        # And one whose trip lapsed while this worker still holds no client for it: the healer
+        # redials it, not a fleet read (see fanout.known_down). A caller's own client still reads.
+        if client_override is _NO_CLIENT_OVERRIDE and fanout.known_down(
+            node_name, getattr(self, "connection_manager", None)
+        ):
+            logger.debug(f"Skipping {node_name} - known down, no client in this worker")
             return [], False, False
 
         try:

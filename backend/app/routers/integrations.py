@@ -55,7 +55,7 @@ from app.services.lxd.proxy import (
 from app.services.activity_logger import get_activity_logger
 from app.services.integration_cluster_state import server_type_name, stamp_cluster_rows
 from app.services.lxd.availability import require_client, unreachable_detail
-from app.services.lxd.fanout import is_read_timeout
+from app.services.lxd.fanout import down_text, is_read_timeout, known_down
 from app.services.lxd.lazy_client import connect_or_get_client
 from app.services.lxd.failover_config import project_failover_config
 from app.services.lxd.limited_write_reach import (
@@ -1449,6 +1449,11 @@ async def _gather_per_cluster(
         if skip_tripped and health.is_tripped(cluster_id):
             logger.debug(f"sync: skipping {label} for tripped cluster {cluster_id}")
             return missed(cluster_id, health.get_reason(cluster_id) or "recently unreachable")
+        # A lapsed trip with no client in this worker: the healer redials it (fanout.known_down).
+        down = known_down(cluster_id, get_lxd_service().connection_manager) if skip_tripped else None
+        if down is not None:
+            logger.debug(f"sync: skipping {label} for known-down cluster {cluster_id}")
+            return missed(cluster_id, down_text(down))
         try:
             return await run_blocking(
                 fn,

@@ -194,6 +194,40 @@ class Fanout(Generic[T]):
         )
 
 
+# What a fleet read says about a cluster it skipped because this worker knows it is down. Fixed
+# text by kind: the recorded reason is raw exception text and can name the endpoint.
+_DOWN_TEXT = {
+    health.KIND_UNAUTHORIZED: "certificate not trusted by the cluster",
+    health.KIND_OFFLINE: "no connection to the cluster",
+}
+
+
+def down_text(kind: Optional[str]) -> str:
+    return _DOWN_TEXT.get(kind or health.KIND_OFFLINE, _DOWN_TEXT[health.KIND_OFFLINE])
+
+
+def known_down(cluster_id: str, connection_manager: object = None) -> Optional[str]:
+    """The failure kind when this worker knows the cluster is down and holds no client for it.
+
+    important: a fleet read must not dial such a cluster. Once its 60 s trip lapsed, the next read
+    that reached it paid a whole connect (about 8 s against a silent host on dev) and its response
+    waited for it; 29 of the 32 such dials in one day came from a single integration poll. The
+    background healer re-probes the cluster and clears the verdict on its first success, and the
+    forced paths (Check Authentication, Verify, renew) still dial. A cluster this worker never saw
+    fail answers None and is still dialed once.
+
+    note: the memory read comes first, so a manager is only consulted for a cluster that failed. A
+    manager without get_cached_client (a stub) counts as holding no client.
+    """
+    verdict = health.last_failure(cluster_id)
+    if verdict is None:
+        return None
+    cached = getattr(connection_manager, "get_cached_client", None)
+    if cached is not None and cached(cluster_id) is not None:
+        return None
+    return verdict[1]
+
+
 def _absent_reason(cluster: str) -> str:
     """Why a cluster the listing never read is missing, from the breaker's verdict.
 
@@ -204,8 +238,8 @@ def _absent_reason(cluster: str) -> str:
     if failure is None:
         return f"{KIND_UNREACHABLE}: not connected from this server yet"
     if failure[1] == health.KIND_UNAUTHORIZED:
-        return f"{KIND_FORBIDDEN}: certificate not trusted by the cluster"
-    return f"{KIND_UNREACHABLE}: no connection to the cluster"
+        return f"{KIND_FORBIDDEN}: {down_text(failure[1])}"
+    return f"{KIND_UNREACHABLE}: {down_text(failure[1])}"
 
 
 # Fixed text for a cluster shared with another organization. Partial detail and LXD's own error

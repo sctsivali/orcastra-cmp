@@ -13,7 +13,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pylxd.exceptions import LXDAPIException
 
 from app.services.lxd.exceptions import LXDConnectionError
-from app.services.lxd.fanout import NodeRead, collect, complete_reasons, unattempted
+from app.services.lxd import health
+from app.services.lxd.fanout import NodeRead, collect, complete_reasons, known_down, unattempted
 from app.models.schemas import FanoutReachability
 from app.core.tenant_visibility import tenant_acl_active
 from app.services.lxd_service import (
@@ -464,8 +465,19 @@ async def get_all_system_warnings(
                         except Exception:
                             pass
                         
-                        # Check node connectivity
-                        connected, error_msg = cert_manager.verify_connection(cluster_id)
+                        # Check node connectivity. A cluster this worker already knows is down is
+                        # reported from that verdict: the healer redials it, not this feed (see
+                        # fanout.known_down), and a silent host cost the probe up to 22 s.
+                        down = known_down(cluster_id, getattr(lxd_service, "connection_manager", None))
+                        if down is not None:
+                            connected = False
+                            error_msg = (
+                                "Certificate not trusted by the cluster"
+                                if down == health.KIND_UNAUTHORIZED
+                                else "Cluster is not reachable"
+                            )
+                        else:
+                            connected, error_msg = cert_manager.verify_connection(cluster_id)
                         if not connected:
                             # note: the import that used to sit here made `datetime` a local for
                             # the entire function, so the earlier `datetime.now(timezone.utc)` in
