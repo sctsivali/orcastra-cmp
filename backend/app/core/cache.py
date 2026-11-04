@@ -113,9 +113,14 @@ def get_encryption():
 
 try:
     import redis
+    from app.core.redis_guard import RedisSkipped
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
+
+    class RedisSkipped(Exception):  # type: ignore[no-redef]
+        """Never raised without redis; keeps the except clauses below valid."""
+
     logger.warning("Redis not available, using in-memory cache only")
 
 
@@ -208,18 +213,11 @@ class CacheManager:
         # Try to connect to Redis with connection pooling
         if redis_url and REDIS_AVAILABLE:
             try:
-                # Create connection pool for better performance
-                # Use simpler configuration that works in Docker
-                self.redis_client = redis.from_url(
-                    redis_url,
-                    decode_responses=True,
-                    max_connections=50,
-                    socket_connect_timeout=2,
-                    socket_timeout=5,
-                    socket_keepalive=True,
-                    retry_on_timeout=True,
-                    health_check_interval=30
-                )
+                # important: behind the guard (core/redis_guard.py). Without it a Redis that stopped
+                # answering held every caller for 10 s per command, most of them on the event loop.
+                from app.core import redis_guard
+
+                self.redis_client = redis_guard.connect(redis_url)
                 # Test connection
                 self.redis_client.ping()
                 # sanitize URL - never log credentials
@@ -352,6 +350,8 @@ class CacheManager:
                     if should_decrypt:
                         data = self._decrypt_data(data)
                     return data, True
+            except RedisSkipped:
+                pass  # the guard logged the outage once; memory serves until it closes
             except redis.TimeoutError:
                 logger.warning(f"Redis timeout for key: {cache_key}, falling back to memory")
             except Exception as e:
@@ -422,6 +422,9 @@ class CacheManager:
                     json.dumps(cached_value, default=str)
                 )
                 logger.debug(f"Cached in Redis: {cache_key} (TTL: {ttl}s, Encrypted: {should_encrypt})")
+            except RedisSkipped as e:
+                if require_shared:
+                    raise CacheInvalidationError(f"shared cache is unavailable for {cache_key}") from e
             except redis.TimeoutError:
                 logger.warning(f"Redis timeout while caching {cache_key} (memory cache still works)")
                 if require_shared:
@@ -447,7 +450,8 @@ class CacheManager:
             try:
                 self.redis_client.delete(cache_key)
             except Exception as e:
-                logger.warning(f"Redis delete error: {e}")
+                if not isinstance(e, RedisSkipped):
+                    logger.warning(f"Redis delete error: {e}")
                 if require_shared:
                     shared_error = CacheInvalidationError("shared cache delete failed")
         elif require_shared and self._redis_configured:
@@ -486,7 +490,8 @@ class CacheManager:
                 if batch:
                     self.redis_client.delete(*batch)
             except Exception as e:
-                logger.warning(f"Redis delete pattern error: {e}")
+                if not isinstance(e, RedisSkipped):
+                    logger.warning(f"Redis delete pattern error: {e}")
                 if require_shared:
                     shared_error = CacheInvalidationError(
                         f"shared cache delete failed for {full_pattern}"

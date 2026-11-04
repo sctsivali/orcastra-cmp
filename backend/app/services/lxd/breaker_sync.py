@@ -68,12 +68,17 @@ def dead_probe_interval() -> float:
 
 
 def shared_mode() -> bool:
-    """Whether failures are shared: a reachable Redis, and not switched off."""
+    """Whether failures are shared: a reachable Redis, and not switched off.
+
+    note: false while the Redis guard skips Redis, so during an outage every worker heals for
+    itself (the behaviour without Redis) instead of waiting on markers nobody can write.
+    """
     if os.environ.get("ORCASTRA_FLEET_VERDICT_SHARED", "true").strip().lower() in ("0", "false", "no"):
         return False
     from app.core.cache import get_cache_manager
+    from app.core.redis_guard import answering
 
-    return getattr(get_cache_manager(), "redis_client", None) is not None
+    return answering(getattr(get_cache_manager(), "redis_client", None))
 
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lxd-breaker-sync")
 # important: its own thread. The announce runs inside connect_with_vault_cert, which
