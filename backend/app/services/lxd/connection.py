@@ -682,8 +682,12 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
             )
             return None
 
-        if cluster_id in self._clients and expected_server_fingerprint:
-            cached_pin = _client_adapter_fingerprint(self._clients[cluster_id])
+        # important: one read of the pool. Validation is a live round trip and the pool is shared by
+        # every thread in this worker, so a concurrent cleanup_connection between a check and a
+        # second `self._clients[cluster_id]` raised KeyError on a client that had just answered.
+        pooled = self._clients.get(cluster_id)
+        if pooled is not None and expected_server_fingerprint:
+            cached_pin = _client_adapter_fingerprint(pooled)
             if cached_pin != normalize_server_fingerprint(expected_server_fingerprint):
                 # A client pooled before a public-CA renewal holds the superseded pin, and one
                 # pooled before the first pin holds none. The reconnect below verifies the live
@@ -691,15 +695,14 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
                 # dropping the stale client is safe.
                 logger.info("Reconnecting %s: its pooled client predates the current pin", cluster_id)
                 self.cleanup_connection(cluster_id)
+                pooled = None
 
-        if cluster_id in self._clients:
+        if pooled is not None:
             if expected_server_fingerprint:
-                require_client_server_fingerprint(
-                    self._clients[cluster_id], expected_server_fingerprint
-                )
+                require_client_server_fingerprint(pooled, expected_server_fingerprint)
             # Validate connection is still working
-            if self._validate_connection(self._clients[cluster_id], cluster_id):
-                return self._clients[cluster_id]
+            if self._validate_connection(pooled, cluster_id):
+                return pooled
             else:
                 # Connection failed validation, try reconnect
                 logger.warning(f"Connection to {cluster_id} failed validation, reconnecting...")
