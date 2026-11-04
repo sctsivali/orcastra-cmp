@@ -19,6 +19,7 @@ from app.core.type_utils import (
     normalize_node_type,
 )
 from .gpu import GpuInventory, build_gpu_inventory
+from . import pool_resource_failures
 from .storage_model import PoolReading, summarise_cluster_storage
 from .hardware import build_hardware_profile
 from .node_resources import aggregate_microcloud_resources, build_node_resources
@@ -224,7 +225,11 @@ class ResourceManager:
                 for pool in pools:
                     try:
                         # use API directly to get pool resources
-                        pool_resources_response = client.api.storage_pools[safe_segment(pool.name)].resources.get()
+                        pool_resources_response = pool_resource_failures.read(
+                            node_name,
+                            pool.name,
+                            client.api.storage_pools[safe_segment(pool.name)].resources.get,
+                        )
                         pool_resources = pool_resources_response.json().get("metadata", {})
                         space_info = pool_resources.get("space", {})
                         space_total = space_info.get("total", 0)

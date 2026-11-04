@@ -146,6 +146,16 @@ def _isolate_response_cache(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_pool_resource_failures():
+    """A pool that failed in one test must not be refused in the next."""
+    from app.services.lxd import pool_resource_failures
+
+    pool_resource_failures._failed.clear()
+    yield
+    pool_resource_failures._failed.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_monitoring_history_store():
     """Start every test with an empty history fallback buffer, body memo and import marks.
 

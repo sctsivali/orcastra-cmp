@@ -15,6 +15,7 @@ from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
+from app.services.lxd import pool_resource_failures
 from app.services.lxd.fanout import NodeRead, collect, complete_reasons, unattempted
 from app.services.lxd.project_scope import ALL_PROJECTS_READ_TIMEOUT
 from app.models.schemas import FanoutReachability
@@ -175,7 +176,7 @@ def _fetch_node_pool_resources(lxd_service: LXDService, tenant_acl, node_name: s
             if not tenant_acl_can_view_lxd_used_by(tenant_acl, node_name, pool.used_by or []):
                 continue
             try:
-                resources = pool.resources.get()
+                resources = pool_resource_failures.read(node_name, pool.name, pool.resources.get)
                 result[f"{node_name}-{pool.name}"] = _serialize_pool_resources(resources)
             except Exception as pool_err:
                 logger.warning(f"Could not get resources for pool {pool.name} on {node_name}: {pool_err}")

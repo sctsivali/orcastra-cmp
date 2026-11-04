@@ -30,7 +30,7 @@ from app.models.schemas import (
 from app.core import swr
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.swr import Built
-from app.services.lxd import health
+from app.services.lxd import health, pool_resource_failures
 from app.services.lxd.fanout import LATE_FRESH_SECONDS, known_down
 from app.services.lxd.freshness import read_resources
 from app.services.lxd.gpu import build_gpu_inventory
@@ -311,7 +311,11 @@ async def build_regions_overview(
                                         for pool in pools:
                                             storage_drivers.add(pool.driver)
                                             try:
-                                                pool_resources = client.api.storage_pools[safe_segment(pool.name)].resources.get()
+                                                pool_resources = pool_resource_failures.read(
+                                                    cluster_id,
+                                                    pool.name,
+                                                    client.api.storage_pools[safe_segment(pool.name)].resources.get,
+                                                )
                                                 pool_data = pool_resources.json().get("metadata", {})
                                                 space = pool_data.get("space", {})
                                                 region_pool_readings.append(PoolReading(
