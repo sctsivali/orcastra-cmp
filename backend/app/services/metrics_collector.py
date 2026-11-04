@@ -15,6 +15,7 @@ import threading
 from app.core import vault_status
 from app.core.blocking import BlockingTimeout, run_blocking
 from app.services.collector_leadership import CollectorLease, DashboardRelay
+from app.services.lxd import breaker_sync, fanout
 from app.services.metrics_prewarm import CachePrewarm
 
 logger = logging.getLogger(__name__)
@@ -287,16 +288,29 @@ class MetricsCollector(CachePrewarm):
                 self._lxd_service.connection_manager.sync_registered_clusters(cluster_ids)
 
             reconnected = 0
+            manager = self._lxd_service.connection_manager
+            shared = breaker_sync.shared_mode()
+            leading = bool(getattr(self, "_leading", False))
             
             for cluster_id in cluster_ids:
                 try:
+                    # important: a cluster held down is redialed by the leader's dead-cluster probe
+                    # (breaker_sync), not by every worker's healer. The leader leaves it to that
+                    # probe; a follower adopts the fleet's down verdict while one is fresh, and
+                    # falls back to its own redial below as soon as none is (no leader probing, or
+                    # no Redis), so a recovery is never left waiting on a probe that is not run.
+                    if shared and manager.get_cached_client(cluster_id) is None:
+                        if leading and fanout.known_down(cluster_id, manager) is not None:
+                            continue
+                        if not leading and breaker_sync.adopt_shared(cluster_id):
+                            continue
                     # get_client() validates and returns existing connection if valid
                     # or auto-reconnects using stored connection info
-                    client = self._lxd_service.connection_manager.get_client(cluster_id)
+                    client = manager.get_client(cluster_id)
                     
                     if client is None:
                         # No stored connection info, need to fetch from Vault
-                        if not self._lxd_service.connection_manager.has_connection_info(cluster_id):
+                        if not manager.has_connection_info(cluster_id):
                             # important: the same door the read path uses, not a fourth copy of
                             # the connect block. ensure_connection consults the breaker, reads
                             # only <cluster>/metadata rather than get_cluster_info (which also

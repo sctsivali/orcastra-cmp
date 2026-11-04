@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 _ORIGINS = (
     ("metrics_bg", "healer"),
     ("lxd-breaker", "breaker_sync"),
+    ("lxd-dead-probe", "dead_probe"),
     ("monitoring_", "monitoring"),
 )
 # Listing parameters worth keeping: they decide how heavy a read is.

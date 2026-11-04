@@ -31,6 +31,16 @@ _last_failed: Dict[str, float] = {}
 # cluster_id -> (reason, kind) of that last failure, kept and cleared with _last_failed. A reader that
 # skips a known-dead cluster still has to say whether it was offline or refusing our certificate.
 _last_verdict: Dict[str, Tuple[str, str]] = {}
+# cluster_id -> epoch of this worker's last successful connect. A failure another worker observed
+# before it must never be adopted here (see adopt): the local proof is newer.
+_cleared_at: Dict[str, float] = {}
+
+# The reason an adopted verdict carries: fixed text, since the observing worker's own reason is raw
+# exception text and is not shared.
+_ADOPTED_REASON = {
+    KIND_OFFLINE: "no connection to the cluster",
+    KIND_UNAUTHORIZED: "certificate not trusted",
+}
 
 
 def record_failure(cluster_id: str, reason: str = "", *, kind: str = KIND_OFFLINE) -> None:
@@ -52,6 +62,29 @@ def clear(cluster_id: str) -> None:
         _failed.pop(cluster_id, None)
         _last_failed.pop(cluster_id, None)
         _last_verdict.pop(cluster_id, None)
+        _cleared_at[cluster_id] = time.time()
+
+
+def adopt(cluster_id: str, failed_at: float, kind: str) -> bool:
+    """Take a failure another worker observed, so this one does not dial the cluster to learn it.
+
+    True when this worker now holds a failure at least as new as `failed_at` (adopted, or it
+    already knew). False when this worker cleared the cluster after that observation: its own
+    proof outranks an older fleet verdict. Not record_failure: nothing here contacted the peer.
+    """
+    if kind not in _ADOPTED_REASON:
+        return False
+    with _lock:
+        if _cleared_at.get(cluster_id, 0.0) >= failed_at:
+            return False
+        known = _last_failed.get(cluster_id)
+        if known is not None and known >= failed_at:
+            return True
+        reason = _ADOPTED_REASON[kind]
+        _failed[cluster_id] = (failed_at, reason, kind)
+        _last_failed[cluster_id] = failed_at
+        _last_verdict[cluster_id] = (reason, kind)
+        return True
 
 
 def is_tripped(cluster_id: str, ttl: float = DEFAULT_TTL) -> bool:
@@ -116,7 +149,8 @@ def forget_unregistered(registered: Iterable[str]) -> None:
     """
     keep = set(registered)
     with _lock:
-        for cluster_id in (set(_failed) | set(_last_failed)) - keep:
+        for cluster_id in (set(_failed) | set(_last_failed) | set(_cleared_at)) - keep:
             _failed.pop(cluster_id, None)
             _last_failed.pop(cluster_id, None)
             _last_verdict.pop(cluster_id, None)
+            _cleared_at.pop(cluster_id, None)

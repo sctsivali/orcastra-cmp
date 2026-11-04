@@ -89,11 +89,12 @@ def test_origin_follows_the_worker_thread():
         thread.start()
         thread.join()
 
-    for name in ("metrics_bg_0", "lxd-breaker-sync_0", "monitoring_status_3", "lxd_blocking_2"):
+    for name in ("metrics_bg_0", "lxd-breaker-sync_0", "lxd-dead-probe_1", "monitoring_status_3", "lxd_blocking_2"):
         run(name)
     assert seen == {
         "metrics_bg_0": "healer",
         "lxd-breaker-sync_0": "breaker_sync",
+        "lxd-dead-probe_1": "dead_probe",
         "monitoring_status_3": "monitoring",
         "lxd_blocking_2": "request",
     }

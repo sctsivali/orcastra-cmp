@@ -86,10 +86,14 @@ class LXDService:
         cluster_id: str,
         *,
         expected_server_fingerprint: str | None = None,
+        force: bool = False,
     ) -> bool:
         """
         Ensure cluster is connected (lazy loading helper).
         Respects org-scope: returns False if the cluster is outside user's org.
+
+        `force` dials past the breaker without lifting it first, for the leader's dead-cluster
+        probe (breaker_sync): every other reader keeps skipping the cluster while it runs.
         """
         # Org-scope guard: prevent reconnecting to clusters outside the user's org
         from app.core.org_scope import get_current_allowed_clusters
@@ -117,7 +121,7 @@ class LXDService:
         # important: fast-skip clusters the breaker marked as recently failed -
         # this is the project/instance lazy-connect path; without it every
         # fan-out re-pays the dead-cluster connect timeout (the projects stall).
-        if health.is_tripped(cluster_id):
+        if not force and health.is_tripped(cluster_id):
             return False
 
         # Try to connect
@@ -144,6 +148,8 @@ class LXDService:
                 connect_kwargs["expected_server_fingerprint"] = (
                     expected_server_fingerprint
                 )
+            if force:
+                connect_kwargs["force"] = True
             connected = self.connection_manager.connect_with_vault_cert(
                 **connect_kwargs
             )
