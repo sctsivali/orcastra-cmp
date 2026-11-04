@@ -171,11 +171,18 @@ class FanoutReachability(BaseModel):
         default_factory=list,
         description="Clusters that answered but lost some rows; node_errors names what was lost",
     )
+    late_nodes: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Clusters still reading past the per-cluster wait. Their rows are not in this answer "
+            "yet; the read finishes in the background and a later answer includes them."
+        ),
+    )
     node_errors: Dict[str, str] = Field(
         default_factory=dict,
         description=(
-            "Reason per cluster in unreachable_nodes or partial_nodes, prefixed with "
-            "unreachable:, forbidden:, error: or partial:. Empty for Tenant callers."
+            "Reason per cluster in unreachable_nodes, partial_nodes or late_nodes, prefixed with "
+            "unreachable:, forbidden:, error:, partial: or late:. Empty for Tenant callers."
         ),
     )
     collected_at: Optional[datetime] = Field(

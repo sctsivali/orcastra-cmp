@@ -7,13 +7,19 @@ from fastapi import APIRouter, HTTPException, Depends, Path, Query, Body
 from typing import Literal, Optional, List, Dict
 import logging
 from datetime import datetime, timezone
-import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 from pylxd.exceptions import LXDAPIException
 
 from app.services.lxd.exceptions import LXDConnectionError
-from app.services.lxd.fanout import NodeRead, collect, complete_reasons, unattempted
+from app.services.lxd.fanout import (
+    LATE_FRESH_SECONDS,
+    NodeRead,
+    collect,
+    complete_reasons,
+    gather_clusters,
+    unattempted,
+)
 from app.services.lxd.project_scope import (
     ALL_PROJECTS_READ_TIMEOUT,
     DEFAULT_PROJECT,
@@ -251,13 +257,17 @@ async def list_storage_volumes(
     async def build() -> Built:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
-        # Fetch volumes from all nodes in parallel
-        loop = asyncio.get_event_loop()
-        tasks = [
-            loop.run_in_executor(_executor, _fetch_volumes_for_node, lxd_service, node_name, pool)
-            for node_name in nodes_to_query
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Fetch volumes from all nodes in parallel, at most CLUSTER_WALL_SECONDS each. A cluster
+        # still reading then (central-1's volumes take 17 to 24 s on dev) is named late and
+        # finishes in the background; see fanout.gather_clusters.
+        results = await gather_clusters(
+            nodes_to_query,
+            lambda node_name: _fetch_volumes_for_node(lxd_service, node_name, pool),
+            executor=_executor,
+            label="storage_volumes.list",
+            memo_key=f"storage_volumes:host={host}:pool={pool}",
+            generation=lambda: get_resource_list_generation(cache, "storage_volumes"),
+        )
         
         # important: two different things make a node absent, and both must be named.
         # A node can fail during the fan-out, or never be asked at all, because
@@ -286,7 +296,14 @@ async def list_storage_volumes(
         cacheable = fan.cacheable_despite_outages and not unattempted(
             seeded, lxd_service.connection_manager
         )
-        ttl = DEGRADED_CACHE_TTL if unreachable_nodes else 180
+        if fan.late_nodes:
+            # Remembered briefly: the late read's own completion schedules the rebuild that
+            # brings its rows in, and this keeps every other poll off the clusters meanwhile.
+            ttl = LATE_FRESH_SECONDS
+        elif unreachable_nodes:
+            ttl = DEGRADED_CACHE_TTL
+        else:
+            ttl = 180
 
         # used_by is held to the caller's bound for every role; only a tenant loses the row
         # when nothing they may see uses it.
@@ -303,7 +320,10 @@ async def list_storage_volumes(
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
-            node_errors=complete_reasons(unreachable_nodes, fan.node_errors, partial=fan.partial_nodes),
+            late_nodes=fan.late_nodes,
+            node_errors=complete_reasons(
+                unreachable_nodes, fan.node_errors, partial=fan.partial_nodes, late=fan.late_nodes
+            ),
             collected_at=datetime.now(timezone.utc),
         )
         

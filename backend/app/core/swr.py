@@ -53,6 +53,9 @@ HIT, STALE, MISS, BYPASS = "hit", "stale", "miss", "bypass"
 
 _refreshing: Dict[str, asyncio.Task] = {}
 _in_background: contextvars.ContextVar[bool] = contextvars.ContextVar("swr_background", default=False)
+# What the build running in this context would store, so a read that finishes after the answer
+# went out (fanout.gather_clusters) can ask for one background read to put it in.
+_building: contextvars.ContextVar[Optional[tuple]] = contextvars.ContextVar("swr_building", default=None)
 
 
 @dataclass(frozen=True)
@@ -171,7 +174,11 @@ async def _build_and_store(
 ) -> Built:
     started = time.time()
     before = generation() if generation is not None else None
-    built = await build()
+    token = _building.set((cache, key, base_key, build, generation, label))
+    try:
+        built = await build()
+    finally:
+        _building.reset(token)
     if built.fresh_for is None:
         return built
     if get_scope_cache_key(base_key) != key:
@@ -267,6 +274,27 @@ async def _refresh(
         )
     if wrote:
         lease.release()
+
+
+def capture_refresh() -> Optional[Callable[[], None]]:
+    """A call that schedules one background read of the entry the current build would store.
+
+    None outside a build. For a cluster read that outlived its wall: when it finishes, its result
+    stands in for that cluster (fanout.gather_clusters), and this rebuild puts it into the body
+    without waiting for the next poll to miss. The usual single-refresh lease applies.
+    """
+    building = _building.get()
+    if building is None:
+        return None
+    cache, key, base_key, build, generation, label = building
+
+    def schedule() -> None:
+        try:
+            _schedule_refresh(cache, key, base_key, build, generation, label)
+        except RuntimeError:  # no running loop (shutdown)
+            pass
+
+    return schedule
 
 
 def _forget(key: str, task: asyncio.Task) -> None:

@@ -23,9 +23,13 @@ projects they cannot see, and transport diagnostics are operator information.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
+import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Dict, Generic, Iterable, List, Mapping, Optional, Sequence, Tuple, TypeVar
+from typing import Any, Callable, Dict, Generic, Iterable, List, Mapping, Optional, Sequence, Tuple, TypeVar
 
 import requests
 import urllib3
@@ -49,6 +53,7 @@ KIND_UNREACHABLE = "unreachable"
 KIND_FORBIDDEN = "forbidden"
 KIND_FAILED = "error"
 KIND_PARTIAL = "partial"
+KIND_LATE = "late"
 
 # How long a fleet answer missing a cluster that did not answer within its wall is remembered:
 # briefly, so the next read asks that cluster again soon, but not "never", which would make every
@@ -176,11 +181,19 @@ class Fanout(Generic[T]):
     node_errors: Dict[str, str] = field(default_factory=dict)
     # Failure kind per cluster in unreachable_nodes, kept even when node_errors is withheld.
     failure_kinds: Dict[str, str] = field(default_factory=dict)
+    # Clusters still reading past their wall (gather_clusters): not unreachable, not in this
+    # answer yet, and filled in by the background read that finishes them.
+    late_nodes: List[str] = field(default_factory=list)
 
     @property
     def cacheable(self) -> bool:
         """Only a fan-out where every queried cluster answered in full may be remembered."""
-        return bool(self.answered) and not self.partial_nodes and not self.unreachable_nodes
+        return (
+            bool(self.answered)
+            and not self.partial_nodes
+            and not self.unreachable_nodes
+            and not self.late_nodes
+        )
 
     @property
     def cacheable_despite_outages(self) -> bool:
@@ -250,6 +263,7 @@ def _absent_reason(cluster: str) -> str:
 # Fixed text for a cluster shared with another organization. Partial detail and LXD's own error
 # text can name that organization's pools and volumes; a transport reason is already fixed text.
 _BOUND_TEXT = {
+    KIND_LATE: f"{KIND_LATE}: still reading, shown when it finishes",
     KIND_PARTIAL: f"{KIND_PARTIAL}: some rows could not be read",
     KIND_FORBIDDEN: f"{KIND_FORBIDDEN}: the cluster refused this read",
     KIND_FAILED: f"{KIND_FAILED}: the cluster could not answer this read",
@@ -261,6 +275,7 @@ def complete_reasons(
     known: Mapping[str, str],
     *,
     partial: Iterable[str] = (),
+    late: Iterable[str] = (),
 ) -> Dict[str, str]:
     """`node_errors` for a list answer: one reason per missing or partial cluster, for this caller.
 
@@ -279,6 +294,8 @@ def complete_reasons(
         reasons[cluster] = known.get(cluster) or _absent_reason(cluster)
     for cluster in partial:
         reasons[cluster] = known.get(cluster) or _BOUND_TEXT[KIND_PARTIAL]
+    for cluster in late:
+        reasons[cluster] = known.get(cluster) or _BOUND_TEXT[KIND_LATE]
     return {
         cluster: _BOUND_TEXT.get(text.partition(":")[0], text)
         if visible_projects_for(cluster) is not None
@@ -334,6 +351,13 @@ def collect(
     """
     fan: Fanout = Fanout()
     for node_name, result in zip(nodes, results):
+        if isinstance(result, LateRead):
+            fan.late_nodes.append(node_name)
+            fan.node_errors[node_name] = (
+                f"{KIND_LATE}: still reading after {round(result.wall)} s, shown when it finishes"
+            )
+            logger.info("%s listing on %s is still reading after %.0f s", noun, node_name, result.wall)
+            continue
         if isinstance(result, NodeRead):
             fan.rows.extend(result.rows)
             fan.answered.append(node_name)
@@ -359,3 +383,160 @@ def collect(
     if not reasons_visible:
         fan.node_errors = {}
     return fan
+
+
+# --- A wall per cluster, and a read that outlives it finishes in the background ------------------
+
+# Owner decision 2026-11-04: a fleet list waits at most this long for any one cluster.
+CLUSTER_WALL_SECONDS = 15.0
+# How long a late cluster's finished read stands in for it in later answers.
+LATE_KEEP_SECONDS = 180.0
+# A stand-in older than this is read again in the background while it keeps answering.
+LATE_REREAD_AFTER_SECONDS = 90.0
+# The background re-read's own budget: about the slowest listing measured on dev (central-1's
+# volumes, 24 s) with room to spare.
+LATE_REREAD_TIMEOUT_SECONDS = 60.0
+_LATE_MAX_ENTRIES = 256
+
+
+class LateRead:
+    """A gather_clusters result slot for a cluster still reading past its wall."""
+
+    def __init__(self, node: str, wall: float) -> None:
+        self.node = node
+        self.wall = wall
+
+
+@dataclass
+class _Late:
+    generation: Any
+    pending: Optional["asyncio.Future[Any]"] = None
+    value: Any = None
+    finished_at: Optional[float] = None
+
+
+_late_lock = threading.Lock()
+_late: "OrderedDict[str, _Late]" = OrderedDict()
+
+
+def _late_entry(key: str) -> Optional[_Late]:
+    with _late_lock:
+        return _late.get(key)
+
+
+def _remember_late(key: str, entry: _Late) -> None:
+    with _late_lock:
+        _late[key] = entry
+        _late.move_to_end(key)
+        while len(_late) > _LATE_MAX_ENTRIES:
+            _late.popitem(last=False)
+
+
+def _forget_late(key: str, entry: _Late) -> None:
+    with _late_lock:
+        if _late.get(key) is entry:
+            _late.pop(key, None)
+
+
+def _late_finished(key: str, entry: _Late, future: "asyncio.Future[Any]", on_done: Optional[Callable[[], None]]) -> None:
+    entry.pending = None
+    if future.cancelled() or future.exception() is not None:
+        # A late read that failed is no stand-in; the next answer reads the cluster again.
+        _forget_late(key, entry)
+        return
+    entry.value = future.result()
+    entry.finished_at = time.monotonic()
+    if on_done is not None:
+        on_done()
+
+
+async def gather_clusters(
+    nodes: Sequence[str],
+    fn: Callable[..., Any],
+    *args: Any,
+    executor: Any,
+    label: str,
+    memo_key: str,
+    generation: Optional[Callable[[], Any]] = None,
+    wall: Optional[float] = None,
+    max_in_flight: Optional[int] = None,
+) -> List[object]:
+    """asyncio.gather(..., return_exceptions=True) over clusters, with a wall per cluster.
+
+    A cluster still reading at the wall answers LateRead (collect() lists it in late_nodes),
+    and its read runs on. When it finishes, its result stands in for that cluster in later answers
+    of the same list and scope for LATE_KEEP_SECONDS, and one background rebuild of the entry
+    being built is scheduled (swr.capture_refresh), so the rows appear without a poll missing
+    first. A stand-in older than LATE_REREAD_AFTER_SECONDS is read again in the background while
+    it keeps answering, so a cluster that is always slow (central-1's volumes take 17 to 24 s on
+    dev) is never missing after its first read. A second request meeting a read still running
+    waits on it instead of starting another.
+
+    important: keyed by the caller's scope (get_scope_cache_key) and fenced by `generation`, like
+    the response cache: a stand-in never crosses a scope, and a mutation discards it. Only a late
+    cluster ever gets one; every other cluster is read every time. `fn(node, *args)` runs through
+    run_blocking, so it gets the caller's context and needs its own socket timeouts.
+    """
+    from app.core import swr
+    from app.core.blocking import BlockingTimeout, run_blocking
+    from app.core.org_scope import get_scope_cache_key
+
+    budget = CLUSTER_WALL_SECONDS if wall is None else wall
+    token = generation() if generation is not None else None
+    scope = get_scope_cache_key(f"late:{memo_key}")
+    on_done = swr.capture_refresh()
+
+    def reread_in_background(node: str, key: str, entry: _Late) -> None:
+        async def reread() -> None:
+            try:
+                value = await run_blocking(
+                    fn, node, *args, timeout=LATE_REREAD_TIMEOUT_SECONDS,
+                    label=f"{label}[{node}] reread", executor=executor, max_in_flight=max_in_flight,
+                )
+            except Exception as exc:  # noqa: BLE001 - the stand-in keeps answering until it lapses
+                logger.info("Background re-read of %s on %s failed: %s", label, node, type(exc).__name__)
+                return
+            if _late_entry(key) is entry and (generation is None or generation() == token):
+                entry.value = value
+                entry.finished_at = time.monotonic()
+            entry.pending = None
+
+        entry.pending = asyncio.ensure_future(reread())
+
+    async def one(node: str) -> object:
+        key = f"{scope}:{node}"
+        entry = _late_entry(key)
+        if entry is not None and entry.generation != token:
+            _forget_late(key, entry)
+            entry = None
+        if entry is not None and entry.finished_at is not None:
+            age = time.monotonic() - entry.finished_at
+            if age <= LATE_KEEP_SECONDS:
+                if age > LATE_REREAD_AFTER_SECONDS and entry.pending is None:
+                    reread_in_background(node, key, entry)
+                return entry.value
+            _forget_late(key, entry)
+            entry = None
+        if entry is not None and entry.pending is not None and not entry.pending.done():
+            try:
+                return await asyncio.wait_for(asyncio.shield(entry.pending), timeout=budget)
+            except asyncio.TimeoutError:
+                return LateRead(node, budget)
+            except Exception as exc:  # noqa: BLE001 - classified by collect()
+                return exc
+        try:
+            return await run_blocking(
+                fn, node, *args, timeout=budget, label=f"{label}[{node}]",
+                executor=executor, max_in_flight=max_in_flight,
+            )
+        except BlockingTimeout as exc:
+            if exc.pending is None:
+                return exc
+            late = _Late(generation=token, pending=exc.pending)
+            _remember_late(key, late)
+            exc.pending.add_done_callback(lambda future: _late_finished(key, late, future, on_done))
+            return LateRead(node, budget)
+        except Exception as exc:  # noqa: BLE001 - classified by collect()
+            return exc
+
+    return list(await asyncio.gather(*(one(node) for node in nodes)))
