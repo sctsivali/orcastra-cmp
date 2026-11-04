@@ -259,6 +259,13 @@ export function useMigrationAction() {
       queryClient.setQueryData(migrationQueryKeys.job(scopeKey, job.job_id), job);
       void reconcileMutationImpact(queryClient, "migration.job");
     },
+    onError: (error: unknown, { jobId }) => {
+      // A 409 means the job moved on (another operator, or the worker). Read it now rather than
+      // at the next poll, 30 s away for a waiting job, so the dialog shows what it moved to.
+      if (error instanceof APIError && error.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: migrationQueryKeys.job(scopeKey, jobId) });
+      }
+    },
   });
 }
 
