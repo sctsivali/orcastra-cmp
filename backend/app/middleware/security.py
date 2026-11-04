@@ -65,7 +65,18 @@ def _shared_allow(key: str, limit: int, window_seconds: int) -> Optional[bool]:
         count = client.incr(bucket)
         if count == 1:
             client.expire(bucket, window_seconds)
-        return int(count) <= limit
+        allowed = int(count) <= limit
+        if not allowed:
+            # note: an expire lost after its incr (a timeout between the two, or the Redis guard
+            # opening) left the counter with none, and a counter past its limit with no expiry
+            # refuses its subject for good. Checked only on a refusal, so it costs nothing on the
+            # common path, and in its own try so it never changes the answer.
+            try:
+                if client.ttl(bucket) == -1:
+                    client.expire(bucket, window_seconds)
+            except Exception:  # noqa: BLE001 - the repair is best effort
+                pass
+        return allowed
     except Exception as exc:  # noqa: BLE001 - any store failure must fall back, not block
         logger.warning("Shared rate limit unavailable, falling back to in-memory: %s", exc)
         return None

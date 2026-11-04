@@ -16,6 +16,13 @@ from app.core.cache_envelope import is_envelope, unwrap
 
 logger = logging.getLogger(__name__)
 
+# Namespaces a worker must not answer from its own memory while a configured Redis is not
+# answering. The Vault mirror carries API key metadata (revocation, capabilities, expiry) and
+# cluster metadata (endpoint, certificate pin): a memory copy can predate a change another
+# worker made, and serving it would honour a revoked key or a superseded pin. The source is
+# read instead.
+_SHARED_ONLY_NAMESPACES = frozenset({"vault"})
+
 # Bump when the SHAPE or the MEANING of a cached resource payload changes. A freshly deployed
 # backend must not keep serving a pre-change body for the rest of its TTL: gpu_total went from
 # "every DRM card" to "compute GPUs only", so an old body shows 2 where the new UI says 1.
@@ -113,13 +120,16 @@ def get_encryption():
 
 try:
     import redis
-    from app.core.redis_guard import RedisSkipped
+    from app.core.redis_guard import GuardedRedis, RedisSkipped
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
 
     class RedisSkipped(Exception):  # type: ignore[no-redef]
         """Never raised without redis; keeps the except clauses below valid."""
+
+    class GuardedRedis:  # type: ignore[no-redef]
+        """Never built without redis."""
 
     logger.warning("Redis not available, using in-memory cache only")
 
@@ -229,6 +239,11 @@ class CacheManager:
                 logger.warning(f"Could not connect to Redis: {e}. Using in-memory cache only.")
                 self.redis_client = None
     
+    def _writer(self) -> Any:
+        """The client for writes: past the Redis guard's skip window (see redis_guard.unskipped)."""
+        client = self.redis_client
+        return client.unskipped if isinstance(client, GuardedRedis) else client
+
     def _make_key(self, namespace: str, key: str) -> str:
         """Create namespaced cache key."""
         return f"orcastra:{namespace}:{key}"
@@ -370,6 +385,9 @@ class CacheManager:
         # Redis unavailable/errored -> degraded mode, fall back to memory cache.
         # note: getattr because a few tests build a bare manager without __init__.
         authoritative = not getattr(self, "_redis_configured", False)
+        if not authoritative and namespace in _SHARED_ONLY_NAMESPACES:
+            # A miss sends the caller to the source, which is what these entries must never skip.
+            return None, False
         cached = self.memory_cache.get(cache_key)
         if cached:
             value, expiry = cached
@@ -416,15 +434,12 @@ class CacheManager:
         # Try to store in Redis (best effort - don't block on failure)
         if self.redis_client:
             try:
-                self.redis_client.setex(
+                self._writer().setex(
                     cache_key,
                     ttl,
                     json.dumps(cached_value, default=str)
                 )
                 logger.debug(f"Cached in Redis: {cache_key} (TTL: {ttl}s, Encrypted: {should_encrypt})")
-            except RedisSkipped as e:
-                if require_shared:
-                    raise CacheInvalidationError(f"shared cache is unavailable for {cache_key}") from e
             except redis.TimeoutError:
                 logger.warning(f"Redis timeout while caching {cache_key} (memory cache still works)")
                 if require_shared:
@@ -448,10 +463,9 @@ class CacheManager:
         # Delete from Redis
         if self.redis_client:
             try:
-                self.redis_client.delete(cache_key)
+                self._writer().delete(cache_key)
             except Exception as e:
-                if not isinstance(e, RedisSkipped):
-                    logger.warning(f"Redis delete error: {e}")
+                logger.warning(f"Redis delete error: {e}")
                 if require_shared:
                     shared_error = CacheInvalidationError("shared cache delete failed")
         elif require_shared and self._redis_configured:
@@ -479,19 +493,19 @@ class CacheManager:
         # Delete from Redis
         if self.redis_client:
             try:
+                writer = self._writer()
                 batch: list[str] = []
-                for key in self.redis_client.scan_iter(match=full_pattern, count=200):
+                for key in writer.scan_iter(match=full_pattern, count=200):
                     if key in excluded:
                         continue
                     batch.append(key)
                     if len(batch) == 200:
-                        self.redis_client.delete(*batch)
+                        writer.delete(*batch)
                         batch.clear()
                 if batch:
-                    self.redis_client.delete(*batch)
+                    writer.delete(*batch)
             except Exception as e:
-                if not isinstance(e, RedisSkipped):
-                    logger.warning(f"Redis delete pattern error: {e}")
+                logger.warning(f"Redis delete pattern error: {e}")
                 if require_shared:
                     shared_error = CacheInvalidationError(
                         f"shared cache delete failed for {full_pattern}"

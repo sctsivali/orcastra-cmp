@@ -329,13 +329,72 @@ def test_the_cache_serves_memory_while_redis_is_skipped_and_says_so_once(manager
         assert cache.get("lists", "a") == {"rows": 1}
         for _ in range(10):
             assert cache.get("lists", "a") == {"rows": 1}
-            cache.set("lists", "b", {"rows": 2}, ttl=60)
-            cache.delete("lists", "c")
-            cache.delete_pattern("lists", "z*")
-    # One timed-out GET reached Redis; everything after it was skipped without a log line.
+    # One timed-out GET reached Redis; the reads after it were skipped without a log line.
     assert client.calls == ["setex", "get"]
     warnings = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
     assert len(warnings) == 2, warnings  # the timeout itself, and the guard opening
+
+
+def test_writes_and_invalidations_are_sent_while_reads_are_skipped(manager):
+    """Security review 2026-11-04: an invalidation is how other workers learn an entry is stale.
+
+    Revoking an API key writes Vault, deletes the shared `vault` copy of its metadata and publishes
+    a tombstone. Skipped while this worker's guard was open, both were lost silently and every
+    other worker went on reading the pre-revoke metadata from Redis for its whole TTL.
+    """
+    cache, client, _clock = manager
+    client.fail = RedisTimeoutError("t")
+    cache.get("lists", "a")  # opens the guard
+    client.fail = None
+    cache.delete("vault", "secret/data/integrations/api_keys/oak_1/metadata")
+    cache.set("apikey_revoked", "oak_1", True, ttl=60)
+    cache.delete_pattern("lists", "*")
+    assert client.calls == ["get", "delete", "setex", "scan_iter", "delete"]
+    # And their answer closed the guard: the next read reaches Redis again.
+    cache.get("lists", "a")
+    assert client.calls[-1] == "get"
+
+
+def test_a_failed_invalidation_while_skipped_still_fails_when_it_must(manager):
+    cache, client, _clock = manager
+    client.fail = RedisTimeoutError("t")
+    cache.get("lists", "a")
+    with pytest.raises(CacheInvalidationError):
+        cache.delete("lists", "a", require_shared=True)
+    assert client.calls == ["get", "delete"]
+
+
+def test_vault_entries_are_never_answered_from_memory_while_redis_is_not(manager):
+    """A memory copy of an API key's metadata can predate its revocation on another worker."""
+    cache, client, _clock = manager
+    cache.sensitive_namespaces = []  # encryption is not what this test is about
+    cache.set("vault", "secret/data/integrations/api_keys/oak_1/metadata", {"is_revoked": False}, ttl=600)
+    cache.set("lists", "a", {"rows": 1}, ttl=60)
+    client.fail = RedisTimeoutError("t")
+    assert cache.get("vault", "secret/data/integrations/api_keys/oak_1/metadata") is None
+    assert cache.get("lists", "a") == {"rows": 1}
+
+
+def test_a_memory_only_deployment_still_reads_vault_entries_from_memory():
+    cache = CacheManager(redis_url=None)
+    cache.sensitive_namespaces = []
+    cache.set("vault", "secret/data/clusters/nuc2/metadata", {"endpoint": "x"}, ttl=600)
+    assert cache.get("vault", "secret/data/clusters/nuc2/metadata") == {"endpoint": "x"}
+
+
+def test_a_script_queued_into_a_pipeline_neither_waits_on_nor_closes_the_guard(setup):
+    """Queuing sends nothing, so it must not be refused, and must not count as Redis answering."""
+    guard, client, _clock = setup
+    script = guard.register_script("return 1")
+    client.fail = RedisTimeoutError("t")
+    with pytest.raises(RedisTimeoutError):
+        guard.get("a")
+    client.fail = None
+    pipe = guard.pipeline(transaction=False)
+    script(keys=["k"], args=[1], client=pipe)
+    assert guard.available() is False
+    with pytest.raises(RedisSkipped):
+        pipe.execute()
 
 
 def test_an_entry_read_while_skipped_is_not_authoritative(manager):
@@ -345,18 +404,6 @@ def test_an_entry_read_while_skipped_is_not_authoritative(manager):
     cache.get("lists", "a")
     _value, authoritative = cache.get_entry("lists", "a")
     assert authoritative is False
-
-
-def test_an_invalidation_that_needs_the_shared_cache_still_fails_while_skipped(manager):
-    cache, client, _clock = manager
-    client.fail = RedisTimeoutError("t")
-    cache.get("lists", "a")
-    with pytest.raises(CacheInvalidationError):
-        cache.set("generation", "lists", "2", ttl=60, require_shared=True)
-    with pytest.raises(CacheInvalidationError):
-        cache.delete("lists", "a", require_shared=True)
-    with pytest.raises(CacheInvalidationError):
-        cache.delete_pattern("lists", "*", require_shared=True)
 
 
 def test_dead_cluster_verdicts_stop_being_shared_while_redis_is_skipped(manager, monkeypatch):

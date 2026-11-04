@@ -57,3 +57,31 @@ def test_the_first_hit_sets_the_window(redis: Dict[str, Any]) -> None:
     redis["client"] = _Redis(count=1, ttl=60)
     assert security._shared_consume("owner-enroll:key:k", 10, 60) == (1, 60)
     assert redis["client"].expires == [("orcastra:ratelimit:owner-enroll:key:k", 60)]
+
+
+# The yes-or-no form (_shared_allow) had no repair: a counter past its limit with no expiry refused
+# its subject for good (console actions, guest credentials, desktop, the forced-refresh budget). The
+# Redis guard made the lost expiry likelier, since it can open between the two calls (2026-11-04).
+
+
+def test_a_refused_counter_without_an_expiry_gets_its_window_back(redis: Dict[str, Any]) -> None:
+    redis["client"] = _Redis(count=11, ttl=-1)
+    assert security._shared_allow("fresh:subject", 10, 60) is False
+    assert redis["client"].expires == [("orcastra:ratelimit:fresh:subject", 60)]
+
+
+def test_an_allowed_hit_costs_no_ttl_read(redis: Dict[str, Any]) -> None:
+    client = _Redis(count=5, ttl=-1)
+    client.ttl = None  # type: ignore[assignment]  # calling it would raise
+    redis["client"] = client
+    assert security._shared_allow("fresh:subject", 10, 60) is True
+    assert client.expires == []
+
+
+def test_a_repair_that_fails_does_not_change_the_answer(redis: Dict[str, Any]) -> None:
+    class _NoTtl(_Redis):
+        def ttl(self, _bucket: str) -> Optional[int]:
+            raise RuntimeError("ttl unavailable")
+
+    redis["client"] = _NoTtl(count=11, ttl=None)
+    assert security._shared_allow("fresh:subject", 10, 60) is False

@@ -15,8 +15,9 @@ ends one command is let through to probe; an answer closes the guard, a failure 
 
 important: a skipped command still raises, it never pretends to succeed. RedisSkipped is a
 redis ConnectionError, so every existing `except redis.ConnectionError` and `except Exception`
-handler treats it as the outage it stands for, and an invalidation that requires the shared
-cache still fails loudly rather than appearing to have cleared it.
+handler treats it as the outage it stands for. The response cache's writes and invalidations are
+never skipped at all (`GuardedRedis.unskipped`): they are how other workers learn an entry is
+stale, so each is sent and only bounded by the 1 s timeout.
 """
 
 from __future__ import annotations
@@ -41,7 +42,9 @@ _PROBE_GRACE_SECONDS = 5.0
 _DEFERRED = frozenset({"pipeline", "register_script"})
 _ITERATORS = frozenset({"scan_iter", "sscan_iter", "hscan_iter", "zscan_iter"})
 # Local bookkeeping that sends nothing: never refused, so shutdown can close the pool mid-outage.
-_LOCAL = frozenset({"close", "get_encoder", "get_connection_kwargs", "get_retry", "set_retry"})
+_LOCAL = frozenset(
+    {"close", "get_encoder", "get_connection_kwargs", "get_retry", "set_retry", "pubsub", "lock"}
+)
 _FAILURES = (RedisConnectionError, RedisTimeoutError)
 
 
@@ -105,6 +108,9 @@ class GuardedRedis:
 
     def _call(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         self._admit()
+        return self._send(fn, *args, **kwargs)
+
+    def _send(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         try:
             result = fn(*args, **kwargs)
         except RedisSkipped:
@@ -122,6 +128,17 @@ class GuardedRedis:
         """The wrapped client, for tests and for code that must bypass the guard on purpose."""
         return self._client
 
+    @property
+    def unskipped(self) -> "_Unskipped":
+        """The same client for writes that must never be skipped: each is sent, and still counted.
+
+        important: an invalidation is the only way another worker learns that an entry is stale.
+        Skipping one while this worker's guard is open left, for example, a revoked API key's
+        metadata in Redis for its whole TTL while every other worker read it as valid. A write is
+        rare next to a read and is bounded by the 1 s timeout, so it is always attempted.
+        """
+        return _Unskipped(self)
+
     def __getattr__(self, name: str) -> Any:
         attr = getattr(self._client, name)
         if not callable(attr) or name in _LOCAL:
@@ -132,8 +149,9 @@ class GuardedRedis:
             return lambda *args, **kwargs: self._iterate(attr, *args, **kwargs)
         return lambda *args, **kwargs: self._call(attr, *args, **kwargs)
 
-    def _iterate(self, fn: Callable[..., Any], *args: Any, **kwargs: Any):
-        self._admit()
+    def _iterate(self, fn: Callable[..., Any], *args: Any, admit: bool = True, **kwargs: Any):
+        if admit:
+            self._admit()
         try:
             yield from fn(*args, **kwargs)
         except RedisSkipped:
@@ -142,6 +160,21 @@ class GuardedRedis:
             self._failed(exc)
             raise
         self._answered()
+
+
+class _Unskipped:
+    """GuardedRedis.unskipped: every command is sent, and its outcome still opens or closes the guard."""
+
+    def __init__(self, guard: GuardedRedis) -> None:
+        self._guard = guard
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._guard.raw, name)
+        if not callable(attr) or name in _LOCAL:
+            return attr
+        if name in _ITERATORS:
+            return lambda *args, **kwargs: self._guard._iterate(attr, *args, admit=False, **kwargs)
+        return lambda *args, **kwargs: self._guard._send(attr, *args, **kwargs)
 
 
 class _Deferred:
@@ -162,6 +195,9 @@ class _Deferred:
         target = kwargs.get("client")
         if isinstance(target, _Deferred):
             kwargs["client"] = target._inner
+            # Queued into a pipeline: nothing is sent until execute(), so this neither waits on
+            # the guard nor tells it Redis answered.
+            return self._inner(*args, **kwargs)
         return self._guard._call(self._inner, *args, **kwargs)
 
     def execute(self, *args: Any, **kwargs: Any) -> Any:
