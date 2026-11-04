@@ -19,7 +19,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useMigrationAction } from "@/hooks/use-migrations";
 import { useToast } from "@/hooks/use-toast";
 import type { MigrationAction, MigrationJob } from "@/types/migrations";
-import { endpointLabel } from "./migration-format";
+import { endpointLabel, migrationStatusMeta } from "./migration-format";
 
 const ACTION_COPY: Record<MigrationAction, { title: string; description: string; submit: string }> = {
   cancel: {
@@ -120,10 +120,14 @@ export function MigrationActionDialog({
 }: MigrationActionDialogProps) {
   const [reason, setReason] = React.useState("");
   const [confirmation, setConfirmation] = React.useState("");
-  const [error, setError] = React.useState<string | null>(null);
+  // The revision a failed submit was refused at, so a later poll can say the job moved on.
+  const [error, setError] = React.useState<{ message: string; revision: number } | null>(null);
   const mutation = useMigrationAction();
   const { toast } = useToast();
   const submitInFlightRef = React.useRef(false);
+  // note: the open job polls, and an unknown job's reconciliation bumps its revision every few
+  // minutes. Only the action itself going away resets what the operator typed.
+  const withdrawn = !!action && !mutation.isPending && !(job.available_actions ?? []).includes(action);
 
   React.useEffect(() => {
     if (action) {
@@ -131,14 +135,27 @@ export function MigrationActionDialog({
       setConfirmation("");
       setError(null);
     }
-  }, [action, job.job_id, job.revision]);
+  }, [action, job.job_id]);
+
+  React.useEffect(() => {
+    if (withdrawn) {
+      setReason("");
+      setConfirmation("");
+    }
+  }, [withdrawn]);
 
   if (!action) return null;
   const copy = migrationActionCopy(job, action);
   const phrase = CONFIRMATION[action];
   const destructive = action === "cleanup" || action === "restore_checkpoint" || action === "rollback";
   const fenceChange = action === "release";
-  const valid = reason.trim().length >= 8 && (!phrase || confirmation === phrase);
+  const valid = !withdrawn && reason.trim().length >= 8 && (!phrase || confirmation === phrase);
+  const phase = migrationStatusMeta(job).label;
+  const submitError = withdrawn
+    ? `${copy.title} is no longer offered: the migration is now ${phase}. Close this and choose from the actions it offers now.`
+    : error && error.revision !== job.revision
+      ? `${error.message} The migration has since changed to ${phase}. Review it and confirm again.`
+      : error?.message ?? null;
 
   const submit = async () => {
     if (!valid || submitInFlightRef.current) return;
@@ -158,7 +175,10 @@ export function MigrationActionDialog({
       onCompleted(updated);
       onOpenChange(false);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "The migration action failed.");
+      setError({
+        message: caught instanceof Error ? caught.message : "The migration action failed.",
+        revision: job.revision,
+      });
     } finally {
       submitInFlightRef.current = false;
     }
@@ -231,7 +251,7 @@ export function MigrationActionDialog({
             </div>
           )}
 
-          <DialogSubmitError message={error} className="mt-0" />
+          <DialogSubmitError message={submitError} className="mt-0" />
           {mutation.isPending && (
             <p role="status" className="sr-only" aria-live="polite">
               Submitting {copy.submit.toLowerCase()}.

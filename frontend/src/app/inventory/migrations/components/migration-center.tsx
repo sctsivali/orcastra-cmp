@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ArrowLeftRight, FileClock, LockKeyhole, Plus } from "lucide-react";
+import { AlertTriangle, ArrowLeftRight, FileClock, LockKeyhole, Plus } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -75,6 +75,12 @@ function MigrationCenterContent() {
   const allowed = permissions.hasRole(Role.PARTNER);
   const migrationCapabilities = useMigrationCapabilities();
   const centerEnabled = migrationCapabilities.centerEnabled === true;
+  // A failed settings read is not a deployment that turned migrations off. Both refuse new plans,
+  // but only one is fixed by an administrator setting MIGRATION_CENTER_ENABLED.
+  const capabilitiesUnreadable = migrationCapabilities.isError;
+  const newMigrationsOffReason = capabilitiesUnreadable
+    ? "Migration availability could not be read"
+    : "New migrations are turned off on this deployment";
   const jobsQuery = useMigrationJobs(allowed);
   const plansQuery = useMigrationPlans(allowed);
   const { writeAvailability, writeUnavailableCause, recheckWriteAvailability } = useReadOnlyMode();
@@ -108,11 +114,12 @@ function MigrationCenterContent() {
         : writeAvailability === "read_only"
           ? "Disabled in read-only mode"
           : undefined;
-  const planWriteDisabledReason = centerEnabled
-    ? writeDisabledReason
-    : "New migrations are turned off on this deployment";
+  const planWriteDisabledReason = centerEnabled ? writeDisabledReason : newMigrationsOffReason;
   const patchQuery = React.useCallback(
     (patch: Record<string, string | null>) => {
+      // important: a request that resolves after Back left this page still holds this callback.
+      // Writing then would put a Migration Center query onto the page the operator is now on.
+      if (window.location.pathname !== pathname) return;
       const params = currentQuery();
       for (const [key, value] of Object.entries(patch)) {
         if (value) params.set(key, value);
@@ -165,6 +172,22 @@ function MigrationCenterContent() {
     () => loadedPlans.filter((plan) => plan.status !== "executed"),
     [loadedPlans],
   );
+  const startedJobId = planId ? loadedJobs.find((job) => job.plan_id === planId)?.job_id ?? null : null;
+
+  const showJob = (id: string) =>
+    patchQuery({
+      job: id,
+      new: null,
+      plan: null,
+      step: null,
+      scope: null,
+      source_cluster: null,
+      source_project: null,
+      resource_name: null,
+      mode: null,
+      intent: null,
+      source_member: null,
+    });
 
   if (permissions.isLoading || migrationCapabilities.isLoading) return <LoadingLottiePage />;
 
@@ -262,7 +285,7 @@ function MigrationCenterContent() {
             title={
               centerEnabled
                 ? "Create a migration plan and run side-effect-free preflight"
-                : "New migrations are turned off on this deployment"
+                : newMigrationsOffReason
             }
           >
             <Plus className="mr-2 h-4 w-4" aria-hidden />
@@ -271,7 +294,27 @@ function MigrationCenterContent() {
         </div>
       </div>
 
-      {!centerEnabled && (
+      {capabilitiesUnreadable ? (
+        <Alert>
+          <AlertTriangle className="h-4 w-4" aria-hidden />
+          <AlertTitle>Migration availability could not be read</AlertTitle>
+          <AlertDescription className="space-y-3">
+            <p>
+              New migrations stay unavailable until it is read, because the settings check failed:{" "}
+              {describeReadError(migrationCapabilities.error).reason}. Existing jobs, their actions,
+              saved drafts, and history stay available.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void migrationCapabilities.refetch()}
+            >
+              Check Again
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : !centerEnabled && (
         <Alert>
           <LockKeyhole className="h-4 w-4" aria-hidden />
           <AlertTitle>New migrations are turned off on this deployment</AlertTitle>
@@ -428,21 +471,9 @@ function MigrationCenterContent() {
         onPlanIdChange={(id) => patchQuery(id ? { plan: id, new: null } : { plan: null, new: "1", step: null })}
         initialStep={initialStep}
         onStepChange={syncStep}
-        onStarted={(job) =>
-          patchQuery({
-            job: job.job_id,
-            new: null,
-            plan: null,
-            step: null,
-            scope: null,
-            source_cluster: null,
-            source_project: null,
-            resource_name: null,
-            mode: null,
-            intent: null,
-            source_member: null,
-          })
-        }
+        onStarted={(job) => showJob(job.job_id)}
+        startedJobId={startedJobId}
+        onOpenJob={showJob}
         writeDisabledReason={planWriteDisabledReason}
         writeAvailability={centerEnabled ? writeAvailability : undefined}
         onRecheckWrite={() => void recheckWriteAvailability()}

@@ -117,6 +117,8 @@ export function useMigrationCapabilities() {
   return {
     isLoading: query.isLoading,
     isError,
+    error: isError ? query.error : null,
+    refetch: query.refetch,
     planningUnavailableReason: migrationPlanningUnavailableReason(
       query.isLoading,
       isError,

@@ -10,16 +10,22 @@ import { RETAINED_PHASES } from "./migration-format";
 export function MigrationRetentionPanel({
   job,
   autoCleanupEnabled,
+  approvedAutomaticCleanup,
 }: {
   job: MigrationJob;
   autoCleanupEnabled?: boolean;
+  /** What the approved plan contract says, undefined while it is unknown. */
+  approvedAutomaticCleanup?: boolean;
 }) {
   const left = useCountdown(job.retention_deadline);
   if (!RETAINED_PHASES.has(job.phase) || job.intent !== "move" || job.strategy === "member_relocation") {
     return null;
   }
   const expired = left !== null && left <= 0;
-  const automatic = autoCleanupEnabled === true;
+  // important: the scheduler deletes only when today's flag and the approved contract both allow
+  // it. A flag turned on after approval must not promise a deletion that waits for Finalize.
+  const automatic = autoCleanupEnabled === true && approvedAutomaticCleanup === true;
+  const undecided = autoCleanupEnabled === true && approvedAutomaticCleanup === undefined;
   const source = job.strategy === "project_relocation" ? "source project" : "source";
   const target = job.strategy === "project_relocation" ? "new project" : "new instance";
   return (
@@ -49,7 +55,9 @@ export function MigrationRetentionPanel({
           ? "A safety check stopped the last cleanup or rollback, and nothing was deleted. Roll back, retry Finalize after the cause is fixed, or ask an administrator to release the job."
           : automatic
             ? `When retention ends, Orcastra checks that the ${source} is unchanged and the ${target} is healthy, then deletes the ${source}. Finalize deletes it now. Rollback restores it.`
-            : `When retention ends, Finalize deletes the ${source}. Rollback restores it until then.`}
+            : undecided
+              ? `When retention ends, Orcastra deletes the ${source} after its health checks if this move was approved with automatic cleanup; otherwise Finalize deletes it. Rollback restores it until then.`
+              : `When retention ends, Finalize deletes the ${source}. Rollback restores it until then.`}
       </p>
     </section>
   );

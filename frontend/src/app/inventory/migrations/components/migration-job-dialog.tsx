@@ -30,7 +30,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useMigrationJob } from "@/hooks/use-migrations";
+import { useMigrationJob, useMigrationPlan } from "@/hooks/use-migrations";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useMigrationCapabilities } from "@/hooks/use-read-only-mode";
 import { describeReadError } from "@/lib/read-error";
@@ -38,7 +38,14 @@ import { formatDateTimeSeconds, formatLabel, plural } from "@/lib/utils";
 import type { MigrationAction, MigrationJob } from "@/types/migrations";
 import { Role } from "@/types/rbac";
 import { MigrationActionDialog, migrationActionCopy } from "./migration-action-dialog";
-import { endpointLabel, jobProgress, migrationStatusMeta, strategyLabel } from "./migration-format";
+import {
+  RETAINED_PHASES,
+  endpointLabel,
+  jobProgress,
+  migrationInView,
+  migrationStatusMeta,
+  strategyLabel,
+} from "./migration-format";
 import { MigrationResourceTable } from "./migration-resource-table";
 import { MigrationRetentionPanel } from "./migration-retention-panel";
 
@@ -76,6 +83,13 @@ export function MigrationJobDialog({ jobId, onOpenChange, writeDisabledReason }:
   const job = query.data;
   const meta = job ? migrationStatusMeta(job) : null;
   const overallProgress = job ? jobProgress(job) : null;
+  const retainedMove =
+    !!job && RETAINED_PHASES.has(job.phase) && job.intent === "move" && job.strategy !== "member_relocation";
+  // note: automatic cleanup needs today's flag and the contract approved with the plan. The job
+  // response does not carry the contract, so it is read from the plan the job was started from.
+  const approvedPlan = useMigrationPlan(job && retainedMove ? job.plan_id : null, retainedMove);
+  const approvedCleanup = approvedPlan.data?.rollback_contract?.automatic_cleanup;
+  const recoveryNotApplicable = job?.intent === "copy" || job?.strategy === "member_relocation";
 
   return (
     <Dialog open={!!jobId} onOpenChange={onOpenChange}>
@@ -192,24 +206,33 @@ export function MigrationJobDialog({ jobId, onOpenChange, writeDisabledReason }:
                     <DetailField label="Destination" value={endpointLabel(job.target)} mono />
                     <DetailField label="Strategy" value={strategyLabel(job)} />
                     <DetailField label="Current Phase" value={formatLabel(job.phase)} />
-                    <DetailField label="Started" value={formatDateTimeSeconds(job.created_at)} />
+                    {/* A queued job has not started: created_at is when it was approved. */}
                     <DetailField
-                      label={
-                        job.intent === "copy" || job.strategy === "member_relocation"
-                          ? "Recovery Window"
-                          : "Source Retention Deadline"
-                      }
-                      value={
-                        job.intent === "copy" || job.strategy === "member_relocation"
-                          ? "Not applicable"
-                          : job.retention_deadline
-                            ? formatDateTimeSeconds(job.retention_deadline)
-                            : "Not started"
-                      }
+                      label={job.started_at ? "Started" : "Created"}
+                      value={formatDateTimeSeconds(job.started_at ?? job.created_at)}
                     />
+                    {/* The server never clears retention_deadline, so a finished job would keep an old date. */}
+                    {!migrationInView(job, "history") && (
+                      <DetailField
+                        label={recoveryNotApplicable ? "Recovery Window" : "Source Retention Deadline"}
+                        value={
+                          recoveryNotApplicable
+                            ? "Not applicable"
+                            : !job.retention_deadline
+                              ? "Not started"
+                              : RETAINED_PHASES.has(job.phase)
+                                ? formatDateTimeSeconds(job.retention_deadline)
+                                : "Ended"
+                        }
+                      />
+                    )}
                   </div>
 
-                  <MigrationRetentionPanel job={job} autoCleanupEnabled={autoCleanupEnabled} />
+                  <MigrationRetentionPanel
+                    job={job}
+                    autoCleanupEnabled={autoCleanupEnabled}
+                    approvedAutomaticCleanup={typeof approvedCleanup === "boolean" ? approvedCleanup : undefined}
+                  />
 
                   {job.scope === "project" && <ProjectProgress job={job} />}
 

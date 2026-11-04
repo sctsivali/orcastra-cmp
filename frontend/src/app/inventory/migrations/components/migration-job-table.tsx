@@ -20,7 +20,15 @@ import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { formatDateTimeSeconds, formatLabel } from "@/lib/utils";
 import type { MigrationJob } from "@/types/migrations";
-import { endpointLabel, endpointPrimary, jobProgress, migrationStatusMeta, operationLabel, strategyLabel } from "./migration-format";
+import {
+  activeRetentionDeadline,
+  endpointLabel,
+  endpointPrimary,
+  jobProgress,
+  migrationStatusMeta,
+  operationLabel,
+  strategyLabel,
+} from "./migration-format";
 
 const MIGRATION_JOBS = defineTable<MigrationJob>()({
   id: "migration-job",
@@ -71,7 +79,10 @@ const MIGRATION_JOBS = defineTable<MigrationJob>()({
     {
       field: "rollback",
       label: "Retention Until",
-      sort: (job) => job.retention_deadline ? Date.parse(job.retention_deadline) : null,
+      sort: (job) => {
+        const deadline = activeRetentionDeadline(job);
+        return deadline ? Date.parse(deadline) : null;
+      },
       filter: fromSort("date", { horizon: "future" }),
     },
   ],
@@ -140,6 +151,7 @@ function MigrationJobTableContent({
             rows.map((job) => {
               const status = migrationStatusMeta(job);
               const progress = jobProgress(job);
+              const deadline = activeRetentionDeadline(job);
               return (
                 <TableRow key={job.job_id}>
                   <TableCell className="font-medium">
@@ -173,8 +185,8 @@ function MigrationJobTableContent({
                   </TableCell>
                   <TableCell className="whitespace-nowrap">{formatDateTimeSeconds(job.updated_at)}</TableCell>
                   <TableCell className="whitespace-nowrap">
-                    {job.retention_deadline ? (
-                      formatDateTimeSeconds(job.retention_deadline)
+                    {deadline ? (
+                      formatDateTimeSeconds(deadline)
                     ) : (
                       <TableEmptyValue label="No source retention deadline" />
                     )}

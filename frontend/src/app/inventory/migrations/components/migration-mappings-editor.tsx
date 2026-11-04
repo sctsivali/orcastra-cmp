@@ -14,6 +14,7 @@ import type {
   MigrationMappings,
 } from "@/types/migrations";
 import { MigrationNetworkMapping } from "./migration-network-mapping";
+import { MAPPING_NAME_MAX } from "./migration-wizard-model";
 
 const UNSUPPORTED: Array<Exclude<MigrationMappingCategory, "storage_pools" | "networks" | "profiles">> = [
   "volumes",
@@ -144,30 +145,45 @@ function MappingCategory({
 
       {entries.length ? (
         <div className="divide-y rounded-md border">
-          {entries.map(([from, to]) => (
-            <div key={from} className="grid items-center gap-2 p-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-              <span className="break-words font-mono text-sm">{from}</span>
-              <Input
-                aria-label={`Target for ${formatLabel(category)} ${from}`}
-                value={to}
-                onChange={(event) => onChange({ ...values, [from]: event.target.value })}
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-8 w-8 p-0"
-                aria-label={`Remove mapping for ${from}`}
-                onClick={() => {
-                  const next = { ...values };
-                  delete next[from];
-                  onChange(next);
-                }}
-              >
-                <Trash2 className="h-4 w-4" aria-hidden />
-              </Button>
-            </div>
-          ))}
+          {entries.map(([from, to], index) => {
+            const blank = !to.trim();
+            const errorId = `mapping-${category}-${index}-error`;
+            return (
+              <div key={from} className="grid items-center gap-2 p-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                <span className="break-words font-mono text-sm">{from}</span>
+                <div className="space-y-1">
+                  <Input
+                    aria-label={`Target for ${formatLabel(category)} ${from}`}
+                    value={to}
+                    maxLength={MAPPING_NAME_MAX}
+                    autoComplete="off"
+                    aria-invalid={blank}
+                    aria-describedby={blank ? errorId : undefined}
+                    onChange={(event) => onChange({ ...values, [from]: event.target.value })}
+                  />
+                  {blank && (
+                    <p id={errorId} className="text-xs text-destructive">
+                      Enter a destination name, or remove this mapping.
+                    </p>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-8 p-0"
+                  aria-label={`Remove mapping for ${from}`}
+                  onClick={() => {
+                    const next = { ...values };
+                    delete next[from];
+                    onChange(next);
+                  }}
+                >
+                  <Trash2 className="h-4 w-4" aria-hidden />
+                </Button>
+              </div>
+            );
+          })}
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">No explicit mapping.</p>
@@ -176,11 +192,23 @@ function MappingCategory({
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
         <div className="space-y-2">
           <Label htmlFor={sourceId}>Source Name</Label>
-          <Input id={sourceId} value={source} onChange={(event) => setSource(event.target.value)} autoComplete="off" />
+          <Input
+            id={sourceId}
+            value={source}
+            maxLength={MAPPING_NAME_MAX}
+            onChange={(event) => setSource(event.target.value)}
+            autoComplete="off"
+          />
         </div>
         <div className="space-y-2">
           <Label htmlFor={targetId}>Destination Name</Label>
-          <Input id={targetId} value={target} onChange={(event) => setTarget(event.target.value)} autoComplete="off" />
+          <Input
+            id={targetId}
+            value={target}
+            maxLength={MAPPING_NAME_MAX}
+            onChange={(event) => setTarget(event.target.value)}
+            autoComplete="off"
+          />
         </div>
         <Button type="button" variant="outline" onClick={add} disabled={!canAdd}>
           <Plus className="mr-2 h-4 w-4" aria-hidden />

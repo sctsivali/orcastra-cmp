@@ -99,16 +99,20 @@ export function MigrationStageStrategy({ plan }: { plan: MigrationPlan }) {
 }
 
 export function MigrationStagePreflight({ plan }: { plan: MigrationPlan }) {
-  const expired = Date.parse(plan.expires_at) <= Date.now();
+  // A started plan keeps its last preflight as a record; it neither expires nor waits to run.
+  const executed = plan.status === "executed";
+  const expired = !executed && Date.parse(plan.expires_at) <= Date.now();
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3">
         <div>
           <p className="text-sm font-medium">Plan revision {plan.revision}</p>
-          <p className="text-xs text-muted-foreground">Expires {formatDateTimeSeconds(plan.expires_at)}</p>
+          {!executed && (
+            <p className="text-xs text-muted-foreground">Expires {formatDateTimeSeconds(plan.expires_at)}</p>
+          )}
         </div>
-        <Badge variant={expired || plan.blockers?.length ? "negative" : "positive"}>
-          {expired ? "Expired" : plan.blockers?.length ? "Blocked" : "Ready"}
+        <Badge variant={executed ? "neutral" : expired || plan.blockers?.length ? "negative" : "positive"}>
+          {executed ? "Started" : expired ? "Expired" : plan.blockers?.length ? "Blocked" : "Ready"}
         </Badge>
       </div>
       {expired && (

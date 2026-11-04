@@ -15,6 +15,7 @@ import {
   useMigrationPlan,
   useUpdateMigrationPlan,
 } from "@/hooks/use-migrations";
+import { toast } from "@/hooks/use-toast";
 import { migrationsAPI } from "@/lib/migrations-api";
 import { describeReadError } from "@/lib/read-error";
 import { safeRandomUUID } from "@/lib/utils";
@@ -26,11 +27,15 @@ import {
   draftFromPlan,
   initialMigrationDraft,
   isSameLocation,
+  mappingProblem,
   parseRetention,
   projectDestinationProblem,
   type MigrationDraftState,
   type MigrationWizardSeed,
 } from "./migration-wizard-model";
+
+/** A create or start that finished after browser Back closed the wizard or left the page. */
+export type MigrationDetachedResult = { kind: "plan"; planId: string } | { kind: "job"; jobId: string };
 
 export interface MigrationRollout {
   durableCopyEnabled?: boolean;
@@ -73,6 +78,10 @@ function isRevisionConflict(message: string): boolean {
   return /Reload and approve plan revision|plan changed/i.test(message);
 }
 
+function asSentence(message: string): string {
+  return /[.!?]$/.test(message.trim()) ? message.trim() : `${message.trim()}.`;
+}
+
 export function useMigrationWizard({
   open,
   seed,
@@ -84,6 +93,7 @@ export function useMigrationWizard({
   rollout,
   initialStep,
   onStepChange,
+  onDetached,
 }: {
   open: boolean;
   seed?: MigrationWizardSeed;
@@ -96,6 +106,8 @@ export function useMigrationWizard({
   /** The step a plan link names. A plan opened without one starts at Preflight. */
   initialStep?: number | null;
   onStepChange?: (step: number) => void;
+  /** Says where a result went when the wizard that asked for it is no longer open. */
+  onDetached?: (result: MigrationDetachedResult) => void;
 }) {
   const defaultRetention = rollout.defaultRetentionHours ?? 24;
   const [step, setStep] = React.useState(0);
@@ -110,6 +122,19 @@ export function useMigrationWizard({
   const preserveDraftOnDetachRef = React.useRef(false);
   const submitInFlightRef = React.useRef(false);
   const executionAttemptRef = React.useRef<{ signature: string; key: string } | null>(null);
+  // important: bumped when the wizard opens, closes or unmounts. A request still running when
+  // browser Back closed the wizard, or left the page, sees another value afterwards, and must
+  // not reopen the wizard, write a URL, or adopt its answer into a wizard started since.
+  const sessionRef = React.useRef(0);
+  React.useEffect(() => {
+    sessionRef.current += 1;
+    // A plan opened again later is read from the cache, which every save keeps current, rather
+    // than from this session's state.
+    if (!open) loadedPlanRef.current = null;
+    return () => {
+      sessionRef.current += 1;
+    };
+  }, [open]);
 
   const clusterQuery = useClusters();
   const projectQuery = useAllProjects({ enabled: open });
@@ -223,8 +248,11 @@ export function useMigrationWizard({
         LXD_NAME_PATTERN.test(draft.targetResourceName.trim()) &&
         !sameLocation;
   const rolloutDisabledReason = rolloutReason(draft, rollout);
-  const expired = plan ? Date.parse(plan.expires_at) <= Date.now() : false;
+  // A started plan is history: the server refuses to change or start it again.
+  const executed = plan?.status === "executed";
+  const expired = plan && !executed ? Date.parse(plan.expires_at) <= Date.now() : false;
   const retentionValid = parseRetention(draft.retentionInput) !== null;
+  const mappingIssue = mappingProblem(draft.mappings);
   const requiredAcks = requiredAcknowledgements(draft, plan);
   const reviewValid =
     draft.reason.trim().length >= 8 &&
@@ -238,48 +266,64 @@ export function useMigrationWizard({
     setDraft((current) => ({ ...current, mappings: nextPlan.mappings }));
   };
 
-  const startPreflight = async () => {
+  type Live = () => boolean;
+
+  /** Creates the plan. Null when the wizard was closed while preflight ran. */
+  const startPreflight = async (live: Live) => {
     const nextPlan = await createPlan.mutateAsync(createPlanBody(draft));
+    if (!live()) {
+      onDetached?.({ kind: "plan", planId: nextPlan.plan_id });
+      return null;
+    }
     adoptPlan(nextPlan);
     loadedPlanRef.current = nextPlan.plan_id;
     onPlanIdChange(nextPlan.plan_id);
     return nextPlan;
   };
 
-  const patchPlan = async (body: MigrationPlanUpdateRequest) => {
-    if (!plan || expired) return startPreflight();
+  // note: an expired plan is patched too. The server re-runs preflight and renews the plan in
+  // place, where a new POST would leave the expired draft behind as a duplicate.
+  const patchPlan = async (body: MigrationPlanUpdateRequest, live: Live) => {
+    if (!plan) return startPreflight(live);
     const nextPlan = await updatePlan.mutateAsync({ planId: plan.plan_id, revision: plan.revision, body });
+    if (!live()) return null;
     adoptPlan(nextPlan);
     return nextPlan;
   };
 
-  // Execution found approval-relevant drift and saved a new revision. Show it, and ask again.
-  const reloadAfterConflict = async (message: string) => {
+  // The server has a newer revision. Its plan wins: a retention or destination edited here and
+  // lost to the conflict must not be shown as what Start would run. Only the reason is kept.
+  const reloadAfterConflict = async (message: string, live: Live) => {
     if (!plan) return;
     try {
       const fresh = await migrationsAPI.getPlan(plan.plan_id);
-      adoptPlan(fresh);
-      setDraft((current) => ({ ...current, acknowledgements: [] }));
-      setStep(fresh.blockers?.length ? 4 : 6);
+      if (!live()) return;
+      setPlan(fresh);
+      setPlanDirty(false);
+      setDraft((current) => ({ ...draftFromPlan(fresh), reason: current.reason }));
+      if (fresh.blockers?.length) setStep((current) => Math.min(current, 4));
       setNotice(
         `Preflight changed since you reviewed it and is now revision ${fresh.revision}. ` +
           "Review the findings and confirm again.",
       );
     } catch (caught) {
-      setError(`${message} The new revision could not be loaded: ${describeReadError(caught).reason}.`);
+      if (live()) setError(`${message} The new revision could not be loaded: ${describeReadError(caught).reason}.`);
     }
   };
 
-  const run = async (work: () => Promise<void>, fallback: string) => {
+  const run = async (work: (live: Live) => Promise<void>, fallback: string) => {
     if (submitInFlightRef.current) return;
     submitInFlightRef.current = true;
+    const session = sessionRef.current;
+    const live = () => sessionRef.current === session;
     setError(null);
     setNotice(null);
     try {
-      await work();
+      await work(live);
     } catch (caught) {
+      if (!live()) return;
       const message = caught instanceof Error ? caught.message : fallback;
-      if (isRevisionConflict(message)) await reloadAfterConflict(message);
+      if (isRevisionConflict(message)) await reloadAfterConflict(message, live);
       else setError(message);
     } finally {
       submitInFlightRef.current = false;
@@ -293,24 +337,23 @@ export function useMigrationWizard({
   });
 
   const advance = () =>
-    run(async () => {
+    run(async (live) => {
       if (step === 0) {
         setStep(1);
       } else if (step === 1) {
         const nextBody = createPlanBody(draft);
-        if (plan && !expired) await patchPlan({ target: nextBody.target, mappings: nextBody.mappings });
-        else await startPreflight();
-        setStep(2);
+        const saved = plan
+          ? await patchPlan({ target: nextBody.target, mappings: nextBody.mappings }, live)
+          : await startPreflight(live);
+        if (saved) setStep(2);
       } else if (step === 2) {
         setStep(3);
       } else if (step === 3) {
-        await patchPlan({ mappings: createPlanBody(draft).mappings });
-        setStep(4);
+        if (await patchPlan({ mappings: createPlanBody(draft).mappings }, live)) setStep(4);
       } else if (step === 4) {
         setStep(5);
       } else if (step === 5) {
-        await patchPlan(recoveryBody());
-        setStep(6);
+        if (await patchPlan(recoveryBody(), live)) setStep(6);
       } else if (step === 6 && plan) {
         const body = { reason: draft.reason.trim(), acknowledgements: draft.acknowledgements };
         const signature = JSON.stringify({ planId: plan.plan_id, revision: plan.revision, body });
@@ -325,22 +368,37 @@ export function useMigrationWizard({
           idempotencyKey: attempt.key,
           body,
         });
-        onStarted(job);
+        if (live()) onStarted(job);
+        else onDetached?.({ kind: "job", jobId: job.job_id });
       }
     }, "The migration request failed.");
 
   const recheck = () =>
-    run(async () => {
-      await patchPlan({ mappings: createPlanBody(draft).mappings, ...recoveryBody() });
+    run(async (live) => {
+      await patchPlan({ mappings: createPlanBody(draft).mappings, ...recoveryBody() }, live);
     }, "Preflight could not be refreshed.");
 
+  // important: Close always closes. A save that fails leaves the server's draft as it was last
+  // saved and says so in a toast, instead of holding the operator in a dialog whose every exit
+  // repeats the failing request.
   const saveAndClose = () =>
-    run(async () => {
-      if (plan && planDirty) {
-        const body = createPlanBody(draft);
-        await patchPlan({ target: body.target, mappings: body.mappings, ...recoveryBody() });
+    run(async (live) => {
+      if (plan && planDirty && !executed) {
+        try {
+          if (mappingIssue) throw new Error(mappingIssue);
+          const body = createPlanBody(draft);
+          await patchPlan({ target: body.target, mappings: body.mappings, ...recoveryBody() }, live);
+        } catch (caught) {
+          if (!live()) return;
+          const reason = caught instanceof Error && caught.message ? caught.message : "The save failed.";
+          toast({
+            variant: "destructive",
+            title: "Migration draft not saved",
+            description: `${asSentence(reason)} The saved draft keeps its earlier settings.`,
+          });
+        }
       }
-      onOpenChange(false);
+      if (live()) onOpenChange(false);
     }, "The migration draft could not be saved.");
 
   const inventoryErrors = [
@@ -360,17 +418,20 @@ export function useMigrationWizard({
   const executionDisabledReason = writeDisabledReason ?? rolloutDisabledReason;
   const canAdvance =
     !pending &&
+    !executed &&
     (step === 0
       ? sourceValid && !inventoryError
       : step === 1
         ? destinationValid && !inventoryError
-        : step === 4
-          ? !!plan && !plan.blockers?.length && !expired
-          : step === 5
-            ? !!plan && retentionValid
-            : step === 6
-              ? !executionDisabledReason && reviewValid
-              : !!plan);
+        : step === 3
+          ? !!plan && !mappingIssue
+          : step === 4
+            ? !!plan && !plan.blockers?.length && !expired
+            : step === 5
+              ? !!plan && retentionValid
+              : step === 6
+                ? !executionDisabledReason && reviewValid
+                : !!plan);
 
   return {
     step,
@@ -383,6 +444,7 @@ export function useMigrationWizard({
     notice,
     pending,
     expired,
+    executed,
     canAdvance,
     sameLocation,
     rolloutDisabledReason,

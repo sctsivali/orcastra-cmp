@@ -274,6 +274,8 @@ async function installMigrationFixtures(page, role, options = {}) {
     if (method === "POST" && path === "/migrations/plans") {
       const body = state.mutations.at(-1).body;
       state.createdBodies.push(body);
+      // Holds the answer, as a preflight that takes seconds does, until the spec releases it.
+      if (options.createGate) await options.createGate;
       const created = makePlan({
         plan_id: options.createdPlanId ?? "plan-created",
         scope: body.scope,
@@ -328,6 +330,11 @@ async function installMigrationFixtures(page, role, options = {}) {
       if (method === "PATCH") {
         const body = state.mutations.at(-1).body;
         state.patchBodies.push({ planId, body });
+        const failure = (options.patchErrors ?? {})[planId];
+        if (failure) {
+          await json(route, failure.body, failure.status);
+          return;
+        }
         if ((options.patchConflictPlanIds ?? []).includes(planId)) {
           // The server's own wording (repository.py), so the wizard's conflict recovery runs.
           await json(route, { detail: "The plan changed. Reload it before applying changes." }, 409);
@@ -337,7 +344,15 @@ async function installMigrationFixtures(page, role, options = {}) {
         // the new revision resolves to, such as a blocked plan whose network is now mapped.
         const variant = (options.patchVariants ?? {})[planId];
         const base = variant ? { ...makePlan({}, variant), plan_id: planId } : plan;
-        const updated = { ...base, ...body, revision: plan.revision + 1, updated_at: NOW };
+        // replace_plan renews the TTL and sets the status from the new report, an expired plan too.
+        const updated = {
+          ...base,
+          ...body,
+          revision: plan.revision + 1,
+          updated_at: NOW,
+          expires_at: FUTURE,
+          status: base.blockers?.length ? "blocked" : "ready",
+        };
         plans.set(planId, updated);
         await json(route, updated);
         return;

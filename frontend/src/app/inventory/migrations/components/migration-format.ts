@@ -102,6 +102,7 @@ const STRATEGY_LABEL: Record<string, string> = {
   cross_cluster_pull: "Transfer between clusters",
   member_relocation: "Relocate to another member",
   project_relocation: "Recreate the project and transfer its instances",
+  revert_relocation: "Move back to the original member",
 };
 
 /**
@@ -203,3 +204,11 @@ export function planHasRunningSource(resources: MigrationPlannedResource[]): boo
 
 /** Phases in which a staged move keeps its stopped source for rollback. */
 export const RETAINED_PHASES = new Set<MigrationJobPhase>(["source_retained", "cleanup_due", "cleanup_blocked"]);
+
+/**
+ * The retention deadline while the source is still retained. The server never clears the field,
+ * so a rolled-back or finalized move would otherwise keep showing a deadline that no longer applies.
+ */
+export function activeRetentionDeadline(job: Pick<MigrationJob, "phase" | "retention_deadline">): string | null {
+  return RETAINED_PHASES.has(job.phase) ? job.retention_deadline ?? null : null;
+}

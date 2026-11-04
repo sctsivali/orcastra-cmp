@@ -16,29 +16,45 @@ import type {
   MigrationPlanUpdateRequest,
 } from "@/types/migrations";
 
-const ACTIVE_PHASES = new Set<MigrationJobPhase>([
+// Phases the worker moves through on its own: the next state is seconds away.
+const PROGRESSING_PHASES = new Set<MigrationJobPhase>([
   "queued",
   "preparing_target",
   "preparing_recovery",
   "checkpointing",
   "initial_sync",
-  "cutover_pending",
   "quiescing",
   "final_sync",
   "target_validating",
-  "external_cutover_pending",
   "cutting_over",
   "verifying",
-  "source_retained",
-  "cleanup_due",
   "cleaning_up",
   "unknown",
   "reconciling",
-  "rollback_available",
   "rolling_back",
+]);
+
+// Phases that wait for an operator or the retention deadline, which can be a week away. An action
+// taken here updates the cache from its own response, so a fast poll buys nothing, and each poll
+// costs the server an identity-provider lookup.
+const WAITING_PHASES = new Set<MigrationJobPhase>([
+  "cutover_pending",
+  "external_cutover_pending",
+  "source_retained",
+  "cleanup_due",
+  "rollback_available",
   "cleanup_blocked",
   "manual_recovery",
 ]);
+
+const ACTIVE_PHASES = new Set<MigrationJobPhase>([...PROGRESSING_PHASES, ...WAITING_PHASES]);
+
+const PROGRESS_LIST_POLL_MS = 3_000;
+const PROGRESS_JOB_POLL_MS = 2_000;
+const WAITING_JOB_POLL_MS = 30_000;
+// The list's rate with nothing moving. A waiting job keeps it here rather than slowing it below
+// the idle rate, since one list read costs the same whatever the jobs are doing.
+const IDLE_LIST_POLL_MS = 15_000;
 
 function retryRead(failureCount: number, error: unknown): boolean {
   return !(error instanceof APIError && [401, 403, 404, 429].includes(error.status)) && failureCount < 2;
@@ -110,10 +126,10 @@ export function useMigrationJobs(enabled = true) {
     staleTime: 3_000,
     refetchInterval: (query) =>
       query.state.data?.pages.some((page) =>
-        page.items.some((job) => migrationIsActive(job)),
+        page.items.some((job) => migrationIsProgressing(job)),
       )
-        ? 3_000
-        : 15_000,
+        ? PROGRESS_LIST_POLL_MS
+        : IDLE_LIST_POLL_MS,
     refetchIntervalInBackground: false,
     retry: retryRead,
     refetchOnWindowFocus: false,
@@ -150,8 +166,11 @@ export function useMigrationJob(jobId: string | null, enabled = true) {
     queryFn: ({ signal }) => migrationsAPI.getJob(jobId ?? "", signal),
     enabled: enabled && isAuthenticated && !!jobId,
     staleTime: 1_000,
-    refetchInterval: (query) =>
-      query.state.data && migrationIsActive(query.state.data) ? 2_000 : false,
+    refetchInterval: (query) => {
+      const job = query.state.data;
+      if (!job || !migrationIsActive(job)) return false;
+      return migrationIsProgressing(job) ? PROGRESS_JOB_POLL_MS : WAITING_JOB_POLL_MS;
+    },
     refetchIntervalInBackground: false,
     retry: retryRead,
     refetchOnWindowFocus: false,
@@ -245,4 +264,9 @@ export function useMigrationAction() {
 
 export function migrationIsActive(job: Pick<MigrationJob, "phase" | "status">): boolean {
   return ACTIVE_PHASES.has(job.phase) || ["pending", "running", "waiting", "unknown", "manual_recovery"].includes(job.status);
+}
+
+/** Whether the job is moving on its own, so its next state is worth polling for every few seconds. */
+export function migrationIsProgressing(job: Pick<MigrationJob, "phase" | "status">): boolean {
+  return PROGRESSING_PHASES.has(job.phase) || ["pending", "running", "unknown"].includes(job.status);
 }

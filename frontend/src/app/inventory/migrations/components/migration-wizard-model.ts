@@ -1,4 +1,5 @@
 import { LXD_NAME_PATTERN } from "@/lib/lxd-names";
+import { formatLabel } from "@/lib/utils";
 import type {
   MigrationIntent,
   MigrationPlanCreateRequest,
@@ -74,6 +75,23 @@ export function planningStepFromKey(key: string | null | undefined): number | nu
 }
 export const MIN_RETENTION_HOURS = 1;
 export const MAX_RETENTION_HOURS = 168;
+/** The server's MappingName bound, on both sides of a mapping. */
+export const MAPPING_NAME_MAX = 255;
+
+/** Why the mappings cannot be saved, or undefined when the server would accept them. */
+export function mappingProblem(mappings: MigrationMappings): string | undefined {
+  for (const [category, values] of Object.entries(mappings)) {
+    for (const [from, to] of Object.entries(values as Record<string, string>)) {
+      if (!to.trim()) {
+        return `Enter a destination name for ${formatLabel(category)} ${from}, or remove that mapping.`;
+      }
+      if (from.length > MAPPING_NAME_MAX || to.trim().length > MAPPING_NAME_MAX) {
+        return `${formatLabel(category)} ${from}: names are limited to ${MAPPING_NAME_MAX} characters.`;
+      }
+    }
+  }
+  return undefined;
+}
 
 export { LXD_NAME_PATTERN };
 
@@ -227,6 +245,22 @@ export function draftFromPlan(plan: {
 
 export function createPlanBody(draft: MigrationDraftState): MigrationPlanCreateRequest {
   const resourceName = draft.scope === "instance" ? draft.resourceName.trim() : undefined;
+  const mappings = Object.fromEntries(
+    Object.entries(draft.mappings).map(([category, values]) => [
+      category,
+      Object.fromEntries(Object.entries(values as Record<string, string>).map(([from, to]) => [from, to.trim()])),
+    ]),
+  ) as unknown as MigrationMappings;
+  const pool = draft.targetStoragePool.trim();
+  if (pool) {
+    mappings.storage_pools = { ...mappings.storage_pools, root: pool };
+  } else {
+    // important: a plan echoes its mappings back into the draft, so a pool picked earlier is still
+    // here. "Same Pool or Project Default" has to remove it, or the PATCH keeps the old pool while
+    // the form shows the default. The server replaces mappings whole, so leaving it out is enough.
+    const { root: _root, "*": _anyDisk, ...otherPools } = mappings.storage_pools;
+    mappings.storage_pools = otherPools;
+  }
   return {
     scope: draft.scope,
     intent: draft.intent,
@@ -245,12 +279,7 @@ export function createPlanBody(draft: MigrationDraftState): MigrationPlanCreateR
           : undefined,
       member: draft.targetMember.trim() || undefined,
     },
-    mappings: {
-      ...draft.mappings,
-      storage_pools: draft.targetStoragePool.trim()
-        ? { ...draft.mappings.storage_pools, root: draft.targetStoragePool.trim() }
-        : draft.mappings.storage_pools,
-    },
+    mappings,
     retention_hours: draft.retentionHours,
     checkpoint_requested: draft.checkpointRequested,
     external_cutover_required: draft.externalCutoverRequired,

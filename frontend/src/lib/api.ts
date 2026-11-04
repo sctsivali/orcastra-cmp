@@ -371,6 +371,31 @@ function parseRetryAfter(header: string | null): number | undefined {
   return Math.max(0, Math.ceil((at - Date.now()) / 1000));
 }
 
+const VALIDATION_LOCATION_ROOTS = new Set(["body", "query", "path", "header"]);
+const VALIDATION_ITEMS_SHOWN = 3;
+
+/**
+ * FastAPI's own 422 answer, `detail: [{loc, msg, ...}]`, as one sentence that names each field.
+ * Undefined for any other shape, so a hand-written 422 detail keeps rendering as before.
+ */
+function validationErrorMessage(detail: unknown): string | undefined {
+  if (!Array.isArray(detail)) return undefined;
+  const items: string[] = [];
+  for (const item of detail) {
+    if (typeof item !== "object" || item === null) return undefined;
+    const { loc, msg } = item as { loc?: unknown; msg?: unknown };
+    if (typeof msg !== "string") return undefined;
+    const field = Array.isArray(loc)
+      ? loc.filter((part, index) => !(index === 0 && VALIDATION_LOCATION_ROOTS.has(String(part)))).join(".")
+      : "";
+    items.push(field ? `${field} (${msg})` : msg);
+  }
+  if (!items.length) return undefined;
+  const more = items.length - VALIDATION_ITEMS_SHOWN;
+  const shown = items.slice(0, VALIDATION_ITEMS_SHOWN).join("; ");
+  return `The server did not accept these values: ${shown}${more > 0 ? `; and ${more} more` : ""}.`;
+}
+
 interface TimedJSONResponse {
   response: Response;
   body?: unknown;
@@ -683,8 +708,14 @@ async function _fetchAPIInternal<T>(
       
       // handle non-string error details (e.g. FastAPI validation errors return arrays)
       let errorMessage: string;
+      const validationMessage =
+        response.status === 422 ? validationErrorMessage(errorDetail) : undefined;
       if (!errorDetail) {
         errorMessage = `HTTP ${response.status}`;
+      } else if (validationMessage) {
+        // note: the raw list carries Pydantic's input echo and documentation URLs, which put a JSON
+        // blob in front of the operator. APIError.detail keeps the list for a caller that maps fields.
+        errorMessage = validationMessage;
       } else if (typeof errorDetail === 'string') {
         errorMessage = errorDetail;
       } else if (

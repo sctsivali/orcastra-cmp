@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { AlertTriangle, Info, Loader2 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -12,7 +13,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { DialogSubmitError } from "@/components/ui/dialog-submit-error";
+import { ToastAction } from "@/components/ui/toast";
 import type { WriteAvailability } from "@/hooks/use-read-only-mode";
+import { toast } from "@/hooks/use-toast";
+import { inventoryLinks } from "@/lib/inventory-links";
 import { describeReadError } from "@/lib/read-error";
 import type { NetworkListResponse, StoragePoolListResponse } from "@/types/api";
 import type { MigrationJob } from "@/types/migrations";
@@ -20,7 +25,11 @@ import { MigrationPlanStages } from "./migration-plan-stages";
 import { MigrationSourceDestination } from "./migration-source-destination";
 import { MigrationStepRail, MigrationStepStatus } from "./migration-step-rail";
 import type { MigrationWizardSeed } from "./migration-wizard-model";
-import { useMigrationWizard, type MigrationRollout } from "./use-migration-wizard";
+import {
+  useMigrationWizard,
+  type MigrationDetachedResult,
+  type MigrationRollout,
+} from "./use-migration-wizard";
 
 const STEP_COPY = [
   ["Choose the source", "Select one instance or a complete project environment."],
@@ -33,6 +42,26 @@ const STEP_COPY = [
 ] as const;
 
 const PLAN_STAGES = ["strategy", "mappings", "preflight", "recovery", "review"] as const;
+
+/**
+ * Where a draft or a started migration went when browser Back closed the wizard before the server
+ * answered. The wizard does not reopen itself for it, and the page under it may be another one.
+ */
+function announceDetached(result: MigrationDetachedResult) {
+  const draft = result.kind === "plan";
+  const href = inventoryLinks.migrations(draft ? { plan: result.planId } : { job: result.jobId });
+  toast({
+    title: draft ? "Migration draft saved" : "Migration started",
+    description: draft
+      ? "Preflight finished after the wizard was closed. The draft is listed under Drafts."
+      : "The migration started after the wizard was closed.",
+    action: (
+      <ToastAction asChild altText={draft ? "Open the migration draft" : "Open the migration"}>
+        <Link href={href}>{draft ? "Open Draft" : "Open Migration"}</Link>
+      </ToastAction>
+    ),
+  });
+}
 
 interface MigrationWizardProps {
   open: boolean;
@@ -48,13 +77,24 @@ interface MigrationWizardProps {
   rollout: MigrationRollout;
   initialStep?: number | null;
   onStepChange?: (step: number) => void;
+  /** The job a started plan created, when the loaded queue has it. */
+  startedJobId?: string | null;
+  onOpenJob?: (jobId: string) => void;
 }
 
 export function MigrationWizard(props: MigrationWizardProps) {
-  const { open, onPlanIdChange, planId, writeDisabledReason, writeAvailability, onRecheckWrite } =
-    props;
+  const {
+    open,
+    onPlanIdChange,
+    planId,
+    writeDisabledReason,
+    writeAvailability,
+    onRecheckWrite,
+    startedJobId,
+    onOpenJob,
+  } = props;
   const showWriteNotice = !!writeDisabledReason && writeAvailability !== "checking";
-  const wizard = useMigrationWizard(props);
+  const wizard = useMigrationWizard({ ...props, onDetached: announceDetached });
   const { step, setStep, draft, plan, pending, queries } = wizard;
   const [title, description] =
     draft.intent === "copy" && step === 5
@@ -84,6 +124,26 @@ export function MigrationWizard(props: MigrationWizardProps) {
 
             <div className="min-w-0 space-y-4 overflow-y-auto p-4 sm:p-6">
               <MigrationStepStatus step={step} intent={draft.intent} title={title} />
+
+              {wizard.executed && (
+                <Alert>
+                  <Info className="h-4 w-4" aria-hidden />
+                  <AlertTitle>This plan was started</AlertTitle>
+                  <AlertDescription className="space-y-3">
+                    <p>
+                      A started plan cannot be changed or started again.{" "}
+                      {startedJobId
+                        ? "Its migration shows the progress and the actions still available."
+                        : "Its migration is listed in the Migration Queue."}
+                    </p>
+                    {startedJobId && onOpenJob ? (
+                      <Button type="button" variant="outline" size="sm" onClick={() => onOpenJob(startedJobId)}>
+                        Open Migration
+                      </Button>
+                    ) : null}
+                  </AlertDescription>
+                </Alert>
+              )}
 
               {planId && planQuery.isLoading && !plan ? (
                 <div className="flex min-h-[320px] items-center justify-center" role="status">
@@ -186,14 +246,11 @@ export function MigrationWizard(props: MigrationWizardProps) {
                   <AlertDescription>{wizard.rolloutDisabledReason}. The plan can still be reviewed.</AlertDescription>
                 </Alert>
               )}
-              {wizard.error && (
-                <p role="alert" className="text-sm text-destructive">
-                  {wizard.error}
-                </p>
-              )}
             </div>
           </div>
         </DialogBody>
+
+        <DialogSubmitError message={wizard.error} className="mb-4" />
 
         <DialogFooter className="gap-2 border-t pt-4 sm:flex-wrap sm:space-x-0">
           <Button
@@ -202,7 +259,7 @@ export function MigrationWizard(props: MigrationWizardProps) {
             onClick={() => void wizard.saveAndClose()}
             disabled={pending}
           >
-            {plan && wizard.planDirty ? "Save and Close" : "Close"}
+            {plan && wizard.planDirty && !wizard.executed ? "Save and Close" : "Close"}
           </Button>
           <div className="hidden sm:block sm:flex-1" />
           <Button
@@ -213,7 +270,7 @@ export function MigrationWizard(props: MigrationWizardProps) {
           >
             Back
           </Button>
-          {(step === 4 || step === 6) && plan && (
+          {(step === 4 || step === 6) && plan && !wizard.executed && (
             <Button
               className="min-h-11 w-full sm:min-h-10 sm:w-auto"
               variant="outline"

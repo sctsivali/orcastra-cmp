@@ -27,7 +27,7 @@ export const LINK_TARGETS = {
   images: { path: "/inventory/images", search: true, facets: ["node", "project"] },
   profiles: { path: "/inventory/profiles", search: true, facets: ["node", "project"] },
   operations: { path: "/inventory/operations", search: true, facets: ["node"], reserved: ["task", "since"] },
-  migrations: { path: "/inventory/migrations", search: false, facets: [], reserved: ["job", "new", "scope", "source_cluster", "source_project", "resource_name", "mode", "intent", "source_member"] },
+  migrations: { path: "/inventory/migrations", search: false, facets: [], reserved: ["job", "plan", "new", "scope", "source_cluster", "source_project", "resource_name", "mode", "intent", "source_member"] },
   networkAcls: { path: "/inventory/network-acls", search: true, facets: ["node"] },
   storagePools: { path: "/inventory/storage-pools", search: true, facets: ["node"] },
   storageVolumes: { path: "/inventory/storage-volumes", search: true, facets: ["node"] },
@@ -101,7 +101,19 @@ export interface WarningsLink {
 
 export type MigrationLink =
   | {
+      plan: string;
+      job?: never;
+      scope?: never;
+      sourceCluster?: never;
+      sourceProject?: never;
+      resourceName?: never;
+      mode?: never;
+      intent?: never;
+      sourceMember?: never;
+    }
+  | {
       job: string;
+      plan?: never;
       scope?: never;
       sourceCluster?: never;
       sourceProject?: never;
@@ -112,6 +124,7 @@ export type MigrationLink =
     }
   | {
       job?: null;
+      plan?: null;
       scope: "instance" | "project";
       sourceCluster: string;
       sourceProject: string;
@@ -169,7 +182,8 @@ export const inventoryLinks = {
     build("migrations", {
       reserved: {
         job: link.job,
-        new: link.job ? undefined : "1",
+        plan: link.plan,
+        new: link.job || link.plan ? undefined : "1",
         scope: link.scope,
         source_cluster: link.sourceCluster,
         source_project: link.sourceProject,

@@ -801,6 +801,306 @@ test("execution retry reuses the idempotency key for the same reviewed payload",
   await expectCleanMigrationHarness(api);
 });
 
+test("a FastAPI validation error reads as a sentence naming the field, not as JSON", async ({ page }) => {
+  const plan = makePlan({ plan_id: "plan-invalid-mapping" });
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner", {
+    plans: [plan],
+    patchErrors: {
+      [plan.plan_id]: {
+        status: 422,
+        // FastAPI's default RequestValidationError body, as the PATCH route answers a blank mapping.
+        body: {
+          detail: [
+            {
+              type: "string_too_short",
+              loc: ["body", "mappings", "profiles", "web"],
+              msg: "String should have at least 1 character",
+              input: "",
+              ctx: { min_length: 1 },
+              url: "https://errors.pydantic.dev/2.9/v/string_too_short",
+            },
+          ],
+        },
+      },
+    },
+  });
+  const dialog = page.getByRole("dialog");
+
+  await page.goto(`/inventory/migrations?plan=${plan.plan_id}`);
+  await expect(dialog.getByRole("heading", { name: "Review preflight" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Recheck" }).click();
+  await expect(
+    dialog.getByText(
+      "The server did not accept these values: mappings.profiles.web (String should have at least 1 character).",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(dialog.getByText(/string_too_short|errors\.pydantic\.dev|"loc"/)).toHaveCount(0);
+  expect(api.patchBodies).toHaveLength(1);
+  await expectCleanMigrationHarness(api);
+});
+
+test("a job waiting on the operator is polled slowly, and a moving one every few seconds", async ({ page }) => {
+  // A retained move waits up to 168 h, and every poll costs the server an identity-provider
+  // lookup. Real time on purpose: a fake clock fires the intervals faster than the fixture
+  // answers, and the deduplicated reads would hide a fast poll.
+  test.setTimeout(60_000);
+  const waiting = makeJob({
+    resourceName: "retained-vm",
+    phase: "source_retained",
+    status: "waiting",
+    available_actions: ["rollback", "cleanup"],
+  });
+  await authenticate(page.context(), "admin");
+  const api = await installMigrationFixtures(page, "admin", { jobs: [waiting] });
+  const jobReads = () =>
+    api.requests.filter((request) => request.method === "GET" && request.path === "/migrations/job-retained-vm").length;
+  const dialog = page.getByRole("dialog");
+
+  await page.goto("/inventory/migrations");
+  await page.getByRole("button", { name: "retained-vm", exact: true }).click();
+  await expect(dialog.getByRole("heading", { name: "Source Retention" })).toBeVisible();
+  let listBefore = api.jobListReads;
+  let jobBefore = jobReads();
+  // The list idles at 15 s and the job at 30 s here; a 3 s list and a 2 s job poll read 2 and 3 times.
+  await page.waitForTimeout(7_000);
+  expect(api.jobListReads - listBefore, "list reads while only a waiting job is loaded").toBeLessThanOrEqual(1);
+  expect(jobReads() - jobBefore, "job reads while it waits in retention").toBeLessThanOrEqual(1);
+  await closeDialog(page);
+
+  api.jobs.set(waiting.job_id, { ...waiting, phase: "initial_sync", status: "running", revision: 2 });
+  await page.getByRole("button", { name: "Refresh migrations" }).click();
+  await expect(page.getByText("Initial Sync", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "retained-vm", exact: true }).click();
+  await expect(dialog.getByText("Initial Sync", { exact: true }).first()).toBeVisible();
+  listBefore = api.jobListReads;
+  jobBefore = jobReads();
+  await page.waitForTimeout(7_000);
+  expect(api.jobListReads - listBefore, "list reads while a job transfers").toBeGreaterThanOrEqual(2);
+  expect(jobReads() - jobBefore, "job reads while it transfers").toBeGreaterThanOrEqual(2);
+  await expectCleanMigrationHarness(api);
+});
+
+async function chooseSourceAndDestination(page) {
+  const dialog = page.getByRole("dialog");
+  await choose(page, "Source Cluster", "Cluster A");
+  await choose(page, "Source Project", "default");
+  await choose(page, "Instance Name", "source-vm");
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  await expect(dialog.getByRole("heading", { name: "Choose the destination" })).toBeVisible();
+  await choose(page, "Destination Cluster", "Cluster B");
+  await choose(page, "Destination Project", "target-project");
+}
+
+async function addProfileMapping(page, from, to) {
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Source Name", { exact: true }).fill(from);
+  await dialog.getByLabel("Destination Name", { exact: true }).fill(to);
+  await dialog.getByRole("button", { name: "Add", exact: true }).click();
+}
+
+test("a poll that moves the job keeps the typed reason, and a withdrawn action says why", async ({ page }) => {
+  const job = makeJob({ resourceName: "unknown-vm", phase: "reconciling", status: "unknown", available_actions: ["recheck"] });
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner", { jobs: [job] });
+  const jobReads = () =>
+    api.requests.filter((request) => request.method === "GET" && request.path === `/migrations/${job.job_id}`).length;
+  const reason = page.getByLabel("Reason");
+  const submit = page.getByRole("button", { name: "Run recheck" });
+
+  await page.goto(`/inventory/migrations?job=${job.job_id}`);
+  await page.getByRole("dialog").getByRole("button", { name: "Recheck" }).click();
+  await expect(page.getByRole("heading", { name: "Recheck Migration" })).toBeVisible();
+  await reason.fill("Reconcile after the daemon restart");
+
+  // Automatic reconciliation writes a new revision while the operator is typing.
+  api.jobs.set(job.job_id, { ...job, revision: 2 });
+  const reads = jobReads();
+  await expect.poll(jobReads).toBeGreaterThan(reads + 1);
+  await expect(reason).toHaveValue("Reconcile after the daemon restart");
+  await expect(submit).toBeEnabled();
+
+  // The server stops offering the action: the form says why instead of going blank.
+  api.jobs.set(job.job_id, {
+    ...job,
+    revision: 3,
+    phase: "manual_recovery",
+    status: "manual_recovery",
+    available_actions: ["release"],
+  });
+  await expect(
+    page.getByText(
+      "Recheck Migration is no longer offered: the migration is now Manual Recovery. Close this and choose from the actions it offers now.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(submit).toBeDisabled();
+  expect(api.mutations).toEqual([]);
+  await expectCleanMigrationHarness(api);
+});
+
+test("a mapping needs a destination name of at most 255 characters before it is sent", async ({ page }) => {
+  const plan = makePlan({ plan_id: "plan-mapping-input" });
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner", { plans: [plan] });
+  const dialog = page.getByRole("dialog");
+
+  await page.goto(`/inventory/migrations?plan=${plan.plan_id}&step=mappings`);
+  await expect(dialog.getByRole("heading", { name: "Review mappings" })).toBeVisible();
+  await expect(dialog.getByLabel("Source Name", { exact: true })).toHaveAttribute("maxlength", "255");
+  await expect(dialog.getByLabel("Destination Name", { exact: true })).toHaveAttribute("maxlength", "255");
+  await addProfileMapping(page, "web", "web-target");
+
+  const row = dialog.getByLabel("Target for Profiles web", { exact: true });
+  await expect(row).toHaveAttribute("maxlength", "255");
+  await row.fill("   ");
+  await expect(row).toHaveAttribute("aria-invalid", "true");
+  await expect(dialog.getByText("Enter a destination name, or remove this mapping.", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Continue" })).toBeDisabled();
+
+  await row.fill(" web-target ");
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  await expect(dialog.getByRole("heading", { name: "Review preflight" })).toBeVisible();
+  expect(api.patchBodies).toHaveLength(1);
+  expect(api.patchBodies[0].body.mappings.profiles).toEqual({ web: "web-target" });
+  await expectCleanMigrationHarness(api);
+});
+
+test("choosing the default pool again takes the pool picked before out of the plan", async ({ page }) => {
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner", { createdPlanId: "plan-pool-reset" });
+  const dialog = page.getByRole("dialog");
+
+  await page.goto("/inventory/migrations?new=1");
+  await chooseSourceAndDestination(page);
+  await choose(page, "Destination Storage Pool (Optional)", "^default");
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  await expect(dialog.getByRole("heading", { name: "Review the strategy" })).toBeVisible();
+  expect(api.createdBodies[0].mappings.storage_pools).toEqual({ root: "default" });
+
+  // The created plan echoes root=default back into the draft; the default choice must drop it.
+  await dialog.getByRole("button", { name: "Back", exact: true }).click();
+  await choose(page, "Destination Storage Pool (Optional)", "Same Pool or Project Default");
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  await expect(dialog.getByRole("heading", { name: "Review the strategy" })).toBeVisible();
+  expect(api.patchBodies).toHaveLength(1);
+  expect(api.patchBodies[0].body.mappings.storage_pools).toEqual({});
+  await expectCleanMigrationHarness(api);
+});
+
+test("a draft that finishes after Back closed the wizard does not reopen it", async ({ page }) => {
+  let releaseCreate;
+  const createGate = new Promise((resolve) => {
+    releaseCreate = resolve;
+  });
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner", { createGate, createdPlanId: "plan-after-back" });
+  const dialog = page.getByRole("dialog");
+
+  await openNewMigration(page);
+  await chooseSourceAndDestination(page);
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  await expect.poll(() => api.createdBodies.length).toBe(1);
+  await page.goBack();
+  await expect(dialog).toHaveCount(0);
+
+  releaseCreate();
+  await expect(page.getByText("Migration draft saved", { exact: true })).toBeVisible();
+  await expect(dialog).toHaveCount(0);
+  await expect(page).toHaveURL(/\/inventory\/migrations$/);
+
+  // The notice leads to the draft that was saved.
+  await page.getByRole("link", { name: "Open Draft" }).click();
+  await expect(dialog.getByRole("heading", { name: "Review preflight" })).toBeVisible();
+  await expect(page).toHaveURL(/\bplan=plan-after-back\b/);
+  await expectCleanMigrationHarness(api);
+});
+
+test("a draft that finishes after Back left the Migration Center leaves the Instances URL alone", async ({ page }) => {
+  let releaseCreate;
+  const createGate = new Promise((resolve) => {
+    releaseCreate = resolve;
+  });
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner", { createGate, instanceListPage: true });
+  const dialog = page.getByRole("dialog");
+
+  await page.goto("/inventory/instances");
+  await page.getByRole("button", { name: "Actions for instance source-vm in default on cluster-a" }).click();
+  await page.getByRole("menuitem", { name: /^Move Instance/ }).click();
+  await expect(dialog.getByRole("heading", { name: "Choose the source" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  await expect(dialog.getByRole("heading", { name: "Choose the destination" })).toBeVisible();
+  await choose(page, "Destination Cluster", "Cluster B");
+  await choose(page, "Destination Project", "target-project");
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  await expect.poll(() => api.createdBodies.length).toBe(1);
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/inventory\/instances/);
+  const instancesUrl = page.url();
+  releaseCreate();
+  await expect(page.getByText("Migration draft saved", { exact: true })).toBeVisible();
+  expect(page.url()).toBe(instancesUrl);
+  await expect(dialog).toHaveCount(0);
+  await expectCleanMigrationHarness(api);
+});
+
+test("Close closes even when saving the draft fails, and says the draft kept its settings", async ({ page }) => {
+  const plan = makePlan({ plan_id: "plan-close-fails" });
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner", {
+    plans: [plan],
+    patchErrors: {
+      [plan.plan_id]: { status: 503, body: { detail: "Migration service is temporarily unavailable." } },
+    },
+  });
+  const dialog = page.getByRole("dialog");
+
+  await page.goto(`/inventory/migrations?plan=${plan.plan_id}&step=mappings`);
+  await expect(dialog.getByRole("heading", { name: "Review mappings" })).toBeVisible();
+  await addProfileMapping(page, "web", "web-target");
+  await dialog.getByRole("button", { name: "Save and Close" }).click();
+
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByText("Migration draft not saved", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Migration service is temporarily unavailable. The saved draft keeps its earlier settings.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page).not.toHaveURL(/\bplan=/);
+  expect(api.patchBodies).toHaveLength(1);
+  expect(api.createdBodies).toEqual([]);
+  await expectCleanMigrationHarness(api);
+});
+
+test("an expired draft is renewed in place by Recheck and by Save and Close, never forked", async ({ page }) => {
+  const rechecked = makePlan({ plan_id: "plan-expired-recheck", status: "expired", expires_at: EXPIRED });
+  const closed = makePlan({ plan_id: "plan-expired-close", status: "expired", expires_at: EXPIRED });
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner", { plans: [rechecked, closed] });
+  const dialog = page.getByRole("dialog");
+
+  await page.goto(`/inventory/migrations?plan=${rechecked.plan_id}`);
+  await expect(dialog.getByRole("heading", { name: "Preflight expired" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Recheck" }).click();
+  await expect(dialog.getByText("Plan revision 2", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "Preflight expired" })).toHaveCount(0);
+  await expect(page).toHaveURL(new RegExp(`plan=${rechecked.plan_id}`));
+
+  await page.goto(`/inventory/migrations?plan=${closed.plan_id}&step=mappings`);
+  await expect(dialog.getByRole("heading", { name: "Review mappings" })).toBeVisible();
+  await addProfileMapping(page, "web", "web-target");
+  await dialog.getByRole("button", { name: "Save and Close" }).click();
+  await expect(dialog).toHaveCount(0);
+
+  expect(api.patchBodies.map((patch) => patch.planId)).toEqual([rechecked.plan_id, closed.plan_id]);
+  expect(api.createdBodies).toEqual([]);
+  await expectCleanMigrationHarness(api);
+});
+
 test("job detail shows retention, offers Finalize and Roll Back, and keeps stale state", async ({ page }, testInfo) => {
   const jobs = [
     makeJob({ resourceName: "unknown-vm", phase: "reconciling", status: "unknown", available_actions: ["recheck"] }),

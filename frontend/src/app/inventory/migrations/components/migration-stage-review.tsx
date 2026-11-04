@@ -79,7 +79,7 @@ export function MigrationStageReview({
                 ? plan.scope === "project"
                   ? "Same instances, moved back automatically on failure"
                   : "Same instance, no retained copy"
-                : plural(draft.retentionHours, "hour")
+                : plural(plan.retention_hours, "hour")
           }
         />
       </div>
