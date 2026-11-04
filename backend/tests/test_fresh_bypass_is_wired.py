@@ -1396,9 +1396,10 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
         # note: no instances:list. That prewarm wrote a key GET /instances never reads.
         # note: no storage_pool_resources and no nodes:availability. Both are warmed through
         # their own handler or resolver, which writes the entry with its own TTL and fence.
+        # note: no regions:overview either since 2026-11-04: it is served stale-while-revalidate
+        # and warmed through build_regions_overview, which stores its own envelope.
         expected = {
             "vms:list": 180,
-            "regions:overview": 120,
         }
         from app.core import cache as cache_module
 

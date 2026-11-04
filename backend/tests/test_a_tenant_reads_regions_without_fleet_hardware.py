@@ -179,13 +179,19 @@ def test_region_details_are_projected_the_same_way(monkeypatch):
 
 def test_the_cache_prewarm_builds_the_unprojected_body(monkeypatch):
     # The prewarm has no caller and writes the shared entry, so it must use the builder: the
-    # route needs a caller and would fail quietly here, leaving the entry cold.
-    _serve(monkeypatch, _overview())
+    # route needs a caller and would fail quietly here, leaving the entry cold. The builder
+    # stores its own stale-while-revalidate entry, so the prewarm only has to call it.
+    calls = []
+
+    async def build(lxd_service, fresh=False):
+        calls.append((lxd_service, fresh))
+        return _overview()
+
+    monkeypatch.setattr(regions, "build_regions_overview", build)
     warm = metrics_prewarm.CachePrewarm()
     warm._lxd_service = None
-    body = asyncio.run(warm._fetch_regions())
-    assert body["total_cpu"] == 64
-    assert body["regions"][0]["nodes"][0]["hardware"]["cpu_model"] == "Xeon Gold 6338"
+    asyncio.run(warm._prewarm_regions())
+    assert calls == [(None, False)]
 
 
 # --- The instance counts are a Tenant's only figures, so a count the build could not take must

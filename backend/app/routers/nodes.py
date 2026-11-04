@@ -50,7 +50,7 @@ from app.core.cache import (
     get_resource_list_generation,
     NODES_AVAILABILITY_CACHE_KEY,
     NODES_STATUS_CACHE_KEY,
-    REGIONS_OVERVIEW_CACHE_KEY,
+    REGIONS_OVERVIEW_SWR_KEY,
 )
 
 logger = logging.getLogger(__name__)
@@ -500,7 +500,7 @@ async def invalidate_node_cache(
         # These projections share generation tokens. Clear them through the helpers so an
         # in-flight read cannot write its pre-invalidation result back afterwards.
         scope_keys = tuple(get_scope_cache_key(key) for key in (
-            NODES_STATUS_CACHE_KEY, NODES_AVAILABILITY_CACHE_KEY, REGIONS_OVERVIEW_CACHE_KEY,
+            NODES_STATUS_CACHE_KEY, NODES_AVAILABILITY_CACHE_KEY, REGIONS_OVERVIEW_SWR_KEY,
         ))
         await run_blocking(
             lambda: cache.invalidate_node_cache(node_name, scope_keys),

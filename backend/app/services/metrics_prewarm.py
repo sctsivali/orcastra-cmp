@@ -32,11 +32,6 @@ class CachePrewarm:
             # build theirs. Without get_scope_cache_key() they lacked the
             # ":scope=all" suffix, so nothing ever read them and every request
             # after a TTL expiry still paid the full cold cost.
-            from app.core.cache import (
-                CAPACITY_GENERATION_KIND,
-                REGIONS_OVERVIEW_CACHE_KEY,
-                get_resource_list_generation,
-            )
             from app.core.org_scope import get_scope_cache_key
             
             cache = get_cache_manager()
@@ -59,17 +54,9 @@ class CachePrewarm:
                 generation=cache.instance_list_generation,
             )
 
-            # Pre-warm regions cache (slowest endpoint, 15-45s cold)
-            await self._prewarm_single_cache(
-                cache,
-                get_scope_cache_key(REGIONS_OVERVIEW_CACHE_KEY),
-                self._fetch_regions,
-                ttl=120,
-                generation=lambda: (
-                    get_resource_list_generation(cache, CAPACITY_GENERATION_KIND),
-                    get_resource_list_generation(cache, "regions"),
-                ),
-            )
+            # Pre-warm regions through its own builder: it is served stale-while-revalidate, and
+            # a plain body written here would read as fresh with no age (cache_envelope.unwrap).
+            await self._prewarm_regions()
 
             # Storage pool resources are warmed through their own handler.
             # important: the fetcher this replaced called pylxd directly from this coroutine,
@@ -170,20 +157,18 @@ class CachePrewarm:
     # cluster merge, which is not worth duplicating; get_node_names() never did
     # the expensive work anyway, so nothing is lost by leaving this cold.
     
-    async def _fetch_regions(self):
-        """Fetch regions overview for cache warming."""
+    async def _prewarm_regions(self):
+        """Warm the regions overview through its builder, which stores the entry itself.
+
+        important: the builder, not the route. The route projects for a caller, and this shared
+        entry has none. fresh=False: a warm entry is a hit, a stale one starts its own background
+        read, and only a missing one is built here.
+        """
         try:
-            # important: the builder, not the route. The route projects for a caller, and
-            # this shared entry has none.
             from app.routers.regions import build_regions_overview
-            result = await build_regions_overview(lxd_service=self._lxd_service)
-            # result is a dict or Pydantic model
-            if hasattr(result, 'model_dump'):
-                return result.model_dump()
-            return result
+            await build_regions_overview(lxd_service=self._lxd_service, fresh=False)
         except Exception as e:
-            logger.debug(f"Regions pre-warm fetch failed: {e}")
-            return None
+            logger.debug(f"Regions pre-warm failed: {e}")
     
     async def _prewarm_availability(self):
         """Warm cluster availability through the resolver the endpoints share."""

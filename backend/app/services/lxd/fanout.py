@@ -50,6 +50,11 @@ KIND_FORBIDDEN = "forbidden"
 KIND_FAILED = "error"
 KIND_PARTIAL = "partial"
 
+# How long a fleet answer missing a cluster that did not answer within its wall is remembered:
+# briefly, so the next read asks that cluster again soon, but not "never", which would make every
+# poll pay the whole wall again.
+LATE_FRESH_SECONDS = 10
+
 # LXD's error field, truncated. Long enough for "More than one cluster member has a volume
 # named backups (specify a target member)", short enough that a stack trace cannot ride in.
 _LXD_TEXT_LIMIT = 200

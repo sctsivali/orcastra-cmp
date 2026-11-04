@@ -49,6 +49,9 @@ NODES_STATUS_CACHE_KEY = f"nodes:status:all:{RESOURCE_SCHEMA_VERSION}:e1"
 # Per-cluster host kernel facts (services/lxd/host_kernels.py), cleared with the cluster.
 HOST_KERNELS_CACHE_PREFIX = "host_kernels:v1"
 REGIONS_OVERVIEW_CACHE_KEY = f"regions:overview:{RESOURCE_SCHEMA_VERSION}"
+# The stale-while-revalidate body (an envelope, not the plain body the old key held). Under the
+# prefix above, so every sweep of it still matches.
+REGIONS_OVERVIEW_SWR_KEY = f"{REGIONS_OVERVIEW_CACHE_KEY}:e1"
 # Cheap per-cluster reachability for pickers. Short TTL paired with the metrics collector's
 # 30s cycle, the same way the monitoring dashboard's 35s cache is paired with it.
 NODES_AVAILABILITY_CACHE_KEY = f"nodes:availability:{RESOURCE_SCHEMA_VERSION}:e1"

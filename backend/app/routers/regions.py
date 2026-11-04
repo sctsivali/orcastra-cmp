@@ -7,9 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Dict, Optional, Set, Tuple
 import logging
 import asyncio
-import contextvars
 from dataclasses import replace
-from functools import partial
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
@@ -17,7 +15,7 @@ from app.services.lxd_service import LXDService, get_lxd_service
 from app.core.config import get_settings
 from app.core.cache import (
     CAPACITY_GENERATION_KIND,
-    REGIONS_OVERVIEW_CACHE_KEY,
+    REGIONS_OVERVIEW_SWR_KEY,
     get_cache_manager,
     get_resource_list_generation,
 )
@@ -29,14 +27,22 @@ from app.models.schemas import (
     ClusterStatus,
 )
 
+from app.core import swr
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from app.core.swr import Built
 from app.services.lxd import health
-from app.services.lxd.fanout import known_down
+from app.services.lxd.fanout import LATE_FRESH_SECONDS, known_down
 from app.services.lxd.freshness import read_resources
 from app.services.lxd.gpu import build_gpu_inventory
 from app.services.lxd.node_resources import aggregate_microcloud_resources
 from app.services.lxd.storage_model import PoolReading, summarise_cluster_storage
 
 logger = logging.getLogger(__name__)
+
+_FRESH_SECONDS = 120
+_CLUSTER_WALL_SECONDS = 30
+_REGIONS_WORKERS = 10
+_regions_executor = ThreadPoolExecutor(max_workers=_REGIONS_WORKERS, thread_name_prefix="regions_overview")
 from app.core.auth import AuthenticatedUser
 from app.core.dependencies import require_tenant
 from app.core.rbac import Permission, has_permission
@@ -46,9 +52,7 @@ from app.services.lxd.hardware import (
     storage_types_from_disks,
 )
 from app.core.registry_guard import require_known_registry
-from app.core.org_scope import org_scope_dependency, get_scope_cache_key, apply_cluster_filter, get_tenant_acl
-import time
-from app.core.single_flight import mark_rebuilt, rebuild_lock, rebuilt_since, release_lock
+from app.core.org_scope import org_scope_dependency, apply_cluster_filter, get_tenant_acl
 from app.core.tenant_visibility import tenant_acl_has_permission
 from app.core.type_utils import resolve_cluster_type, resolve_clustered
 from app.services.lxd.project_scope import list_instance_records
@@ -158,42 +162,16 @@ async def build_regions_overview(
     """
     cache = get_cache_manager()
     settings = get_settings()
-    
-    # Check cache first (2 minute TTL)
-    cache_key = get_scope_cache_key(REGIONS_OVERVIEW_CACHE_KEY)
-    cached_data = None if fresh else cache.get("api_responses", cache_key)
-    if cached_data is not None:
-        logger.debug("Returning cached regions overview")
-        return RegionsOverviewResponse(**cached_data)
-    generations = (
+    generation = lambda: (  # noqa: E731 - read twice by swr.serve, around the build
         get_resource_list_generation(cache, CAPACITY_GENERATION_KIND),
         get_resource_list_generation(cache, "regions"),
     )
-    
-    # important: serialise cold rebuilds per scope. A manual refresh bypasses the
-    # response cache on purpose, and this endpoint fans out over every cluster
-    # (15-45s cold), so N simultaneous fresh requests would launch N fan-outs at
-    # the same hardware. The second arrival waits, then reads the first's result.
-    _lock_key = f"regions:overview:{cache_key}"
-    _arrived_at = time.monotonic()
-    _lock = rebuild_lock(_lock_key)
-    try:
-        async with _lock:
-            # important: only accept an entry someone rebuilt AFTER we arrived. Reading
-            # the cache unconditionally here made fresh=true return the very cached body
-            # it was asked to bypass, because the admin key is kept warm by the metrics
-            # collector and is therefore almost never absent.
-            rebuilt = (
-                cache.get("api_responses", cache_key)
-                if rebuilt_since(_lock_key, _arrived_at)
-                else None
-            )
-            if rebuilt is not None:
-                logger.debug("Regions overview was rebuilt by a concurrent request")
-                return RegionsOverviewResponse(**rebuilt)
 
-            logger.info("Building regions overview from cluster data...")
-    
+    # note: stale-while-revalidate since 2026-11-04. The page polls every 120 s and the plain
+    # cache lived exactly 120 s, so a poll landed just after expiry and paid the whole fan-out
+    # (about 4 s on dev) nearly every time. swr.serve also collapses concurrent cold rebuilds per
+    # scope, which the lock here used to do, and keeps fresh=true a real read.
+    async def build() -> Built:
             # Get all registered clusters from Vault
             try:
                 from app.core.vault_client import get_vault_client
@@ -217,14 +195,7 @@ async def build_regions_overview(
                         total_cpu=0, total_memory=0, total_storage=0, total_gpu=0,
                         collected_at=datetime.now(timezone.utc),
                     )
-                    current = (
-                        get_resource_list_generation(cache, CAPACITY_GENERATION_KIND),
-                        get_resource_list_generation(cache, "regions"),
-                    )
-                    if current == generations:
-                        cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
-                    mark_rebuilt(_lock_key)
-                    return response
+                    return Built(value=response, body=response.model_dump(), fresh_for=_FRESH_SECONDS)
 
                 tenant_acl = get_tenant_acl()
 
@@ -235,6 +206,7 @@ async def build_regions_overview(
                 # the monitoring dashboard declines to cache a no-cluster-answered body.
                 # note: set.add from the thread pool is safe under the GIL.
                 degraded_clusters: Set[str] = set()
+                late_clusters: Set[str] = set()
 
                 # process single cluster (runs in thread pool for parallelism)
                 def _process_cluster(cluster_id: str) -> Optional[Tuple[str, Dict, RegionNodeInfo, int, int]]:
@@ -477,16 +449,25 @@ async def build_regions_overview(
                 # none: `Context.run` refuses re-entry, so ten threads entering the same copy
                 # raise "cannot enter context", which is why the copy is per task and not
                 # hoisted out of the comprehension.
-                loop = asyncio.get_event_loop()
-                executor = ThreadPoolExecutor(max_workers=min(len(cluster_ids), 10))
+                # note: run_blocking copies the context per call, which is the rule the note
+                # above states, on one module pool rather than a new one per rebuild, under a wall
+                # per cluster. A cluster still reading past it is left out of this answer and named
+                # degraded, so a slow host no longer holds the map.
                 tasks = [
-                    loop.run_in_executor(
-                        executor, partial(contextvars.copy_context().run, _process_cluster, cid)
+                    run_blocking(
+                        _process_cluster,
+                        cid,
+                        timeout=_CLUSTER_WALL_SECONDS,
+                        label=f"regions.overview[{cid}]",
+                        executor=_regions_executor,
+                        max_in_flight=_REGIONS_WORKERS,
                     )
                     for cid in cluster_ids
                 ]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-                executor.shutdown(wait=False)
+                for cid, result in zip(cluster_ids, results):
+                    if isinstance(result, (BlockingTimeout, BlockingPoolFull)):
+                        late_clusters.add(cid)
         
                 regions_map: Dict[str, RegionSummary] = {}
                 total_nodes = 0
@@ -558,20 +539,19 @@ async def build_regions_overview(
                         "Not caching regions overview: %s answered but did not report resources",
                         ", ".join(sorted(degraded_clusters)),
                     )
-                elif (
-                    get_resource_list_generation(cache, CAPACITY_GENERATION_KIND),
-                    get_resource_list_generation(cache, "regions"),
-                ) == generations:
-                    cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
+                    fresh_for = None
+                elif late_clusters:
+                    # Remembered briefly, so the next poll reads the late cluster again soon.
+                    logger.info(
+                        "Regions overview without %s, which did not answer within %d s",
+                        ", ".join(sorted(late_clusters)), _CLUSTER_WALL_SECONDS,
+                    )
+                    fresh_for = LATE_FRESH_SECONDS
                 else:
-                    logger.info("Not caching regions overview: capacity changed during the read")
-                # important: mark only a rebuild that finished. In the finally below this
-                # also ran when the build raised, so the next waiter believed a rebuild had
-                # completed and served the cache it had asked to bypass.
-                mark_rebuilt(_lock_key)
+                    fresh_for = _FRESH_SECONDS
                 logger.info(f"Built regions overview: {len(regions_map)} regions, {total_nodes} nodes")
 
-                return response
+                return Built(value=response, body=response.model_dump(), fresh_for=fresh_for)
 
             except HTTPException:
                 raise
@@ -579,8 +559,15 @@ async def build_regions_overview(
                 logger.error(f"Error building regions overview: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
-    finally:
-        release_lock(_lock_key)
+    served = await swr.serve(
+        cache=cache,
+        base_key=REGIONS_OVERVIEW_SWR_KEY,
+        fresh=fresh,
+        build=build,
+        generation=generation,
+        label="regions overview",
+    )
+    return served.as_model(RegionsOverviewResponse)
 
 
 def _can_read_hardware(user: AuthenticatedUser) -> bool:
