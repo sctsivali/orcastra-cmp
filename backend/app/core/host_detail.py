@@ -15,13 +15,16 @@ under `org_scope_dependency`, or an unset scope reads as Admin; a ratchet test p
 """
 
 import re
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from typing import Any, Mapping, Optional, TypeVar
 
 from pydantic import BaseModel
 
 from app.core.task_scope import Tier
-from app.core.tenant_visibility import parse_lxd_reference
+from app.core.tenant_visibility import (
+    filter_visible_lxd_references,
+    parse_lxd_reference,
+    without_member_target,
+)
 
 HOST_DETAIL_TIERS = frozenset({"admin", "partner"})
 # Instance and profile config a Tenant may read: limits, the image's identity, boot and snapshot
@@ -132,15 +135,6 @@ def cluster_list_for_tier(response: Model, tier: Tier) -> Model:
     return response.model_copy(update={"clusters": rows})
 
 
-def without_member_target(reference: str) -> str:
-    """A used_by reference without LXD's `target`, the cluster member it appends on a clustered pool."""
-    parts = urlsplit(reference)
-    if not parts.query:
-        return reference
-    query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True) if key != "target"]
-    return urlunsplit(parts._replace(query=urlencode(query)))
-
-
 def _tenant_used_by(model: Model) -> list:
     # note: references to an instance or its root volume only, which the route already narrowed
     # to the Tenant's ACL. Any other reference passes on any rule in its project, so it named
@@ -224,6 +218,58 @@ def profile_list_for_tier(response: Model, tier: Tier) -> Model:
         return response
     rows = [profile_for_tier(profile, tier) for profile in getattr(response, "profiles")]
     return response.model_copy(update={"profiles": rows})
+
+
+def project_for_tier(project: Model, host: str, tier: Tier) -> Model:
+    """A project as a Tenant may read it: its limits and its own instances (backlog A1).
+
+    A project's used_by is LXD's whole inventory of it (every party's instances, profiles, images
+    and volumes) and its config carries features.*, user.* and restricted.* settings that are the
+    provider's. The project card reads limits.* only (`components/dashboard/project-card.tsx`).
+    note: used_by goes through the request's tenant filter, so this runs on the request path,
+    never inside a cache build shared across callers.
+    """
+    if sees_host_detail(tier):
+        return project
+    config = getattr(project, "config") or {}
+    return project.model_copy(update={
+        "config": {key: value for key, value in config.items() if key.startswith("limits.")},
+        "used_by": filter_visible_lxd_references(host, list(getattr(project, "used_by") or [])),
+        # note: the provider's note and its user.tags (services/lxd/projects.py) describe the project
+        # from the provider's side, as a pool's or a volume's description does.
+        "description": "",
+        "tags": [],
+    })
+
+
+# Network config a Tenant may read: what its own instance sees from the inside (the gateway
+# addresses, NAT, DHCP, DNS, MTU and the ACLs applied to its traffic). Every other key describes
+# the host side: bridge.external_interfaces and parent name host interfaces, tunnel.* and bgp.*
+# name remote peers and may carry a password, ovn.* the chassis, raw.* and user.* are free-form.
+TENANT_NETWORK_CONFIG_KEYS = frozenset({
+    "ipv4.address", "ipv4.nat", "ipv4.dhcp", "ipv6.address", "ipv6.nat", "ipv6.dhcp",
+    "ipv6.dhcp.stateful", "dns.domain", "dns.mode", "bridge.mtu", "mtu", "security.acls",
+})
+# Network state a Tenant may read; bridge, bond, vlan and ovn name host devices and members.
+TENANT_NETWORK_STATE_KEYS = ("addresses", "counters", "mtu", "state", "type")
+
+
+def network_for_tier(network: Model, tier: Tier) -> Model:
+    """A network as a Tenant may read it (backlog A3)."""
+    if sees_host_detail(tier):
+        return network
+    config = getattr(network, "config") or {}
+    return network.model_copy(update={
+        "config": {key: value for key, value in config.items() if key in TENANT_NETWORK_CONFIG_KEYS},
+        # note: the description is the operator's note about the network and often names its uplink.
+        "description": "",
+    })
+
+
+def network_state_for_tier(state: Mapping[str, Any], tier: Tier) -> Mapping[str, Any]:
+    if sees_host_detail(tier):
+        return state
+    return {key: state[key] for key in TENANT_NETWORK_STATE_KEYS if key in state}
 
 
 # What a Tenant keeps of one cluster on the monitoring dashboard: whether it answers and how many

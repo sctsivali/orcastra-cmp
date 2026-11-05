@@ -42,6 +42,8 @@ from app.core.tenant_visibility import (
     tenant_may_see_project,
 )
 from app.core.cache import get_cache_manager, get_resource_list_generation
+from app.core.host_detail import network_for_tier, network_state_for_tier
+from app.core.task_scope import caller_tier
 from app.core.blocking import (
     BlockingPoolFull,
     BlockingTimeout,
@@ -493,7 +495,14 @@ async def list_networks(
             generation=lambda: get_resource_list_generation(cache, "networks"),
             label="networks list",
         )
-        return served.as_model(NetworkListResponse)
+        listed = served.as_model(NetworkListResponse)
+        tier = caller_tier()
+        if tier == "tenant":
+            # note: on the way out, after the cache; the body cached per scope stays whole (A3).
+            listed = listed.model_copy(update={
+                "networks": [network_for_tier(network, tier) for network in listed.networks],
+            })
+        return listed
     except HTTPException:
         raise
     except Exception as e:
@@ -570,7 +579,7 @@ async def get_network(
         if tenant_acl_active() and not used_by:
             raise HTTPException(status_code=403, detail="Access denied to this network")
 
-        return NetworkInfo(
+        return network_for_tier(NetworkInfo(
             name=data.get("name") or network_name,
             description=data.get("description") or "",
             type=data.get("type") or "",
@@ -580,7 +589,7 @@ async def get_network(
             status=data.get("status") or "",
             node=host,
             project=data.get("project") or owner,
-        )
+        ), caller_tier())
     except HTTPException:
         # 503 (unreachable) / 403 (tenant denied) must survive. Previously the
         # generic handler collapsed everything into a 404 "not found", so a real
@@ -1110,7 +1119,9 @@ async def get_network_state(
         ) or {}
         return {
             "name": network_name,
-            "state": jsonable_lxd(state),
+            # A Tenant keeps addresses and counters; bridge, bond, vlan and ovn name host
+            # devices and cluster members (A3).
+            "state": network_state_for_tier(jsonable_lxd(state), caller_tier()),
         }
     except HTTPException:
         raise

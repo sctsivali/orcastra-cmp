@@ -62,6 +62,8 @@ from app.core.org_scope import (
     visible_projects_for,
 )
 from app.services import project_deletion, project_grants
+from app.core.host_detail import project_for_tier
+from app.core.task_scope import caller_tier
 from app.core.registry_guard import require_known_registry
 from app.core.cache import PROJECT_CACHE_KINDS, get_cache_manager, get_resource_list_generation
 from app.core import swr
@@ -178,6 +180,18 @@ def _parse_size_to_bytes(size_str: str) -> int:
     value = Decimal(match.group(1))
     unit = (match.group(2) or "B").upper()
     return int(value * _SIZE_FACTORS[unit])
+
+
+def _for_caller(response: ProjectListResponse) -> ProjectListResponse:
+    """The list as this caller may read it; a Tenant gets limits and its own instances only (A1).
+
+    note: applied on the way out, after the cache, so a body cached per scope stays whole.
+    """
+    tier = caller_tier()
+    if tier != "tenant":
+        return response
+    projects = [project_for_tier(project, response.host, tier) for project in response.projects]
+    return response.model_copy(update={"projects": projects})
 
 
 def _invalidate_project_caches() -> None:
@@ -339,8 +353,8 @@ async def list_all_projects(
             label="projects list",
         )
         if served.built:
-            return served.value
-        return [ProjectListResponse(**item) for item in served.body]
+            return [_for_caller(item) for item in served.value]
+        return [_for_caller(ProjectListResponse(**item)) for item in served.body]
 
     except HTTPException:
         raise
@@ -381,11 +395,11 @@ async def list_projects(
         allowed_names = filter_projects_by_acl(host, [p.name for p in projects])
         projects = [p for p in projects if p.name in allowed_names and project_is_visible(host, p.name)]
         
-        return ProjectListResponse(
+        return _for_caller(ProjectListResponse(
             host=host,
             projects=projects,
             total=len(projects),
-        )
+        ))
         
     except LXDConnectionError as e:
         logger.warning(f"LXD connection error: {e}")

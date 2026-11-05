@@ -46,6 +46,7 @@ from .proxy import (
 )
 from app.core.error_sanitizer import sanitize_error
 from app.core.lxd_segment import lxd_segment
+from app.core.tenant_visibility import parse_lxd_reference
 
 logger = logging.getLogger(__name__)
 
@@ -534,10 +535,21 @@ def execute_proxy_operation(
 
     if operation in _SIMPLE_LISTS:
         manager, fields = _SIMPLE_LISTS[operation]
-        return [
+        rows = [
             {name: _attr(item, name) for name in fields}
             for item in getattr(client, manager).all()
         ]
+        if visible_projects is not None:
+            # important: a network's or a pool's used_by is cluster-wide, so a key granted some
+            # projects read every other project's instances and volumes on a shared cluster (A4).
+            # It keeps the references in its own grant, as the operation reads above do.
+            for row in rows:
+                if "used_by" in row:
+                    row["used_by"] = [
+                        reference for reference in row["used_by"] or []
+                        if parse_lxd_reference(reference)[0] in visible_projects
+                    ]
+        return rows
 
     if operation == "list_snapshots":
         return [

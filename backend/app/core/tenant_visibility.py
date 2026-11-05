@@ -1,7 +1,7 @@
 """Tenant visibility helpers for LXD resource references."""
 
 from typing import Optional
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, parse_qsl, unquote, urlencode, urlparse, urlsplit, urlunsplit
 
 from app.core.org_scope import check_tenant_permission, get_tenant_acl, project_is_visible
 
@@ -38,6 +38,15 @@ def tenant_acl_has_permission(
     return False
 
 
+def without_member_target(reference: str) -> str:
+    """A used_by reference without LXD's `target`, the cluster member it appends on a clustered pool."""
+    parts = urlsplit(reference)
+    if not parts.query:
+        return reference
+    query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True) if key != "target"]
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
+
 def parse_lxd_reference(reference: str) -> tuple[str, Optional[str]]:
     """Extract project and instance from an LXD used_by/resource reference."""
     if not reference:
@@ -72,10 +81,19 @@ def tenant_can_view_lxd_reference(
     reference: str,
     required_permission: str = "view",
 ) -> bool:
-    """Check if a tenant can see the resource pointed to by an LXD reference."""
+    """Check if a tenant can see the resource pointed to by an LXD reference.
+
+    important: a reference that names no instance (a profile, network, ACL, custom volume or
+    image) is never visible to a Tenant. `check_tenant_permission(..., None)` passes it on any
+    rule in its project, so one instance rule in a project shared with another party handed over
+    that party's records (backlog A1-A7, owner decision 2026-11-05: strict). A record a Tenant's
+    own instance uses still shows, through that instance's reference.
+    """
     if not tenant_acl_active():
         return True
     project_name, instance_name = parse_lxd_reference(reference)
+    if instance_name is None:
+        return False
     return check_tenant_permission(cluster_id, project_name, instance_name, required_permission)
 
 
@@ -85,8 +103,10 @@ def tenant_acl_can_view_lxd_reference(
     reference: str,
     required_permission: str = "view",
 ) -> bool:
-    """Check an LXD reference against a captured tenant ACL snapshot."""
+    """Check an LXD reference against a captured tenant ACL snapshot (same rule as above)."""
     project_name, instance_name = parse_lxd_reference(reference)
+    if acl is not None and instance_name is None:
+        return False
     return tenant_acl_has_permission(
         acl,
         cluster_id,
@@ -115,8 +135,10 @@ def filter_visible_lxd_references(
     ]
     if not tenant_acl_active():
         return bounded
+    # note: a Tenant does not see the cluster member a reference names (`&target=` on a
+    # clustered pool), as `vm_for_tier` withholds an instance's location.
     return [
-        reference for reference in bounded
+        without_member_target(reference) for reference in bounded
         if tenant_can_view_lxd_reference(cluster_id, reference, required_permission)
     ]
 
@@ -154,7 +176,9 @@ def tenant_may_see_project(cluster_id: str, project: Optional[str]) -> bool:
     from any rule matching the project, so a tenant holding one instance-level rule in project
     P could read every project-owned ACL in P, ingress and egress bodies included.
 
-    So ownership is checked as well as usage. `default` stays visible unconditionally: it is
+    So ownership is checked as well as usage, and since 2026-11-05 the usage side refuses a
+    reference that names no instance (`tenant_can_view_lxd_reference`). `default` stays visible
+    unconditionally: it is
     the shared project every other one draws its networks and profiles from when it does not
     isolate them, and hiding it would take away resources the tenant's own instances are
     attached to.

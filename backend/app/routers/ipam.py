@@ -217,6 +217,22 @@ def _read_join_sources(
     return configs.result(), networks.result(), records, instances_ok
 
 
+def _visible_allocation(allocation: IPAMAllocation) -> bool:
+    """Whether the caller may see one allocation row.
+
+    important: a Tenant keeps its own instances' rows only. A network, forward or load-balancer
+    row names no instance, so `check_tenant_permission(..., None)` passed it on any rule in the
+    project and handed a Tenant another party's forward listen addresses (often public IPs) and
+    OVN subnets in a project they share (backlog A6, owner decision 2026-11-05: strict).
+    """
+    project = allocation.project or "default"
+    if not project_is_visible(allocation.node, project):
+        return False
+    if allocation.type != "instance":
+        return not tenant_acl_active()
+    return check_tenant_permission(allocation.node, project, allocation.used_by, "view")
+
+
 def _fetch_ipam_for_node(
     lxd_service: LXDService,
     node_name: str,
@@ -356,16 +372,7 @@ async def list_ipam_allocations(
         )
         ttl = LATE_FRESH_SECONDS if fan.late_nodes else (DEGRADED_CACHE_TTL if unreachable_nodes else 120)
 
-        all_allocations = [
-            allocation for allocation in fan.rows
-            if project_is_visible(allocation.node, allocation.project or "default")
-            and check_tenant_permission(
-                allocation.node,
-                allocation.project or "default",
-                allocation.used_by if allocation.type == "instance" else None,
-                "view",
-            )
-        ]
+        all_allocations = [allocation for allocation in fan.rows if _visible_allocation(allocation)]
 
         response = IPAMListResponse(
             total=len(all_allocations),

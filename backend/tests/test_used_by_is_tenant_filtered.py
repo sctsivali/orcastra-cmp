@@ -211,3 +211,61 @@ def test_every_tenant_reachable_used_by_is_filtered() -> None:
         "halves and only the emission is what the caller receives. If the function genuinely "
         "does not need it, add it to EXEMPT with the reason."
     )
+
+
+# A model built from an unpacked dict carries whatever LXD sent, used_by and config included, and
+# the keyword scan above never sees a `used_by=` for it: `ProjectInfo(**proj)` handed a Tenant the
+# whole project inventory that way (backlog A7). Such a handler must reach a tier or filter helper.
+TIER_HELPERS = FILTERS | {"_for_caller", "project_for_tier", "network_for_tier", "volume_for_tier",
+                          "pool_for_tier", "profile_for_tier", "profile_list_for_tier",
+                          "pool_list_for_tier", "volume_list_for_tier"}
+
+
+def _builds_info_from_a_dict(fn: ast.AST) -> list[int]:
+    lines = []
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Call) and any(k.arg is None for k in node.keywords):
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None) or ""
+            if name.endswith("Info"):
+                lines.append(node.lineno)
+    return lines
+
+
+def _calls_a_tier_helper(fn: ast.AST) -> bool:
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Call):
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if name in TIER_HELPERS:
+                return True
+    return False
+
+
+# Builders whose dict is already filtered or holds no tenant data; each names where and why.
+DICT_EXEMPT: dict[tuple[str, str], str] = {
+    ("console.py", "list_isos"): "console_service.list_isos filters each ISO's used_by, console_service.py:491",
+    ("images.py", "list_remote_images"): "the public image-server catalog: no used_by, no party's records",
+}
+
+
+def test_a_model_built_from_lxd_dict_reaches_a_tier_helper() -> None:
+    offenders = []
+    for path in sorted(ROUTERS.glob("*.py")):
+        tree = ast.parse(path.read_text())
+        if not _module_is_tenant_reachable(tree):
+            continue
+        functions = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        for node in functions:
+            lines = _builds_info_from_a_dict(node)
+            if not lines or DICT_EXEMPT.get((path.name, node.name)):
+                continue
+            # A nested builder (a fan-out worker) is judged with the handler that encloses it.
+            scope = [node] + [p for p in functions if p is not node and node in ast.walk(p)]
+            if any(_handler_elevates_above_tenant(f, tree) for f in scope):
+                continue
+            if any(_calls_a_tier_helper(f) for f in scope):
+                continue
+            offenders.append(f"{path.name}::{node.name} (lines {lines})")
+    assert not offenders, (
+        "these tenant-reachable functions build a response model from a raw LXD dict without a "
+        "tier or filter helper:\n  " + "\n  ".join(offenders)
+    )
