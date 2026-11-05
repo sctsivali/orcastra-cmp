@@ -127,6 +127,25 @@ test("Back closes a dialog that the hidden section opened", async ({ page }) => 
   await expectCleanSettingsHarness(api);
 });
 
+test("an administrator can assign a role in a local organization", async ({ page }) => {
+  // The organization list's default leaves local organizations out, so an organization made in the
+  // console could never get a partner row (2026-11-05). The dialog asks for both and marks local.
+  await authenticate(page.context(), "admin");
+  const api = await installSettingsFixtures(page, "admin", { reads });
+  const local = { id: 480, name: "QA Console Lab", slug: "qa-console-lab", description: null, source: "local",
+    external_id: null, api_key_id: null, app_name: null, created_at: null, updated_at: null };
+  await page.route(
+    (url) => url.pathname.endsWith("/api/v1/integrations/organizations") && url.searchParams.get("source") === "local",
+    (route) => route.fulfill({ json: [local] }),
+  );
+  await page.goto("/settings/user-groups");
+  await page.getByRole("button", { name: "Assign User" }).click();
+  const dialog = page.getByRole("dialog", { name: "Assign User Role" });
+  await dialog.getByRole("combobox", { name: /Organization/ }).click();
+  await expect(page.getByRole("option", { name: /QA Console Lab\s*local/ })).toBeVisible();
+  await expectCleanSettingsHarness(api);
+});
+
 test("a partner is offered only the tenant role", async ({ page }) => {
   await authenticate(page.context(), "partner");
   const api = await installSettingsFixtures(page, "partner", { reads });

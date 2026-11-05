@@ -118,10 +118,19 @@ function AssignedUsersPanelContent() {
     queryFn: () => api.userGroups.list(),
   });
 
-  // organizations synced from external apps (OrcaHub), the ones a role is assigned in
+  // The organizations a role is assigned in: those synced from OrcaHub and the local ones an
+  // administrator created here. The list's default leaves local organizations out, so a partner
+  // could never be given the partner row that lets them run an organization made in the console.
   const { data: orgs } = useQuery({
-    queryKey: ["integration-organizations"],
-    queryFn: () => integrationsAPI.listOrganizations(),
+    queryKey: ["integration-organizations", "with-local"],
+    queryFn: async () => {
+      const [synced, local] = await Promise.all([
+        integrationsAPI.listOrganizations(),
+        integrationsAPI.listOrganizations("local"),
+      ]);
+      const known = new Set(synced.map((org) => org.id));
+      return [...synced, ...local.filter((org) => !known.has(org.id))];
+    },
   });
 
   // note: memoised. A fresh array every render hands the filter engine a new identity each
@@ -462,11 +471,12 @@ function AssignedUsersPanelContent() {
                       {org.app_name && (
                         <span className="text-muted-foreground ml-1">via {org.app_name}</span>
                       )}
+                      {org.source === "local" && <span className="text-muted-foreground ml-1">local</span>}
                     </SelectItem>
                   ))}
                   {(!orgs || orgs.length === 0) && orgRequired && (
                     <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                      No organizations synced. Connect OrcaHub via Integrations first.
+                      No organizations yet. Create one, or connect OrcaHub under Integrations.
                     </div>
                   )}
                 </SelectContent>
