@@ -56,6 +56,33 @@ function list(items, limit = 100, offset = 0) {
   };
 }
 
+// The server's view predicates (backend repository.py _view_predicate), mirroring
+// migrationInView in the console's migration-format.ts.
+const HISTORY_PHASES = new Set(["completed", "rolled_back", "cancelled", "failed"]);
+const ATTENTION_PHASES = new Set([
+  "cutover_pending", "external_cutover_pending", "unknown", "reconciling", "rollback_available",
+  "cleanup_due", "cleanup_blocked", "manual_recovery", "failed",
+]);
+const JOB_VIEWS = ["active", "attention", "history"];
+
+function jobInView(job, view) {
+  const history = HISTORY_PHASES.has(job.phase) || ["success", "failure", "cancelled"].includes(job.status);
+  if (view === "history") return history;
+  if (view === "attention") {
+    return ATTENTION_PHASES.has(job.phase) || ["failure", "unknown", "manual_recovery"].includes(job.status);
+  }
+  return !history;
+}
+
+function jobList(jobs, url, limit, offset) {
+  const view = url.searchParams.get("view");
+  const visible = JOB_VIEWS.includes(view) ? jobs.filter((job) => jobInView(job, view)) : jobs;
+  const counts = Object.fromEntries(
+    JOB_VIEWS.map((name) => [name, jobs.filter((job) => jobInView(job, name)).length]),
+  );
+  return { ...list(visible, limit, offset), counts };
+}
+
 function pagination(url) {
   const requestedLimit = Number.parseInt(url.searchParams.get("limit") ?? "100", 10);
   const requestedOffset = Number.parseInt(url.searchParams.get("offset") ?? "0", 10);
@@ -327,6 +354,16 @@ async function installMigrationFixtures(page, role, options = {}) {
         await json(route, plan);
         return;
       }
+      if (method === "DELETE") {
+        // The server's wording (planning.py discard_plan) for a plan a migration ran from.
+        if (plan.status === "executed") {
+          await json(route, { detail: "A started plan stays with its migration and cannot be discarded." }, 409);
+          return;
+        }
+        plans.delete(planId);
+        await route.fulfill({ status: 204, body: "" });
+        return;
+      }
       if (method === "PATCH") {
         const body = state.mutations.at(-1).body;
         state.patchBodies.push({ planId, body });
@@ -368,7 +405,7 @@ async function installMigrationFixtures(page, role, options = {}) {
         await json(route, { detail: "Fixture migration stream unavailable" }, 429, { "Retry-After": "1" });
       } else {
         const { limit, offset } = pagination(url);
-        await json(route, list([...jobs.values()], limit, offset));
+        await json(route, jobList([...jobs.values()], url, limit, offset));
       }
       return;
     }

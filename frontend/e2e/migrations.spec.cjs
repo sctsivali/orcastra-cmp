@@ -153,6 +153,134 @@ test("load older uses offset pagination and exposes the 101st job and draft", as
   await expectCleanMigrationHarness(api);
 });
 
+// 101 finished jobs fill the first page of the whole list. The retained move and the blocked
+// cleanup were started before them, as a week-long retention is, so an unfiltered first page
+// never holds them.
+function jobsBehindFinishedPage() {
+  const finished = Array.from({ length: 101 }, (_, index) =>
+    makeJob({
+      resourceName: `done-${String(index + 1).padStart(3, "0")}`,
+      phase: "completed",
+      status: "success",
+    }),
+  );
+  return [
+    ...finished,
+    makeJob({ resourceName: "retained-old", phase: "source_retained", status: "waiting", available_actions: ["rollback", "cleanup"] }),
+    makeJob({ resourceName: "blocked-old", phase: "cleanup_blocked", status: "waiting", available_actions: ["rollback", "cleanup"] }),
+  ];
+}
+
+test("a retained and a blocked job older than the first page stay in Active and Needs Attention", async ({ page }) => {
+  await authenticate(page.context(), "admin");
+  const api = await installMigrationFixtures(page, "admin", { jobs: jobsBehindFinishedPage() });
+  const listSearches = () =>
+    api.requests
+      .filter((request) => request.method === "GET" && request.path === "/migrations")
+      .map((request) => request.search);
+
+  await page.goto("/inventory/migrations");
+  await expect(page.getByRole("button", { name: "retained-old", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "blocked-old", exact: true })).toBeVisible();
+  expect(listSearches().some((search) => search.includes("view=active"))).toBe(true);
+
+  await page.getByRole("tab", { name: /^Needs Attention/ }).click();
+  await expect(page).toHaveURL(/view=attention/);
+  await expect(page.getByRole("button", { name: "blocked-old", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "retained-old", exact: true })).toHaveCount(0);
+  expect(listSearches().some((search) => search.includes("view=attention"))).toBe(true);
+  await expectCleanMigrationHarness(api);
+});
+
+test("tab counts are the server's exact totals, with no plus sign", async ({ page }) => {
+  await authenticate(page.context(), "admin");
+  const api = await installMigrationFixtures(page, "admin", { jobs: jobsBehindFinishedPage() });
+
+  await page.goto("/inventory/migrations?view=history");
+  // One page holds 100 of the 101 finished jobs; the tab still counts all of them.
+  await expect(page.getByRole("button", { name: "Load older jobs" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Active (2)", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Needs Attention (1)", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "History (101)", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /\+/ })).toHaveCount(0);
+
+  // Switching views keeps the totals, which do not depend on the view read.
+  await page.getByRole("tab", { name: "Active (2)", exact: true }).click();
+  await expect(page.getByRole("button", { name: "retained-old", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "History (101)", exact: true })).toBeVisible();
+  await expectCleanMigrationHarness(api);
+});
+
+function draftFor(planId, resourceName) {
+  const template = makePlan();
+  return makePlan({
+    plan_id: planId,
+    source: { ...template.source, resource_name: resourceName },
+    target: { ...template.target, resource_name: resourceName },
+  });
+}
+
+test("discarding a draft names its source and destination, then removes it", async ({ page }) => {
+  const draft = draftFor("plan-to-discard", "source-vm");
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner", { plans: [draft] });
+  const confirm = page.getByRole("alertdialog");
+
+  await page.goto("/inventory/migrations?view=drafts");
+  await page.getByRole("button", { name: "Discard migration draft for source-vm" }).click();
+  await expect(confirm.getByRole("heading", { name: "Discard Migration Draft?" })).toBeVisible();
+  await expect(confirm).toContainText("cluster-a/default/source-vm");
+  await expect(confirm).toContainText("cluster-b/target-project/source-vm");
+  await expect(confirm).toContainText("It cannot be undone.");
+  expect(api.mutations, "nothing is sent before the operator confirms").toEqual([]);
+
+  await confirm.getByRole("button", { name: "Discard Draft" }).click();
+  await expect(confirm).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "Drafts (0)", exact: true })).toBeVisible();
+  await expect(page.getByText("No saved drafts", { exact: true })).toBeVisible();
+  expect(api.mutations.map(({ method, path }) => ({ method, path }))).toEqual([
+    { method: "DELETE", path: `/migrations/plans/${draft.plan_id}` },
+  ]);
+  await expectCleanMigrationHarness(api);
+});
+
+test("a refused discard keeps the dialog open with the server's reason", async ({ page }) => {
+  const started = draftFor("plan-started-elsewhere", "started-vm");
+  const gone = draftFor("plan-gone", "gone-vm");
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner", { plans: [started, gone] });
+  const confirm = page.getByRole("alertdialog");
+
+  await page.goto("/inventory/migrations?view=drafts");
+  await expect(page.getByRole("tab", { name: "Drafts (2)", exact: true })).toBeVisible();
+
+  // Started from another tab after this list was read: the server refuses with 409.
+  api.plans.set(started.plan_id, { ...started, status: "executed" });
+  await page.getByRole("button", { name: "Discard migration draft for started-vm" }).click();
+  await confirm.getByRole("button", { name: "Discard Draft" }).click();
+  await expect(
+    confirm.getByText("A started plan stays with its migration and cannot be discarded.", { exact: true }),
+  ).toBeVisible();
+  await expect(confirm.getByRole("button", { name: "Discard Draft" })).toBeEnabled();
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  // The list was read again, so the started plan has left Drafts.
+  await expect(page.getByRole("tab", { name: "Drafts (1)", exact: true })).toBeVisible();
+
+  // Already gone on the server: the 404's message is shown, and the row follows the list.
+  api.plans.delete(gone.plan_id);
+  await page.getByRole("button", { name: "Discard migration draft for gone-vm" }).click();
+  await confirm.getByRole("button", { name: "Discard Draft" }).click();
+  await expect(confirm.getByText("Migration plan not found", { exact: true })).toBeVisible();
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByRole("tab", { name: "Drafts (0)", exact: true })).toBeVisible();
+
+  expect(api.mutations.map(({ method, path }) => ({ method, path }))).toEqual([
+    { method: "DELETE", path: `/migrations/plans/${started.plan_id}` },
+    { method: "DELETE", path: `/migrations/plans/${gone.plan_id}` },
+  ]);
+  await expectCleanMigrationHarness(api);
+});
+
 test("turned-off admission keeps existing migration recovery visible", async ({ page }, testInfo) => {
   const unresolved = makeJob({
     resourceName: "needs-recheck",

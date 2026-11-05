@@ -237,12 +237,19 @@ export interface MigrationJob {
   finished_at?: string | null;
 }
 
+/** The Migration Queue tabs the server filters on (`GET /migrations?view=`). */
+export type MigrationView = "active" | "attention" | "history";
+
+export type MigrationViewCounts = Record<MigrationView, number>;
+
 export interface MigrationJobListResponse {
   items: MigrationJob[];
   total: number;
   limit: number;
   offset: number;
   has_more: boolean;
+  /** Exact totals of every view, whatever view or page was read. Unknown when absent. */
+  counts?: Partial<MigrationViewCounts> | null;
 }
 
 export interface MigrationPlanListResponse {

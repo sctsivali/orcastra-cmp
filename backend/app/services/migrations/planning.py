@@ -1029,10 +1029,21 @@ class MigrationPlanningMixin:
         visibility: repository.MigrationListVisibility,
         limit: int,
         offset: int,
+        view: Optional[str] = None,
     ) -> tuple[list[MigrationJob], int]:
         return await repository.list_jobs(
             self.db,
             visibility=visibility,
             limit=limit,
             offset=offset,
+            view=view,
         )
+
+    async def count_jobs_by_view(
+        self, *, visibility: repository.MigrationListVisibility
+    ) -> dict[str, int]:
+        return await repository.count_jobs_by_view(self.db, visibility=visibility)
+
+    async def discard_plan(self, plan_id: str) -> None:
+        if not await repository.discard_plan(self.db, plan_id):
+            raise MigrationConflict("A started plan stays with its migration and cannot be discarded.")

@@ -9,6 +9,7 @@ import type {
   MigrationPlanCreateRequest,
   MigrationPlanListResponse,
   MigrationPlanUpdateRequest,
+  MigrationView,
 } from "@/types/migrations";
 
 function migrationPath(id: string): string {
@@ -31,12 +32,13 @@ const ACTION_PATH: Record<MigrationAction, string> = {
 };
 
 export const migrationsAPI = {
+  /** Without `view` the server returns every job; with it, only that tab's jobs. */
   listJobs: (
-    { limit = 100, offset = 0 }: { limit?: number; offset?: number } = {},
+    { limit = 100, offset = 0, view }: { limit?: number; offset?: number; view?: MigrationView } = {},
     signal?: AbortSignal,
   ) =>
     fetchAPI<MigrationJobListResponse>(
-      `/migrations?limit=${limit}&offset=${offset}`,
+      `/migrations?limit=${limit}&offset=${offset}${view ? `&view=${view}` : ""}`,
       { signal },
     ),
 
@@ -75,6 +77,16 @@ export const migrationsAPI = {
         headers: { "If-Match": String(revision) },
         body: JSON.stringify(body),
       },
+      undefined,
+      false,
+      { retryAfterAuthRefresh: false },
+    ),
+
+  /** 204 on success; 409 for a plan that was started, 404 for one gone or not the caller's. */
+  discardPlan: (planId: string) =>
+    fetchAPI<void>(
+      planPath(planId),
+      { method: "DELETE" },
       undefined,
       false,
       { retryAfterAuthRefresh: false },

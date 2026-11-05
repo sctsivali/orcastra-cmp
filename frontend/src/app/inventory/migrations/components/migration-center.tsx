@@ -6,21 +6,21 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { LoadingLottiePage } from "@/components/loading-lottie";
+import { LoadingLottieMedium, LoadingLottiePage } from "@/components/loading-lottie";
 import { PageReadError, ReadErrorState } from "@/components/ui/read-error-state";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useMigrationJobs, useMigrationPlans } from "@/hooks/use-migrations";
+import { migrationViewCounts, useMigrationJobs, useMigrationPlans } from "@/hooks/use-migrations";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useMigrationCapabilities, useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { describeReadError } from "@/lib/read-error";
 import { currentQuery, replaceQuery } from "@/lib/url-state";
 import { Role } from "@/types/rbac";
 import { APIError } from "@/types/api";
-import type { MigrationJob, MigrationPlan } from "@/types/migrations";
+import type { MigrationJob, MigrationPlan, MigrationView } from "@/types/migrations";
 import { usePathname, useSearchParams } from "next/navigation";
 import { MigrationDraftTable } from "./migration-draft-table";
-import { endpointLabel, migrationInView, type MigrationView } from "./migration-format";
+import { JOB_VIEW_TABS, migrationInView } from "./migration-format";
 import { MigrationJobDialog } from "./migration-job-dialog";
 import { MigrationJobTable } from "./migration-job-table";
 import { MigrationWizard } from "./migration-wizard";
@@ -81,11 +81,13 @@ function MigrationCenterContent() {
   const newMigrationsOffReason = capabilitiesUnreadable
     ? "Migration availability could not be read"
     : "New migrations are turned off on this deployment";
-  const jobsQuery = useMigrationJobs(allowed);
+  const view = viewFromQuery(searchParams.get("view"));
+  // Drafts reads the Active jobs: the queue keeps polling, and a resumed plan finds its job.
+  const jobView: MigrationView = view === "drafts" ? "active" : view;
+  const jobsQuery = useMigrationJobs(jobView, allowed);
   const plansQuery = useMigrationPlans(allowed);
   const { writeAvailability, writeUnavailableCause, recheckWriteAvailability } = useReadOnlyMode();
 
-  const view = viewFromQuery(searchParams.get("view"));
   const jobId = searchParams.get("job");
   const planId = searchParams.get("plan");
   const wizardOpen = (centerEnabled && searchParams.get("new") === "1") || !!planId;
@@ -163,11 +165,13 @@ function MigrationCenterContent() {
     () => uniquePlans(plansQuery.data?.pages),
     [plansQuery.data?.pages],
   );
+  // The server already filtered the view; filtering again keeps a server that ignores `view`
+  // (one that predates it) from listing every job under every tab.
   const jobs = React.useMemo(() => {
     return [...loadedJobs]
-      .filter((job) => migrationInView(job, view === "drafts" ? "active" : view))
+      .filter((job) => migrationInView(job, jobView))
       .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
-  }, [loadedJobs, view]);
+  }, [loadedJobs, jobView]);
   const draftPlans = React.useMemo(
     () => loadedPlans.filter((plan) => plan.status !== "executed"),
     [loadedPlans],
@@ -253,14 +257,20 @@ function MigrationCenterContent() {
     );
   }
 
-  const counts = {
-    active: loadedJobs.filter((job) => migrationInView(job, "active")).length,
-    attention: loadedJobs.filter((job) => migrationInView(job, "attention")).length,
-    history: loadedJobs.filter((job) => migrationInView(job, "history")).length,
-    drafts: draftPlans.length,
-  };
   const moreJobsAvailable = jobsQuery.hasNextPage === true;
   const moreDraftsAvailable = plansQuery.hasNextPage === true;
+  const serverCounts = migrationViewCounts(jobsQuery.data?.pages);
+  // The server counts every view exactly. Only a server without counts, which also ignores
+  // `view` and sends every job, falls back to counting the rows loaded so far.
+  const jobCount = (tab: MigrationView): string => {
+    const exact = serverCounts?.[tab];
+    if (typeof exact === "number") return String(exact);
+    const loaded = loadedJobs.filter((job) => migrationInView(job, tab)).length;
+    return `${loaded}${moreJobsAvailable ? "+" : ""}`;
+  };
+  // Until a newly chosen view lands, the data is the previous view's: its counts still hold, its
+  // rows belong to another tab.
+  const switchingView = jobsQuery.isPlaceholderData;
 
   return (
     <div className="p-8 space-y-6">
@@ -390,61 +400,38 @@ function MigrationCenterContent() {
           <CardHeader className="space-y-4">
             <CardTitle>Migration Queue</CardTitle>
             <TabsList className="h-auto w-full justify-start overflow-x-auto sm:w-auto">
-              <TabsTrigger className="min-h-11 sm:min-h-9" value="active">Active ({counts.active}{moreJobsAvailable ? "+" : ""})</TabsTrigger>
-              <TabsTrigger className="min-h-11 sm:min-h-9" value="attention">Needs Attention ({counts.attention}{moreJobsAvailable ? "+" : ""})</TabsTrigger>
-              <TabsTrigger className="min-h-11 sm:min-h-9" value="history">History ({counts.history}{moreJobsAvailable ? "+" : ""})</TabsTrigger>
-              <TabsTrigger className="min-h-11 sm:min-h-9" value="drafts">Drafts ({counts.drafts}{moreDraftsAvailable ? "+" : ""})</TabsTrigger>
+              {JOB_VIEW_TABS.map((tab) => (
+                <TabsTrigger key={tab.view} className="min-h-11 sm:min-h-9" value={tab.view}>
+                  {tab.label} ({jobCount(tab.view)})
+                </TabsTrigger>
+              ))}
+              <TabsTrigger className="min-h-11 sm:min-h-9" value="drafts">Drafts ({draftPlans.length}{moreDraftsAvailable ? "+" : ""})</TabsTrigger>
             </TabsList>
           </CardHeader>
           <CardContent>
-            <TabsContent value="active" className="mt-0">
-              {jobsUnavailable ? (
-                <ReadErrorState
-                  noun="migration jobs"
-                  error={jobsQuery.error}
-                  onRetry={() => void jobsQuery.refetch()}
-                />
-              ) : (
-                <MigrationJobTable
-                  jobs={jobs}
-                  emptyTitle="No active migrations"
-                  emptyDescription="Queued and in-progress jobs appear here."
-                  onOpen={(id) => openOverlay({ job: id, plan: null, new: null })}
-                />
-              )}
-            </TabsContent>
-            <TabsContent value="attention" className="mt-0">
-              {jobsUnavailable ? (
-                <ReadErrorState
-                  noun="migration jobs"
-                  error={jobsQuery.error}
-                  onRetry={() => void jobsQuery.refetch()}
-                />
-              ) : (
-                <MigrationJobTable
-                  jobs={jobs}
-                  emptyTitle="No migration needs attention"
-                  emptyDescription="Blocked, uncertain, failed, and overdue jobs appear here."
-                  onOpen={(id) => openOverlay({ job: id, plan: null, new: null })}
-                />
-              )}
-            </TabsContent>
-            <TabsContent value="history" className="mt-0">
-              {jobsUnavailable ? (
-                <ReadErrorState
-                  noun="migration jobs"
-                  error={jobsQuery.error}
-                  onRetry={() => void jobsQuery.refetch()}
-                />
-              ) : (
-                <MigrationJobTable
-                  jobs={jobs}
-                  emptyTitle="No migration history"
-                  emptyDescription="Completed, cancelled, and failed jobs appear here."
-                  onOpen={(id) => openOverlay({ job: id, plan: null, new: null })}
-                />
-              )}
-            </TabsContent>
+            {JOB_VIEW_TABS.map((tab) => (
+              <TabsContent key={tab.view} value={tab.view} className="mt-0">
+                {jobsUnavailable ? (
+                  <ReadErrorState
+                    noun="migration jobs"
+                    error={jobsQuery.error}
+                    onRetry={() => void jobsQuery.refetch()}
+                  />
+                ) : switchingView ? (
+                  <div className="flex flex-col items-center gap-3 py-12 text-sm text-muted-foreground" role="status">
+                    <LoadingLottieMedium />
+                    Loading migration jobs…
+                  </div>
+                ) : (
+                  <MigrationJobTable
+                    jobs={jobs}
+                    emptyTitle={tab.emptyTitle}
+                    emptyDescription={tab.emptyDescription}
+                    onOpen={(id) => openOverlay({ job: id, plan: null, new: null })}
+                  />
+                )}
+              </TabsContent>
+            ))}
             <TabsContent value="drafts" className="mt-0">
               {plansQuery.isError && !plansQuery.data ? (
                 <ReadErrorState

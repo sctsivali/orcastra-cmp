@@ -1,8 +1,9 @@
 "use client";
 
-import { Suspense } from "react";
-import { Edit3, FileClock } from "lucide-react";
+import { Suspense, useState } from "react";
+import { Edit3, FileClock, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm-dialog";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import {
   Table,
@@ -14,6 +15,7 @@ import {
 } from "@/components/ui/table";
 import { TableEmptyRow, TableSubText } from "@/components/ui/table-text";
 import { TableLink } from "@/components/ui/table-link";
+import { useDiscardMigrationPlan } from "@/hooks/use-migrations";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { formatDateTime, formatLabel, plural } from "@/lib/utils";
@@ -97,6 +99,19 @@ function MigrationDraftTableContent({
 }) {
   const filters = useTableFilters(MIGRATION_DRAFTS, plans, { syncUrl: false });
   const rows = filters.filteredRows;
+  const discard = useDiscardMigrationPlan();
+  const [discarding, setDiscarding] = useState<MigrationPlan | null>(null);
+  // Held through the close fade, so the dialog body does not blank while it leaves.
+  const [shownDiscard, setShownDiscard] = useState<MigrationPlan | null>(null);
+  const [discardError, setDiscardError] = useState<string | null>(null);
+
+  const confirmDiscard = (plan: MigrationPlan) => {
+    setDiscardError(null);
+    discard.mutate(plan.plan_id, {
+      onSuccess: () => setDiscarding(null),
+      onError: (error) => setDiscardError(error instanceof Error ? error.message : "The draft could not be discarded."),
+    });
+  };
 
   return (
     <div className="space-y-4">
@@ -109,7 +124,7 @@ function MigrationDraftTableContent({
             <TableHead>Operation</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Expires</TableHead>
-            <TableHead pinned="end" className="w-12 text-right"><span className="sr-only">Actions</span></TableHead>
+            <TableHead pinned="end" className="w-24 text-right"><span className="sr-only">Actions</span></TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -140,7 +155,7 @@ function MigrationDraftTableContent({
                     {draftStatusLabel(plan, expired)}
                   </TableCell>
                   <TableCell className="whitespace-nowrap">{formatDateTime(plan.expires_at)}</TableCell>
-                  <TableCell pinned="end" className="text-right">
+                  <TableCell pinned="end" className="whitespace-nowrap text-right">
                     <Button
                       variant="ghost"
                       size="sm"
@@ -150,6 +165,22 @@ function MigrationDraftTableContent({
                     >
                       <Edit3 className="h-4 w-4" aria-hidden />
                     </Button>
+                    {/* A started plan stays with its migration; the server refuses to discard it. */}
+                    {plan.status !== "executed" && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-11 w-11 p-0 text-destructive hover:text-destructive sm:h-8 sm:w-8"
+                        aria-label={`Discard migration draft for ${endpointPrimary(plan.source)}`}
+                        onClick={() => {
+                          setDiscardError(null);
+                          setShownDiscard(plan);
+                          setDiscarding(plan);
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4" aria-hidden />
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               );
@@ -157,6 +188,26 @@ function MigrationDraftTableContent({
           )}
         </TableBody>
       </Table>
+
+      <DestructiveConfirmDialog
+        open={discarding !== null}
+        onOpenChange={(open) => !open && setDiscarding(null)}
+        title="Discard Migration Draft?"
+        description={shownDiscard ? (
+          <>
+            This deletes the draft to {shownDiscard.intent}{" "}
+            <span className="break-words font-medium text-foreground" translate="no">{endpointLabel(shownDiscard.source)}</span>
+            {" "}to{" "}
+            <span className="break-words font-medium text-foreground" translate="no">{endpointLabel(shownDiscard.target)}</span>
+            {" "}and its preflight results. Nothing on either cluster changes. It cannot be undone.
+          </>
+        ) : ""}
+        confirmLabel="Discard Draft"
+        pendingLabel="Discarding…"
+        pending={discard.isPending}
+        onConfirm={() => discarding && confirmDiscard(discarding)}
+        error={discardError}
+      />
     </div>
   );
 }

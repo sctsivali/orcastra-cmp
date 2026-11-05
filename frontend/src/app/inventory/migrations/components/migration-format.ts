@@ -10,6 +10,7 @@ import type {
   MigrationContractSummary,
   MigrationJsonValue,
   MigrationPlannedResource,
+  MigrationView,
 } from "@/types/migrations";
 
 const PHASE_META: Record<MigrationJobPhase, { label: string; tone: BadgeTone }> = {
@@ -51,8 +52,6 @@ const STATUS_META: Record<MigrationJobStatus, { label: string; tone: BadgeTone }
   manual_recovery: { label: "Manual Recovery", tone: "negative" },
 };
 
-export type MigrationView = "active" | "attention" | "history";
-
 const ATTENTION_PHASES = new Set<MigrationJobPhase>([
   "cutover_pending",
   "external_cutover_pending",
@@ -76,6 +75,8 @@ export function migrationStatusMeta(job: Pick<MigrationJob, "phase" | "status">)
   return PHASE_META[job.phase] ?? STATUS_META[job.status] ?? { label: formatLabel(job.phase), tone: "neutral" as const };
 }
 
+// important: GET /migrations?view= filters with these same predicates on the server
+// (backend/app/services/migrations/repository.py); change both together.
 export function migrationInView(job: Pick<MigrationJob, "phase" | "status">, view: MigrationView): boolean {
   if (view === "attention") {
     return ATTENTION_PHASES.has(job.phase) || ["failure", "unknown", "manual_recovery"].includes(job.status);
@@ -85,6 +86,33 @@ export function migrationInView(job: Pick<MigrationJob, "phase" | "status">, vie
   }
   return !HISTORY_PHASES.has(job.phase) && !["success", "failure", "cancelled"].includes(job.status);
 }
+
+/** The Migration Queue's job tabs, in order, with what each says when it is empty. */
+export const JOB_VIEW_TABS: ReadonlyArray<{
+  view: MigrationView;
+  label: string;
+  emptyTitle: string;
+  emptyDescription: string;
+}> = [
+  {
+    view: "active",
+    label: "Active",
+    emptyTitle: "No active migrations",
+    emptyDescription: "Queued and in-progress jobs appear here.",
+  },
+  {
+    view: "attention",
+    label: "Needs Attention",
+    emptyTitle: "No migration needs attention",
+    emptyDescription: "Blocked, uncertain, failed, and overdue jobs appear here.",
+  },
+  {
+    view: "history",
+    label: "History",
+    emptyTitle: "No migration history",
+    emptyDescription: "Completed, cancelled, and failed jobs appear here.",
+  },
+];
 
 export function findingMessage(finding: MigrationIssue): string {
   return finding.message;

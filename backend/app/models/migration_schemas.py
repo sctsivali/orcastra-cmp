@@ -324,6 +324,8 @@ class MigrationListResponse(BaseModel):
     limit: int = Field(..., ge=1)
     offset: int = Field(..., ge=0)
     has_more: bool
+    # Exact job counts of the console's three views, whatever the page or view asked for.
+    counts: Optional[Dict[str, int]] = None
 
 
 class MigrationPlanListResponse(BaseModel):

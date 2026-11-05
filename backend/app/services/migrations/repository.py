@@ -424,18 +424,59 @@ async def get_job_by_request(db: AsyncSession, requester: str, idempotency_key: 
     ).scalar_one_or_none()
 
 
+# The console's tabs (frontend migration-format.ts migrationInView), decided on the server so a
+# view is never limited to the jobs one page of the whole list happened to hold.
+_HISTORY_PHASES = ("completed", "rolled_back", "cancelled", "failed")
+_ATTENTION_PHASES = (
+    "cutover_pending", "external_cutover_pending", "unknown", "reconciling", "rollback_available",
+    "cleanup_due", "cleanup_blocked", "manual_recovery", "failed",
+)
+JOB_VIEWS = ("active", "attention", "history")
+
+
+def _view_predicate(view: str) -> Any:
+    history = or_(
+        MigrationJob.phase.in_(_HISTORY_PHASES),
+        MigrationJob.status.in_(("success", "failure", "cancelled")),
+    )
+    if view == "history":
+        return history
+    if view == "attention":
+        return or_(
+            MigrationJob.phase.in_(_ATTENTION_PHASES),
+            MigrationJob.status.in_(("failure", "unknown", "manual_recovery")),
+        )
+    return ~history
+
+
+async def count_jobs_by_view(db: AsyncSession, *, visibility: MigrationListVisibility) -> dict[str, int]:
+    visible = _list_visibility_predicate(MigrationJob, visibility, exact_actor=False)
+    counts: dict[str, int] = {}
+    for view in JOB_VIEWS:
+        counts[view] = int(
+            (await db.execute(
+                select(func.count()).select_from(MigrationJob).where(visible, _view_predicate(view))
+            )).scalar()
+            or 0
+        )
+    return counts
+
+
 async def list_jobs(
     db: AsyncSession,
     *,
     visibility: MigrationListVisibility,
     limit: int,
     offset: int,
+    view: Optional[str] = None,
 ) -> tuple[list[MigrationJob], int]:
     predicate = _list_visibility_predicate(
         MigrationJob,
         visibility,
         exact_actor=False,
     )
+    if view is not None:
+        predicate = and_(predicate, _view_predicate(view))
     rows, total = await _list_visible_page(
         db,
         MigrationJob,
@@ -988,6 +1029,20 @@ async def recoverable_job_ids(db: AsyncSession, *, limit: int = 50) -> list[str]
 OPEN_PLAN_LIMIT = 50
 PLAN_RETENTION = timedelta(days=30)
 _OPEN_PLAN_STATUSES = ("draft", "preflighting", "ready", "blocked")
+
+
+async def discard_plan(db: AsyncSession, plan_id: str) -> bool:
+    """Delete a plan no migration ran from. False when it was started (it stays with its job)."""
+    started = select(MigrationJob.job_id).where(MigrationJob.plan_id == MigrationPlan.plan_id)
+    result = await db.execute(
+        delete(MigrationPlan).where(
+            MigrationPlan.plan_id == plan_id,
+            MigrationPlan.status != "executed",
+            ~started.exists(),
+        )
+    )
+    await db.commit()
+    return bool(result.rowcount)
 
 
 async def count_open_plans(db: AsyncSession, requester: str) -> int:

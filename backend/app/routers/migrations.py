@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import logging
 from collections.abc import Awaitable
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +38,7 @@ from app.models.migration_schemas import (
     MigrationPlanPatchRequest,
     MigrationPlanResponse,
 )
+from app.services.activity_logger import get_activity_logger
 from app.services.migrations import MigrationService
 from app.services.migrations.authority import (
     AuthorityDeniedError,
@@ -61,6 +62,7 @@ from app.services.snapshots.schedule_authority import standing_authority_refusal
 
 _IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 logger = logging.getLogger(__name__)
+activity_logger = get_activity_logger()
 
 _IDENTITY_BINDING_REQUIRED_DETAIL = {
     "error": "identity_binding_required",
@@ -357,6 +359,29 @@ async def get_plan(
     return plan_response(row)
 
 
+@router.delete("/plans/{plan_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def discard_plan(
+    plan_id: str,
+    user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Discard a draft the caller wrote and never started (owner decision: the author only)."""
+    authority = await _current_authority(user)
+    service = MigrationService(db)
+    row = await _service_call(service.get_plan(plan_id))
+    await _authorize_plan_current(row, authority=authority, user=user, db=db)
+    await _service_call(service.discard_plan(plan_id))
+    activity_logger.log_activity(
+        action="migration.plan.discard",
+        target_type="migration_plan",
+        target_id=plan_id,
+        target_host=row.source_cluster_id,
+        target_project=row.source_project,
+        result="success",
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.patch(
     "/plans/{plan_id}",
     response_model=MigrationPlanResponse,
@@ -433,23 +458,29 @@ async def list_migrations(
     db: AsyncSession = Depends(get_db),
     limit: int = Query(25, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    view: Optional[Literal["active", "attention", "history"]] = Query(None),
 ) -> MigrationListResponse:
     authority = await _current_authority(user)
+    service = MigrationService(db)
+    visibility = _list_visibility(authority)
     rows, total = await _service_call(
-        MigrationService(db).list_jobs(
-            visibility=_list_visibility(authority),
+        service.list_jobs(
+            visibility=visibility,
             limit=limit,
             offset=offset,
+            view=view,
         )
     )
     for row in rows:
         _assert_list_row_visibility(row, authority=authority, exact_actor=False)
+    counts = await _service_call(service.count_jobs_by_view(visibility=visibility))
     return MigrationListResponse(
         items=[await job_response(db, row) for row in rows],
         total=total,
         limit=limit,
         offset=offset,
         has_more=offset + len(rows) < total,
+        counts=counts,
     )
 
 

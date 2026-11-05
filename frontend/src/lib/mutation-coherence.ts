@@ -84,7 +84,7 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
   "migration.plan": {
     completion: "response",
     queryFamilies: ["migrations"],
-    apiCalls: ["migrationsAPI.createPlan", "migrationsAPI.updatePlan"],
+    apiCalls: ["migrationsAPI.createPlan", "migrationsAPI.updatePlan", "migrationsAPI.discardPlan"],
   },
   "migration.job": {
     completion: "response",
