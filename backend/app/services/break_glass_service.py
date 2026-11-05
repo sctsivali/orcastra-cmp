@@ -16,7 +16,7 @@ from datetime import datetime, timezone, timedelta
 from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import HTTPException
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import ws_close
@@ -330,12 +330,14 @@ async def list_grants(
     *,
     cluster_filter: Optional[set[str]],
     mine_email: Optional[str] = None,
+    organization_filter: Optional[set[int]] = None,
     limit: int = 200,
 ) -> list[BreakGlassGrant]:
     """
     List grants newest-first. ``cluster_filter`` None means no cluster restriction
     (admin sees all); a set restricts to grants on those clusters (tenant accountability
-    view, fed the caller's get_user_allowed_clusters). ``mine_email`` narrows to one admin.
+    view, fed the request's enforced cluster set). ``organization_filter`` keeps grants aimed
+    at those organizations or at no organization. ``mine_email`` narrows to one admin.
     """
     stmt = select(BreakGlassGrant).order_by(BreakGlassGrant.created_at.desc()).limit(limit)
     if mine_email:
@@ -343,6 +345,11 @@ async def list_grants(
     if cluster_filter is not None:
         # empty set -> match nothing (a sentinel keeps the IN clause valid)
         stmt = stmt.where(BreakGlassGrant.cluster_id.in_(cluster_filter or {"__none__"}))
+    if organization_filter is not None:
+        stmt = stmt.where(or_(
+            BreakGlassGrant.target_organization_id.is_(None),
+            BreakGlassGrant.target_organization_id.in_(organization_filter or {-1}),
+        ))
     return list((await db.execute(stmt)).scalars().all())
 
 

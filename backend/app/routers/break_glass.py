@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.dependencies import AuthenticatedUser, require_admin, require_tenant
 from app.core.rbac import Role, resolve_roles, get_highest_role
-from app.core.org_scope import org_scope_dependency, get_user_allowed_clusters
+from app.core.org_scope import get_current_allowed_clusters, get_user_org_ids, org_scope_dependency
 from app.services import break_glass_service
 from app.services.activity_logger import get_activity_logger
 from app.models.db_models import BreakGlassGrant
@@ -154,12 +154,18 @@ async def list_grants(
     view of grants on clusters in their own organization scope (nothing from other orgs).
     """
     is_admin = get_highest_role(resolve_roles(user)) == Role.ADMIN
-    # get_user_allowed_clusters returns None for admin (no filter) or the caller's own set.
-    allowed = await get_user_allowed_clusters(user, db)
+    # important: the REQUEST-scoped set org_scope_dependency enforces (narrowed by a Tenant's
+    # ACL), never a fresh get_user_allowed_clusters(), as console.py's session list learned. None
+    # for an Admin; an empty set matches nothing (security review 2026-11-05, finding 6).
+    allowed = get_current_allowed_clusters()
+    # On a cluster several organizations hold, only the grants aimed at the caller's own, or at
+    # the whole cluster (no target organization).
+    organizations = None if is_admin else set(await get_user_org_ids(user, db))
     grants = await break_glass_service.list_grants(
         db,
-        cluster_filter=allowed,  # None=admin all; set=scoped to caller's clusters
+        cluster_filter=allowed,
         mine_email=(user.email if (is_admin and mine) else None),
+        organization_filter=organizations,
     )
     return [_to_response(g) for g in grants]
 
