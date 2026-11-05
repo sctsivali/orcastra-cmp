@@ -18,6 +18,7 @@ from app.core.cache import get_cache_manager
 from app.core.database import get_db
 from app.core.dependencies import (
     AuthenticatedUser,
+    check_read_only_mode,
     require_admin,
     require_partner,
     require_tenant,
@@ -244,7 +245,7 @@ async def get_organization(
     return _org_to_response(org, user.email, tenant=role == Role.TENANT.value)
 
 
-@router.post("/", response_model=OrgResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=OrgResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(check_read_only_mode)])
 async def create_organization(
     body: OrgCreateRequest,
     user: AuthenticatedUser = Depends(require_partner()),
@@ -260,7 +261,7 @@ async def create_organization(
     return _org_to_response(org, user.email)
 
 
-@router.patch("/{org_id}", response_model=OrgResponse)
+@router.patch("/{org_id}", response_model=OrgResponse, dependencies=[Depends(check_read_only_mode)])
 async def update_organization(
     org_id: int,
     body: OrgUpdateRequest,
@@ -280,7 +281,7 @@ async def update_organization(
     return _org_to_response(org, user.email)
 
 
-@router.delete("/{org_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{org_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(check_read_only_mode)])
 async def delete_organization(
     org_id: int,
     user: AuthenticatedUser = Depends(require_admin()),
@@ -349,7 +350,7 @@ async def list_members(
     return [MemberResponse.model_validate(m) for m in members]
 
 
-@router.post("/{org_id}/members", response_model=MemberResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/{org_id}/members", response_model=MemberResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(check_read_only_mode)])
 async def add_member(
     org_id: int,
     body: MemberAddRequest,
@@ -378,7 +379,7 @@ async def add_member(
     return MemberResponse.model_validate(member)
 
 
-@router.patch("/{org_id}/members/{member_email}", response_model=MemberResponse)
+@router.patch("/{org_id}/members/{member_email}", response_model=MemberResponse, dependencies=[Depends(check_read_only_mode)])
 async def update_member(
     org_id: int,
     member_email: str,
@@ -402,7 +403,7 @@ async def update_member(
     return MemberResponse.model_validate(member)
 
 
-@router.delete("/{org_id}/members/{member_email}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{org_id}/members/{member_email}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(check_read_only_mode)])
 async def remove_member(
     org_id: int,
     member_email: str,
@@ -456,7 +457,7 @@ async def list_cluster_bindings(
     return [ClusterBindingResponse.model_validate(c) for c in clusters]
 
 
-@router.post("/{org_id}/clusters", response_model=ClusterBindingResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/{org_id}/clusters", response_model=ClusterBindingResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(check_read_only_mode)])
 async def bind_cluster(
     org_id: int,
     body: ClusterBindRequest,
@@ -520,7 +521,7 @@ async def bind_cluster(
     return ClusterBindingResponse.model_validate(binding)
 
 
-@router.delete("/{org_id}/clusters/{cluster_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{org_id}/clusters/{cluster_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(check_read_only_mode)])
 async def unbind_cluster(
     org_id: int,
     cluster_id: str,

@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import AuthenticatedUser, require_partner
+from app.core.dependencies import AuthenticatedUser, check_read_only_mode, require_partner
 from app.core.rbac import Role, resolve_roles, get_highest_role
 from app.models.db_models import OrganizationMember, Organization
 from app.services.authentik_sync import get_authentik_sync
@@ -151,7 +151,7 @@ async def list_user_groups(
     return list(user_map.values())
 
 
-@router.post("/assign", response_model=AssignRoleResponse)
+@router.post("/assign", response_model=AssignRoleResponse, dependencies=[Depends(check_read_only_mode)])
 async def assign_user_role(
     body: AssignRoleRequest,
     user: AuthenticatedUser = Depends(require_partner()),
@@ -284,7 +284,7 @@ async def assign_user_role(
     )
 
 
-@router.delete("/{user_email}")
+@router.delete("/{user_email}", dependencies=[Depends(check_read_only_mode)])
 async def remove_user_from_all(
     user_email: str,
     user: AuthenticatedUser = Depends(require_partner()),

@@ -43,6 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.cache import get_cache_manager
 from app.core.database import get_db, async_session_maker
+from app.core.dependencies import check_read_only_mode
 from app.core.upload_stream import UploadStagingUnavailable, append_request_body
 from app.core.lxd_path import safe_segment
 from app.core.lxd_segment import is_dot_segment, lxd_segment
@@ -217,7 +218,7 @@ class CreateUploadRequest(BaseModel):
     image_ref: Optional[str] = None
 
 
-@router.post("/image-uploads")
+@router.post("/image-uploads", dependencies=[Depends(check_read_only_mode)])
 async def create_upload(
     body: CreateUploadRequest,
     api_key: Dict[str, Any] = Depends(require_capability("storage.upload")),
@@ -340,7 +341,7 @@ async def options_upload(session_id: str):
     )
 
 
-@router.patch("/image-uploads/{session_id}")
+@router.patch("/image-uploads/{session_id}", dependencies=[Depends(check_read_only_mode)])
 async def patch_upload(
     session_id: str,
     request: Request,
@@ -394,7 +395,7 @@ async def patch_upload(
 # Finalize (trigger import) + status (polled by OrcaHub)
 # ============================================
 
-@router.post("/image-uploads/{session_id}/finalize")
+@router.post("/image-uploads/{session_id}/finalize", dependencies=[Depends(check_read_only_mode)])
 async def finalize_upload(
     session_id: str,
     api_key: Dict[str, Any] = Depends(require_capability("storage.upload")),
