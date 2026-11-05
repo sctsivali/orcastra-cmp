@@ -919,6 +919,47 @@ def verify_api_key_secret(secret: str, stored_hash: str) -> bool:
     return secrets.compare_digest(computed_hash, stored_hash)
 
 
+API_KEY_STORE_UNAVAILABLE = "api_key_store_unavailable"
+
+
+def _vault_did_not_answer(exc: BaseException) -> bool:
+    """True when Vault failed as a store (sealed, down, unreachable), never for "not there".
+
+    important: only Vault and transport errors count. A 404 is a missing key, a 4xx is a refusal
+    worth reporting as it is, and anything else is a fault of ours that stays a 500.
+    """
+    from app.core.vault_client import VaultClientError
+
+    if not isinstance(exc, (VaultClientError, requests.RequestException)):
+        return False
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status is None or status >= 500
+
+
+def _key_store_unavailable() -> HTTPException:
+    """The 503 for a key read, list or write that Vault could not serve.
+
+    note: measured in the RC5 acceptance Vault window, a sealed Vault turned a valid key into
+    401 "Invalid API key" and the key list into 200 with nothing in it, while /clusters already
+    answered 503 for the same outage (core/registry_guard.py).
+    """
+    from app.core.registry_guard import RETRY_AFTER_SECONDS
+
+    return HTTPException(
+        status_code=503,
+        detail={
+            "error": API_KEY_STORE_UNAVAILABLE,
+            "message": (
+                "API keys cannot be read or written because the secret store (Vault) is sealed "
+                "or unavailable. Try again once Vault is unsealed."
+            ),
+        },
+        headers={"Retry-After": str(RETRY_AFTER_SECONDS), "Cache-Control": "no-store"},
+    )
+
+
 def save_api_key_to_vault(
     vault_client, key_id: str, metadata: Dict[str, Any], secret_hash: str,
     raw_secret: Optional[str] = None,
@@ -943,6 +984,7 @@ def save_api_key_to_vault(
         logger.info(f"Saved API key {key_id} to Vault")
     except Exception as e:
         logger.error(f"Failed to save API key to Vault: {e}")
+        unavailable = _vault_did_not_answer(e)
         if metadata_saved:
             # important: metadata without a secret lists as an Active key that can never
             # authenticate, which an operator reads as a live credential. Best effort: the write
@@ -953,6 +995,8 @@ def save_api_key_to_vault(
                 )
             except Exception as cleanup:  # noqa: BLE001 - the mint already failed; report that
                 logger.warning(f"API key {key_id} left its metadata without a secret: {cleanup}")
+        if unavailable:
+            raise _key_store_unavailable() from e
         raise HTTPException(status_code=500, detail="Could not save API key")
 
 
@@ -987,6 +1031,8 @@ def get_api_key_from_vault(vault_client, key_id: str, *, use_cache: bool = True)
         return metadata, secret_data.get("hash", "")
     except Exception as e:
         logger.error(f"Failed to get API key from Vault: {e}")
+        if _vault_did_not_answer(e):
+            raise _key_store_unavailable() from e
         raise HTTPException(status_code=404, detail="API key not found")
 
 
@@ -1040,12 +1086,20 @@ def list_api_keys_from_vault(vault_client) -> List[Dict[str, Any]]:
                     f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata"
                 )
                 all_metadata.append(metadata)
-            except Exception:
+            except Exception as e:
+                # A key whose document went away is skipped; Vault going away part way is not a
+                # shorter list.
+                if _vault_did_not_answer(e):
+                    raise
                 continue
         
         return all_metadata
     except Exception as e:
         logger.warning(f"Failed to list API keys from Vault: {e}")
+        # important: an unanswered LIST is not an empty key store. It was answered as one, so a
+        # sealed Vault showed every operator zero keys.
+        if _vault_did_not_answer(e):
+            raise _key_store_unavailable() from e
         return []
 
 

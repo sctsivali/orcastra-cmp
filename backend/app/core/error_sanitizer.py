@@ -118,6 +118,12 @@ _STRUCTURED_5XX: Dict[int, Dict[str, str]] = {
         "vault_unavailable": (
             "Cluster data cannot be read because the secret store (Vault) is sealed or unavailable."
         ),
+        # routers/integrations.py: API keys live in Vault too, so a sealed Vault is neither an
+        # invalid key nor an empty key list.
+        "api_key_store_unavailable": (
+            "API keys cannot be read or written because the secret store (Vault) is sealed or "
+            "unavailable."
+        ),
         # Host Health's unseal (routers/host_health.py): the dialog tells "nothing was sent" apart
         # from "sent, not confirmed", so the operator knows whether to check progress first.
         "vault_unreachable": "Vault did not answer. Check the progress before entering the key again.",

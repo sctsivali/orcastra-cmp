@@ -78,3 +78,22 @@ def test_the_vault_listing_runs_off_the_event_loop(monkeypatch: pytest.MonkeyPat
     count = asyncio.run(sweep._revoke_orphaned_credentials(OrphanDB(installs=[]), vault))
     assert count == 1
     assert len(seen) == 2 and loop_thread not in seen
+
+
+def test_a_key_store_vault_cannot_list_skips_the_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A sealed Vault lists as 503 now; the pass revokes nothing and waits, as the empty list did."""
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from tests.test_the_reconcile_sweep_narrows_and_reclaims import FakeVault, OrphanDB
+
+    def listing(_client: Any) -> List[Dict[str, Any]]:
+        raise HTTPException(status_code=503, detail={"error": "api_key_store_unavailable"})
+
+    revoked: List[str] = []
+    monkeypatch.setattr("app.routers.integrations.list_api_keys_from_vault", listing)
+    monkeypatch.setattr(sweep, "revoke_install_credential", lambda _c, key_id: revoked.append(key_id))
+
+    assert asyncio.run(sweep._revoke_orphaned_credentials(OrphanDB(installs=[]), FakeVault([]))) == 0
+    assert revoked == []

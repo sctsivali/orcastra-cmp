@@ -283,7 +283,15 @@ async def _revoke_orphaned_credentials(db, vault_client) -> int:
     # important: off the event loop. The listing is one blocking Vault read per key ever minted,
     # 1286 on the dev deployment, and this pass runs in every worker every interval. Inline, it
     # stalled each worker's loop for the whole read on every tick.
-    keys = await asyncio.to_thread(list_api_keys_from_vault, vault_client)
+    try:
+        keys = await asyncio.to_thread(list_api_keys_from_vault, vault_client)
+    except HTTPException as exc:
+        # A sealed Vault answers the listing with 503 now rather than an empty list. Revoking
+        # nothing is what that empty list did, so the pass waits for the next interval.
+        if exc.status_code != 503:
+            raise
+        logger.warning("Orphan credential pass skipped: the key store is unavailable")
+        return 0
     for key in keys or []:
         install_id = key.get("extension_install_id")
         if install_id is None:
