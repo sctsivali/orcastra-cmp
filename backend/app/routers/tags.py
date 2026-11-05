@@ -49,7 +49,8 @@ from app.models.schemas import (
     # User visibility
     UserTagVisibilitySettings, UserTagVisibilityResponse,
 )
-from app.models.db_models import TagAssignment
+from app.models.db_models import Tag, TagAssignment
+from app.core.rbac import is_admin
 from app.services.lxd_service import get_lxd_service
 from app.services.migration_fence import (
     MigrationFenceConflict,
@@ -191,6 +192,29 @@ async def _guard_tag_target_mutation(
             yield
     except MigrationFenceConflict as exc:
         raise HTTPException(status_code=409, detail=exc.detail) from exc
+
+
+async def _refuse_unless_tag_owner(tag_id: int, tag_service: TagService, user: AuthenticatedUser) -> None:
+    """403 unless an Admin or the tag's creator changes or deletes its definition.
+
+    important: a tag is one fleet-wide definition and deleting it removes every assignment, on every
+    organization's instances. Any Partner could rename or delete any tag (security review of
+    v1.0.0-RC4..c5199ea1, finding 2; live 2026-11-05: 200 and 204 on a tag another user created).
+    Owner decision 2026-11-05: an Admin or the creator; anyone may still assign it. A tag with no
+    recorded creator (older rows, system tags) is an Admin's. A missing tag falls through to the
+    service, which answers it as before.
+    """
+    if is_admin(user):
+        return
+    tag = (await tag_service.db.execute(select(Tag).where(Tag.id == tag_id))).scalar_one_or_none()
+    if tag is None:
+        return
+    creator = (tag.created_by or "").strip().casefold()
+    if not creator or creator != (user.email or "").strip().casefold():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only an Administrator or the person who created this tag can change or delete it",
+        )
 
 
 @asynccontextmanager
@@ -339,7 +363,8 @@ async def update_category(
     data: TagCategoryUpdate,
     tag_service: TagService = Depends(get_tag_service_dep),
     _: None = Depends(check_read_only_mode),
-    _rbac: AuthenticatedUser = Depends(require_partner()),
+    # A category is fleet-wide taxonomy with no recorded creator, and no screen edits one.
+    _rbac: AuthenticatedUser = Depends(require_admin()),
 ):
     """Update a tag category."""
     try:
@@ -403,9 +428,10 @@ async def update_tag(
     data: TagUpdate,
     tag_service: TagService = Depends(get_tag_service_dep),
     _: None = Depends(check_read_only_mode),
-    _rbac: AuthenticatedUser = Depends(require_partner()),
+    user: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update a tag."""
+    await _refuse_unless_tag_owner(tag_id, tag_service, user)
     try:
         async with _guard_tag_definition_mutation(tag_id, tag_service):
             return await tag_service.update_tag(tag_id, data)
@@ -423,9 +449,10 @@ async def delete_tag(
     tag_id: int,
     tag_service: TagService = Depends(get_tag_service_dep),
     _: None = Depends(check_read_only_mode),
-    _rbac: AuthenticatedUser = Depends(require_partner()),
+    user: AuthenticatedUser = Depends(require_partner()),
 ):
     """Delete a tag."""
+    await _refuse_unless_tag_owner(tag_id, tag_service, user)
     try:
         async with _guard_tag_definition_mutation(tag_id, tag_service):
             await tag_service.delete_tag(tag_id)
