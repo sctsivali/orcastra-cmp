@@ -935,6 +935,11 @@ def _vault_did_not_answer(exc: BaseException) -> bool:
     status = getattr(exc, "status_code", None)
     if status is None:
         status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status is None and isinstance(exc, VaultClientError):
+        # important: no status and no transport error behind it is the client refusing the path
+        # before any request (an empty or dot segment in a caller's key id). Counted as an outage,
+        # anyone could fake the 503 with `X-API-Key-ID: ..` (security review of 9d77f216).
+        return isinstance(exc.__cause__ or exc.__context__, requests.RequestException)
     return status is None or status >= 500
 
 
@@ -1087,10 +1092,13 @@ def list_api_keys_from_vault(vault_client) -> List[Dict[str, Any]]:
                 )
                 all_metadata.append(metadata)
             except Exception as e:
-                # A key whose document went away is skipped; Vault going away part way is not a
-                # shorter list.
-                if _vault_did_not_answer(e):
+                # A key whose document went away is skipped, and so is one document Vault cannot
+                # serve while it answered the LIST. Vault going away part way (sealed, or no
+                # answer at all) is not a shorter list.
+                status = getattr(e, "status_code", None)
+                if _vault_did_not_answer(e) and status in (None, 503):
                     raise
+                logger.error(f"API key {key_id} could not be read and is left out of the list: {e}")
                 continue
         
         return all_metadata
@@ -3576,7 +3584,12 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
             features=_integration_features(),
         )
         
-    except HTTPException:
+    except HTTPException as exc:
+        # A key store Vault cannot serve is not an invalid key: the same 503 as every other key
+        # door, so an integrator retries instead of discarding a good credential. Every id gets
+        # it during an outage, so it says nothing about which ids exist.
+        if exc.status_code == 503:
+            raise
         # note: the same wording as a wrong secret. This endpoint takes no authentication, so
         # distinguishing the two turned it into a free oracle for which key ids exist.
         return APIKeyValidateResponse(valid=False, error="Invalid API key or secret")

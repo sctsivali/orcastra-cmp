@@ -51,6 +51,12 @@ class _Vault:
         self.session = _Session()
 
     def vault_read(self, path: str, use_cache: bool = True) -> Dict[str, Any]:
+        if self.read_status is None:
+            # As vault_client.vault_read raises it: inside the transport error's except block.
+            try:
+                raise requests.ConnectionError("connection refused")
+            except requests.ConnectionError:
+                raise VaultClientError("Vault read failed", status_code=None)
         if self.read_status != 200:
             raise VaultClientError("Vault read failed", status_code=self.read_status)
         return {"id": "oak_one", "hash": "h"}
@@ -114,3 +120,39 @@ def test_the_answer_keeps_its_code_through_the_sanitizer() -> None:
 
     shown = public_server_detail(503, {"error": UNAVAILABLE, "message": "API keys cannot be read."}, "ref")
     assert shown == {"error": UNAVAILABLE, "message": "API keys cannot be read."}
+
+
+def test_a_malformed_key_id_is_still_not_found() -> None:
+    """The client refuses a dot or empty path segment before any request: not an outage.
+
+    Found by the security review of this change: `..` as a key id reached the new 503, so anyone
+    could fake the "Vault is down" answer and an integration with a bad id would retry forever.
+    """
+
+    class _Refusing(_Vault):
+        def vault_read(self, path: str, use_cache: bool = True) -> Dict[str, Any]:
+            raise VaultClientError(f"Refusing Vault path with a traversal or empty segment: {path!r}")
+
+    with pytest.raises(HTTPException) as caught:
+        integrations.get_api_key_from_vault(_Refusing(), "..")
+    assert caught.value.status_code == 404
+
+
+def test_one_unreadable_key_document_does_not_hide_the_rest() -> None:
+    """A 500 on one key's document while Vault answers the LIST is that document, not an outage."""
+
+    class _OneBroken(_Vault):
+        def vault_read(self, path: str, use_cache: bool = True) -> Dict[str, Any]:
+            raise VaultClientError("Vault read failed", status_code=500)
+
+    assert integrations.list_api_keys_from_vault(_OneBroken()) == []
+
+
+def test_the_public_validate_endpoint_says_unavailable_not_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: _Vault(read_status=503))
+    request = integrations.APIKeyValidateRequest(api_key_id="oak_one", api_key_secret="oas_x")
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(integrations.validate_api_key_endpoint(request))
+    assert caught.value.status_code == 503
