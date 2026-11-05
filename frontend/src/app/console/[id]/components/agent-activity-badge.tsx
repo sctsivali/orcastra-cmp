@@ -30,7 +30,9 @@ import {
 } from "@/components/ui/tooltip";
 import { Bot } from "lucide-react";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
+// note: relative, through the app's own /api/v1 proxy like every other read (sessions/page.tsx).
+// NEXT_PUBLIC_API_URL sent this one read to the backend origin, outside CSP connect-src 'self'.
+const API_URL = "";
 
 /** Matches ORCASTRA_DESKTOP_SESSION_TTL, the window the backend reuses a desktop session for. */
 const RECENT_WINDOW_MS = 900_000;
