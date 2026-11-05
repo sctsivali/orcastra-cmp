@@ -17,6 +17,7 @@ import {
   useSystemWarnings,
   queryKeys } from "@/hooks/use-lxd";
 import { useQueryClient } from "@tanstack/react-query";
+import { nodeAPI } from "@/lib/api";
 import { usePermissions } from "@/hooks/use-permissions";
 import { ReadErrorState } from "@/components/ui/read-error-state";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -39,16 +40,24 @@ export function Dashboard() {
   // note: no success toast. The refresh control reports its own outcome inline
   // (spinner, tick, "Updated just now"), and a toast here would evict whatever
   // the operator was actually reading, since TOAST_LIMIT is 1.
-  // important: the fleet read goes past the backend cache, like the Refresh on the Instances page.
-  // A plain refetch answered from that cache, so after a change made elsewhere (OrcaHub, the LXD
-  // CLI) the button reported "Updated" over the old rows. Only that one is forced: each forced
-  // read spends the per-operator budget the delete and create reconciles also draw on.
+  // important: the fleet read and the cluster status read go past the backend cache, like the
+  // Refresh on the Instances page. A plain refetch answered from that cache, so after a change
+  // made elsewhere (OrcaHub, the LXD CLI) the button reported "Updated" over the old rows, and the
+  // Clusters region it sits in still read "Updated 2m ago" a moment after the click (owner
+  // decision 2026-11-05). Only these two are forced: each forced read spends the per-operator
+  // budget the delete and create reconciles also draw on.
+  // note: fetchQuery with its own queryFn, not another observer's refreshNow, so the forced
+  // read cannot fall back to whichever observer's queryFn the shared key last registered.
   const handleOverviewRefresh = React.useCallback(async () => {
     await Promise.all([
       refreshInstances(),
       queryClient.refetchQueries({ queryKey: queryKeys.allProjectsFor(scopeKey), type: "active" }),
       queryClient.refetchQueries({ queryKey: queryKeys.clustersFor(scopeKey, false), type: "active" }),
-      queryClient.refetchQueries({ queryKey: queryKeys.nodesFor(scopeKey), type: "active" }),
+      queryClient.fetchQuery({
+        queryKey: queryKeys.nodesFor(scopeKey),
+        queryFn: ({ signal }) => nodeAPI.status({ fresh: true, signal }),
+        staleTime: 0,
+      }),
       queryClient.refetchQueries({ queryKey: ["warnings", scopeKey], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["systemWarnings", scopeKey], type: "active" }),
     ]);
