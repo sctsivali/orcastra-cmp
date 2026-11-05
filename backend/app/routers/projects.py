@@ -58,6 +58,7 @@ from app.core.org_scope import (
     org_scope_dependency,
     org_to_hold_project_grant,
     project_is_visible,
+    refuse_default_operation,
     verify_cluster_access,
     visible_projects_for,
 )
@@ -758,6 +759,8 @@ async def update_project(
     """Update a project's description and resource limits."""
     verify_cluster_access(host)
     _refuse_a_project_outside_the_bound(host, project_name)
+    # `default` carries the other party's instances where another party holds the cluster.
+    refuse_default_operation(host, project_name)
     try:
         async with serialize_cluster_configuration(db, host):
             policy = await _cluster_write_policy(user, host, db)

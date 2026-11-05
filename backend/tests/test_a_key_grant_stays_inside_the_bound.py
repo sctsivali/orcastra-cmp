@@ -40,9 +40,13 @@ def scope():
 
 # ── the dashboard grant ────────────────────────────────────────────────────────────────────────
 
+# note: `default` beside another party is refused since 2026-11-05 (owner): it carries that party's
+# instances, and a key reaches it through the raw proxy and /proxy, as the LXD TLS keys already
+# refuse it (services/lxd_key_bounds.py).
 @pytest.mark.parametrize("cluster,project", [
-    (MIXED, "*"), (MIXED, "theirs"), (SOLO, "*"),
-], ids=["wildcard-beside-another-party", "another-partys-project", "wildcard-where-another-party-holds-alone"])
+    (MIXED, "*"), (MIXED, "theirs"), (SOLO, "*"), (MIXED, "default"),
+], ids=["wildcard-beside-another-party", "another-partys-project", "wildcard-where-another-party-holds-alone",
+        "default-beside-another-party"])
 async def test_a_grant_past_the_bound_is_refused(scope, cluster: str, project: str) -> None:
     db = await _world()
     with pytest.raises(HTTPException) as caught:
@@ -51,8 +55,8 @@ async def test_a_grant_past_the_bound_is_refused(scope, cluster: str, project: s
 
 
 @pytest.mark.parametrize("cluster,project", [
-    (MIXED, "own-web"), (MIXED, "default"), (OWN, "*"),
-], ids=["inside-the-bound", "default", "wildcard-on-the-sellers-own-cluster-after-a-sale"])
+    (MIXED, "own-web"), (OWN, "default"), (OWN, "*"),
+], ids=["inside-the-bound", "default-on-the-sellers-own-cluster", "wildcard-on-the-sellers-own-cluster-after-a-sale"])
 async def test_a_grant_inside_the_bound_passes(scope, cluster: str, project: str) -> None:
     db = await _world()
     await integrations._refuse_a_grant_past_the_project_bound(db, SELLER, [_grant(cluster, project)])
@@ -164,7 +168,8 @@ def test_provisioning_and_the_sync_ask_who_names_the_project_before_writing() ->
 
 # ── an add-on installation is a key too ────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("cluster,project", [(MIXED, "*"), (MIXED, "theirs")], ids=["wildcard", "another-partys-project"])
+@pytest.mark.parametrize("cluster,project", [(MIXED, "*"), (MIXED, "theirs"), (MIXED, "default")],
+                         ids=["wildcard", "another-partys-project", "default"])
 async def test_an_add_on_install_is_held_to_the_same_bound(scope, cluster: str, project: str) -> None:
     """A partner publishes an add-on asking for every project and installs it beside another party."""
     from app.services.extension_scope import assert_install_scope_within_partner

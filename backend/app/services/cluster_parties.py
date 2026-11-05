@@ -211,13 +211,36 @@ async def run_org_keys(db: AsyncSession, email: str) -> Set[str]:
     return await side_keys(db, email)
 
 
+async def member_orgs(db: AsyncSession, email: str) -> Set[int]:
+    """Active organizations where this user holds a `member` row: a teammate added from Members.
+
+    note: not part of `run_orgs`, which every whole-cluster check reads; only the view-only
+    `default` rule counts a teammate as its organization's side (owner decision 2026-11-05).
+    """
+    from app.models.db_models import Organization, OrganizationMember
+
+    if not email:
+        return set()
+    rows = (await db.execute(
+        select(OrganizationMember.organization_id)
+        .join(Organization, Organization.id == OrganizationMember.organization_id)
+        .where(
+            Organization.is_active == True,  # noqa: E712 - SQLAlchemy column comparison
+            func.lower(func.trim(OrganizationMember.user_email)) == email.strip().lower(),
+            OrganizationMember.role == "member",
+        )
+    )).scalars().all()
+    return set(rows)
+
+
 async def clusters_held_by_another_party(
-    db: AsyncSession, email: str, cluster_ids: Iterable[str]
+    db: AsyncSession, email: str, cluster_ids: Iterable[str], also_runs: Iterable[int] = (),
 ) -> Set[str]:
     """Clusters on which some holder is outside the caller's party.
 
     An unbound row registered by someone else counts as another holder, as it does in
-    org_scope._clusters_with_several_orgs.
+    org_scope._clusters_with_several_orgs. `also_runs` adds organizations the caller's side holds
+    for one rule only (org_scope._default_view_only's teammates).
     """
     from app.models.db_models import OrganizationCluster
     from app.services.organization_owners import PARTY_ADDED_VIA, owners_of
@@ -235,13 +258,14 @@ async def clusters_held_by_another_party(
     )).all()
     owners = await owners_of(db, [org_id for _c, org_id, _r in rows if org_id is not None])
     runs = await run_orgs(db, email)
+    extra = set(also_runs)
     keys = await side_keys(db, email)
     held_elsewhere: Set[str] = set()
     for cluster_id, org_id, registered_by in rows:
         if org_id is None:
             if (registered_by or "").lower() != (email or "").lower():
                 held_elsewhere.add(cluster_id)
-        elif org_id in runs or {row.api_key_id for row in owners.get(org_id, []) if row.added_via in PARTY_ADDED_VIA} & keys:
+        elif org_id in runs or org_id in extra or {row.api_key_id for row in owners.get(org_id, []) if row.added_via in PARTY_ADDED_VIA} & keys:
             continue
         else:
             held_elsewhere.add(cluster_id)

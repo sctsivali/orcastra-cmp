@@ -65,6 +65,11 @@ _read_only_clusters_var: contextvars.ContextVar[frozenset] = contextvars.Context
 _purchase_only_clusters_var: contextvars.ContextVar[frozenset] = contextvars.ContextVar(
     "purchase_only_clusters", default=frozenset()
 )
+# Clusters where `default` is view only for this role_partner: another party also holds the cluster,
+# so `default` carries that party's instances (owner decision 2026-11-05). Empty for everyone else.
+_default_view_only_var: contextvars.ContextVar[frozenset] = contextvars.ContextVar(
+    "default_view_only", default=frozenset()
+)
 # Set by an interactive socket (console, terminal): driving a guest is a change, not a read.
 _interactive_var: contextvars.ContextVar[bool] = contextvars.ContextVar("interactive_scope", default=False)
 
@@ -238,7 +243,10 @@ def check_tenant_permission(
 
     acl = _tenant_acl_var.get(None)
     if acl is None:
-        return True  # no ACL = full access (admin/partner)
+        # no ACL = full access (admin/partner), except a change needing a grant above view in a
+        # `default` another party also holds (console, files, credentials, power, snapshots).
+        # Reads stay open (owner decision 2026-11-05).
+        return required_permission == "view" or not (default_is_view_only(cluster_id, project_name) and _is_change())
 
     cluster_rules = acl.get(cluster_id)
     if not cluster_rules:
@@ -346,7 +354,31 @@ def verify_project_access(cluster_id: str, project_name: Optional[str]) -> str:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied to this project",
         )
+    if _is_change():
+        refuse_default_operation(cluster_id, project)
     return project
+
+
+DEFAULT_VIEW_ONLY_DETAIL = (
+    "The default project on cluster '{cluster}' is shared with another organization: it is view only "
+    "for you. Work in your own projects there."
+)
+
+
+def default_is_view_only(cluster_id: str, project_name: Optional[str]) -> bool:
+    """Whether this request may only read `project_name` on `cluster_id` (see _default_view_only)."""
+    if _allowed_clusters_var.get(None) is None:
+        return False  # an Admin, dev mode or a background task is never narrowed
+    return (project_name or "default") == "default" and cluster_id in _default_view_only_var.get()
+
+
+def refuse_default_operation(cluster_id: str, project_name: Optional[str]) -> None:
+    """403 for a change, a session or an instance grant above view in a view-only `default`."""
+    if default_is_view_only(cluster_id, project_name):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=DEFAULT_VIEW_ONLY_DETAIL.format(cluster=cluster_id),
+        )
 
 
 def can_view_instance(
@@ -1340,6 +1372,26 @@ async def _partner_read_only(
     return frozenset(read_only & allowed)
 
 
+async def _default_view_only(
+    user: "AuthenticatedUser", db: AsyncSession, allowed: Optional[set[str]],
+) -> frozenset:
+    """The clusters where `default` is view only for this Partner: another party also holds them.
+
+    important: decided by party (services.cluster_parties), not by binding count, so a seller's
+    own buyer organizations do not take `default` away from the seller. A Tenant acts only on the
+    instances a policy names and an Admin is unrestricted, so both get an empty set.
+    """
+    from app.core.rbac import Role, get_highest_role, resolve_roles
+    from app.services import cluster_parties
+
+    if not allowed or db is None or get_highest_role(resolve_roles(user)) != Role.PARTNER:
+        return frozenset()
+    email = user.email or ""
+    teammates = await cluster_parties.member_orgs(db, email)
+    held = await cluster_parties.clusters_held_by_another_party(db, email, allowed, also_runs=teammates)
+    return frozenset(held & set(allowed))
+
+
 def purchase_only_clusters() -> frozenset:
     """For this request: the clusters a Partner reaches only through purchases."""
     return _purchase_only_clusters_var.get()
@@ -1372,6 +1424,7 @@ async def org_scope_dependency(
     """
     _interactive_var.set(False)
     _read_only_clusters_var.set(frozenset())
+    _default_view_only_var.set(frozenset())
     if user is None:
         # dev mode - no filter
         _allowed_clusters_var.set(None)
@@ -1398,6 +1451,7 @@ async def org_scope_dependency(
         tenant_visible_projects = await get_visible_projects(user, db, reachable=allowed)
     _visible_projects_var.set(tenant_visible_projects)
     _read_only_clusters_var.set(await _partner_read_only(user, db, allowed))
+    _default_view_only_var.set(await _default_view_only(user, db, allowed))
 
     # for tenants: restrict to the clusters their ACL grants (empty ACL means empty scope)
     _allowed_clusters_var.set(_narrow_by_tenant_acl(allowed, acl))
@@ -1419,6 +1473,7 @@ async def set_org_scope_for_ws(user: Optional["AuthenticatedUser"], *, interacti
     """
     _interactive_var.set(interactive)
     _read_only_clusters_var.set(frozenset())
+    _default_view_only_var.set(frozenset())
     if user is None:
         _allowed_clusters_var.set(None)
         _tenant_acl_var.set(None)
@@ -1453,6 +1508,7 @@ async def set_org_scope_for_ws(user: Optional["AuthenticatedUser"], *, interacti
             tenant_visible_projects = await get_visible_projects(user, db, reachable=allowed)
         _visible_projects_var.set(tenant_visible_projects)
         _read_only_clusters_var.set(await _partner_read_only(user, db, allowed))
+        _default_view_only_var.set(await _default_view_only(user, db, allowed))
 
         # important: the same narrowing as the HTTP dependency, through the same helper. These
         # were two duplicated blocks, which is how the empty-ACL fallback survived: fixing one

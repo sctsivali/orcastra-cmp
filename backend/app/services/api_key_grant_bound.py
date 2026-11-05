@@ -62,7 +62,7 @@ async def refuse_a_grant_past_the_project_bound(
     *,
     held: Callable[[AsyncSession, str, Set[str]], Awaitable[Set[str]]] = cluster_parties.clusters_held_by_another_party,
 ) -> None:
-    """Raise 403 when a grant names '*' or a project the caller cannot see on a cluster another party holds.
+    """Raise 403 when a grant names '*', `default` or a project the caller cannot see on a cluster another party holds.
 
     important: asked after the cluster scope check and before any cluster is read. On a cluster
     another party also holds, a grant naming that party's project, or '*', lets the key act on it
@@ -88,14 +88,18 @@ async def refuse_a_grant_past_the_project_bound(
         if _field(grant, "cluster_id") in held_elsewhere
         for project in (_field(grant, "projects") or [])
         if not carried_over(_field(grant, "cluster_id"), _field(grant, "permissions"), project)
-        and (project == "*" or not project_is_visible(_field(grant, "cluster_id"), project))
+        # important: `default` counts like '*' there. It carries the other party's instances, and a
+        # key reaches them through the raw proxy and /proxy (owner decision 2026-11-05, as the LXD
+        # TLS keys in services/lxd_key_bounds.py already refuse it).
+        and (project in ("*", "default") or not project_is_visible(_field(grant, "cluster_id"), project))
     })
     if refused:
         raise HTTPException(
             status_code=403,
             detail=(
                 f"Not permitted to grant these projects: {refused}. Another organization also "
-                "holds that cluster, so a key may name only the projects you can see there. "
+                "holds that cluster, so a key may name only your own projects there, never the "
+                "default project or every project. "
                 "A project the key already holds is kept at its current permission level. "
                 "An administrator can issue a wider key."
             ),

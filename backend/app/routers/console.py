@@ -36,6 +36,7 @@ from app.core.org_scope import (
     check_tenant_permission,
     org_scope_dependency,
     project_is_visible,
+    refuse_default_operation,
     set_org_scope_for_ws,
     verify_cluster_access,
     verify_project_access,
@@ -261,6 +262,9 @@ def _verify_instance_access(
     # grants retain their rollout flag, but disabling it must never make an unviewable instance
     # observable or addressable.
     verify_tenant_permission(host, scoped_project, instance_name, "view")
+    if permission != "view":
+        # Same door as core/instance_access.verify_instance_access: whatever the rollout flag.
+        refuse_default_operation(host, scoped_project)
     if permission != "view" and get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(host, scoped_project, instance_name, permission)
     return scoped_project

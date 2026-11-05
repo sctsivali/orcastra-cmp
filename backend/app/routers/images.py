@@ -33,11 +33,12 @@ from app.core.dependencies import (
     require_tenant,
 )
 from app.core.org_scope import (
-    org_scope_dependency,
-    verify_cluster_access,
-    get_scope_cache_key,
     check_tenant_permission,
+    get_scope_cache_key,
+    org_scope_dependency,
     project_is_visible,
+    refuse_default_operation,
+    verify_cluster_access,
 )
 from app.core.tenant_visibility import tenant_acl_active, tenant_may_see_project
 from app.services.activity_logger import get_activity_logger
@@ -638,6 +639,8 @@ async def delete_image(
                 ),
             )
         _store_must_be_visible(host, image.project)
+        # The store `default` serves is view only where another party holds the cluster.
+        refuse_default_operation(host, image.project)
         try:
             await assert_project_not_migration_fenced(
                 cluster_id=host,

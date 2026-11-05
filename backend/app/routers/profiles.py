@@ -38,10 +38,11 @@ from app.core.blocking import (
 from app.core.host_detail import profile_for_tier, profile_list_for_tier
 from app.core.task_scope import caller_tier
 from app.core.org_scope import (
-    org_scope_dependency,
-    verify_cluster_access,
     get_scope_cache_key,
+    org_scope_dependency,
     project_is_visible,
+    refuse_default_operation,
+    verify_cluster_access,
 )
 from app.services.instance_security_policy import (
     ClusterWritePolicy,
@@ -232,6 +233,8 @@ async def _profile_write_target(
     owner = effective_project("profiles", requested_project, project_configs)
     if not project_is_visible(host, owner):
         raise HTTPException(status_code=403, detail="Access denied to this project")
+    # `default`'s profiles shape every instance on the cluster that inherits them.
+    refuse_default_operation(host, owner)
     target_config = project_configs.get(owner)
     if target_config is None:
         if requested_project and requested_project != DEFAULT_PROJECT:
@@ -858,6 +861,7 @@ async def delete_profile(
             owner = resolve_owner(client, "profiles", project)
             if not project_is_visible(host, owner):
                 raise HTTPException(status_code=403, detail="Access denied to this profile")
+            refuse_default_operation(host, owner)
             for fenced_project in sorted({requested_project, owner}):
                 try:
                     await assert_project_not_migration_fenced(

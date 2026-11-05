@@ -209,6 +209,8 @@ def _install_scope_sequence(monkeypatch, *, role: str, outcome: str) -> dict[str
         return frozenset()
 
     monkeypatch.setattr(org_scope, "_partner_read_only", _no_read_only)
+    # The fake session answers no query, so the party read behind `default` view-only is stubbed too.
+    monkeypatch.setattr(org_scope, "_default_view_only", _no_read_only)
     return state
 
 

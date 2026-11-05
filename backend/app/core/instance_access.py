@@ -12,13 +12,17 @@ the same answers. Raises HTTPException 403 like the org-scope primitives it call
 from typing import Optional
 
 from app.core.config import get_settings
-from app.core.org_scope import verify_project_access, verify_tenant_permission
+from app.core.org_scope import refuse_default_operation, verify_project_access, verify_tenant_permission
 
 
 def verify_instance_access(host: str, project: Optional[str], instance_name: str, permission: str = "view") -> str:
     """The project the caller may reach `instance_name` in; raises 403 when it may not."""
     scoped_project = verify_project_access(host, project)
     verify_tenant_permission(host, scoped_project, instance_name, "view")
+    if permission != "view":
+        # important: whatever the rollout flag says. A ticket is a read POST, so this is the door
+        # that keeps a Partner out of another party's guests in a shared `default`.
+        refuse_default_operation(host, scoped_project)
     if permission != "view" and get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(host, scoped_project, instance_name, permission)
     return scoped_project
@@ -32,6 +36,7 @@ def verify_file_access(host: str, project: Optional[str], instance_name: str) ->
     the guest's filesystem the moment an operator switched it off.
     """
     scoped_project = verify_project_access(host, project)
+    refuse_default_operation(host, scoped_project)
     verify_tenant_permission(host, scoped_project, instance_name, "view")
     verify_tenant_permission(host, scoped_project, instance_name, "file_transfer")
     return scoped_project
@@ -46,6 +51,7 @@ def verify_guest_access(host: str, project: Optional[str], instance_name: str) -
     gain it because an operator relaxed a rollout flag.
     """
     scoped_project = verify_project_access(host, project)
+    refuse_default_operation(host, scoped_project)
     verify_tenant_permission(host, scoped_project, instance_name, "view")
     verify_tenant_permission(host, scoped_project, instance_name, "console")
     return scoped_project

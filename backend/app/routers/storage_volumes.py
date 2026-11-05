@@ -38,8 +38,9 @@ from app.core.task_scope import caller_tier
 from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.org_scope import (
     org_scope_dependency,
-    verify_cluster_access,
     project_is_visible,
+    refuse_default_operation,
+    verify_cluster_access,
 )
 from urllib.parse import unquote
 from app.core.lxd_errors import lxd_http_error
@@ -431,6 +432,8 @@ async def create_storage_volume(
     verify_cluster_access(host)
     if not project_is_visible(host, DEFAULT_PROJECT):
         raise HTTPException(status_code=403, detail="Access denied to this project")
+    # A create lands in `default`, view only where another party holds the cluster.
+    refuse_default_operation(host, DEFAULT_PROJECT)
     try:
         async with serialize_cluster_configuration(db, host):
             try:
@@ -547,6 +550,7 @@ async def update_storage_volume(
             owner = resolve_owner(client, "storage-volumes", project)
             if not project_is_visible(host, owner):
                 raise HTTPException(status_code=403, detail="Access denied to this project")
+            refuse_default_operation(host, owner)
             for fenced_project in sorted({requested_project, owner}):
                 try:
                     await assert_project_not_migration_fenced(
@@ -657,6 +661,7 @@ async def delete_storage_volume(
             owner = resolve_owner(client, "storage-volumes", project)
             if not project_is_visible(host, owner):
                 raise HTTPException(status_code=403, detail="Access denied to this project")
+            refuse_default_operation(host, owner)
             for fenced_project in sorted({requested_project, owner}):
                 try:
                     await assert_project_not_migration_fenced(
