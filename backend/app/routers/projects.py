@@ -590,13 +590,15 @@ async def create_project(
                 grant_org = await org_to_hold_project_grant(user.email, request.host, db)
                 if grant_org is None and visible_projects_for(request.host) is not None:
                     # Refused before LXD is touched: created first, the project would be one
-                    # its creator can neither see nor delete.
+                    # its creator can neither see nor delete. note: the message names the rule
+                    # (org_to_hold_project_grant counts only an organization the user runs), since
+                    # a member of the holding organization is refused here too.
                     raise HTTPException(
                         status_code=403,
                         detail=(
-                            "Your account is not a member of an organization bound to cluster "
-                            f"'{request.host}', so a project created there could not be shown "
-                            "to you"
+                            "None of the organizations you created or hold as Partner is bound to "
+                            f"cluster '{request.host}', so a project created there could not be "
+                            "shown to you. A member role in another organization does not count."
                         ),
                     )
 
