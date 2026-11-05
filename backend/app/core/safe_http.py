@@ -63,9 +63,11 @@ async def fetch_guarded(
     and measuring afterwards means a hostile responder decides how much memory a worker uses.
     """
     current = url
+    # No keepalive: a pooled connection outlives the moment its address was judged (see _pin).
+    limits = httpx.Limits(max_connections=4, max_keepalive_connections=0)
     # `transport` is a test seam. Production passes nothing and gets httpx's own.
     async with httpx.AsyncClient(
-        timeout=timeout, follow_redirects=False, transport=transport
+        timeout=timeout, follow_redirects=False, limits=limits, transport=transport
     ) as client:
         for _ in range(max_redirects + 1):
             # The risk check resolves the name with a blocking getaddrinfo, so it runs off the loop.
@@ -76,14 +78,27 @@ async def fetch_guarded(
                 raise SafeHTTPError(reason)
             if allowed_hosts is not None and (urlsplit(current).hostname or "").lower() not in allowed_hosts:
                 raise SafeHTTPError("destination is not one this fetch may reach")
+            # important: connect to the address just judged, never to the name. httpx resolving the
+            # name again let a rebinding name pass the check public and connect to loopback
+            # (security review 2026-11-05, finding 3). Every hop is pinned, redirects included.
+            try:
+                connect_url, host, _address = await asyncio.to_thread(_pin, current, exemptions=exemptions)
+            except ValueError as exc:
+                raise SafeHTTPError(str(exc)) from exc
+            request = client.build_request(
+                "GET", connect_url, headers={**(headers or {}), "Host": _host_header(current)},
+                extensions={"sni_hostname": host},
+            )
 
             try:
-                async with client.stream("GET", current, headers=headers) as response:
+                response = await client.send(request, stream=True)
+                try:
                     if response.status_code in _REDIRECT_STATUSES:
                         location = response.headers.get("location")
                         if not location:
                             raise SafeHTTPError("redirect without a destination")
-                        # Relative redirects are legal and common on CDNs.
+                        # Relative redirects are legal and common on CDNs; resolved against the
+                        # name, never the pinned literal.
                         current = urljoin(current, location)
                         continue
 
@@ -96,6 +111,8 @@ async def fetch_guarded(
                         if len(body) > max_bytes:
                             raise SafeHTTPError("response exceeds the size limit")
                     return response.headers.get("content-type", ""), bytes(body)
+                finally:
+                    await response.aclose()
             except SafeHTTPError:
                 raise
             except httpx.HTTPError as exc:
@@ -105,6 +122,11 @@ async def fetch_guarded(
                 raise SafeHTTPError("could not reach the URL") from exc
 
     raise SafeHTTPError("too many redirects")
+
+
+def _host_header(url: str) -> str:
+    """The Host a pinned request carries: the name and any non-default port, never userinfo."""
+    return urlsplit(url).netloc.rsplit("@", 1)[-1]
 
 
 def _pin(url: str, *, exemptions: Sequence[Any] = ()) -> Tuple[str, str, str]:
@@ -180,7 +202,7 @@ async def post_pinned(
             "POST",
             connect_url,
             content=content,
-            headers={**dict(headers), "Host": host},
+            headers={**dict(headers), "Host": _host_header(url)},
             extensions={"sni_hostname": host},
         )
         try:
