@@ -924,12 +924,14 @@ def save_api_key_to_vault(
     raw_secret: Optional[str] = None,
 ):
     """Save API key metadata, hash, and optionally raw secret to Vault."""
+    metadata_saved = False
     try:
         # Store metadata
         vault_client.vault_kv_put(
             f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
             metadata
         )
+        metadata_saved = True
         # Store secret hash (+ raw secret for callback auth)
         secret_payload: Dict[str, Any] = {"hash": secret_hash}
         if raw_secret:
@@ -941,6 +943,16 @@ def save_api_key_to_vault(
         logger.info(f"Saved API key {key_id} to Vault")
     except Exception as e:
         logger.error(f"Failed to save API key to Vault: {e}")
+        if metadata_saved:
+            # important: metadata without a secret lists as an Active key that can never
+            # authenticate, which an operator reads as a live credential. Best effort: the write
+            # that just failed may mean Vault is gone, and then the key is left as it was.
+            try:
+                vault_client.vault_delete_metadata(
+                    f"secret/metadata/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata"
+                )
+            except Exception as cleanup:  # noqa: BLE001 - the mint already failed; report that
+                logger.warning(f"API key {key_id} left its metadata without a secret: {cleanup}")
         raise HTTPException(status_code=500, detail="Could not save API key")
 
 
