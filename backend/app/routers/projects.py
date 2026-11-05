@@ -721,7 +721,9 @@ async def create_project(
             error_code="LXDOperationError",
             error_message=str(e),
         )
-        raise HTTPException(status_code=400, detail=str(e))
+        # A taken name is a conflict the caller resolves (another name, or reuse the project).
+        conflict = "already exists" in str(e).lower()
+        raise HTTPException(status_code=409 if conflict else 400, detail=str(e))
     except HTTPException:
         # important: let a deliberate status through. This try raises HTTPException
         # itself, and the broad handler below rewrote it, so an unreachable cluster
