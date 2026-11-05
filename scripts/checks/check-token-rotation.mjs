@@ -127,6 +127,7 @@ function world() {
     "@/lib/token-claims": tokenClaims,
     "@/lib/refresh-grants": registry,
     "@/lib/auth-refresh": load("frontend/src/lib/auth-refresh.ts"),
+    "@/types/rbac": load("frontend/src/types/rbac.ts"),
   });
   return { jwt: auth.authConfig.callbacks.jwt, config: auth.authConfig, registry };
 }

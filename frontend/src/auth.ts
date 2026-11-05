@@ -10,6 +10,7 @@ import type { NextAuthConfig, User, Session } from "next-auth";
 import type { JWT } from "next-auth/jwt";
 import { callbackPath, redirectTo, safeCallbackPath } from "@/lib/auth-redirect";
 import { readGroupsClaim, roleGroups } from "@/lib/token-claims";
+import { Role, hasMinimumRole, resolveRoles } from "@/types/rbac";
 import { forget, grantOnce, holdTombstones, upgradeSpent, type GrantOutcome, type RefreshedFields } from "@/lib/refresh-grants";
 import { REFRESH_FAILED, REFRESH_TOKEN_REVOKED, createIdpClient } from "@/lib/auth-refresh";
 
@@ -364,20 +365,28 @@ export const authConfig: NextAuthConfig = {
       // ---- Three-Tier Role-based route protection ----
       // Extract role groups from session
       const userGroups: string[] = (auth?.user as any)?.groups ?? [];
-      const groupsLower = userGroups.map((g) => g.toLowerCase().trim());
 
-      // resolve admin/partner using same mapping as rbac.ts
-      const adminGroups = ["role_admin", "admin", "admins", "authentik admins", "orcastra-admins"];
-      const partnerGroups = [...adminGroups, "role_partner", "partner", "orcastra-partners"];
+      // important: the same mapping useRequireRole and the backend use (types/rbac.ts, which also
+      // reads role_<alias> groups). A local list here answered Tenant for role_orcastra-partners,
+      // so the server sent home a Partner the page and the API both accepted.
+      const roles = resolveRoles(userGroups);
+      const isAdmin = hasMinimumRole(roles, Role.ADMIN);
+      const isPartner = hasMinimumRole(roles, Role.PARTNER);
 
-      const isAdmin = groupsLower.some((g) => adminGroups.includes(g));
-      const isPartner = groupsLower.some((g) => partnerGroups.includes(g));
-
-      // Admin-only routes (Identities & Groups moved to Admin+Partner in sidebar,
-      // but middleware also allows Partner)
+      // important: every page that calls useRequireRole(Role.PARTNER) is listed here too, so a
+      // tenant deep link is sent home before the page shell mounts (the RC4 hotfix line already
+      // did this for seven of them). scripts/checks/check-role-gates.mjs keeps the lists in step.
       const adminOrPartnerPaths = [
         "/inventory/identities",
         "/inventory/groups",
+        "/inventory/clustering/members",
+        "/inventory/clusters",
+        "/inventory/operations",
+        "/inventory/server",
+        "/inventory/snapshots",
+        "/inventory/migrations",
+        "/inventory/warnings",
+        "/my-keys",
         // Installing an add-on hands a third party a credential into an organization, so the
         // gate is a real redirect here rather than a component that renders null.
         "/extensions",

@@ -14,8 +14,8 @@
 //
 // Run: node scripts/checks/check-role-gates.mjs [repo-root]
 
-import { readFileSync, existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -73,11 +73,66 @@ if (required.size < 7) {
   offenders.push(`only ${required.size} gated destinations found in nav-config.tsx; expected at least 7`);
 }
 
+// The server half: every page that gates itself in the browser is also refused by the
+// authorized() callback in auth.ts, so a tenant deep link never mounts the page shell. The
+// production RC4 hotfix line redirected seven partner pages on the server and the dev line only
+// two, and nothing compared the lists (found in the RC5 acceptance, 2026-11-05).
+const authSource = readFileSync(join(src, 'auth.ts'), 'utf8');
+const serverPaths = (name) => {
+  const block = authSource.match(new RegExp(`const ${name} = \\[([\\s\\S]*?)\\];`));
+  // Comments go first: a quoted path inside a `//` note is not an entry.
+  return block ? [...block[1].replace(/\/\/.*$/gm, '').matchAll(/"([^"]+)"/g)].map((m) => m[1]) : null;
+};
+const SERVER_LISTS = new Map([
+  ['PARTNER', 'adminOrPartnerPaths'],
+  ['ADMIN', 'adminOnlyPaths'],
+]);
+const covered = (route, paths) => paths.some((p) => route === p || route.startsWith(`${p}/`));
+
+const pages = [];
+const walk = (dir) => {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) walk(full);
+    else if (/^page\.(tsx|ts|jsx|js)$/.test(entry.name)) pages.push(full);
+  }
+};
+walk(appDir);
+
+let serverChecked = 0;
+for (const page of pages) {
+  const body = readFileSync(page, 'utf8');
+  // Route groups such as (marketing) do not appear in the URL.
+  const route = `/${relative(appDir, dirname(page)).split(sep).filter((s) => !/^\(.*\)$/.test(s)).join('/')}`;
+  for (const [role, list] of SERVER_LISTS) {
+    // Any argument list: useRequireRole(Role.PARTNER, "/") gates the page just the same. The gate
+    // lives in the page file itself (house rule, see inventory/identities/page.tsx).
+    if (!new RegExp(`useRequireRole\\(\\s*Role\\.${role}\\b`).test(body)) continue;
+    const paths = serverPaths(list);
+    if (!paths) {
+      offenders.push(`auth.ts has no ${list} list to refuse ${route} on the server`);
+      continue;
+    }
+    serverChecked += 1;
+    if (!covered(route, paths)) {
+      offenders.push(`${route} calls useRequireRole(Role.${role}) but auth.ts ${list} does not refuse it on the server`);
+    }
+  }
+}
+// Fifteen today (2026-11-05); fewer means pages left the scan, not that the gate got simpler.
+if (serverChecked < 15) {
+  offenders.push(`only ${serverChecked} role-gated pages found under app/; expected at least 15`);
+}
+
 if (offenders.length) {
   console.error('The nav hides these routes by role but the routes do not refuse them:');
   for (const o of offenders) console.error(`  ${o}`);
   console.error('\nGate the page as inventory/warnings/page.tsx does: call useRequireRole at the');
   console.error('top level, render LoadingLottiePage until isResolved, then null when not allowed.');
+  console.error('Refuse it on the server too: add its route to the matching list in frontend/src/auth.ts.');
   process.exit(1);
 }
-console.log(`role gates: ${required.size} role-restricted destinations, every page refuses its own route`);
+console.log(
+  `role gates: ${required.size} role-restricted destinations, every page refuses its own route; ` +
+    `${serverChecked} gated pages also refused on the server`,
+);
