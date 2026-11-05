@@ -78,7 +78,10 @@ const DialogContent = React.forwardRef<
         // focusing a node that is no longer in the document does nothing at all.
         if (opener && opener.isConnected) {
           event.preventDefault();
-          opener.focus();
+          // important: preventScroll, as Radix's own FocusScope restore does. A created row is
+          // scrolled into view while its dialog is still closing (useRowFocus), and a plain
+          // focus() then scrolled back up to the Create button and left the row off screen.
+          opener.focus({ preventScroll: true });
         }
       }}
       className={cn(
