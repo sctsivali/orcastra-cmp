@@ -997,12 +997,13 @@ async def restore_snapshot(
             details={"snapshot": snapshot_name, "safety_snapshot": safety_name},
         )
         _invalidate_after_restore(body.host, body.project, instance_name)
+        kept = f" Safety snapshot {safety_name} was taken and is still present." if safety_name else ""
+        refusal = restore_plan.project_limits_refusal(failure_detail, body.project)
+        if refusal:
+            raise HTTPException(status_code=409, detail={**refusal, "message": refusal["message"] + kept})
         raise HTTPException(
             status_code=502,
-            detail=(
-                f"The cluster refused the restore: {failure_detail}."
-                + (f" Safety snapshot {safety_name} was taken and is still present." if safety_name else "")
-            ),
+            detail=f"The cluster refused the restore: {failure_detail}.{kept}",
         )
 
     _audit(

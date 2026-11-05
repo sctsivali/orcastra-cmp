@@ -127,3 +127,27 @@ def plan_restore(
             "kept through the restore."
         ),
     )
+
+
+# important: LXD 5.21.5 and later re-check project policy on a snapshot restore (the CVE-2026-9640
+# fix) and refuse one that changes any `volatile.*` key, which most restores do, whenever the
+# project sets limits. Measured on 5.21.5 and 5.21.8 (2026-11-05): an instance's first restore
+# passes and every later one is refused; clearing the project's limits lets restores through and
+# setting them again brings the refusal back. Nothing on our side can change that, so the refusal
+# is explained instead of passed on as a daemon failure.
+_VOLATILE_REFUSAL = re.compile(r'Changing "volatile\.[^"]+" on \S+ ".+" in project ".+" is forbidden')
+
+
+def project_limits_refusal(lxd_error: str, project: str) -> Optional[Dict[str, str]]:
+    """The coded refusal for LXD's volatile-key restore check, or None for any other failure."""
+    if not _VOLATILE_REFUSAL.search(lxd_error or ""):
+        return None
+    return {
+        "error": "restore_refused_by_project_limits",
+        "message": (
+            f"LXD refused this restore because project {project} sets resource limits, and this "
+            "LXD version refuses most restores in such a project. To restore, clear the "
+            "project's limits, restore, then set them again."
+        ),
+        "lxd_error": lxd_error,
+    }
