@@ -200,6 +200,11 @@ async def _active_row(db: Any, cluster_id: str) -> Optional[ClusterRegistration]
     ).scalar_one_or_none()
 
 
+async def active_registration(db: Any, cluster_id: str) -> Optional[ClusterRegistration]:
+    """The cluster id's registration still in force, if any."""
+    return await _active_row(db, cluster_id)
+
+
 async def _ever_registered(db: Any, cluster_id: str) -> bool:
     return (
         await db.execute(select(ClusterRegistration.id).where(ClusterRegistration.cluster_id == cluster_id).limit(1))

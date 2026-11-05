@@ -50,6 +50,7 @@ from app.core.type_utils import (
     resolve_clustered,
 )
 from app.services import cluster_generations
+from app.services.cluster_records import forget_cluster_records
 from app.services.activity_logger import get_activity_logger
 from app.services.lxd_certs import pending as pending_certs
 from app.services.lxd_certs import trust_cleanup
@@ -1365,13 +1366,22 @@ async def delete_cluster(
             from sqlalchemy import delete as sql_delete
 
             async def _delete_binding() -> int:
+                if await cluster_generations.active_registration(db, cluster_id) is not None:
+                    # important: the id was registered again while this delete ran (its
+                    # registration ended first, above). The binding, tags and schedules now
+                    # belong to that registration, not to this delete (security review 2026-11-05).
+                    logger.warning("Left %s's binding and records: it was registered again meanwhile", cluster_id)
+                    return 0
                 result = await db.execute(
                     sql_delete(OrganizationCluster).where(OrganizationCluster.cluster_id == cluster_id)
                 )
                 # Again here, in case step 0 rolled back: a row for a cluster with no Vault entry
                 # would wait on a certificate that will never be read.
                 await trust_store.delete_for_cluster(db, cluster_id)
+                forgotten = await forget_cluster_records(db, cluster_id)
                 await db.commit()
+                if any(forgotten.values()):
+                    logger.info("Forgot the records of deregistered %s: %s", cluster_id, forgotten)
                 return result.rowcount
 
             deleted_rows = await asyncio.wait_for(_delete_binding(), timeout=DB_DELETE_TIMEOUT)
