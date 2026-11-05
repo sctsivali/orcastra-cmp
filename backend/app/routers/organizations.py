@@ -181,6 +181,16 @@ async def _guard_organization_write(
         raise HTTPException(status_code=409, detail=exc.detail) from exc
 
 
+async def _require_organization(svc: OrganizationService, org_id: int) -> None:
+    """Raise 404 unless the organization exists.
+
+    note: an Admin runs every organization (user_runs_org reads no row for it), so nothing else
+    stopped a member or binding written into a deleted one, and the foreign key answered 500.
+    """
+    if await svc.get_organization(org_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+
+
 @asynccontextmanager
 async def _guard_cluster_write(
     db: AsyncSession,
@@ -365,6 +375,7 @@ async def add_member(
         # important: whoever runs the organization, not whoever can see it (a tenant row can).
         if not await user_runs_org(db, org_id, user.email, role):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
+        await _require_organization(svc, org_id)
 
         try:
             member = await svc.add_member(
@@ -470,6 +481,7 @@ async def bind_cluster(
 
     if not await user_runs_org(db, org_id, user.email, role):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
+    await _require_organization(svc, org_id)
 
     # important: `user_has_access` checks the ORGANISATION, which is the caller's own. Nothing
     # checked the CLUSTER, and org scope is derived from exactly the row this writes

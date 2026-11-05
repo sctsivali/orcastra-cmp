@@ -156,6 +156,9 @@ async def test_the_bind_route_refuses_it(monkeypatch) -> None:
         async def user_has_access(self, *_args):
             return True
 
+        async def get_organization(self, org_id):
+            return {"id": org_id}
+
     async def owned(_user, _db):
         return {"sold"}
 

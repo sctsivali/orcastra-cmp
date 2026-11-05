@@ -47,7 +47,11 @@ def binding(monkeypatch: pytest.MonkeyPatch) -> List[Dict[str, Any]]:
     async def _not_bought(*_a: Any, **_k: Any) -> bool:
         return False
 
+    async def _exists(self: Any, org_id: int) -> Any:
+        return {"id": org_id}
+
     monkeypatch.setattr(organizations, "user_runs_org", _runs)
+    monkeypatch.setattr(OrganizationService, "get_organization", _exists)
     monkeypatch.setattr(OrganizationService, "bind_cluster", _bind)
     monkeypatch.setattr(organizations, "_guard_cluster_write", _lock)
     monkeypatch.setattr(organizations, "reaches_only_by_purchase", _not_bought)
