@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import AuthenticatedUser
 from app.core.database import get_db
 from app.core.dependencies import check_read_only_mode, require_partner
+from app.core.lxd_errors import lxd_http_error
 from app.core.lxd_names import LXD_NAME_DESCRIPTION, LXD_NAME_PATTERN
 from app.core.org_scope import (
     org_scope_dependency,
@@ -150,24 +151,30 @@ async def create_schedule(
         from app.services.lxd import snapshots as snapshots_service
         from app.services.snapshots.schedule_runner import _blocking
 
-        config, policy = await _blocking(
-            snapshots_service.read_instance_config_and_policy,
-            client,
-            body.instance_name,
-            body.project,
-            label=f"read {body.instance_name}",
-        )
-        conflict = svc.upstream_conflict(body.host, body.project, body.instance_name, policy)
-        if conflict is not None:
-            raise conflict
+        try:
+            config, policy = await _blocking(
+                snapshots_service.read_instance_config_and_policy,
+                client,
+                body.instance_name,
+                body.project,
+                label=f"read {body.instance_name}",
+            )
+            conflict = svc.upstream_conflict(body.host, body.project, body.instance_name, policy)
+            if conflict is not None:
+                raise conflict
+            rows = await _blocking(
+                snapshots_service.list_instance_snapshots,
+                client,
+                body.instance_name,
+                body.project,
+                label=f"list {body.instance_name}",
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 - mapped as the instance snapshot routes map it
+            # A name the cluster does not have answered 500 (live, 2026-11-05).
+            raise lxd_http_error(exc, "Instance", body.instance_name) from exc
 
-        rows = await _blocking(
-            snapshots_service.list_instance_snapshots,
-            client,
-            body.instance_name,
-            body.project,
-            label=f"list {body.instance_name}",
-        )
         no_room = svc.capacity_conflict(body.instance_name, rows, body.keep_last)
         if no_room is not None:
             raise no_room
