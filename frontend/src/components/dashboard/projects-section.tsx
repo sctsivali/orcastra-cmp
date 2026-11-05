@@ -18,7 +18,7 @@ import { VMInfo, ProjectListResponse, ProjectInfo } from "@/types";
 import { useRowFocus } from "@/hooks/use-row-focus";
 import { projectRowKey } from "@/lib/row-focus";
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
-import { ProjectCard } from "./project-card";
+import { INSTANCE_PAGE_SIZE, ProjectCard } from "./project-card";
 
 interface ProjectsSectionProps {
   projectsData: ProjectListResponse[] | undefined;
@@ -246,6 +246,19 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
       });
     } else {
       newExpanded.add(projectKey);
+      // A search that reached this card through an instance name opens it on the page holding
+      // the first match. The card pages its instances five at a time and filters none of them,
+      // so in a busy project the instance the operator searched for sat on a later page.
+      const query = filters.searchInput.trim().toLowerCase();
+      const match = query
+        ? vmsData
+            .filter((vm) => projectRowKey(vm.host, vm.project || "default") === projectKey)
+            .findIndex((vm) => vm.name.toLowerCase().includes(query))
+        : -1;
+      if (match >= 0) {
+        const holding = Math.floor(match / INSTANCE_PAGE_SIZE) + 1;
+        setInstancePages((pages) => new Map(pages).set(projectKey, holding));
+      }
     }
     setExpandedProjects(newExpanded);
   };

@@ -71,7 +71,7 @@ interface ProjectCardProps {
 
 // One page of instances inside an expanded project card. Five, the same number the app's other
 // in-card pager uses, so the two compact pagers do not disagree about what a page is.
-const INSTANCE_PAGE_SIZE = 5;
+export const INSTANCE_PAGE_SIZE = 5;
 
 export function ProjectCard({ project, projectKey, rowProps, instanceCount, countPending = false, isExpanded, instances, stats, toggleProject, instancePage, onInstancePageChange, refetch, isReadOnly = false }: ProjectCardProps) {
   const count = instanceCount ?? 0;
