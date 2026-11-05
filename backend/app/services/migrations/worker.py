@@ -38,7 +38,7 @@ from .contracts import (
     logger,
 )
 from .preflight import InventoryReadError
-from .reconciliation import _reconcile, _reconciliation_backoff_values
+from .reconciliation import _reconcile, _reconciliation_backoff_values, current_progress
 from .retention import run_cleanup
 from .retention_store import schedule_due_cleanups
 from .rollback import run_abort, run_rollback
@@ -494,6 +494,7 @@ async def _back_off_unknown(job: MigrationJob, worker_id: str, exc: BaseExceptio
         job,
         error_code="operation_outcome_unknown",
         error_message=sanitize_error(exc),
+        progress=await current_progress(job),
     )
     if values.get("status") == "unknown" and (
         job.phase in _RECOVERY_PHASES or job.scope == "project"

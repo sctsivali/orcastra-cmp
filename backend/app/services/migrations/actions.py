@@ -41,6 +41,8 @@ def _reset_reconciliation_cycle(value: Any) -> dict[str, Any]:
     state["reconciliation_cycle"] = max(0, cycle) + 1
     state["reconciliation_streak"] = 0
     state.pop("reconciliation_retry_delay_seconds", None)
+    for key in ("reconciliation_seen_progress", "reconciliation_cycle_unknowns", "reconciliation_progress"):
+        state.pop(key, None)
     return sanitize_payload(state)
 
 

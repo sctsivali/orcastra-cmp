@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 from app.core.lxd_path import safe_segment
@@ -66,13 +67,54 @@ _RECONCILIATION_BASE_DELAY_SECONDS = 30
 _RECONCILIATION_MAX_DELAY_SECONDS = 15 * 60
 
 
+def journal_progress(resources: Any) -> str:
+    """What a job has done so far, as one value: each resource's state and the markers it records.
+
+    note: operation references are left out. A start that keeps failing adds a reference each try
+    yet changes nothing else, and must not read as progress.
+    """
+    entries = sorted(
+        (
+            str(getattr(resource, "resource_id", "")),
+            str(getattr(resource, "state", "")),
+            sorted(
+                str(key)
+                for key, value in (getattr(resource, "safe_result", None) or {}).items()
+                if value not in (None, False, "", [], {})
+            ),
+        )
+        for resource in resources or []
+    )
+    return hashlib.sha256(json.dumps(entries).encode("utf-8")).hexdigest()[:16]
+
+
+# Journals remembered per Recheck cycle, and the hard limit on inconclusive outcomes in one cycle
+# however much progress they report; Recheck starts a new cycle (actions._reset_reconciliation_cycle).
+_SEEN_PROGRESS_LIMIT = 32
+_CYCLE_UNKNOWN_LIMIT = 25
+
+
+async def current_progress(job: MigrationJob) -> Optional[str]:
+    """journal_progress of the job as stored now, or None when the journal cannot be read."""
+    try:
+        return journal_progress(await _resources(job.job_id))
+    except Exception:  # noqa: BLE001 - without a reading the streak just counts on
+        return None
+
+
 def _reconciliation_backoff_values(
     job: MigrationJob,
     *,
     error_code: str,
     error_message: str,
+    progress: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Return a durable, deterministic not-before transition for unresolved state."""
+    """Return a durable, deterministic not-before transition for unresolved state.
+
+    The streak counts inconclusive outcomes since the journal last changed (``progress``): a long
+    job that resolves several separate blips keeps going, and one that keeps failing at the same
+    step still stops after the bounded attempts.
+    """
     safe_result = dict(getattr(job, "safe_result", None) or {})
     raw_streak = safe_result.get("reconciliation_streak", 0)
     streak = (
@@ -80,9 +122,25 @@ def _reconciliation_backoff_values(
         if isinstance(raw_streak, int) and not isinstance(raw_streak, bool)
         else 0
     )
+    recorded = safe_result.get("reconciliation_progress")
+    raw_seen = safe_result.get("reconciliation_seen_progress")
+    seen = [value for value in raw_seen if isinstance(value, str)] if isinstance(raw_seen, list) else []
+    if progress is not None:
+        # important: only a journal not seen before in this cycle is progress. A journal that swings
+        # between two states (a step fails, a reconcile is inconclusive, the step fails again) must
+        # not reset the count on every pass (security review 2026-11-05).
+        if isinstance(recorded, str) and recorded != progress and progress not in seen:
+            streak = 0
+        if progress not in seen:
+            seen.append(progress)
+        safe_result["reconciliation_seen_progress"] = seen[-_SEEN_PROGRESS_LIMIT:]
+        safe_result["reconciliation_progress"] = progress
     next_streak = max(0, streak) + 1
     safe_result["reconciliation_streak"] = next_streak
-    if next_streak >= _MAX_AUTOMATIC_RECONCILIATIONS:
+    raw_unknowns = safe_result.get("reconciliation_cycle_unknowns", 0)
+    cycle_unknowns = (raw_unknowns if isinstance(raw_unknowns, int) and not isinstance(raw_unknowns, bool) else 0) + 1
+    safe_result["reconciliation_cycle_unknowns"] = cycle_unknowns
+    if next_streak >= _MAX_AUTOMATIC_RECONCILIATIONS or cycle_unknowns >= _CYCLE_UNKNOWN_LIMIT:
         safe_result.pop("reconciliation_retry_delay_seconds", None)
         return {
             "phase": "manual_recovery",
@@ -510,6 +568,7 @@ async def _mark_reconciliation_unknown(
         job,
         error_code="daemon_operation_failed" if failed else "ambiguous_daemon_state",
         error_message=message,
+        progress=await current_progress(job),
     )
     await _fenced_job_update(
         job,
