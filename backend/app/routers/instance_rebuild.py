@@ -252,6 +252,50 @@ async def _run_rebuild(job_id: str, run_provisioning: bool) -> None:
         logger.error("Rebuild job %s failed: instance=%s error=%s", job_id, name, e)
 
 
+async def _refuse_a_rebuild_in_an_unisolated_project(
+    lxd_service: LXDService, user: AuthenticatedUser, host: str, project: str, db: AsyncSession
+) -> None:
+    """409 for a Partner's rebuild on a shared cluster in a project that does not isolate itself.
+
+    note: a rebuild takes its image from the project's store, which for a project without
+    features.images is `default`'s, where another party's private images live (security review of
+    the RC5 follow-up round, 2026-11-06). Instance create and config writes already refuse it.
+    """
+    from app.services.instance_security_policy import (
+        InstanceSecurityPolicyViolation,
+        resolve_cluster_write_policy,
+        validate_target_project_isolation,
+    )
+    from app.services.lxd.project_scope import list_project_configs
+
+    try:
+        policy = await resolve_cluster_write_policy(user, host, db)
+    except InstanceSecurityPolicyViolation as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.as_detail()) from exc
+    except Exception as exc:  # noqa: BLE001 - ownership that cannot be proven refuses closed
+        logger.error("Could not verify write policy for cluster %s: %s", host, type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Cluster ownership could not be verified. No change was sent.") from exc
+    if not policy.requires_safe_allowlist:
+        return
+
+    def project_config() -> Dict[str, Any]:
+        client = lxd_service.get_client_with_reconnect(host)
+        if client is None:
+            raise LXDConnectionError(f"Could not connect to {host}")
+        return list_project_configs(client).get(project) or {}
+
+    try:
+        config = await asyncio.wait_for(asyncio.to_thread(project_config), timeout=30)
+    except (asyncio.TimeoutError, LXDConnectionError) as exc:
+        raise HTTPException(
+            status_code=503, detail="Target project configuration could not be verified. No change was sent."
+        ) from exc
+    try:
+        validate_target_project_isolation(policy, config)
+    except InstanceSecurityPolicyViolation as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.as_detail()) from exc
+
+
 @router.post("/{instance_name}/rebuild")
 async def rebuild_instance(
     instance_name: str,
@@ -259,8 +303,10 @@ async def rebuild_instance(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     project = _verify_instance_access(body.host, body.project, instance_name, "view")
+    await _refuse_a_rebuild_in_an_unisolated_project(lxd_service, user, body.host, project, db)
 
     # Destructive-action confirmation: the client must echo the instance name.
     if body.confirm_name != instance_name:

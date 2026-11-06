@@ -400,3 +400,31 @@ async def test_a_raw_project_delete_drops_every_cached_bound(held, monkeypatch) 
     assert not isinstance(deleted, HTTPException), deleted
     assert deleted.status_code < 300, (deleted.status_code, deleted.error)
     assert dropped == [CLUSTER_ID]
+
+
+async def test_a_browser_rebuild_in_an_unisolated_shared_project_is_refused(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.core.rbac import Role
+    from app.routers import instance_rebuild
+    from app.services import instance_security_policy as isp
+
+    shared = isp.ClusterWritePolicy(CLUSTER_ID, Role.PARTNER, isp.ClusterOwnership.SHARED)
+    exclusive = isp.ClusterWritePolicy(CLUSTER_ID, Role.PARTNER, isp.ClusterOwnership.EXCLUSIVE)
+    configs = {"legacy": {}, "own-a": dict(ISOLATED)}
+    client = SimpleNamespace()
+    service = SimpleNamespace(get_client_with_reconnect=lambda host: client)
+    monkeypatch.setattr("app.services.lxd.project_scope.list_project_configs", lambda _client: configs)
+
+    async def policy_of(value):
+        async def resolve(_user, _host, _db):
+            return value
+        return resolve
+
+    monkeypatch.setattr(isp, "resolve_cluster_write_policy", await policy_of(shared))
+    with pytest.raises(HTTPException) as refused:
+        await instance_rebuild._refuse_a_rebuild_in_an_unisolated_project(service, None, CLUSTER_ID, "legacy", None)
+    assert refused.value.status_code == 409
+    await instance_rebuild._refuse_a_rebuild_in_an_unisolated_project(service, None, CLUSTER_ID, "own-a", None)
+    monkeypatch.setattr(isp, "resolve_cluster_write_policy", await policy_of(exclusive))
+    await instance_rebuild._refuse_a_rebuild_in_an_unisolated_project(service, None, CLUSTER_ID, "legacy", None)
