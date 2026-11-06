@@ -17,13 +17,12 @@ from sqlalchemy import delete, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.migration_models import MigrationJob, MigrationResource, MigrationResourceLock
-from app.services.webhooks.reach import PROJECT_DELETED
 from app.services.project_grants import revoke_project_grants
 
 from .metadata_cutover import InstanceIdentity
 from .project_metadata_cutover import ProjectIdentity, move_project_records
 from .repository import RepositoryConflict
-from .retention_store import _events, _fenced_update
+from .retention_store import _events, _fenced_update, naming_holders, owner_of
 from .security import canonical_resource_key, sanitize_payload
 
 Pair = tuple[InstanceIdentity, InstanceIdentity]
@@ -147,7 +146,7 @@ async def enter_project_retention(
         phase="source_retained",
         message="Cutover completed. The stopped source project is retained for rollback.",
         actor=event_actor,
-        outbox_events=outbox_events,
+        outbox_events=naming_holders(outbox_events, owner_of(job)),
         extra={"metadata_moved": counts},
     )
     await db.commit()
@@ -225,7 +224,7 @@ async def finish_project_rollback(
             organization_id=job.source_organization_id,
             instances=[(target, source) for source, target in pairs],
             )
-    held_by = _owner_of(job)
+    held_by = owner_of(job)
     if target_project_deleted:
         # As on a project delete: no rule may outlive the project it names.
         await revoke_project_grants(
@@ -237,26 +236,11 @@ async def finish_project_rollback(
         phase=phase,
         message=message,
         actor=event_actor,
-        outbox_events=_naming_holders(outbox_events, held_by),
+        outbox_events=naming_holders(outbox_events, held_by),
         extra={"metadata_restored": counts} if revert_metadata else None,
     )
     await db.commit()
     return counts
-
-
-def _owner_of(job: MigrationJob) -> set[int]:
-    return {job.source_organization_id} if isinstance(job.source_organization_id, int) else set()
-
-
-def _naming_holders(events: list[dict[str, Any]], held_by: set[int]) -> list[dict[str, Any]]:
-    """A project delete event names the organizations that held the project: it is in no bound by
-    the time the outbox publishes it (services/webhooks/emitter.py)."""
-    held = sorted(held_by)
-    return [
-        {**event, "extra": {**(event.get("extra") or {}), "held_organizations": held}}
-        if event.get("event_type") == PROJECT_DELETED else event
-        for event in events
-    ]
 
 
 async def finish_project_cleanup(
@@ -291,7 +275,7 @@ async def finish_project_cleanup(
         await db.rollback()
         raise RepositoryConflict("Migration lease ownership was lost.")
     await db.execute(delete(MigrationResourceLock).where(MigrationResourceLock.job_id == job.job_id))
-    held_by = _owner_of(job)
+    held_by = owner_of(job)
     await revoke_project_grants(
         db, cluster_id=job.source_cluster_id, project_name=job.source_project, commit=False, held_by=held_by
     )
@@ -301,7 +285,7 @@ async def finish_project_cleanup(
         phase="completed",
         message=message,
         actor=event_actor,
-        outbox_events=_naming_holders(outbox_events, held_by),
+        outbox_events=naming_holders(outbox_events, held_by),
     )
     await db.commit()
 

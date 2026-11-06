@@ -68,6 +68,18 @@ async def _fenced_update(
     return bool(result.rowcount)
 
 
+def owner_of(job: MigrationJob) -> set[int]:
+    return {job.source_organization_id} if isinstance(job.source_organization_id, int) else set()
+
+
+def naming_holders(events: list[dict[str, Any]], held_by: set[int]) -> list[dict[str, Any]]:
+    """Every outbox event of a job names the organizations that hold what it moved: the job's owner,
+    and for a removed project those whose policies held it. By the time the outbox publishes, a
+    removed project is in no bound (services/webhooks/emitter.py, services/orcahub_reach.py)."""
+    held = sorted(held_by)
+    return [{**event, "extra": {**(event.get("extra") or {}), "held_organizations": held}} for event in events]
+
+
 async def _events(
     db: AsyncSession,
     *,
@@ -149,7 +161,7 @@ async def enter_source_retention(
         phase="source_retained",
         message="Cutover completed. The stopped source is retained for rollback.",
         actor=event_actor,
-        outbox_events=outbox_events,
+        outbox_events=naming_holders(outbox_events, owner_of(job)),
         extra={"metadata_moved": counts},
     )
     await db.commit()
@@ -231,6 +243,7 @@ async def finish_rollback(
             new=source_identity(job, uuid=source_uuid),
             organization_id=job.source_organization_id,
         )
+    held_by = owner_of(job)
     if revoke_rule_ids:
         # As on a project delete: no rule may outlive the project this job created and removed.
         # On a shared cluster another organization's later project of that name would inherit it.
@@ -240,6 +253,7 @@ async def finish_rollback(
             project_name=job.target_project,
             commit=False,
             only_rule_ids=revoke_rule_ids,
+            held_by=held_by,
         )
     await _events(
         db,
@@ -247,7 +261,7 @@ async def finish_rollback(
         phase=phase,
         message=message,
         actor=event_actor,
-        outbox_events=outbox_events,
+        outbox_events=naming_holders(outbox_events, held_by),
         extra={"metadata_restored": counts} if revert_metadata else None,
     )
     await db.commit()

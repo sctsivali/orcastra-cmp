@@ -33,12 +33,16 @@ async def test_rules_go_only_with_the_project(monkeypatch: pytest.MonkeyPatch, r
     async def fenced(*_args: Any, **_kwargs: Any) -> bool:
         return True
 
-    async def events(*_args: Any, **_kwargs: Any) -> None:
-        return None
+    published: list[dict[str, Any]] = []
 
-    async def revoke(_db: Any, *, cluster_id: str, project_name: str, commit: bool, only_rule_ids: Any) -> None:
+    async def events(*_args: Any, **kwargs: Any) -> None:
+        published.extend(kwargs["outbox_events"])
+
+    async def revoke(_db: Any, *, cluster_id: str, project_name: str, commit: bool, only_rule_ids: Any,
+                     held_by: set) -> None:
         assert commit is False, "the revoke belongs to the rollback's transaction"
         revoked.append((cluster_id, project_name, list(only_rule_ids)))
+        held_by.add(9)
 
     monkeypatch.setattr(retention_store, "_fenced_update", fenced)
     monkeypatch.setattr(retention_store, "_events", events)
@@ -48,12 +52,15 @@ async def test_rules_go_only_with_the_project(monkeypatch: pytest.MonkeyPatch, r
 
     await retention_store.finish_rollback(
         _Db(), job, worker_id="w", event_actor={}, source_uuid=None, phase="rolled_back", status="success",
-        message="done", revert_metadata=False, outbox_events=[], revoke_rule_ids=rule_ids,
+        message="done", revert_metadata=False, revoke_rule_ids=rule_ids,
+        outbox_events=[{"event_type": "instance.deleted", "channel": "billing", "extra": {"resource_name": "web"}}],
     )
 
     # Only the rules recorded when the project was deleted: a rule written later for a new
     # project of the same name survives a rollback that resumes after it.
     assert revoked == ([("shared", "new-web", rule_ids)] if rule_ids else [])
+    # The removed project is in no bound when the outbox publishes, so its events name who held it.
+    assert published[0]["extra"]["held_organizations"] == ([7, 9] if rule_ids else [7])
 
 
 @pytest.mark.asyncio

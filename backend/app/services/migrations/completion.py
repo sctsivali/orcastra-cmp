@@ -188,6 +188,11 @@ def _required_text(payload: dict[str, Any], key: str) -> str:
     return value
 
 
+def _held_organizations(payload: dict[str, Any]) -> list[int]:
+    # Named when the outbox row was written (retention_store.naming_holders).
+    return [o for o in payload.get("held_organizations") or [] if type(o) is int]
+
+
 async def deliver_completion_event(row: MigrationAuditOutbox) -> bool:
     """Deliver a supported non-audit outbox row, returning whether it was handled."""
     payload = row.payload or {}
@@ -220,8 +225,7 @@ async def deliver_completion_event(row: MigrationAuditOutbox) -> bool:
             event_id=row.event_id,
             occurred_at=occurred_at,
             raise_on_error=True,
-            # Named when the project's rules were revoked (project_retention_store._naming_holders).
-            reached_organizations=[o for o in payload.get("held_organizations") or [] if isinstance(o, int)],
+            reached_organizations=_held_organizations(payload),
         )
         return True
     if row.channel == "billing" and row.event_type in {"instance.created", "instance.deleted"}:
@@ -233,6 +237,7 @@ async def deliver_completion_event(row: MigrationAuditOutbox) -> bool:
             name=resource_name,
             occurred_at=occurred_at,
             resource_type="INSTANCE",
+            reached_organizations=_held_organizations(payload),
         )
         return True
     return False

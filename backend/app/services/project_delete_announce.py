@@ -62,6 +62,7 @@ async def announce(
         name=name,
         resource_type="PROJECT",
         namespace="orcastra-project-delete",
+        reached_organizations=reached_organizations,
     )
     get_activity_logger().log_activity(
         action="project.delete",

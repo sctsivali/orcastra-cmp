@@ -233,7 +233,7 @@ async def test_a_migration_project_delete_names_its_owner_and_the_policies_that_
     await store.finish_project_cleanup(_Db(), job, worker_id="w", event_actor={}, message="done", outbox_events=outbox)
     project_event, instance_event = captured["outbox_events"]
     assert project_event["extra"]["held_organizations"] == [7, 9]
-    assert "held_organizations" not in instance_event["extra"]
+    assert instance_event["extra"]["held_organizations"] == [7, 9], "the job's instances are its owner's too"
 
     from app.services.migrations import completion
 

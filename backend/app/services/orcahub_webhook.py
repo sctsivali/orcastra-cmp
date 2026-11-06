@@ -18,13 +18,14 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Collection, Optional
 
 from sqlalchemy import select
 
 from app.core.database import async_session_maker
 from app.models.db_models import Organization, OrganizationCluster
 from app.services.orcahub_callbacks import post_to_app
+from app.services.orcahub_reach import organizations_reaching
 from app.services.orcahub_sync import _get_orcahub_credentials
 
 logger = logging.getLogger(__name__)
@@ -80,15 +81,22 @@ async def emit_orcahub_event_durable(
     state: Optional[str] = None,
     resource_type: str = "INSTANCE",
     namespace: str = "orcastra-migration",
+    reached_organizations: Collection[int] = (),
 ) -> int:
     """Deliver one retry-safe OrcaHub event from a durable caller.
 
     The caller retains its outbox row until this returns. A per-organization UUID derived from
     the stable outbox id gives OrcaHub the same idempotency key after a partial delivery or worker
     crash. Endpoint and signing credentials still come only from the stored integration.
+
+    `reached_organizations`: the organizations a delete or a Migration Center job names as having
+    held the project (services/orcahub_reach.py). An unreadable reach raises, so the caller retries.
     """
     async with async_session_maker() as db:
         orgs = await _orcahub_orgs_for_cluster(db, cluster_id)
+        orgs = await organizations_reaching(
+            db, cluster_id, project, orgs, held_by=reached_organizations, deleted=event_type == "project.deleted"
+        )
         owner_sets = await _owner_sets(db, orgs)
     if not orgs:
         return 0
@@ -123,6 +131,9 @@ async def _emit(event_type: str, cluster_id: str, project: Optional[str], name: 
     try:
         async with async_session_maker() as db:
             orgs = await _orcahub_orgs_for_cluster(db, cluster_id)
+            # important: only the organizations that reach the event's project (an unreadable
+            # reach lands in the except below and sends nothing).
+            orgs = await organizations_reaching(db, cluster_id, project, orgs)
             if not orgs:
                 return
             owner_sets = await _owner_sets(db, orgs)
