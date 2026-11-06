@@ -4,6 +4,7 @@ const {
   capture,
   countRequests,
   expectNoHorizontalOverflow,
+  expectServerRedirectHome,
 } = require("./support/fixtures.cjs");
 const {
   expectCleanInventoryHarness,
@@ -384,8 +385,8 @@ test("tenant: no kernel CVE is requested or shown, and no version check either",
   await expect(page.getByText(/^(Latest|Update Available)$/)).toHaveCount(0);
   expect(countRequests(api, "/security/kernel-advisories")).toBe(0);
 
-  await page.goto("/inventory/warnings?tab=kernel");
-  await expect(page).not.toHaveURL(/\/inventory\/warnings/);
+  // The server refuses the Warnings page before it loads (auth.ts).
+  await expectServerRedirectHome(page, "/inventory/warnings?tab=kernel");
   expect(countRequests(api, "/security/kernel-advisories")).toBe(0);
   expect(countRequests(api, "/security/kernel-advisories/ubuntu-status")).toBe(0);
 

@@ -1,5 +1,5 @@
 const { test, expect } = require("@playwright/test");
-const { authenticate } = require("./support/fixtures.cjs");
+const { authenticate, expectServerRedirectHome } = require("./support/fixtures.cjs");
 
 // Every page that gates itself to Partner in the browser is also refused on the server, so a
 // tenant deep link is redirected home before the page shell loads. The production RC4 hotfix line
@@ -26,11 +26,7 @@ const REDIRECT = [302, 303, 307, 308];
 
 test("a tenant deep link to a partner page is redirected home by the server", async ({ page }) => {
   await authenticate(page.context(), "tenant");
-  for (const path of PARTNER_PAGES) {
-    const response = await page.request.get(path, { maxRedirects: 0 });
-    expect(REDIRECT, `${path} answered ${response.status()}`).toContain(response.status());
-    expect(new URL(response.headers().location, "http://e2e.invalid").pathname, path).toBe("/");
-  }
+  for (const path of PARTNER_PAGES) await expectServerRedirectHome(page, path);
 });
 
 test("a partner still gets every partner page", async ({ page }) => {

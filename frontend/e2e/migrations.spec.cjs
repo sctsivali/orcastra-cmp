@@ -2,6 +2,7 @@ const { test, expect } = require("@playwright/test");
 const {
   authenticate,
   expectNoHorizontalOverflow,
+  expectServerRedirectHome,
 } = require("./support/fixtures.cjs");
 const {
   EXPIRED,
@@ -449,8 +450,9 @@ test("Tenant is refused before Migration Center data is requested", async ({ pag
   await authenticate(page.context(), "tenant");
   const api = await installMigrationFixtures(page, "tenant");
 
-  await page.goto("/inventory/migrations");
-  await expect(page).toHaveURL(/\/$/);
+  // The server refuses the page before it loads (auth.ts); the tenant lands home.
+  await expectServerRedirectHome(page, "/inventory/migrations");
+  await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: "Migration Center" })).toHaveCount(0);
   expect(api.requests.filter((request) => request.path.startsWith("/migrations"))).toEqual([]);
 

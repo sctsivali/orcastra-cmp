@@ -585,9 +585,25 @@ function countRequests(state, path) {
   return state.requests.filter((entry) => entry.path === path).length;
 }
 
+/**
+ * A deep link the server refuses (auth.ts authorized()) is answered with a redirect home before
+ * any page code loads.
+ *
+ * note: the redirect is asserted, not followed. `next start`, which serves these specs, hands the
+ * middleware a Host of localhost, so a followed redirect leaves the 127.0.0.1 origin and its
+ * session cookie. The standalone server that ships keeps the origin the request came on (checked
+ * live on dev, 2026-11-06).
+ */
+async function expectServerRedirectHome(page, path) {
+  const response = await page.request.get(path, { maxRedirects: 0 });
+  expect([302, 303, 307, 308], `${path} answered ${response.status()}`).toContain(response.status());
+  expect(new URL(response.headers().location, BASE_URL).pathname, path).toBe("/");
+}
+
 module.exports = {
   BASE_URL,
   authenticate,
+  expectServerRedirectHome,
   capture,
   countRequests,
   expectCleanHarness,

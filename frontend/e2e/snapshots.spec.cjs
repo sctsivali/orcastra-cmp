@@ -4,6 +4,7 @@ const {
   capture,
   expectCleanHarness,
   expectNoHorizontalOverflow,
+  expectServerRedirectHome,
   installApiFixtures,
 } = require("./support/fixtures.cjs");
 const {
@@ -683,8 +684,9 @@ test("Tenant deep link never mounts the fleet snapshot reads or create action", 
   await authenticate(page.context(), "tenant");
   const api = await installApiFixtures(page, "tenant", { snapshotPage: true });
 
-  await page.goto("/inventory/snapshots");
-  await expect(page).toHaveURL(/\/$/);
+  // The server refuses the page before it loads (auth.ts); the tenant lands home.
+  await expectServerRedirectHome(page, "/inventory/snapshots");
+  await page.goto("/");
   await expect(page.getByRole("button", { name: "Take Snapshot", exact: true })).toHaveCount(0);
   expect(
     api.requests.filter(

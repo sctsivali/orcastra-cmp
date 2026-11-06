@@ -1,5 +1,5 @@
 const { test, expect } = require("@playwright/test");
-const { authenticate, expectNoHorizontalOverflow, capture } = require("./support/fixtures.cjs");
+const { authenticate, expectNoHorizontalOverflow, capture, expectServerRedirectHome } = require("./support/fixtures.cjs");
 const { installInventoryHardeningFixtures, expectCleanInventoryHarness, serverRows } = require("./support/inventory-hardening-fixtures.cjs");
 
 for (const role of ["admin", "partner"]) {
@@ -55,8 +55,9 @@ for (const role of ["admin", "partner"]) {
 test("tenant: forbidden server deep link never issues a privileged server read", async ({ page, context }) => {
   await authenticate(context, "tenant");
   const state = await installInventoryHardeningFixtures(page, "tenant");
-  await page.goto("/inventory/server");
-  await expect(page).toHaveURL(new URL("/", process.env.ORCASTRA_E2E_BASE_URL || "http://127.0.0.1:2025").href);
+  // The server refuses the page before it loads (auth.ts); the tenant lands home.
+  await expectServerRedirectHome(page, "/inventory/server");
+  await page.goto("/");
   await expect(page.getByRole("heading", { name: "Server Information", exact: true })).toHaveCount(0);
   expect(state.requests.filter((entry) => entry.path === "/server")).toEqual([]);
   await expectCleanInventoryHarness(state);
