@@ -16,7 +16,7 @@ import logging
 import random
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Set
 
 from app.services import project_delete_announce as announcer
 from app.services import project_delete_store as store
@@ -59,6 +59,7 @@ async def finish(lxd_service: Any, followup: store.Followup, session_maker: Call
         )
         return "expired"
     host, name = followup.cluster_id, followup.project_name
+    held_by: Set[int] = set()
     if await _exists(lxd_service, host, name) is not False:
         await store.retry_later(followup.id, RECHECK)
         return "waiting"
@@ -74,7 +75,7 @@ async def finish(lxd_service: Any, followup: store.Followup, session_maker: Call
                     logger.info("Project %s on %s exists again; the earlier delete revokes nothing", name, host)
                     return "superseded"
                 await project_grants.forget_deleted_project(
-                    db, cluster_id=host, project_name=name, only_rule_ids=followup.rule_ids
+                    db, cluster_id=host, project_name=name, only_rule_ids=followup.rule_ids, held_by=held_by
                 )
     except ClusterConfigurationBusy:
         await store.retry_later(followup.id, RECHECK)
@@ -86,7 +87,9 @@ async def finish(lxd_service: Any, followup: store.Followup, session_maker: Call
     logger.info("Project %s on %s finished deleting after its request answered", name, host)
     # note: attempts restart here, as mark_settled restarts them in the row. The claim counted every
     # probe pass, and carried into the announcement a first failure would have been its last.
-    await announcer.announce_and_finish(replace(followup, state="settled", attempts=0), settled_later=True)
+    await announcer.announce_and_finish(
+        replace(followup, state="settled", attempts=0), settled_later=True, reached_organizations=held_by
+    )
     return "settled"
 
 

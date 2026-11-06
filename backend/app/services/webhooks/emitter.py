@@ -28,7 +28,7 @@ grant can change between enqueue and send. This is the cheap filter, not the bou
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, List, Optional, Sequence
+from typing import Any, Collection, List, Optional, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -74,7 +74,11 @@ def _now() -> str:
 
 
 async def _subscriptions_for_cluster(
-    db: AsyncSession, cluster_id: str, event_type: str, project: Optional[str] = None
+    db: AsyncSession,
+    cluster_id: str,
+    event_type: str,
+    project: Optional[str] = None,
+    reached_organizations: Collection[int] = (),
 ) -> List[WebhookSubscription]:
     """Active subscriptions on active installations whose grant still covers this cluster.
 
@@ -111,17 +115,24 @@ async def _subscriptions_for_cluster(
         # important: and the event's project must be one the installation reaches, its grant held
         # to its installer's bound (services/key_party_bound.py). Routed by cluster alone, an add-on
         # a Partner installed on a shared cluster heard the other party's names.
-        if project is not None and not await _reaches_project(install, cluster_id, project, db):
+        # note: a deleted project is out of every bound by the time its event goes out, so the
+        # organizations whose policies held it are named by the delete itself.
+        held = getattr(install, "organization_id", None) in reached_organizations
+        if project is not None and not await _reaches_project(install, cluster_id, project, held):
             continue
         interested.append(subscription)
     return interested
 
 
-async def _reaches_project(install: Any, cluster_id: str, project: str, db: AsyncSession) -> bool:
-    from app.services.key_party_bound import install_reaches_project
+async def _reaches_project(install: Any, cluster_id: str, project: str, held: bool) -> bool:
+    import asyncio
+
+    from app.services.key_party_bound import REACH_SECONDS, install_reaches_project
 
     try:
-        return await install_reaches_project(install, cluster_id, project, db=db)
+        return await asyncio.wait_for(
+            install_reaches_project(install, cluster_id, project, held_by_its_organization=held), REACH_SECONDS
+        )
     except Exception as exc:  # noqa: BLE001 - not knowing whether it reaches the project is not a yes
         logger.warning("Could not tell whether an installation reaches %s on %s: %s", project, cluster_id, sanitize_error(exc))
         return False
@@ -140,8 +151,13 @@ async def emit_resource_event(
     event_id: Optional[str] = None,
     occurred_at: Optional[str] = None,
     raise_on_error: bool = False,
+    reached_organizations: Collection[int] = (),
 ) -> int:
     """Enqueue one lifecycle event for every entitled subscription. Returns rows created.
+
+    `reached_organizations`: for a project delete, the organizations whose policies held the
+    project before the delete revoked them; their installations hear it although it has left
+    their bound.
 
     important: this never raises. It is called after an operation that already changed a customer's
     cluster, so a failure here must not be reported to the caller as a failed create. The failure
@@ -154,7 +170,9 @@ async def emit_resource_event(
         async with async_session_maker() as db:
             # A project event is about the project it names; anything else about the one holding it.
             event_project = resource_name if resource_type == "project" else (project or "default")
-            subscriptions = await _subscriptions_for_cluster(db, cluster_id, event_type, event_project)
+            subscriptions = await _subscriptions_for_cluster(
+                db, cluster_id, event_type, event_project, reached_organizations
+            )
             if not subscriptions:
                 return 0
             stable_event_id = event_id or f"evt_{uuid.uuid4()}"

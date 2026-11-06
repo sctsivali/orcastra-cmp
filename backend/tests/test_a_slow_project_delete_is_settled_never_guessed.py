@@ -217,7 +217,8 @@ def test_a_404_with_nothing_pending_revokes_nothing_announces_nothing_and_keeps_
 def test_a_404_that_lands_an_earlier_delete_revokes_only_what_that_delete_captured(monkeypatch) -> None:
     revoked: List[Any] = []
 
-    async def forget(_db, **kwargs):
+    async def forget(_db, held_by=None, **kwargs):
+        # held_by collects the delete event's audience (test_an_addon_hears_only_its_installers_projects).
         revoked.append(kwargs)
         return ""
 
@@ -254,6 +255,20 @@ def test_a_real_delete_revokes_every_rule_and_announces_from_its_row(monkeypatch
     ((announced, later),) = client.deletes.announced
     assert announced.event_id == row.event_id and later is False
     assert client.deletes.cleared == ["route"]
+
+
+def test_the_announcement_names_the_organizations_whose_policies_held_the_project(monkeypatch) -> None:
+    # The project has left every bound by the time it is announced, so the delete names who had it.
+    from tests._project_grant_fakes import Policy
+
+    session = GrantSession(
+        policies=[Policy(70, "Partner A", id=7), Policy(80, "Partner B", id=8)],
+        rules=[Rule(7, HOST, "web"), Rule(8, HOST, "other")],
+    )
+    client = projects_client(_Service(), monkeypatch, session, user=partner())
+
+    assert client.delete(f"/projects/{HOST}/web").status_code == 200
+    assert client.deletes.reached == [frozenset({70})]
 
 
 def test_a_refused_delete_keeps_no_row(monkeypatch) -> None:
@@ -323,8 +338,11 @@ def durable(monkeypatch):
     fakes = durable_deletes(monkeypatch)
     revoked: List[Any] = []
 
-    async def forget(_db, **kwargs):
+    async def forget(_db, held_by=None, **kwargs):
+        # held_by collects the delete event's audience: here organization 5 held every project.
         revoked.append(kwargs)
+        if held_by is not None:
+            held_by.add(5)
         return ""
 
     @asynccontextmanager
@@ -357,6 +375,7 @@ async def test_a_crash_between_sending_and_the_answer_is_settled_by_another_work
     assert outcome == "settled"
     assert durable.revoked == [{"cluster_id": HOST, "project_name": "web", "only_rule_ids": frozenset({11, 12})}]
     assert [(f.requester, later) for f, later in durable.announced] == [("qa-partner", True)]
+    assert durable.reached == [frozenset({5})], "the sweeper names who held the project, as the request does"
     assert durable.rows()[0].state == "settled"
 
 

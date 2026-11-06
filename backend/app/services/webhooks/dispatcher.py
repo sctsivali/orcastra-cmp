@@ -202,17 +202,10 @@ async def _still_authorised(
         generations = await cluster_generations.current_or_none()
         if cluster_id not in cluster_generations.reachable(install.granted_scope, generations):
             return "the installation no longer reaches that cluster"
-        data = payload.get("data") or {}
-        if data.get("resource_type") in ("instance", "project", "volume"):
-            from app.services.key_party_bound import install_reaches_project
+        from app.services.key_party_bound import payload_reaches
 
-            project = data.get("resource_name") if data.get("resource_type") == "project" else data.get("project")
-            try:
-                reaches = await install_reaches_project(install, cluster_id, project, db=db)
-            except Exception:  # noqa: BLE001 - an unknown reach is not a delivery
-                return "whether the installation reaches that project could not be checked"
-            if not reaches:
-                return "the installation no longer reaches that project"
+        if not await payload_reaches(install, payload):
+            return "the installation no longer reaches that project"
     return None
 
 

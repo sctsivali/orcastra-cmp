@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from typing import Collection
 
 from app.core.cache import get_cache_manager
 from app.services import project_delete_store as store
@@ -32,7 +33,9 @@ def clear_caches(origin: str) -> None:
         cache.invalidate_after_external_write()
 
 
-async def announce(followup: store.Followup, *, settled_later: bool) -> None:
+async def announce(
+    followup: store.Followup, *, settled_later: bool, reached_organizations: Collection[int] = ()
+) -> None:
     """Webhook, then OrcaHub and the audit success for a dashboard delete. Raises on failure."""
     from app.services.orcahub_webhook import emit_orcahub_event_durable
     from app.services.webhooks.emitter import emit_resource_event
@@ -43,9 +46,11 @@ async def announce(followup: store.Followup, *, settled_later: bool) -> None:
         cluster_id=host,
         resource_type="project",
         resource_name=name,
-        project=followup.scope_project if followup.origin == "proxy" else None,
+        # A project event is about the project it names; the caller's own project is not part of it.
+        project=None,
         event_id=f"evt_{followup.event_id}",
         raise_on_error=True,
+        reached_organizations=reached_organizations,
     )
     if followup.origin != "route":
         return
@@ -70,10 +75,12 @@ async def announce(followup: store.Followup, *, settled_later: bool) -> None:
     )
 
 
-async def announce_and_finish(followup: store.Followup, *, settled_later: bool) -> None:
+async def announce_and_finish(
+    followup: store.Followup, *, settled_later: bool, reached_organizations: Collection[int] = ()
+) -> None:
     """Announce, then close the row; a failure leaves it settled for the sweeper to retry."""
     try:
-        await announce(followup, settled_later=settled_later)
+        await announce(followup, settled_later=settled_later, reached_organizations=reached_organizations)
     except Exception as exc:  # noqa: BLE001 - retried from the row, never lost with this task
         error = f"{type(exc).__name__}: {exc}"[:500]
         if followup.id is None:

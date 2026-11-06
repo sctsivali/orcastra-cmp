@@ -295,28 +295,91 @@ def _shared_policy(cluster_id: str):
     return ClusterWritePolicy(cluster_id, Role.PARTNER, ClusterOwnership.SHARED)
 
 
-async def install_reaches_project(install: Any, cluster_id: str, project: Optional[str], *, db: Any = None) -> bool:
+# How long an event's reach may take to judge before it is treated as not reached.
+REACH_SECONDS = 10
+PROJECT_DELETED = "orcastra.project.deleted.v1"
+
+
+def _grants_naming(grants: List[Mapping[str, Any]], cluster_id: str, project: Optional[str]) -> bool:
+    wanted = (project or "").strip() or "default"
+    for grant in grants:
+        if grant.get("cluster_id") != cluster_id:
+            continue
+        projects = grant.get("projects", ["default"])
+        if "*" in projects or wanted in projects:
+            return True
+    return False
+
+
+async def install_reaches_project(
+    install: Any, cluster_id: str, project: Optional[str], *, held_by_its_organization: bool = False
+) -> bool:
     """Whether an add-on installation may hear about `project` on `cluster_id`.
 
-    note: webhooks were routed by cluster alone, so an add-on a Partner installed on a cluster
-    another party holds received that party's project, instance and volume names (security review,
-    2026-11-06). Where another party holds the cluster for the installer, the installation's grant
-    is held to the installer's bound exactly as its key is (narrow_to_party_bound), and the event's
-    project must be inside it. Elsewhere reaching the cluster still decides.
+    note: webhooks were routed by cluster alone, so an add-on heard every project on a cluster it
+    reached, another party's included (security review, 2026-11-06). The event's project must now
+    be in the installation's grant for that cluster, and where another party holds the cluster for
+    the installer, that grant is held to the installer's bound exactly as its key is
+    (narrow_to_party_bound). Only the event's cluster is judged, in its own session, so a slow or
+    failed read cannot abort the caller's transaction.
+
+    `held_by_its_organization`: a deleted project has left every bound by the time its event goes
+    out, so the delete names the organizations whose policies held it and the stored grant decides.
     """
-    grants = [g for g in (getattr(install, "granted_scope", None) or []) if isinstance(g, dict)]
+    grants = [
+        g for g in (getattr(install, "granted_scope", None) or [])
+        if isinstance(g, dict) and g.get("cluster_id") == cluster_id
+    ]
+    if not grants:
+        return False
+    if held_by_its_organization:
+        return _grants_naming(grants, cluster_id, project)
     as_key = {
         "id": str(getattr(install, "api_key_id", "") or ""),
         "created_by": str(getattr(install, "installed_by", "") or ""),
         "cluster_permissions": grants,
     }
-    narrowed = await narrow_to_party_bound(as_key, db=db)
-    if not is_party_bounded(narrowed, cluster_id):
-        # No other party holds the cluster for the installer (or it is an Admin): reaching the
-        # cluster decides, as it always has.
+    narrowed = await narrow_to_party_bound(as_key, db=None)
+    return _grants_naming(narrowed["cluster_permissions"], cluster_id, project)
+
+
+async def payload_reaches(
+    install: Any, payload: Mapping[str, Any], memo: Optional[Dict[Tuple[Any, ...], bool]] = None
+) -> bool:
+    """Whether a queued webhook payload is about something this installation reaches.
+
+    An instance or volume event names its project; one that names none (queued before events
+    carried it) is not reached. A project event is about the project it names, and a project
+    delete is judged by the stored grant (its project is in no bound any more; the emitter already
+    held it to the organizations that had it). An event about the installation itself always is.
+    Not knowing in time is not reached. `memo` keeps one verdict per cluster and project for a
+    caller judging many rows of one installation.
+    """
+    import asyncio
+
+    data = (payload or {}).get("data") or {}
+    resource_type = data.get("resource_type")
+    if resource_type not in ("instance", "volume", "project"):
         return True
-    grant = next((g for g in narrowed["cluster_permissions"] if g.get("cluster_id") == cluster_id), None)
-    return grant is not None and ((project or "").strip() or "default") in grant.get("projects", [])
+    cluster_id = data.get("cluster_id")
+    project = data.get("resource_name") if resource_type == "project" else data.get("project")
+    if not cluster_id or not project:
+        return False
+    deleted = (payload or {}).get("type") == PROJECT_DELETED
+    key = (cluster_id, project, deleted)
+    if memo is not None and key in memo:
+        return memo[key]
+    try:
+        verdict = await asyncio.wait_for(
+            install_reaches_project(install, cluster_id, project, held_by_its_organization=deleted),
+            REACH_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001 - an unknown reach is not a delivery
+        logger.warning("Could not tell whether an installation reaches %s on %s: %s", project, cluster_id, type(exc).__name__)
+        verdict = False
+    if memo is not None:
+        memo[key] = verdict
+    return verdict
 
 
 def forget_party_bounds() -> None:

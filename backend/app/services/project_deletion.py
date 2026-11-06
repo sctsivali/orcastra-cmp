@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, replace
-from typing import Any, Awaitable, Callable, FrozenSet, Optional, Set
+from typing import Any, Awaitable, Callable, Collection, FrozenSet, Optional, Set
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -94,6 +94,7 @@ async def delete_project_and_forget(
         )
         if followup is None:
             raise ProjectDeletesBacklogged(host)
+        held_by: Set[int] = set()
         try:
             if send is not None:
                 await send()
@@ -108,9 +109,9 @@ async def delete_project_and_forget(
                 await store.give_back(followup)
                 return ProjectDeleted(already_gone=True, revoke_note="")
             note = await project_grants.forget_deleted_project(
-                db, cluster_id=host, project_name=name, only_rule_ids=followup.rule_ids
+                db, cluster_id=host, project_name=name, only_rule_ids=followup.rule_ids, held_by=held_by
             )
-            await _settled(followup, settled_later=True)
+            await _settled(followup, settled_later=True, reached_organizations=held_by)
             return ProjectDeleted(already_gone=True, revoke_note=note, settled_pending=True)
         except LXDOperationUnknownError as exc:
             await store.mark_pending(followup, merge_ids=rule_ids)
@@ -118,16 +119,18 @@ async def delete_project_and_forget(
         except Exception:
             await store.give_back(followup)
             raise
-        note = await project_grants.forget_deleted_project(db, cluster_id=host, project_name=name)
+        note = await project_grants.forget_deleted_project(db, cluster_id=host, project_name=name, held_by=held_by)
     if not followup.created_here:
         # This call's own delete landed while an earlier one's row was open: announce it as this
         # caller's, under that row's event id so a sweep cannot announce it a second time.
         followup = replace(followup, origin=origin, requester=requester, scope_project=scope_project)
-    await _settled(followup, settled_later=False)
+    await _settled(followup, settled_later=False, reached_organizations=held_by)
     return ProjectDeleted(already_gone=False, revoke_note=note)
 
 
-async def _settled(followup: store.Followup, *, settled_later: bool) -> None:
+async def _settled(
+    followup: store.Followup, *, settled_later: bool, reached_organizations: Collection[int] = ()
+) -> None:
     """The project is gone and its rules are revoked: clear the lists now, announce from the row."""
     try:
         await store.mark_settled(followup.id)
@@ -142,7 +145,9 @@ async def _settled(followup: store.Followup, *, settled_later: bool) -> None:
     from app.services.key_party_bound import forget_cluster_bounds
 
     forget_cluster_bounds(followup.cluster_id)
-    spawn(announcer.announce_and_finish(followup, settled_later=settled_later))
+    spawn(announcer.announce_and_finish(
+        followup, settled_later=settled_later, reached_organizations=frozenset(reached_organizations)
+    ))
 
 
 async def delete_for_integration(

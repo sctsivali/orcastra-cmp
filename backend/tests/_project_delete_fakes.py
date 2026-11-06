@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, List, Tuple
+from typing import Any, FrozenSet, List, Tuple
 
 from tests._sqlite_session import sqlite_session
 
@@ -30,6 +30,8 @@ class DurableDeletes:
     db: Any
     maker: SessionMaker
     announced: List[Tuple[Any, bool]] = field(default_factory=list)
+    # The organizations each announcement named as having held the project, in the same order.
+    reached: List[FrozenSet[int]] = field(default_factory=list)
     cleared: List[str] = field(default_factory=list)
 
     def rows(self) -> List[Any]:
@@ -49,8 +51,9 @@ def durable_deletes(monkeypatch, *, record_announcements: bool = True) -> Durabl
     monkeypatch.setattr(project_delete_announce, "clear_caches", fakes.cleared.append)
     if record_announcements:
 
-        def record(followup: Any, *, settled_later: bool):
+        def record(followup: Any, *, settled_later: bool, reached_organizations=()):
             fakes.announced.append((followup, settled_later))
+            fakes.reached.append(frozenset(reached_organizations))
             return asyncio.sleep(0)
 
         monkeypatch.setattr(project_delete_announce, "announce_and_finish", record)

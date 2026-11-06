@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Collection, FrozenSet, Optional
+from typing import Collection, FrozenSet, Optional, Set
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -150,6 +150,7 @@ async def revoke_project_grants(
     project_name: str,
     commit: bool = True,
     only_rule_ids: Optional[Collection[int]] = None,
+    held_by: Optional[Set[int]] = None,
 ) -> RevokeOutcome:
     """Remove every rule naming (cluster, project), whichever organization wrote it.
 
@@ -171,6 +172,13 @@ async def revoke_project_grants(
         await db.execute(select(TenantPolicyRule).where(and_(*conditions)))
     ).scalars().all()
     touched = {rule.policy_id for rule in rules}
+    if held_by is not None and touched:
+        # The organizations whose policies held the project, for its delete event's audience.
+        held_by.update(
+            org_id for org_id in (await db.execute(
+                select(TenantAccessPolicy.organization_id).where(TenantAccessPolicy.id.in_(sorted(touched)))
+            )).scalars().all() if org_id is not None
+        )
     for rule in rules:
         await db.delete(rule)
     await db.flush()
@@ -254,11 +262,13 @@ async def forget_deleted_project(
     cluster_id: str,
     project_name: str,
     only_rule_ids: Optional[Collection[int]] = None,
+    held_by: Optional[Set[int]] = None,
 ) -> str:
     """Forget every rule that named the deleted project; a failure is reported, never a 500."""
     try:
         outcome = await revoke_project_grants(
-            db, cluster_id=cluster_id, project_name=project_name, only_rule_ids=only_rule_ids
+            db, cluster_id=cluster_id, project_name=project_name, only_rule_ids=only_rule_ids,
+            held_by=held_by,
         )
     except Exception as e:  # noqa: BLE001 - the project is gone; say what was left behind
         logger.error(f"Could not remove the access rules naming {project_name} on {cluster_id}: {e}")

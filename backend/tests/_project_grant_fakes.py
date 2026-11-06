@@ -95,11 +95,16 @@ class GrantSession:
             return _Rows(rows)
         if "tenant_access_policies" in sql:
             strings = [v for v in values if isinstance(v, str)]
-            ints = [v for v in values if isinstance(v, int)]
+            # An `in_()` binds its ids as one list.
+            ints = [i for v in values for i in (v if isinstance(v, list) else [v]) if isinstance(i, int)]
             rows = [
                 p for p in self.policies
                 if (not strings or p.name in strings) and (not ints or p.id in ints or p.organization_id in ints)
             ]
+            # `select(TenantAccessPolicy.organization_id)` (revoke's held_by) reads the ids only.
+            columns = list(getattr(stmt, "selected_columns", []))
+            if len(columns) == 1 and columns[0].key == "organization_id":
+                return _Rows([p.organization_id for p in rows])
             return _Rows(rows)
         raise AssertionError(f"unexpected query: {sql[:100]}")
 

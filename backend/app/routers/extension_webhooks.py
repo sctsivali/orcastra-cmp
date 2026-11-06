@@ -44,6 +44,9 @@ from app.services.webhooks.signing import secret_fingerprint
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
 
+# What a delivery the installation does not reach shows in place of its payload.
+REDACTED_PAYLOAD = {"redacted": True, "reason": "This event is about a project this installation does not reach."}
+
 router = APIRouter(
     prefix="/extensions",
     tags=["Extensions"],
@@ -408,7 +411,7 @@ async def list_deliveries(
     log outgrows any cap quickly, and filtering by state then narrowed a set that had already been
     cut, which is a misleading answer rather than a slow one.
     """
-    await _install_for(db, install_id, user)
+    install = await _install_for(db, install_id, user)
     subscription_ids = [
         row[0]
         for row in (
@@ -458,6 +461,12 @@ async def list_deliveries(
         .all()
     )
 
+    # important: rows enqueued before events were held to the installation's projects can carry
+    # another party's names; they are shown without their payload (security review, 2026-11-06).
+    from app.services.key_party_bound import payload_reaches
+
+    memo: Dict[Any, bool] = {}
+    shown = {row.id: await payload_reaches(install, row.payload or {}, memo) for row in rows}
     return DeliveryPage(
         deliveries=[
             {
@@ -473,7 +482,7 @@ async def list_deliveries(
                 "last_error": row.last_error,
                 "next_attempt_at": row.next_attempt_at,
                 "created_at": row.created_at,
-                "payload": row.payload,
+                "payload": row.payload if shown[row.id] else REDACTED_PAYLOAD,
             }
             for row in rows
         ],
@@ -497,7 +506,7 @@ async def redeliver(
     user: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
-    await _install_for(db, install_id, user)
+    install = await _install_for(db, install_id, user)
     # important: the delivery must be bound to a subscription of THIS installation. Looking it up
     # by primary key alone let any partner holding any installation requeue any delivery in the
     # deployment by guessing an integer, and the response hands back its event_id. `list_deliveries`
@@ -512,7 +521,9 @@ async def redeliver(
             )
         )
     ).scalar_one_or_none()
-    if row is None:
+    from app.services.key_party_bound import payload_reaches
+
+    if row is None or not await payload_reaches(install, row.payload or {}):
         raise HTTPException(status_code=404, detail="Delivery not found")
 
     row.state = "pending"
