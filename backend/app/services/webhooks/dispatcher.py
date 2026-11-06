@@ -202,10 +202,14 @@ async def _still_authorised(
         generations = await cluster_generations.current_or_none()
         if cluster_id not in cluster_generations.reachable(install.granted_scope, generations):
             return "the installation no longer reaches that cluster"
-        from app.services.key_party_bound import payload_reaches
+        from app.services.key_party_bound import install_grant_names, payload_reach
 
-        if not await payload_reaches(install, payload):
-            return "the installation no longer reaches that project"
+        # note: the installer's bound is judged when the event is queued (emitter.py). Here only the
+        # stored grant, so an identity provider outage cannot drop a delivery, and a project deleted
+        # after its instance events were queued does not cancel them (security review, 2026-11-06).
+        about = payload_reach(payload)
+        if about is not None and not (about[0] and install_grant_names(install, about[0], about[1])):
+            return "the installation's grant no longer names that project"
     return None
 
 

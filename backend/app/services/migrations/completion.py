@@ -220,6 +220,8 @@ async def deliver_completion_event(row: MigrationAuditOutbox) -> bool:
             event_id=row.event_id,
             occurred_at=occurred_at,
             raise_on_error=True,
+            # Named when the project's rules were revoked (project_retention_store._naming_holders).
+            reached_organizations=[o for o in payload.get("held_organizations") or [] if isinstance(o, int)],
         )
         return True
     if row.channel == "billing" and row.event_type in {"instance.created", "instance.deleted"}:

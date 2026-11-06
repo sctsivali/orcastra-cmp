@@ -465,7 +465,7 @@ async def list_deliveries(
     # another party's names; they are shown without their payload (security review, 2026-11-06).
     from app.services.key_party_bound import payload_reaches
 
-    memo: Dict[Any, bool] = {}
+    memo: Dict[Any, Any] = {}
     shown = {row.id: await payload_reaches(install, row.payload or {}, memo) for row in rows}
     return DeliveryPage(
         deliveries=[
@@ -478,7 +478,8 @@ async def list_deliveries(
                 "attempt": row.attempt,
                 "response_status": row.response_status,
                 "response_ms": row.response_ms,
-                "response_excerpt": row.response_excerpt,
+                # A receiver's answer can echo what it was sent.
+                "response_excerpt": row.response_excerpt if shown[row.id] else None,
                 "last_error": row.last_error,
                 "next_attempt_at": row.next_attempt_at,
                 "created_at": row.created_at,

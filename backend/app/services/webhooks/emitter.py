@@ -44,6 +44,7 @@ from .dispatcher import enqueue_event
 from .envelope import ResourceEvent
 
 from app.services import cluster_generations
+from app.services.key_party_bound import PROJECT_DELETED, ReachMemo, install_reaches_project
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,8 @@ async def _subscriptions_for_cluster(
     # narrowed the grant.
     generations = await cluster_generations.current_or_none()
     interested: List[WebhookSubscription] = []
+    memo: ReachMemo = {}
+    deleted = event_type == PROJECT_DELETED
     for subscription, install in rows:
         if event_type not in (subscription.event_types or []):
             continue
@@ -117,22 +120,19 @@ async def _subscriptions_for_cluster(
         # a Partner installed on a shared cluster heard the other party's names.
         # note: a deleted project is out of every bound by the time its event goes out, so the
         # organizations whose policies held it are named by the delete itself.
-        held = getattr(install, "organization_id", None) in reached_organizations
-        if project is not None and not await _reaches_project(install, cluster_id, project, held):
+        held = (getattr(install, "organization_id", None) in reached_organizations) if deleted else None
+        if project is not None and not await _reaches_project(install, cluster_id, project, held, memo):
             continue
         interested.append(subscription)
     return interested
 
 
-async def _reaches_project(install: Any, cluster_id: str, project: str, held: bool) -> bool:
-    import asyncio
-
-    from app.services.key_party_bound import REACH_SECONDS, install_reaches_project
-
+async def _reaches_project(
+    install: Any, cluster_id: str, project: str, held: Optional[bool], memo: ReachMemo
+) -> bool:
+    # The memo reads each installer's bound once per event, so a slow read costs one wait.
     try:
-        return await asyncio.wait_for(
-            install_reaches_project(install, cluster_id, project, held_by_its_organization=held), REACH_SECONDS
-        )
+        return await install_reaches_project(install, cluster_id, project, deleted_and_held=held, memo=memo)
     except Exception as exc:  # noqa: BLE001 - not knowing whether it reaches the project is not a yes
         logger.warning("Could not tell whether an installation reaches %s on %s: %s", project, cluster_id, sanitize_error(exc))
         return False

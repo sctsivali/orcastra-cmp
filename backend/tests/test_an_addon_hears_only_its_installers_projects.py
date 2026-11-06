@@ -156,8 +156,20 @@ async def test_a_delivery_is_checked_again_before_it_goes_out(installer, monkeyp
     sub = FakeSubscription(id=10, installation_id=1, event_types=["orcastra.instance.created.v1"])
     theirs = {"data": {"cluster_id": "nuc2", "resource_type": "instance", "resource_name": "vm", "project": "theirs"}}
     own = {"data": {"cluster_id": "nuc2", "resource_type": "instance", "resource_name": "vm", "project": "own"}}
-    assert await dispatcher._still_authorised(_DB(), sub, theirs) == "the installation no longer reaches that project"
+    unnamed = {"data": {"cluster_id": "nuc2", "resource_type": "instance", "resource_name": "vm"}}
+    install.granted_scope = [{"cluster_id": "nuc2", "projects": ["own"]}]
+    refused = "the installation's grant no longer names that project"
+    assert await dispatcher._still_authorised(_DB(), sub, theirs) == refused
+    assert await dispatcher._still_authorised(_DB(), sub, unnamed) == refused
     assert await dispatcher._still_authorised(_DB(), sub, own) is None
+    # The bound was judged at enqueue; delivery does not ask the identity provider again.
+    install.granted_scope = [{"cluster_id": "nuc2", "projects": ["*"]}]
+
+    async def no_idp(_email, *, roles=None):
+        raise AssertionError("the identity provider was asked at delivery")
+
+    monkeypatch.setattr(kpb, "creator_is_admin", no_idp)
+    assert await dispatcher._still_authorised(_DB(), sub, theirs) is None
 
 
 def test_a_project_delete_reaches_the_organizations_that_held_it(installer, monkeypatch) -> None:
@@ -197,7 +209,11 @@ async def test_a_queued_payload_is_judged_by_what_it_names(installer) -> None:
     assert await kpb.payload_reaches(install, about_the_install) is True
     deleted = {"type": "orcastra.project.deleted.v1",
                "data": {"cluster_id": "nuc2", "resource_type": "project", "resource_name": "gone"}}
-    assert await kpb.payload_reaches(install, deleted) is True, "a delete is judged by the stored grant"
+    assert await kpb.payload_reaches(install, deleted) is False, (
+        "the queue does not keep who held a deleted project, so on a held cluster it stays hidden"
+    )
+    installer["bound"] = None
+    assert await kpb.payload_reaches(install, deleted) is True, "elsewhere the stored grant decides"
     named = Install(id=1, granted_scope=[{"cluster_id": "nuc2", "projects": ["own"]}])
     assert await kpb.payload_reaches(named, deleted) is False
 
@@ -228,7 +244,7 @@ async def test_a_queued_project_delete_is_delivered_by_the_stored_grant(installe
 
     assert await dispatcher._still_authorised(_DB(), sub, deleted("gone")) is None
     assert await dispatcher._still_authorised(_DB(), sub, deleted("theirs")) == (
-        "the installation no longer reaches that project"
+        "the installation's grant no longer names that project"
     )
 
 
@@ -236,6 +252,7 @@ def _delivery(ident: int, project: str):
     from tests.test_the_delivery_log_can_be_paged import Delivery
 
     row = Delivery(ident, "delivered")
+    row.response_excerpt = "ok"
     row.payload = {"type": "orcastra.instance.created.v1",
                    "data": {"cluster_id": "nuc2", "resource_type": "instance", "resource_name": "vm", "project": project}}
     return row
@@ -252,8 +269,10 @@ async def test_the_delivery_log_hides_what_the_installation_does_not_reach(insta
     db = FakeDB([_delivery(2, "own"), _delivery(1, "theirs")], subscription_ids=[1])
     page = await extension_webhooks.list_deliveries(install_id=1, user=object(), db=db, state=None, limit=50, offset=0)
     payloads = {d["id"]: d["payload"] for d in page.deliveries}
-    assert payloads[2]["data"]["project"] == "own"
+    excerpts = {d["id"]: d["response_excerpt"] for d in page.deliveries}
+    assert payloads[2]["data"]["project"] == "own" and excerpts[2] == "ok"
     assert payloads[1] == extension_webhooks.REDACTED_PAYLOAD, "another party's names stay out of the log"
+    assert excerpts[1] is None, "a receiver's answer can echo what it was sent"
     assert page.total == 2, "the row is still counted; only its payload is withheld"
 
 
@@ -302,3 +321,106 @@ async def test_a_revoke_names_the_organizations_whose_policies_held_the_project(
     held_by: set = set()
     await project_grants.revoke_project_grants(session, cluster_id="nuc2", project_name="gone", held_by=held_by)
     assert held_by == {7}
+
+
+def test_a_party_that_reuses_a_deleted_name_is_not_told_it_went_away(installer, monkeypatch) -> None:
+    # Organization 8 created its own "gone" while organization 7's delete was being announced.
+    installer["bound"] = frozenset({"default", "gone"})
+    deleted = dict(event_type="orcastra.project.deleted.v1", resource_type="project", resource_name="gone")
+    assert _interested(Install(id=1, organization_id=8), None, monkeypatch, reached={7}, **deleted) == []
+    installer["bound"] = None
+    assert _interested(Install(id=1, organization_id=8), None, monkeypatch, reached=(), **deleted) == [10], (
+        "on a cluster no other party holds, the stored grant decides as before"
+    )
+
+
+def test_a_slow_identity_provider_holds_the_addon_to_the_bound(installer, monkeypatch) -> None:
+    async def slow_admin(_email, *, roles=None):
+        await asyncio.sleep(1)
+        return True
+
+    monkeypatch.setattr(kpb, "creator_is_admin", slow_admin)
+    monkeypatch.setattr(kpb, "ROLE_SECONDS", 0.05)
+    assert _interested(Install(id=1), "own", monkeypatch) == [10], "its own projects are still heard"
+    assert _interested(Install(id=1), "theirs", monkeypatch) == [], "an unanswered provider is not an Admin"
+
+
+def test_an_event_reads_each_installers_bound_once(installer, monkeypatch) -> None:
+    from tests.test_a_lifecycle_change_reaches_the_addons_watching_it import FakeDB
+
+    reads: List[str] = []
+
+    async def bound(api_key, _cluster_id, _db):
+        reads.append(api_key["created_by"])
+        return "partner@example.test", BOUND
+
+    monkeypatch.setattr(kpb, "_bound", bound)
+    subs = [FakeSubscription(id=10 + i, installation_id=i, event_types=["orcastra.instance.created.v1"]) for i in range(3)]
+    installs = [Install(id=i) for i in range(3)]
+
+    async def run():
+        return await emitter._subscriptions_for_cluster(
+            FakeDB(list(zip(subs, installs))), "nuc2", "orcastra.instance.created.v1", "own"
+        )
+
+    async def no_generations():
+        return None
+
+    monkeypatch.setattr("app.services.cluster_generations.current_or_none", no_generations)
+    monkeypatch.setattr("app.services.cluster_generations.reachable", lambda scope, generations: {"nuc2"})
+    assert [s.id for s in asyncio.run(run())] == [10, 11, 12]
+    assert reads == ["partner@example.test"], "three subscriptions of one installer, one bound read"
+
+
+async def test_a_migration_project_delete_names_its_owner_and_the_policies_that_held_it(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.services.migrations import project_retention_store as store
+
+    captured: Dict[str, Any] = {}
+
+    async def fenced(*_a, **_k):
+        return True
+
+    async def events(_db, **kwargs):
+        captured.update(kwargs)
+
+    async def revoke(_db, *, cluster_id, project_name, commit, held_by):
+        held_by.add(9)
+
+    class _Db:
+        async def execute(self, *_a, **_k):
+            return None
+
+        async def commit(self):
+            return None
+
+    monkeypatch.setattr(store, "_fenced_update", fenced)
+    monkeypatch.setattr(store, "_events", events)
+    monkeypatch.setattr(store, "revoke_project_grants", revoke)
+    job = SimpleNamespace(job_id="job-1", fence_token=1, source_cluster_id="nuc2", source_project="gone",
+                          source_organization_id=7)
+    outbox = [
+        {"event_type": "orcastra.project.deleted.v1", "extra": {"cluster_id": "nuc2", "resource_name": "gone"}},
+        {"event_type": "orcastra.instance.deleted.v1", "extra": {"cluster_id": "nuc2", "resource_name": "vm"}},
+    ]
+    await store.finish_project_cleanup(_Db(), job, worker_id="w", event_actor={}, message="done", outbox_events=outbox)
+    project_event, instance_event = captured["outbox_events"]
+    assert project_event["extra"]["held_organizations"] == [7, 9]
+    assert "held_organizations" not in instance_event["extra"]
+
+    from app.services.migrations import completion
+
+    emitted: Dict[str, Any] = {}
+
+    async def emit(**kwargs):
+        emitted.update(kwargs)
+        return 1
+
+    monkeypatch.setattr(completion, "emit_resource_event", emit)
+    row = SimpleNamespace(channel="webhook", event_type="orcastra.project.deleted.v1", event_id="evt-1", payload={
+        "cluster_id": "nuc2", "project": "gone", "resource_name": "gone", "occurred_at": "2026-11-06T00:00:00Z",
+        **project_event["extra"],
+    })
+    assert await completion.deliver_completion_event(row) is True
+    assert list(emitted["reached_organizations"]) == [7, 9]
