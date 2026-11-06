@@ -463,9 +463,11 @@ async def list_deliveries(
 
     # important: rows enqueued before events were held to the installation's projects can carry
     # another party's names; they are shown without their payload (security review, 2026-11-06).
-    from app.services.key_party_bound import payload_reaches
+    from app.services.key_party_bound import REACH_SECONDS, payload_reach, payload_reaches, read_bounds
 
     memo: Dict[Any, Any] = {}
+    clusters = {about[0] for about in (payload_reach(row.payload or {}) for row in rows) if about and about[0]}
+    await read_bounds([(install, cluster_id) for cluster_id in sorted(clusters)], memo, REACH_SECONDS)
     shown = {row.id: await payload_reaches(install, row.payload or {}, memo) for row in rows}
     return DeliveryPage(
         deliveries=[

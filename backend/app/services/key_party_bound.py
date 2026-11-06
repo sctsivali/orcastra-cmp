@@ -23,7 +23,7 @@ import asyncio
 import logging
 import threading
 import time
-from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -130,15 +130,40 @@ async def party_bound(
     else:
         # A caller that cannot wait for the identity provider (an event on a request path) takes
         # the bound, as an unanswered provider does.
-        try:
-            admin = await asyncio.wait_for(creator_is_admin(creator, roles=roles), role_seconds)
-        except asyncio.TimeoutError:
-            admin = None
+        admin = await _role_within(creator, roles, role_seconds)
     if admin:
         return None, False
     if admin is None:
         logger.warning("Creator role unknown for a key on %s; held to the creator's bound", cluster_id)
     return bound, admin is None
+
+
+# One role read per creator in flight. A read that outlives its caller's wait keeps going and fills
+# creator_role's cache, so the next event does not wait again for an answer that was on its way.
+_role_reads: Dict[str, "asyncio.Task[Optional[bool]]"] = {}
+
+
+def _role_read_done(key: str, task: "asyncio.Task[Optional[bool]]") -> None:
+    if _role_reads.get(key) is task:
+        _role_reads.pop(key, None)
+    if not task.cancelled() and task.exception() is not None:
+        logger.warning("Creator role read failed: %s", type(task.exception()).__name__)
+
+
+async def _role_within(creator: str, roles: Optional[CurrentRoleReader], seconds: float) -> Optional[bool]:
+    loop = asyncio.get_running_loop()
+    key = creator.strip().lower()
+    task = _role_reads.get(key)
+    if task is None or task.done() or task.get_loop() is not loop:
+        task = loop.create_task(creator_is_admin(creator, roles=roles))
+        _role_reads[key] = task
+        task.add_done_callback(lambda done, k=key: _role_read_done(k, done))
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), seconds)
+    except asyncio.TimeoutError:
+        return None
+    except Exception:  # noqa: BLE001 - a failed read is an unknown role, as the provider's silence is
+        return None
 
 
 async def narrow_to_party_bound(
@@ -309,10 +334,12 @@ def _shared_policy(cluster_id: str):
     return ClusterWritePolicy(cluster_id, Role.PARTNER, ClusterOwnership.SHARED)
 
 
-# How long one installer's reach may take to judge before it is treated as not reached, and how
-# long an event waits for the identity provider before the installer's bound applies.
+# How long one installer's reach may take to judge before it is treated as not reached, how long
+# an event waits for the identity provider before the installer's bound applies, and the one
+# deadline every installer of an event shares (the instance create emit has 2 s in all).
 REACH_SECONDS = 3
 ROLE_SECONDS = 1.0
+EVENT_REACH_SECONDS = 1.5
 PROJECT_DELETED = "orcastra.project.deleted.v1"
 
 # One bound per installer and cluster for a caller judging many subscriptions or rows.
@@ -363,6 +390,31 @@ async def _installer_bound(install: Any, cluster_id: str, memo: Optional[ReachMe
     if memo is not None:
         memo[key] = bound
     return bound
+
+
+async def read_bounds(pairs: Iterable[Tuple[Any, str]], memo: ReachMemo, seconds: float) -> None:
+    """Read the bound of every distinct (installer, cluster) at once, under one deadline.
+
+    A pair still unread at the deadline counts as unreadable, so one slow installer does not cost
+    the others their events, and a page of the delivery log waits once.
+    """
+    tasks: Dict[Tuple[str, str], "asyncio.Task[Any]"] = {}
+    for install, cluster_id in pairs:
+        key = (str(getattr(install, "installed_by", "") or ""), cluster_id)
+        if key in memo or key in tasks:
+            continue
+        tasks[key] = asyncio.ensure_future(_installer_bound(install, cluster_id, memo))
+    if not tasks:
+        return
+    done, late = await asyncio.wait(tasks.values(), timeout=seconds)
+    for task in late:
+        task.cancel()
+    await asyncio.gather(*late, return_exceptions=True)
+    for task in done:
+        task.exception()  # read, so a failure is not reported as never retrieved
+    for key, task in tasks.items():
+        if task in late:
+            memo[key] = _UNREADABLE
 
 
 async def install_reaches_project(

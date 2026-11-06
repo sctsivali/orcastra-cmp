@@ -5,45 +5,24 @@ organization also holds received that party's project, instance and volume names
 of the RC5 follow-up round, 2026-11-06). The event's project must now be in the installation's
 grant for that cluster (owner decision 2026-11-06: filtered per grant on every cluster), the grant
 held to its installer's bound where another party holds the cluster, as its key is
-(services/key_party_bound.py), at enqueue, at delivery, in the delivery log and on redeliver.
+(services/key_party_bound.py), when the event is queued. A queued event is judged again in
+test_a_queued_addon_event_is_judged_where_it_is_sent_or_shown.py.
 """
 
 import asyncio
-from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 import pytest
 
 from app.services import key_party_bound as kpb
 from app.services.webhooks import emitter
+from tests._addon_reach_fakes import BOUND, Install, hold_installer
 from tests.test_a_lifecycle_change_reaches_the_addons_watching_it import FakeSubscription, _run
-
-BOUND = frozenset({"default", "own"})
-
-
-@dataclass
-class Install:
-    id: int
-    status: str = "active"
-    granted_scope: List[Dict[str, Any]] = field(default_factory=lambda: [{"cluster_id": "nuc2", "projects": ["*"]}])
-    installed_by: str = "partner@example.test"
-    api_key_id: str = "oak_addon"
-    organization_id: int = 7
 
 
 @pytest.fixture
 def installer(monkeypatch):
-    state = {"bound": BOUND, "admin": False}
-
-    async def bound(_api_key, _cluster_id, _db):
-        return "partner@example.test", state["bound"]
-
-    async def is_admin(_email, *, roles=None):
-        return state["admin"]
-
-    monkeypatch.setattr(kpb, "_bound", bound)
-    monkeypatch.setattr(kpb, "creator_is_admin", is_admin)
-    return state
+    return hold_installer(monkeypatch)
 
 
 def _interested(
@@ -135,43 +114,6 @@ def test_the_existing_cluster_routing_still_holds(monkeypatch) -> None:
     assert count == 1
 
 
-async def test_a_delivery_is_checked_again_before_it_goes_out(installer, monkeypatch) -> None:
-    from app.services.webhooks import dispatcher
-
-    install = Install(id=1)
-
-    class _Rows:
-        def scalar_one_or_none(self):
-            return install
-
-    class _DB:
-        async def execute(self, _statement):
-            return _Rows()
-
-    async def no_generations():
-        return None
-
-    monkeypatch.setattr("app.services.cluster_generations.current_or_none", no_generations)
-    monkeypatch.setattr("app.services.cluster_generations.reachable", lambda scope, generations: {"nuc2"})
-    sub = FakeSubscription(id=10, installation_id=1, event_types=["orcastra.instance.created.v1"])
-    theirs = {"data": {"cluster_id": "nuc2", "resource_type": "instance", "resource_name": "vm", "project": "theirs"}}
-    own = {"data": {"cluster_id": "nuc2", "resource_type": "instance", "resource_name": "vm", "project": "own"}}
-    unnamed = {"data": {"cluster_id": "nuc2", "resource_type": "instance", "resource_name": "vm"}}
-    install.granted_scope = [{"cluster_id": "nuc2", "projects": ["own"]}]
-    refused = "the installation's grant no longer names that project"
-    assert await dispatcher._still_authorised(_DB(), sub, theirs) == refused
-    assert await dispatcher._still_authorised(_DB(), sub, unnamed) == refused
-    assert await dispatcher._still_authorised(_DB(), sub, own) is None
-    # The bound was judged at enqueue; delivery does not ask the identity provider again.
-    install.granted_scope = [{"cluster_id": "nuc2", "projects": ["*"]}]
-
-    async def no_idp(_email, *, roles=None):
-        raise AssertionError("the identity provider was asked at delivery")
-
-    monkeypatch.setattr(kpb, "creator_is_admin", no_idp)
-    assert await dispatcher._still_authorised(_DB(), sub, theirs) is None
-
-
 def test_a_project_delete_reaches_the_organizations_that_held_it(installer, monkeypatch) -> None:
     # "gone" is in no bound any more: the delete revoked the policies that put it there.
     deleted = dict(event_type="orcastra.project.deleted.v1", resource_type="project", resource_name="gone")
@@ -193,123 +135,6 @@ def test_a_slow_reach_is_not_reached(installer, monkeypatch) -> None:
     monkeypatch.setattr(kpb, "_bound", slow)
     monkeypatch.setattr(kpb, "REACH_SECONDS", 0.05)
     assert _interested(Install(id=1), "own", monkeypatch) == []
-
-
-async def test_a_queued_payload_is_judged_by_what_it_names(installer) -> None:
-    install = Install(id=1)
-
-    def instance(project):
-        data = {"cluster_id": "nuc2", "resource_type": "instance", "resource_name": "vm"}
-        return {"type": "orcastra.instance.created.v1", "data": {**data, **({"project": project} if project else {})}}
-
-    assert await kpb.payload_reaches(install, instance("own")) is True
-    assert await kpb.payload_reaches(install, instance("theirs")) is False
-    assert await kpb.payload_reaches(install, instance(None)) is False, "a row that names no project is not reached"
-    about_the_install = {"type": "orcastra.installation.updated.v1", "data": {"resource_type": "installation"}}
-    assert await kpb.payload_reaches(install, about_the_install) is True
-    deleted = {"type": "orcastra.project.deleted.v1",
-               "data": {"cluster_id": "nuc2", "resource_type": "project", "resource_name": "gone"}}
-    assert await kpb.payload_reaches(install, deleted) is False, (
-        "the queue does not keep who held a deleted project, so on a held cluster it stays hidden"
-    )
-    installer["bound"] = None
-    assert await kpb.payload_reaches(install, deleted) is True, "elsewhere the stored grant decides"
-    named = Install(id=1, granted_scope=[{"cluster_id": "nuc2", "projects": ["own"]}])
-    assert await kpb.payload_reaches(named, deleted) is False
-
-
-async def test_a_queued_project_delete_is_delivered_by_the_stored_grant(installer, monkeypatch) -> None:
-    from app.services.webhooks import dispatcher
-
-    install = Install(id=1, granted_scope=[{"cluster_id": "nuc2", "projects": ["own", "gone"]}])
-
-    class _Rows:
-        def scalar_one_or_none(self):
-            return install
-
-    class _DB:
-        async def execute(self, _statement):
-            return _Rows()
-
-    async def no_generations():
-        return None
-
-    monkeypatch.setattr("app.services.cluster_generations.current_or_none", no_generations)
-    monkeypatch.setattr("app.services.cluster_generations.reachable", lambda scope, generations: {"nuc2"})
-    sub = FakeSubscription(id=10, installation_id=1, event_types=["orcastra.project.deleted.v1"])
-
-    def deleted(name):
-        return {"type": "orcastra.project.deleted.v1",
-                "data": {"cluster_id": "nuc2", "resource_type": "project", "resource_name": name}}
-
-    assert await dispatcher._still_authorised(_DB(), sub, deleted("gone")) is None
-    assert await dispatcher._still_authorised(_DB(), sub, deleted("theirs")) == (
-        "the installation's grant no longer names that project"
-    )
-
-
-def _delivery(ident: int, project: str):
-    from tests.test_the_delivery_log_can_be_paged import Delivery
-
-    row = Delivery(ident, "delivered")
-    row.response_excerpt = "ok"
-    row.payload = {"type": "orcastra.instance.created.v1",
-                   "data": {"cluster_id": "nuc2", "resource_type": "instance", "resource_name": "vm", "project": project}}
-    return row
-
-
-async def test_the_delivery_log_hides_what_the_installation_does_not_reach(installer, monkeypatch) -> None:
-    from app.routers import extension_webhooks
-    from tests.test_the_delivery_log_can_be_paged import FakeDB
-
-    async def install_for(_db, _install_id, _user):
-        return Install(id=1)
-
-    monkeypatch.setattr(extension_webhooks, "_install_for", install_for)
-    db = FakeDB([_delivery(2, "own"), _delivery(1, "theirs")], subscription_ids=[1])
-    page = await extension_webhooks.list_deliveries(install_id=1, user=object(), db=db, state=None, limit=50, offset=0)
-    payloads = {d["id"]: d["payload"] for d in page.deliveries}
-    excerpts = {d["id"]: d["response_excerpt"] for d in page.deliveries}
-    assert payloads[2]["data"]["project"] == "own" and excerpts[2] == "ok"
-    assert payloads[1] == extension_webhooks.REDACTED_PAYLOAD, "another party's names stay out of the log"
-    assert excerpts[1] is None, "a receiver's answer can echo what it was sent"
-    assert page.total == 2, "the row is still counted; only its payload is withheld"
-
-
-async def test_a_delivery_the_installation_does_not_reach_cannot_be_sent_again(installer, monkeypatch) -> None:
-    from fastapi import HTTPException
-
-    from app.routers import extension_webhooks
-
-    async def install_for(_db, _install_id, _user):
-        return Install(id=1)
-
-    class _One:
-        def __init__(self, row):
-            self.row = row
-
-        def scalar_one_or_none(self):
-            return self.row
-
-    class _DB:
-        def __init__(self, row):
-            self.row = row
-            self.commits = 0
-
-        async def execute(self, _statement):
-            return _One(self.row)
-
-        async def commit(self):
-            self.commits += 1
-
-    monkeypatch.setattr(extension_webhooks, "_install_for", install_for)
-    monkeypatch.setattr(extension_webhooks.activity_logger, "log_activity", lambda **_kw: None)
-    theirs = _DB(_delivery(1, "theirs"))
-    with pytest.raises(HTTPException) as refused:
-        await extension_webhooks.redeliver(install_id=1, delivery_id=1, user=object(), db=theirs)
-    assert refused.value.status_code == 404 and theirs.commits == 0
-    own = _DB(_delivery(2, "own"))
-    assert (await extension_webhooks.redeliver(install_id=1, delivery_id=2, user=object(), db=own))["state"] == "pending"
 
 
 async def test_a_revoke_names_the_organizations_whose_policies_held_the_project() -> None:
@@ -424,3 +249,61 @@ async def test_a_migration_project_delete_names_its_owner_and_the_policies_that_
     })
     assert await completion.deliver_completion_event(row) is True
     assert list(emitted["reached_organizations"]) == [7, 9]
+
+
+def test_a_slow_installer_does_not_cost_the_others_their_events(monkeypatch) -> None:
+    import time
+
+    from tests.test_a_lifecycle_change_reaches_the_addons_watching_it import FakeDB
+
+    async def bound(api_key, _cluster_id, _db):
+        if api_key["created_by"] == "slow@example.test":
+            await asyncio.sleep(5)
+        return api_key["created_by"], BOUND
+
+    async def not_admin(_email, *, roles=None):
+        return False
+
+    async def no_generations():
+        return None
+
+    monkeypatch.setattr(kpb, "_bound", bound)
+    monkeypatch.setattr(kpb, "creator_is_admin", not_admin)
+    monkeypatch.setattr(kpb, "EVENT_REACH_SECONDS", 0.2)
+    monkeypatch.setattr(emitter, "EVENT_REACH_SECONDS", 0.2)
+    monkeypatch.setattr("app.services.cluster_generations.current_or_none", no_generations)
+    monkeypatch.setattr("app.services.cluster_generations.reachable", lambda scope, generations: {"nuc2"})
+    rows = [
+        (FakeSubscription(id=10, installation_id=1, event_types=["orcastra.instance.created.v1"]),
+         Install(id=1, installed_by="slow@example.test")),
+        (FakeSubscription(id=11, installation_id=2, event_types=["orcastra.instance.created.v1"]),
+         Install(id=2, installed_by="fast@example.test")),
+    ]
+    started = time.monotonic()
+    heard = asyncio.run(emitter._subscriptions_for_cluster(FakeDB(rows), "nuc2", "orcastra.instance.created.v1", "own"))
+    assert [s.id for s in heard] == [11], "the slow installer's bound is unread at the deadline"
+    assert time.monotonic() - started < 2, "every installer shares one deadline"
+
+
+async def test_a_role_answer_that_arrives_late_still_fills_the_cache(monkeypatch) -> None:
+    from app.core.rbac import Role
+    from app.services.authentik_role_reading import RoleReading
+
+    async def bound(_api_key, _cluster_id, _db):
+        return "admin@example.test", BOUND
+
+    class SlowRoles:
+        calls = 0
+
+        async def read_current_roles(self, _email):
+            SlowRoles.calls += 1
+            await asyncio.sleep(0.2)
+            return RoleReading(frozenset({Role.ADMIN}), "read")
+
+    monkeypatch.setattr(kpb, "_bound", bound)
+    as_key = {"id": "oak_addon", "created_by": "admin@example.test"}
+    assert await kpb.party_bound(as_key, "nuc2", roles=SlowRoles(), role_seconds=0.05) == (BOUND, True)
+    await asyncio.sleep(0.4)
+    assert await kpb.party_bound(as_key, "nuc2", roles=SlowRoles(), role_seconds=0.05) == (None, False)
+    assert SlowRoles.calls == 1, "the late answer was kept rather than asked for again"
+

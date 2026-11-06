@@ -44,7 +44,14 @@ from .dispatcher import enqueue_event
 from .envelope import ResourceEvent
 
 from app.services import cluster_generations
-from app.services.key_party_bound import PROJECT_DELETED, ReachMemo, install_reaches_project
+from app.services.key_party_bound import (
+    EVENT_REACH_SECONDS,
+    PROJECT_DELETED,
+    ReachMemo,
+    install_grant_names,
+    install_reaches_project,
+    read_bounds,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,9 +114,14 @@ async def _subscriptions_for_cluster(
     # routing on it sent that organization's events to this add-on until the reconcile sweep
     # narrowed the grant.
     generations = await cluster_generations.current_or_none()
-    interested: List[WebhookSubscription] = []
-    memo: ReachMemo = {}
     deleted = event_type == PROJECT_DELETED
+
+    def held(install: Any) -> Optional[bool]:
+        # note: a deleted project is out of every bound by the time its event goes out, so the
+        # organizations whose policies held it are named by the delete itself.
+        return (getattr(install, "organization_id", None) in reached_organizations) if deleted else None
+
+    candidates = []
     for subscription, install in rows:
         if event_type not in (subscription.event_types or []):
             continue
@@ -118,19 +130,27 @@ async def _subscriptions_for_cluster(
         # important: and the event's project must be one the installation reaches, its grant held
         # to its installer's bound (services/key_party_bound.py). Routed by cluster alone, an add-on
         # a Partner installed on a shared cluster heard the other party's names.
-        # note: a deleted project is out of every bound by the time its event goes out, so the
-        # organizations whose policies held it are named by the delete itself.
-        held = (getattr(install, "organization_id", None) in reached_organizations) if deleted else None
-        if project is not None and not await _reaches_project(install, cluster_id, project, held, memo):
+        if project is not None and not install_grant_names(install, cluster_id, project):
             continue
-        interested.append(subscription)
+        candidates.append((subscription, install))
+    if project is None:
+        return [subscription for subscription, _install in candidates]
+
+    memo: ReachMemo = {}
+    await read_bounds(
+        [(install, cluster_id) for _sub, install in candidates if not held(install)], memo, EVENT_REACH_SECONDS
+    )
+    interested: List[WebhookSubscription] = []
+    for subscription, install in candidates:
+        if await _reaches_project(install, cluster_id, project, held(install), memo):
+            interested.append(subscription)
     return interested
 
 
 async def _reaches_project(
     install: Any, cluster_id: str, project: str, held: Optional[bool], memo: ReachMemo
 ) -> bool:
-    # The memo reads each installer's bound once per event, so a slow read costs one wait.
+    # The bounds are already in the memo (read_bounds), so this does no I/O of its own.
     try:
         return await install_reaches_project(install, cluster_id, project, deleted_and_held=held, memo=memo)
     except Exception as exc:  # noqa: BLE001 - not knowing whether it reaches the project is not a yes
