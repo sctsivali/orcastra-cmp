@@ -423,37 +423,61 @@ async def get_storage_volume(
 async def create_storage_volume(
     request: StorageVolumeCreateRequest,
     host: str = Query(..., pattern=LXD_NAME_PATTERN, description="Target cluster"),
+    project: Optional[str] = Query(
+        None, pattern=LXD_NAME_PATTERN, description="Project to create the volume in (default: default)"
+    ),
+    location: Optional[str] = Query(
+        None, pattern=LXD_NAME_PATTERN, description="Cluster member to create it on, for a per-member pool"
+    ),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new storage volume."""
+    """Create a new storage volume.
+
+    note: the project is named on the call. Without it every volume landed in `default`
+    whatever project the caller worked in (RC5 acceptance F-02).
+    """
     verify_cluster_access(host)
-    if not project_is_visible(host, DEFAULT_PROJECT):
+    requested_project = project or DEFAULT_PROJECT
+    if not project_is_visible(host, requested_project):
         raise HTTPException(status_code=403, detail="Access denied to this project")
-    # A create lands in `default`, view only where another party holds the cluster.
-    refuse_default_operation(host, DEFAULT_PROJECT)
     try:
         async with serialize_cluster_configuration(db, host):
-            try:
-                await assert_project_not_migration_fenced(
-                    cluster_id=host,
-                    project=DEFAULT_PROJECT,
-                    db=db,
-                )
-            except MigrationFenceConflict as exc:
-                raise HTTPException(status_code=409, detail=exc.detail) from exc
             client = require_client(await client_for(lxd_service, host), host)
-            storage_pool = client.storage_pools.get(safe_segment(request.pool))
-
-            volume = storage_pool.volumes.create({
-                "name": request.name,
-                "type": request.type,
-                "config": request.config,
-                "description": request.description,
-                "content_type": request.content_type
-            })
+            # A project without its own volumes keeps them in `default`, as LXD does.
+            owner = resolve_owner(client, "storage-volumes", project)
+            if not project_is_visible(host, owner):
+                raise HTTPException(status_code=403, detail="Access denied to this project")
+            # `default` is view only where another party holds the cluster.
+            refuse_default_operation(host, owner)
+            for fenced_project in sorted({requested_project, owner}):
+                try:
+                    await assert_project_not_migration_fenced(
+                        cluster_id=host,
+                        project=fenced_project,
+                        db=db,
+                    )
+                except MigrationFenceConflict as exc:
+                    raise HTTPException(status_code=409, detail=exc.detail) from exc
+            params = _address_params(owner, location) or None
+            response = client.api["storage-pools"][safe_segment(request.pool)]["volumes"]["custom"].post(
+                json={
+                    "name": request.name,
+                    "type": request.type,
+                    "config": request.config,
+                    "description": request.description,
+                    "content_type": request.content_type,
+                },
+                params=params,
+            )
+            if response.json().get("type") == "async":
+                client.operations.wait_for_operation(response.json()["operation"])
+            volume = (
+                _volume_node(client, request.pool, "custom", request.name).get(params=params).json().get("metadata")
+                or {}
+            )
         
         # Announce the lifecycle change to any subscribed add-on. Volumes have no operation in
         # the integrations proxy vocabulary, so this router is their only source: without it two
@@ -477,21 +501,23 @@ async def create_storage_volume(
             details={"pool": request.pool, "type": request.type, "content_type": request.content_type}
         )
         
-        schedule_orcahub_event("volume.created", host, getattr(volume, "project", None), request.name, resource_type="VOLUME")
+        schedule_orcahub_event("volume.created", host, owner, request.name, resource_type="VOLUME")
         # Readers hold a cached list; without this the change is invisible until the TTL.
         _invalidate_volume_lists()
         return {
             "success": True,
             "message": f"Storage volume {request.name} created successfully",
             "volume": StorageVolumeInfo(
-                name=volume.name,
-                type=volume.type,
+                name=volume.get("name") or request.name,
+                type=volume.get("type") or request.type,
                 pool=request.pool,
-                description=getattr(volume, 'description', '') or "",
-                config=volume.config or {},
-                used_by=volume.used_by or [],
-                content_type=getattr(volume, 'content_type', ''),
-                node=host
+                description=volume.get("description") or "",
+                config=volume.get("config") or {},
+                used_by=volume.get("used_by") or [],
+                content_type=volume.get("content_type") or "",
+                node=host,
+                project=owner,
+                location=volume.get("location") or location,
             )
         }
     except HTTPException:

@@ -1216,8 +1216,21 @@ export function useDeleteStorageVolume() {
 
   return useMutation({
     // important: same scrambled argument order as useStorageVolume above. See the note there.
-    mutationFn: ({ pool, type, name, host }: { pool: string; type: string; name: string; host: string }) =>
-      api.storageVolumes.delete(type, name, host, pool),
+    mutationFn: ({
+      pool,
+      type,
+      name,
+      host,
+      project,
+      location,
+    }: {
+      pool: string;
+      type: string;
+      name: string;
+      host: string;
+      project?: string | null;
+      location?: string | null;
+    }) => api.storageVolumes.delete(type, name, host, pool, { project, location }),
     onSuccess: () => reconcile(queryClient, "storage.volume"),
   });
 }

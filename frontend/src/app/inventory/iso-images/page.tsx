@@ -218,6 +218,10 @@ function IsoImagesContent() {
         name: deleteTarget.name,
         pool: deleteTarget.pool,
         host: deleteTarget.node,
+        // The row's own project and member: an ISO outside `default` or on one member of a
+        // per-member pool is not the one the bare name addresses.
+        project: deleteTarget.project,
+        location: deleteTarget.location,
       });
       toast({
         title: "ISO deleted",

@@ -1790,6 +1790,21 @@ export const storagePoolAPI = {
 };
 
 // Storage Volume Operations
+
+/** The row's project and member. Without them a write lands on `default`'s copy of the name. */
+export interface StorageVolumeAddress {
+  project?: string | null;
+  location?: string | null;
+}
+
+function volumeQuery(host: string, pool?: string, address: StorageVolumeAddress = {}): string {
+  const params = new URLSearchParams({ host });
+  if (pool) params.set("pool", pool);
+  if (address.project) params.set("project", address.project);
+  if (address.location) params.set("location", address.location);
+  return params.toString();
+}
+
 export const storageVolumeAPI = {
   list: async (host?: string, pool?: string, opts: ReadOptions = {}) => {
     const params = new URLSearchParams();
@@ -1802,36 +1817,35 @@ export const storageVolumeAPI = {
     return fetchRead(endpoint, opts);
   },
 
-  get: async (volumeType: string, name: string, host: string, pool: string) => {
-    return fetchAPI(
-      `/storage/volumes/${volumeType}/${name}?host=${encodeURIComponent(host)}&pool=${encodeURIComponent(pool)}`
-    );
+  get: async (volumeType: string, name: string, host: string, pool: string, address?: StorageVolumeAddress) => {
+    return fetchAPI(`/storage/volumes/${volumeType}/${name}?${volumeQuery(host, pool, address)}`);
   },
 
-  create: async (data: any, host: string) => {
-    return fetchAPI(`/storage/volumes?host=${encodeURIComponent(host)}`, {
+  create: async (data: any, host: string, address?: StorageVolumeAddress) => {
+    return fetchAPI(`/storage/volumes?${volumeQuery(host, undefined, address)}`, {
       method: "POST",
       body: JSON.stringify(data),
     });
   },
 
-  update: async (volumeType: string, name: string, host: string, pool: string, data: any) => {
-    return fetchAPI(
-      `/storage/volumes/${volumeType}/${name}?host=${encodeURIComponent(host)}&pool=${encodeURIComponent(pool)}`,
-      {
-        method: "PUT",
-        body: JSON.stringify(data),
-      }
-    );
+  update: async (
+    volumeType: string,
+    name: string,
+    host: string,
+    pool: string,
+    data: any,
+    address?: StorageVolumeAddress
+  ) => {
+    return fetchAPI(`/storage/volumes/${volumeType}/${name}?${volumeQuery(host, pool, address)}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
   },
 
-  delete: async (volumeType: string, name: string, host: string, pool: string) => {
-    return fetchAPI(
-      `/storage/volumes/${volumeType}/${name}?host=${encodeURIComponent(host)}&pool=${encodeURIComponent(pool)}`,
-      {
-        method: "DELETE",
-      }
-    );
+  delete: async (volumeType: string, name: string, host: string, pool: string, address?: StorageVolumeAddress) => {
+    return fetchAPI(`/storage/volumes/${volumeType}/${name}?${volumeQuery(host, pool, address)}`, {
+      method: "DELETE",
+    });
   },
 };
 
