@@ -1076,13 +1076,6 @@ async def get_visible_projects(
     bounded even when the partner's own party holds it whole.
     """
     from app.core.rbac import resolve_roles, get_highest_role, Role
-    from app.models.db_models import (
-        OrganizationCluster,
-        OrganizationMember,
-        TenantAccessPolicy,
-        TenantPolicyAssignment,
-        TenantPolicyRule,
-    )
 
     highest = get_highest_role(resolve_roles(user))
     if highest == Role.ADMIN:
@@ -1107,12 +1100,30 @@ async def get_visible_projects(
         _resolved, mapping = await _resolve_tenant_grants(grants or [], shared, db)
         return mapping or None
 
+    return (await partner_projects_on(db, user.email, shared)) or None
+
+
+async def partner_projects_on(db: AsyncSession, email: str, cluster_ids: Iterable[str]) -> dict[str, set[str]]:
+    """The projects a Partner may see on each of `cluster_ids`, read from the database alone.
+
+    The browser bound (get_visible_projects) and the bound an API key a Partner created is held to
+    (services/key_party_bound.py) are this one function, so the two cannot drift. `default` is
+    always in the set; whether it may be changed is the view-only rule's question.
+    """
+    from app.models.db_models import (
+        OrganizationCluster,
+        OrganizationMember,
+        TenantAccessPolicy,
+        TenantPolicyAssignment,
+        TenantPolicyRule,
+    )
+
     # important: the organizations the partner runs (created, or a partner row), not every
     # membership. A member row in an organization the partner bought from would otherwise lift the
     # bound to whatever that seller's policies name on its own cluster.
     from app.services import cluster_parties
 
-    org_ids = set(await cluster_parties.run_orgs(db, user.email))
+    org_ids = set(await cluster_parties.run_orgs(db, email))
     # note: and the policies assigned to the caller's own member rows, as the release line does. A
     # teammate added from the dashboard holds a member row, runs nothing, and is given its projects
     # by assignment; the seller's other policies stay out.
@@ -1121,12 +1132,12 @@ async def get_visible_projects(
         select(TenantPolicyAssignment.policy_id)
         .join(OrganizationMember, OrganizationMember.id == TenantPolicyAssignment.org_member_id)
         .where(
-            OrganizationMember.user_email == user.email,
+            OrganizationMember.user_email == email,
             or_(TenantPolicyAssignment.expires_at.is_(None), TenantPolicyAssignment.expires_at > now),
         )
     )
     mapping: dict[str, set[str]] = {}
-    for cluster_id in shared:
+    for cluster_id in sorted(set(cluster_ids)):
         allowed = {"default"}
         stmt = (
             select(TenantPolicyRule.project_name)
@@ -1163,7 +1174,7 @@ async def get_visible_projects(
         allowed |= {n for n in named if n and n != "*"}
         mapping[cluster_id] = allowed
 
-    return mapping or None
+    return mapping
 
 
 async def reconcile_personal_clusters(
