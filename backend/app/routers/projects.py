@@ -32,6 +32,7 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.services.lxd.fanout import failure_text
+from app.services.integration_cluster_checks import refuse_a_cluster_not_registered
 from app.services.lxd.exceptions import (
     LXDLocalUnavailableError,
     LXDOperationUnknownError,
@@ -377,6 +378,7 @@ async def list_all_projects(
     description="Get a list of all projects in a specific cluster.",
     responses={
         200: {"description": "List of projects retrieved successfully"},
+        404: {"model": ErrorResponse, "description": "No cluster is registered under that host"},
         503: {"model": ErrorResponse, "description": "LXD connection error"},
         500: {"model": ErrorResponse, "description": "Server error"},
     }
@@ -403,6 +405,7 @@ async def list_projects(
         ))
         
     except LXDConnectionError as e:
+        await refuse_a_cluster_not_registered(host)
         logger.warning(f"LXD connection error: {e}")
         raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
@@ -450,9 +453,13 @@ async def get_project_usage(
     usage_generation = get_resource_list_generation(cache, PROJECT_USAGE_CACHE_KIND)
     try:
         usage = await lxd_service.get_project_usage(host, project_name)
-    except HTTPException:
+    except HTTPException as e:
+        # require_client answers a missing client with this 503 before any LXDConnectionError.
+        if e.status_code == 503:
+            await refuse_a_cluster_not_registered(host)
         raise
     except LXDConnectionError as e:
+        await refuse_a_cluster_not_registered(host)
         raise HTTPException(status_code=503, detail=str(e))
     except LXDProjectNotFoundError:
         raise HTTPException(
@@ -868,6 +875,7 @@ async def update_project(
     except InstanceSecurityPolicyViolation as exc:
         raise _policy_refusal(exc) from exc
     except LXDConnectionError as e:
+        await refuse_a_cluster_not_registered(host)
         logger.warning(f"LXD connection error: {e}")
         raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationUnknownError as e:
@@ -988,6 +996,7 @@ async def delete_project(
             detail=f"Project operations on {host} are busy. Try again in a moment.",
         ) from e
     except LXDConnectionError as e:
+        await refuse_a_cluster_not_registered(host)
         logger.warning("LXD connection error deleting %s on %s", project_name, host)
         failed("LXDConnectionError", f"Could not reach {host}")
         raise HTTPException(status_code=503, detail=f"Could not reach {host} to delete the project") from e
