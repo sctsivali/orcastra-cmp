@@ -52,6 +52,7 @@ from app.core.type_utils import (
 from app.services import cluster_generations
 from app.services.cluster_records import forget_cluster_records
 from app.services.activity_logger import get_activity_logger
+from app.services.registration_budget import spend_registration_budget
 from app.services.lxd_certs import pending as pending_certs
 from app.services.lxd_certs import trust_cleanup
 from app.services.lxd_certs.storage import stored_location, stored_location_fields
@@ -286,6 +287,7 @@ async def register_cluster(
     db: AsyncSession = Depends(get_db),
 ):
     """Register a new LXD cluster."""
+    spend_registration_budget("register", _rbac)
     share_serialization = None
     try:
         settings = get_settings()
@@ -550,7 +552,8 @@ async def register_cluster(
             
             return ClusterRegisterResponse(
                 success=False,
-                message=f"Could not generate certificate: {str(e)}",
+                # The Vault PKI text names mounts and roles; it is in the log and the audit row.
+                message="Could not generate a certificate for this cluster. An administrator can find the cause in the backend log.",
                 cluster_id=cluster_id,
                 status=ClusterStatus.ERROR,
                 certificate_generated=False,
@@ -1558,6 +1561,7 @@ async def regenerate_certificate(
     # important: the certificate acts for every project on the cluster, and a new one replaces the
     # owner's pending renewal, so this is held to the whole cluster like /certificates/renew.
     await verify_whole_cluster_access(cluster_id, db, _rbac)
+    spend_registration_budget("certificate", _rbac)
     try:
         await assert_cluster_not_migration_fenced(cluster_id=cluster_id)
     except MigrationFenceConflict as exc:

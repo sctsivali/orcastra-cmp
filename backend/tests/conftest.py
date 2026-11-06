@@ -173,6 +173,16 @@ def _isolate_cluster_breaker():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_registration_budget():
+    """Registration attempts counted by one test must not spend the next test's budget."""
+    from app.services.registration_budget import forget_registration_budget
+
+    forget_registration_budget()
+    yield
+    forget_registration_budget()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_monitoring_history_store():
     """Start every test with an empty history fallback buffer, body memo and import marks.
 
