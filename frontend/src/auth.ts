@@ -10,7 +10,7 @@ import type { NextAuthConfig, User, Session } from "next-auth";
 import type { JWT } from "next-auth/jwt";
 import { callbackPath, redirectTo, safeCallbackPath } from "@/lib/auth-redirect";
 import { readGroupsClaim, roleGroups } from "@/lib/token-claims";
-import { Role, hasMinimumRole, resolveRoles } from "@/types/rbac";
+import { Role, hasMappedRole, hasMinimumRole, resolveRoles } from "@/types/rbac";
 import { forget, grantOnce, holdTombstones, upgradeSpent, type GrantOutcome, type RefreshedFields } from "@/lib/refresh-grants";
 import { REFRESH_FAILED, REFRESH_TOKEN_REVOKED, createIdpClient } from "@/lib/auth-refresh";
 
@@ -403,7 +403,12 @@ export const authConfig: NextAuthConfig = {
         (p) => nextUrl.pathname === p || nextUrl.pathname.startsWith(p + "/")
       );
 
-      if ((isAdminOrPartnerRoute && !isPartner) || (isAdminOnlyRoute && !isAdmin)) {
+      // note: a session with no role at all is left to the access gate in MainLayout, which shows
+      // the no-role notice on any page and keeps the URL, so Check again lands where the person
+      // was going. The partner redirect is for a role below Partner.
+      const belowPartner = hasMappedRole(userGroups) && !isPartner;
+
+      if ((isAdminOrPartnerRoute && belowPartner) || (isAdminOnlyRoute && !isAdmin)) {
         return Response.redirect(redirectTo(nextUrl, host, "/"));
       }
 

@@ -51,6 +51,19 @@ test("a Partner known by a role_ alias group gets every partner page too", async
   }
 });
 
+test("a session with no role keeps its URL on a partner page, for the access gate to answer", async ({ page }) => {
+  // The access gate shows the no-role notice on any page and keeps the address, so Check again
+  // lands where the person was going once a role is granted. The partner redirect is for a role
+  // below Partner, not for no role at all (found by the gate's own live spec, 2026-11-06).
+  await authenticate(page.context(), "tenant", { groups: [] });
+  for (const path of PARTNER_PAGES) {
+    const response = await page.request.get(path, { maxRedirects: 0 });
+    expect(response.status(), path).toBe(200);
+  }
+  const hostHealth = await page.request.get("/inventory/warnings/host-health", { maxRedirects: 0 });
+  expect(REDIRECT, "Host Health still redirects anyone who is not an Admin").toContain(hostHealth.status());
+});
+
 test("Host Health stays an admin page on the server", async ({ page }) => {
   await authenticate(page.context(), "partner");
   const refused = await page.request.get("/inventory/warnings/host-health", { maxRedirects: 0 });
