@@ -74,7 +74,7 @@ async def test_an_unreadable_registry_marks_nothing(registered) -> None:
     assert not [1 for s in maker.sessions for sql, _ in s.calls if "unregistered" in sql]
 
 
-async def test_an_excluded_cluster_is_still_registered(monkeypatch, registered) -> None:
+async def test_an_excluded_cluster_is_not_named_and_reads_as_unfollowed(monkeypatch, registered) -> None:
     registered["ids"] = frozenset({"nuc1", "prod-lab"})
     maker = FakeSessionMaker()
     follower = JournalFollower(
@@ -84,4 +84,6 @@ async def test_an_excluded_cluster_is_still_registered(monkeypatch, registered) 
     )
     await follower.sync_registry()
     [(_sql, params)] = [(sql, p) for s in maker.sessions for sql, p in s.calls if "SET state = 'unregistered'" in sql]
-    assert params == {"registered": ["nuc1", "prod-lab"]}, "excluded means not followed, not deregistered"
+    # An excluded cluster leaves no trace in the journal, and the follower no longer answers for a row
+    # it kept from before the exclusion, so that row reads `unregistered` too.
+    assert params == {"registered": ["nuc1"]}
