@@ -207,7 +207,7 @@ async def _guard_cluster_write(
 # Organization CRUD
 # ---------------------------------------------------------------------------
 
-@router.get("/", response_model=list[OrgResponse])
+@router.get("", response_model=list[OrgResponse])
 async def list_organizations(
     user: AuthenticatedUser = Depends(require_tenant()),
     db: AsyncSession = Depends(get_db),
@@ -255,7 +255,7 @@ async def get_organization(
     return _org_to_response(org, user.email, tenant=role == Role.TENANT.value)
 
 
-@router.post("/", response_model=OrgResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(check_read_only_mode)])
+@router.post("", response_model=OrgResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(check_read_only_mode)])
 async def create_organization(
     body: OrgCreateRequest,
     user: AuthenticatedUser = Depends(require_partner()),

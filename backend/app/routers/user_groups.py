@@ -92,7 +92,7 @@ class AuthentikSyncStatus(BaseModel):
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("/", response_model=list[UserGroupEntry])
+@router.get("", response_model=list[UserGroupEntry])
 async def list_user_groups(
     user: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),

@@ -115,7 +115,7 @@ def client():
         ("GET", "/api/v1/system/settings"),
         ("GET", "/api/v1/user-preferences"),
         ("POST", "/api/v1/ws-tickets"),
-        ("GET", "/api/v1/organizations/"),
+        ("GET", "/api/v1/organizations"),
         ("GET", "/api/v1/tenant-access/my-access"),
     ],
 )

@@ -216,11 +216,18 @@ async function proxyRequest(req: NextRequest): Promise<Response> {
     req.method === "DELETE" ? UPSTREAM_DELETE_HEADERS_TIMEOUT_MS : UPSTREAM_HEADERS_TIMEOUT_MS
   );
 
+  // important: a streamed body cannot be replayed, so undici throws on a redirect for any method
+  // that carries one and the catch below would call a healthy backend unavailable. Such a
+  // redirect is answered as what it is; one without a body is still followed here, because its
+  // Location names the internal backend host the browser cannot reach.
+  const carriesBody = req.method !== "GET" && req.method !== "HEAD";
+
   try {
     const upstream = await fetch(targetUrl, {
       method: req.method,
       headers,
       body: req.body,
+      redirect: carriesBody ? "manual" : "follow",
       // important: req.signal aborts when the browser disconnects. Without it the upstream
       // fetch and its backend connection outlive the client that asked for them, inside the
       // same single Node process that also renders every RSC payload.
@@ -231,6 +238,19 @@ async function proxyRequest(req: NextRequest): Promise<Response> {
 
     // Headers are in. The body may legitimately take much longer, so stop the clock.
     clearTimeout(deadlineTimer);
+
+    if (carriesBody && upstream.status >= 300 && upstream.status < 400) {
+      console.error("[api-proxy] backend redirected a request with a body", {
+        method: req.method,
+        path: pathname,
+        status: upstream.status,
+      });
+      await upstream.body?.cancel();
+      return NextResponse.json(
+        { error: "The backend redirected this request, which the proxy does not replay with its body" },
+        { status: 502 }
+      );
+    }
 
     // 204/205/304 are null-body statuses: passing ANY body (even a zero-length
     // buffer) makes the Response constructor throw "Invalid response status
