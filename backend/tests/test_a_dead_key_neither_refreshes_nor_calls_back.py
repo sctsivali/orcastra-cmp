@@ -23,6 +23,7 @@ from app.routers import integrations
 from app.services import orcahub_sync
 from app.services.integration_callback_url import APP_URL_SECRET_TAG, callback_url_tag
 from app.services.lxd_service import get_lxd_service
+from tests._callback_fakes import answer_callbacks  # noqa: E402
 from tests._sqlite_session import org_tables, sqlite_session
 
 _HTTP = httpx.AsyncClient
@@ -74,7 +75,7 @@ def outbound(monkeypatch: pytest.MonkeyPatch) -> List[str]:
         calls.append(str(request.url))
         return httpx.Response(200, json={"organizations": [{"id": "ext-1", "name": "Hub Org", "slug": "hub-org"}]})
 
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _HTTP(transport=httpx.MockTransport(_answer), **kw))
+    answer_callbacks(monkeypatch, _answer)
     return calls
 
 

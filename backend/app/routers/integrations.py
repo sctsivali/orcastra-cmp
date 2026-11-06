@@ -6362,7 +6362,10 @@ async def refresh_organizations(
     user: AuthenticatedUser = Depends(require_partner()),
 ):
     """On-demand pull of organizations from external app via stored callback URL."""
-    import httpx
+    import json
+
+    from app.core.safe_http import SafeHTTPError
+    from app.services.orcahub_callbacks import get_from_app
 
     # important: every other single-key handler here scopes through _authorize_api_key, and this
     # one took `api_key_id` straight from a query parameter. Any partner could therefore name any
@@ -6420,24 +6423,27 @@ async def refresh_organizations(
     # Call external app's organizations endpoint
     callback_url = f"{app_url.rstrip('/')}/api/external/organizations"
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                callback_url,
-                headers={
-                    "X-API-Key-ID": api_key_id,
-                    "X-API-Key-Secret-Hash": secret_hash,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.HTTPStatusError as e:
-        # note: status only. Logging the body put the fetched content into the log,
+        body = await get_from_app(
+            callback_url,
+            headers={
+                "X-API-Key-ID": api_key_id,
+                "X-API-Key-Secret-Hash": secret_hash,
+            },
+        )
+        data = json.loads(body)
+    except SafeHTTPError as e:
+        # note: status or category only. Logging the body put the fetched content into the log,
         # which turns a blind SSRF into a returned one for anyone who can read logs.
-        logger.error("External app returned %s for the configured callback", e.response.status_code)
-        raise HTTPException(status_code=502, detail=f"External app returned {e.response.status_code}")
-    except Exception as e:
-        logger.error(f"Failed to reach external app at {callback_url}: {e}")
+        if e.status_code is not None:
+            logger.error("External app returned %s for the configured callback", e.status_code)
+            raise HTTPException(status_code=502, detail=f"External app returned {e.status_code}")
+        logger.error("Could not reach the external app for the configured callback: %s", e)
         raise HTTPException(status_code=502, detail="Could not reach external app")
+    except ValueError:
+        logger.error("External app answered the configured callback with something other than JSON")
+        raise HTTPException(status_code=502, detail="External app returned an unreadable answer")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="External app returned an unreadable answer")
 
     # Parse and upsert organizations
     orgs_data = data.get("organizations", [])

@@ -44,6 +44,7 @@ from app.services.integration_callback_url import APP_URL_SECRET_TAG, callback_u
 from app.services.lxd import registry as cluster_registry
 from app.services.lxd.proxy_operations import PROXY_OPERATION_LEVELS
 from app.services.lxd_service import get_lxd_service
+from tests._callback_fakes import answer_callbacks  # noqa: E402
 from tests._sqlite_session import AsyncSessionFacade, org_tables, sqlite_session
 from tests.test_a_capability_grant_leaves_a_record import PARTNER as PARTNER_LOGIN
 from tests.test_a_capability_grant_leaves_a_record import SECRETS, _FakeVault, _RecordingLogger
@@ -324,7 +325,7 @@ async def test_a_refresh_counts_only_what_it_claimed(
         asked.append(str(request.url))
         return httpx.Response(hub_status, json=answer)
 
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _HTTP(transport=httpx.MockTransport(_callback), **kw))
+    answer_callbacks(monkeypatch, _callback)
     async with _HTTP(transport=httpx.ASGITransport(app=refresh_app(db)), base_url="http://orcastra.test") as client:
         response = await client.post(f"/api/v1/integrations/refresh-organizations?api_key_id={K_PARTNER}")
     assert response.status_code == status, response.text

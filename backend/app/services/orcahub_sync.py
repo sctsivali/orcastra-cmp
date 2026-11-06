@@ -5,14 +5,16 @@ Handles pushing member/branding changes from Orcastra back to OrcaHub
 via the external API endpoints authenticated with API key credentials.
 """
 
+import json
 import logging
 from typing import Any, Dict, List, Optional, Sequence
 
-import httpx
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_key_expiry import classify_key
+from app.core.safe_http import SafeHTTPError
+from app.services.orcahub_callbacks import post_to_app
 from app.models.db_models import Organization, OrganizationMember
 from app.services.integration_callback_url import bound_callback_url
 
@@ -127,27 +129,29 @@ async def push_members_to_orcahub(
     callback_url = f"{creds['app_url'].rstrip('/')}/api/external/members/sync"
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                callback_url,
-                headers={
-                    "X-API-Key-ID": creds["api_key_id"],
-                    "X-API-Key-Secret": creds["api_key_secret"],
-                },
-                json={"members": payload_members},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            logger.info(
-                f"Pushed {len(payload_members)} member(s) to OrcaHub: "
-                f"synced={data.get('data', {}).get('synced', 0)}, "
-                f"removed={data.get('data', {}).get('removed', 0)}"
-            )
-            return True
-    except httpx.HTTPStatusError as e:
-        logger.error(f"OrcaHub member push failed: HTTP {e.response.status_code}")
-    except Exception as e:
+        _status, head = await post_to_app(
+            callback_url,
+            content=json.dumps({"members": payload_members}).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "X-API-Key-ID": creds["api_key_id"],
+                "X-API-Key-Secret": creds["api_key_secret"],
+            },
+        )
+        try:
+            data = json.loads(head) if head else {}
+        except ValueError:
+            data = {}
+        counts = data.get("data", {}) if isinstance(data, dict) else {}
+        logger.info(
+            f"Pushed {len(payload_members)} member(s) to OrcaHub: "
+            f"synced={counts.get('synced', 0)}, removed={counts.get('removed', 0)}"
+        )
+        return True
+    except SafeHTTPError as e:
         logger.error(f"OrcaHub member push failed: {e}")
+    except Exception as e:
+        logger.error(f"OrcaHub member push failed: {type(e).__name__}")
 
     return False
 

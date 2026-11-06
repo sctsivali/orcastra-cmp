@@ -19,6 +19,7 @@ from app.core import org_scope
 from app.core.auth import AuthenticatedUser
 from app.models.db_models import Organization, OrganizationCluster, OrganizationMember, OrganizationOwnerKey
 from app.routers import integrations
+from tests._callback_fakes import answer_callbacks  # noqa: E402
 from tests._sqlite_session import sqlite_session
 
 SHARED = "cluster-shared"
@@ -167,7 +168,7 @@ async def test_refresh_refuses_the_other_partys_key(monkeypatch, world) -> None:
     monkeypatch.setattr(integrations, "_read_api_key_metadata_blocking", lambda _k: dict(theirs))
     monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: object())
     called: List[str] = []
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kw: called.append("callback"))
+    answer_callbacks(monkeypatch, lambda _request: called.append("callback"))
     token = org_scope._allowed_clusters_var.set({SHARED})
     try:
         with pytest.raises(HTTPException) as caught:

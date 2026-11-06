@@ -20,11 +20,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-import httpx
 from sqlalchemy import select
 
 from app.core.database import async_session_maker
 from app.models.db_models import Organization, OrganizationCluster
+from app.services.orcahub_callbacks import post_to_app
 from app.services.orcahub_sync import _get_orcahub_credentials
 
 logger = logging.getLogger(__name__)
@@ -57,18 +57,16 @@ async def _post_signed(creds: dict, payload: dict) -> None:
     ts = str(int(time.time()))
     sig = hmac.new(creds["api_key_secret"].encode(), f"{ts}.{body}".encode(), hashlib.sha256).hexdigest()
     url = f"{creds['app_url'].rstrip('/')}/api/webhooks/orcastra"
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.post(
-            url,
-            content=body,
-            headers={
-                "Content-Type": "application/json",
-                "X-API-Key-ID": creds["api_key_id"],
-                "X-Orcastra-Timestamp": ts,
-                "X-Orcastra-Signature": sig,
-            },
-        )
-        resp.raise_for_status()
+    await post_to_app(
+        url,
+        content=body.encode(),
+        headers={
+            "Content-Type": "application/json",
+            "X-API-Key-ID": creds["api_key_id"],
+            "X-Orcastra-Timestamp": ts,
+            "X-Orcastra-Signature": sig,
+        },
+    )
 
 
 async def emit_orcahub_event_durable(

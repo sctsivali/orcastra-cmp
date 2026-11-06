@@ -26,6 +26,7 @@ from app.routers import integrations
 from app.routers.integrations import SyncDataRequest
 from app.services import orcahub_sync
 from app.services.integration_callback_url import APP_URL_SECRET_TAG, callback_url_tag
+from tests._callback_fakes import answer_callbacks  # noqa: E402
 from tests.test_an_api_key_secret_rotates_in_place import (  # noqa: F401
     ADMIN,
     BASE,
@@ -66,13 +67,12 @@ def _stored_url(world: Dict[str, Any]) -> Optional[str]:  # noqa: F811
 def outbound(monkeypatch: pytest.MonkeyPatch) -> List[httpx.Request]:
     """Every request the refresh makes, answered with no organizations."""
     sent: List[httpx.Request] = []
-    real_client = httpx.AsyncClient
 
     def _answer(request: httpx.Request) -> httpx.Response:
         sent.append(request)
         return httpx.Response(200, json={"organizations": []})
 
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(_answer), **kw))
+    answer_callbacks(monkeypatch, _answer)
     return sent
 
 

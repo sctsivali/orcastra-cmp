@@ -35,7 +35,15 @@ _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 
 class SafeHTTPError(Exception):
-    """An outbound fetch was refused or failed. Carries a category, never an address."""
+    """An outbound fetch was refused or failed. Carries a category, never an address.
+
+    `status_code` is set when the destination answered with an error status, so a caller can
+    report the status without parsing the message.
+    """
+
+    def __init__(self, message: str, *, status_code: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 async def fetch_guarded(
@@ -103,7 +111,9 @@ async def fetch_guarded(
                         continue
 
                     if response.status_code >= 400:
-                        raise SafeHTTPError(f"upstream returned {response.status_code}")
+                        raise SafeHTTPError(
+                            f"upstream returned {response.status_code}", status_code=response.status_code
+                        )
 
                     body = bytearray()
                     async for chunk in response.aiter_bytes():
@@ -168,6 +178,8 @@ async def post_pinned(
     max_response_bytes: int,
     timeout: httpx.Timeout = DEFAULT_TIMEOUT,
     transport: Optional[httpx.AsyncBaseTransport] = None,
+    exemptions: Optional[Sequence[Any]] = None,
+    require_https: Optional[bool] = None,
 ) -> Tuple[int, bytes, int]:
     """Deliver a signed body to a caller-registered endpoint, safely.
 
@@ -177,18 +189,25 @@ async def post_pinned(
     registered with us, so it has no legitimate need to redirect, and every implementation of
     per-hop revalidation in the wild has had a bug in it. A 3xx is a delivery failure with a
     reason, which is more useful to the operator than a silent hop.
+
+    `exemptions` and `require_https` default to the webhook settings. A caller whose URL was
+    accepted under a stricter boundary passes that boundary, so delivery is held to the same rule.
     """
     from app.core.config import webhook_destination_exemptions, webhook_requires_https
 
-    exemptions = webhook_destination_exemptions()
-    reason = describe_url_risk(
-        url, require_https=webhook_requires_https(), exemptions=exemptions
+    if exemptions is None:
+        exemptions = webhook_destination_exemptions()
+    if require_https is None:
+        require_https = webhook_requires_https()
+    # Both resolve the name with a blocking getaddrinfo, so they run off the loop.
+    reason = await asyncio.to_thread(
+        describe_url_risk, url, require_https=require_https, exemptions=exemptions
     )
     if reason is not None:
         raise SafeHTTPError(reason)
 
     try:
-        connect_url, host, address = _pin(url, exemptions=exemptions)
+        connect_url, host, address = await asyncio.to_thread(_pin, url, exemptions=exemptions)
     except ValueError as exc:
         raise SafeHTTPError(str(exc)) from exc
 
