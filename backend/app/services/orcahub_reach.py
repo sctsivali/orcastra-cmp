@@ -4,7 +4,7 @@ note: OrcaHub events fanned out to every OrcaHub organization bound to the event
 cluster two parties hold, each one's OrcaHub heard, and could bill, the other's projects (pre-1.0.0
 review, 2026-11-06). An organization now hears an event when no other party holds the cluster for
 it, or when the event's project is in its bound there: `default` and the projects its party's
-policies name (`*` naming every one), the bound its key and its add-ons are held to. A delete names
+policies name, the bound its key and its add-ons are held to. A delete names
 the organizations that held what it removed, and they hear it although it has left every bound.
 
 OrcaHub organizations are created by the system rather than a person, so the party is organization
@@ -50,7 +50,9 @@ async def _named_by(db: AsyncSession, party: Set[int], cluster_id: str) -> Set[s
         .where(TenantPolicyRule.cluster_id == cluster_id, TenantAccessPolicy.organization_id.in_(sorted(party)))
         .distinct()
     )).scalars().all()
-    return {name for name in rows if name}
+    # important: '*' does not lift the bound, as in org_scope.partner_projects_on: a rule's project
+    # defaults to '*', and on a cluster another party holds a wildcard names their projects too.
+    return {name for name in rows if name and name != "*"}
 
 
 async def organizations_reaching(
@@ -83,6 +85,7 @@ async def organizations_reaching(
     parties = await _parties(db, holders | {org.id for org in orgs} | held)
     wanted = (project or "").strip() or "default"
     reaching: List[Organization] = []
+    named: Dict[frozenset, Set[str]] = {}  # a seller and its buyers share one read
     for org in orgs:
         party = parties.get(org.id, {org.id})
         if party & held:
@@ -93,7 +96,12 @@ async def organizations_reaching(
             continue
         if deleted:
             continue
-        names = await _named_by(db, party, cluster_id)
-        if wanted == "default" or "*" in names or wanted in names:
+        if wanted == "default":
+            reaching.append(org)
+            continue
+        key = frozenset(party)
+        if key not in named:
+            named[key] = await _named_by(db, party, cluster_id)
+        if wanted in named[key]:
             reaching.append(org)
     return reaching

@@ -3,7 +3,8 @@
 OrcaHub events fanned out to every OrcaHub organization bound to the event's cluster, so on a
 cluster two parties hold, each one's OrcaHub heard, and could bill, the other's projects (pre-1.0.0
 review, 2026-11-06). An organization hears an event when no other party holds the cluster for it,
-or when the project is in its bound there (`default` and what its party's policies name); a delete
+or when the project is in its bound there (`default` and what its party's policies name, never `*`);
+a delete
 reaches the organizations that held what it removed (services/orcahub_reach.py).
 """
 
@@ -78,11 +79,14 @@ async def test_beside_another_party_an_organization_hears_only_its_bound() -> No
     assert await _reaching(db, MIXED, "nobodys", (1, 3)) == []
 
 
-async def test_a_star_rule_reaches_every_project() -> None:
+async def test_a_star_rule_does_not_lift_the_bound_beside_another_party() -> None:
+    # A rule's project defaults to '*'; written while the seller held the cluster alone, it would
+    # otherwise name every project the other party adds later (org_scope.partner_projects_on).
     db = await _world()
     db.add(TenantPolicyRule(policy_id=10, cluster_id=MIXED, project_name="*"))
     await db.commit()
-    assert await _reaching(db, MIXED, "theirs", (1,)) == [1]
+    assert await _reaching(db, MIXED, "theirs", (1,)) == []
+    assert await _reaching(db, MIXED, "sellers", (1,)) == [1]
 
 
 async def test_a_delete_reaches_the_organizations_that_held_the_project() -> None:
@@ -193,3 +197,44 @@ async def test_a_migration_billing_event_names_the_jobs_owner(monkeypatch) -> No
     })
     assert await completion.deliver_completion_event(row) is True
     assert reached["reached_organizations"] == [7], "only integer organization ids are holders"
+
+
+async def test_a_policy_of_an_organization_not_bound_to_the_cluster_does_not_count() -> None:
+    db = await _world()
+    # The buyer (2) is not bound to the mixed cluster; its rule there names no project of the seller's.
+    db.add_all([
+        TenantAccessPolicy(id=20, organization_id=2, name="buyer", created_by="system"),
+        TenantPolicyRule(policy_id=20, cluster_id=MIXED, project_name="buyers"),
+    ])
+    await db.commit()
+    assert await _reaching(db, MIXED, "buyers", (1,)) == []
+
+
+async def test_a_key_that_lends_no_party_does_not_join_two_sides() -> None:
+    db = await _world()
+    # Organization 3 also lists the seller's key, enrolled rather than claimed: it lends no party.
+    db.add(OrganizationOwnerKey(organization_id=3, api_key_id=SELLER_KEY, added_via="enroll"))
+    await db.commit()
+    assert await _reaching(db, MIXED, "theirs", (1,)) == []
+
+
+async def test_every_migration_outbox_event_names_the_jobs_owner(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.services.migrations import context, repository
+
+    written: Dict[str, Any] = {}
+
+    async def set_job(_db, _job_id, **kwargs):
+        written.update(kwargs)
+        return True
+
+    monkeypatch.setattr(repository, "set_job", set_job)
+    monkeypatch.setattr(context, "async_session_maker", _Maker(object()))
+    job = SimpleNamespace(job_id="job-1", fence_token=1, source_organization_id=7, requester_role="admin",
+                          actor_issuer="i", actor_subject="s", actor_email="ops@example.test", actor_provider_uuid="u")
+    await context._fenced_job_update(
+        job, "w", event_message="done", phase="completed", status="success", terminal=True,
+        outbox_events=[{"event_type": "instance.deleted", "channel": "billing", "extra": {"resource_name": "vm"}}],
+    )
+    assert written["outbox_events"][0]["extra"]["held_organizations"] == [7]

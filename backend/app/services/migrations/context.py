@@ -192,6 +192,10 @@ async def _fenced_job_update(
     terminal: bool = False,
     **values: Any,
 ) -> bool:
+    if values.get("outbox_events"):
+        from .retention_store import naming_holders, owner_of
+
+        values["outbox_events"] = naming_holders(values["outbox_events"], owner_of(job))
     if values.get("status") == "success":
         # A transient error recorded on the way, such as an authority retry, does not describe
         # a job that finished cleanly.
