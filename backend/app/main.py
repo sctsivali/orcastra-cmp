@@ -163,6 +163,12 @@ async def lifespan(app: FastAPI):
     instance_operation_recovery_task = None
     migration_recovery_task = None
 
+    from app.core.request_security import own_address, untrusted_own_network_warning
+
+    proxy_warning = untrusted_own_network_warning(settings.trusted_proxy_cidrs, own_ip=own_address())
+    if proxy_warning:
+        logger.warning(proxy_warning)
+
     # important: the per-key budget only isolates integrations from each other while it is
     # strictly below the per-IP one. Buckets are evaluated together and the request is refused by
     # whichever is reached first, so at or above it the IP bucket always refuses first and the

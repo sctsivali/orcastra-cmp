@@ -131,7 +131,10 @@ class Settings(BaseSettings):
     trusted_proxy_cidrs: str = Field(
         default="127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128,fc00::/7,fe80::/10",
         alias="TRUSTED_PROXY_CIDRS",
-        description="Comma-separated proxy CIDRs allowed to supply client IP headers"
+        description=(
+            "Comma-separated proxy CIDRs allowed to supply client IP headers. A set value replaces "
+            "this default; loopback is always trusted"
+        ),
     )
     allow_private_forwarded_ips: bool = Field(
         default=False,

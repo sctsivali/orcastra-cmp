@@ -7,6 +7,7 @@ from app.core.request_security import (
     get_client_subnet,
     inspect_request_target,
     resolve_client_ip,
+    untrusted_own_network_warning,
 )
 from app.core.safe_paths import safe_filename
 from app.middleware.security import WindowedRateLimiter
@@ -117,13 +118,41 @@ class ClientIpTrustTests(unittest.TestCase):
         self.assertEqual(resolution.source, "x-orcastra-client-ip")
         self.assertTrue(resolution.trusted_proxy)
 
-    def test_keeps_internal_proxy_trusted_when_custom_cidrs_are_configured(self) -> None:
+    def test_a_configured_list_replaces_the_default(self) -> None:
+        # RC5 acceptance FU-6: the default was always added to a configured list, so a list could
+        # widen trust but never narrow it, and the installer's narrow value had no effect.
         request = make_request({"x-orcastra-client-ip": "195.178.110.104"}, "172.18.0.5")
 
         self.assertEqual(
             get_client_ip(request, trusted_proxy_cidrs="173.245.48.0/20,103.21.244.0/22"),
-            "195.178.110.104",
+            "172.18.0.5",
         )
+
+    def test_the_installer_value_trusts_its_compose_network_and_nothing_else_private(self) -> None:
+        installer = "127.0.0.0/8,::1/128,172.20.0.0/14"
+        from_compose = make_request({"x-orcastra-client-ip": "195.178.110.104"}, "172.21.0.3")
+        from_the_lan = make_request({"x-orcastra-client-ip": "195.178.110.104"}, "192.168.1.20")
+
+        self.assertEqual(get_client_ip(from_compose, trusted_proxy_cidrs=installer), "195.178.110.104")
+        self.assertEqual(get_client_ip(from_the_lan, trusted_proxy_cidrs=installer), "192.168.1.20")
+
+    def test_loopback_is_trusted_whatever_the_list_says(self) -> None:
+        request = make_request({"x-forwarded-for": "8.8.8.8"}, "127.0.0.1")
+
+        self.assertEqual(get_client_ip(request, trusted_proxy_cidrs="173.245.48.0/20"), "8.8.8.8")
+
+    def test_an_empty_list_keeps_the_default(self) -> None:
+        request = make_request({"x-forwarded-for": "8.8.8.8"}, "10.1.2.3")
+
+        self.assertEqual(get_client_ip(request, trusted_proxy_cidrs=""), "8.8.8.8")
+        self.assertEqual(get_client_ip(request, trusted_proxy_cidrs=None), "8.8.8.8")
+
+    def test_startup_warns_when_its_own_network_is_not_trusted(self) -> None:
+        warning = untrusted_own_network_warning("173.245.48.0/20", own_ip="172.18.0.4")
+        self.assertIsNotNone(warning)
+        self.assertIn("172.18.0.4", warning)
+        self.assertIsNone(untrusted_own_network_warning("127.0.0.0/8,172.16.0.0/12", own_ip="172.18.0.4"))
+        self.assertIsNone(untrusted_own_network_warning("173.245.48.0/20", own_ip=None))
 
     def test_rejects_private_forwarded_ip_by_default(self) -> None:
         request = make_request({"cf-connecting-ip": "172.18.0.5"}, "172.18.0.2")

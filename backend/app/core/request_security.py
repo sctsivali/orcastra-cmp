@@ -5,6 +5,7 @@ Request security helpers for scanner detection and trusted client IP handling.
 from __future__ import annotations
 
 import ipaddress
+import socket
 from dataclasses import dataclass
 from typing import Iterable
 from urllib.parse import parse_qsl, unquote
@@ -16,6 +17,7 @@ DEFAULT_TRUSTED_PROXY_CIDRS = (
     "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,"
     "::1/128,fc00::/7,fe80::/10"
 )
+LOOPBACK_PROXY_CIDRS = "127.0.0.0/8,::1/128"
 
 CLIENT_IP_HEADERS = (
     "x-orcastra-client-ip",
@@ -236,9 +238,11 @@ def _parse_ip(value: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Addres
 
 
 def _trusted_networks(cidr_text: str | None) -> Iterable[ipaddress._BaseNetwork]:
-    cidr_sources = [DEFAULT_TRUSTED_PROXY_CIDRS]
-    if cidr_text:
-        cidr_sources.append(cidr_text)
+    # important: a configured list replaces the default rather than adding to it. Added, the
+    # default's private ranges stayed trusted whatever was set, so a caller on a private network
+    # reaching the backend port directly could name any client address (RC5 acceptance FU-6).
+    # Loopback is always trusted: it can only be this host.
+    cidr_sources = [LOOPBACK_PROXY_CIDRS, cidr_text or DEFAULT_TRUSTED_PROXY_CIDRS]
 
     seen_cidrs: set[str] = set()
     for cidrs in cidr_sources:
@@ -258,6 +262,30 @@ def _is_trusted_proxy(ip_value: str | None, cidr_text: str | None) -> bool:
     if not direct_ip:
         return False
     return any(direct_ip in network for network in _trusted_networks(cidr_text))
+
+
+def own_address() -> str | None:
+    try:
+        return socket.gethostbyname(socket.gethostname())
+    except OSError:
+        return None
+
+
+def untrusted_own_network_warning(cidr_text: str | None, *, own_ip: str | None) -> str | None:
+    """A startup warning when this backend's own address is outside the trusted proxy list.
+
+    note: the frontend proxy normally shares the backend's container network. A list that leaves
+    that network out (one written when the default was still added to it) stops trusting the
+    frontend, and every browser request is then counted against the frontend's one address.
+    """
+    if not own_ip or _is_trusted_proxy(own_ip, cidr_text):
+        return None
+    return (
+        f"TRUSTED_PROXY_CIDRS does not include this backend's own address ({own_ip}). A proxy on "
+        "the same network, such as the frontend, is not trusted to pass the client address, so "
+        "every request through it shares one rate-limit bucket and one audit address. List every "
+        "proxy in front of the backend, the frontend's network included."
+    )
 
 
 def _is_allowed_forwarded_ip(
