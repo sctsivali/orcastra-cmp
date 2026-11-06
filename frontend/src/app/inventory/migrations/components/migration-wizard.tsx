@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { DialogSubmitError } from "@/components/ui/dialog-submit-error";
+import { MigrationOwnerChoice } from "./migration-owner-choice";
 import { ToastAction } from "@/components/ui/toast";
 import type { WriteAvailability } from "@/hooks/use-read-only-mode";
 import { toast } from "@/hooks/use-toast";
@@ -211,6 +212,14 @@ export function MigrationWizard(props: MigrationWizardProps) {
                   networksLoading={queries.networkQuery.isLoading}
                 />
               ) : null}
+
+              {step === 1 && !plan && wizard.ownerChoices && (
+                <MigrationOwnerChoice
+                  candidates={wizard.ownerChoices}
+                  value={draft.sourceOrganizationId}
+                  onChange={(organizationId) => wizard.updateDraft({ sourceOrganizationId: organizationId })}
+                />
+              )}
 
               {wizard.notice && (
                 <Alert>

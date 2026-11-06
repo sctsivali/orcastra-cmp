@@ -155,6 +155,13 @@ class MigrationPlanCreateRequest(BaseModel):
     checkpoint_requested: bool = False
     external_cutover_required: bool = False
     mappings: MigrationMappings = Field(default_factory=MigrationMappings)
+    # note: only an Admin may send it, and only for a source whose owner the bindings cannot
+    # name: `default` on a cluster several organizations hold (services/migrations/planning.py).
+    source_organization_id: Optional[int] = Field(
+        None,
+        ge=1,
+        description="The organization that owns an ambiguous default source. Admins only.",
+    )
 
     @model_validator(mode="after")
     def _validate_resource_shape(self):

@@ -163,6 +163,15 @@ export interface MigrationPlanCreateRequest {
   checkpoint_requested: boolean;
   external_cutover_required: boolean;
   mappings: MigrationMappings;
+  /** Admins only: the organization that owns an instance in an ambiguous `default`. */
+  source_organization_id?: number;
+}
+
+/** An organization an Admin may name as the owner of an ambiguous `default` source. */
+export interface MigrationOwnerCandidate {
+  id: number;
+  slug: string;
+  name: string;
 }
 
 export interface MigrationPlanUpdateRequest {

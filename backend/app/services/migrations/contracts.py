@@ -22,6 +22,18 @@ class MigrationConflict(RuntimeError):
     pass
 
 
+class MigrationOwnerChoiceRequired(MigrationConflict):
+    """An Admin must name which organization owns an ambiguous `default` source.
+
+    `candidates` are the organizations bound to the source cluster that the plan could be
+    attributed to, as (id, slug, name). Only an Admin is ever shown them.
+    """
+
+    def __init__(self, message: str, candidates: list) -> None:
+        super().__init__(message)
+        self.candidates = list(candidates)
+
+
 class MigrationNotFound(RuntimeError):
     pass
 

@@ -2,6 +2,7 @@ import { LXD_NAME_PATTERN } from "@/lib/lxd-names";
 import { formatLabel } from "@/lib/utils";
 import type {
   MigrationIntent,
+  MigrationOwnerCandidate,
   MigrationPlanCreateRequest,
   MigrationScope,
 } from "@/types/migrations";
@@ -41,6 +42,8 @@ export interface MigrationDraftState {
   externalCutoverRequired: boolean;
   reason: string;
   acknowledgements: string[];
+  /** The owner an Admin named for an ambiguous `default` source; null until the server asks. */
+  sourceOrganizationId: number | null;
 }
 
 export const MIGRATION_STEPS = [
@@ -207,6 +210,7 @@ export function initialMigrationDraft(
     externalCutoverRequired: false,
     reason: "",
     acknowledgements: [],
+    sourceOrganizationId: null,
   };
 }
 
@@ -240,6 +244,8 @@ export function draftFromPlan(plan: {
     externalCutoverRequired: plan.external_cutover_required,
     reason: "",
     acknowledgements: [],
+    // A saved plan keeps the owner it was created with on the server; a patch does not resend it.
+    sourceOrganizationId: null,
   };
 }
 
@@ -283,5 +289,19 @@ export function createPlanBody(draft: MigrationDraftState): MigrationPlanCreateR
     retention_hours: draft.retentionHours,
     checkpoint_requested: draft.checkpointRequested,
     external_cutover_required: draft.externalCutoverRequired,
+    ...(draft.sourceOrganizationId !== null ? { source_organization_id: draft.sourceOrganizationId } : {}),
   };
+}
+
+/** The candidates of a 409 that asks an Admin to name the source's owner, else null. */
+export function ownerChoiceCandidates(detail: unknown): MigrationOwnerCandidate[] | null {
+  if (!detail || typeof detail !== "object") return null;
+  const body = detail as { error?: unknown; candidates?: unknown };
+  if (body.error !== "source_owner_choice_required" || !Array.isArray(body.candidates)) return null;
+  return body.candidates.filter(
+    (entry): entry is MigrationOwnerCandidate =>
+      !!entry &&
+      typeof (entry as MigrationOwnerCandidate).id === "number" &&
+      typeof (entry as MigrationOwnerCandidate).name === "string",
+  );
 }

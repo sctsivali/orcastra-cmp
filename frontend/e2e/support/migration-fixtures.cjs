@@ -303,6 +303,12 @@ async function installMigrationFixtures(page, role, options = {}) {
       state.createdBodies.push(body);
       // Holds the answer, as a preflight that takes seconds does, until the spec releases it.
       if (options.createGate) await options.createGate;
+      // A refusal the spec decides from the body, such as the 409 asking an Admin to name an owner.
+      const refusal = options.createRefusal?.(body);
+      if (refusal) {
+        await json(route, refusal.body, refusal.status);
+        return;
+      }
       const created = makePlan({
         plan_id: options.createdPlanId ?? "plan-created",
         scope: body.scope,

@@ -52,7 +52,7 @@ from app.services.migrations.orchestrator import (
     MigrationNotFound,
     _authority_pin,
 )
-from app.services.migrations.contracts import MigrationClusterUnavailable
+from app.services.migrations.contracts import MigrationClusterUnavailable, MigrationOwnerChoiceRequired
 from app.services.migrations.metrics import collect_migration_metrics
 from app.services.migrations.presenters import job_response, plan_response
 from app.services.migrations.repository import MigrationListVisibility
@@ -165,6 +165,18 @@ async def _service_call(awaitable: Awaitable[Any]) -> Any:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_AUTHORITY_UNAVAILABLE_DETAIL,
+        ) from exc
+    except MigrationOwnerChoiceRequired as exc:
+        # Only an Admin reaches this (planning._organizations), so the candidates disclose nothing.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "source_owner_choice_required",
+                "message": str(exc),
+                "candidates": [
+                    {"id": org_id, "slug": slug, "name": name} for org_id, slug, name in exc.candidates
+                ],
+            },
         ) from exc
     except (MigrationConflict, MigrationSecurityError) as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

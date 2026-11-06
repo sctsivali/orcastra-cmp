@@ -1301,3 +1301,42 @@ test("job detail shows retention, offers Finalize and Roll Back, and keeps stale
   await expectNoHorizontalOverflow(page);
   await expectCleanMigrationHarness(api);
 });
+
+test("an Admin names the owner of an ambiguous default before preflight runs", async ({ page }) => {
+  // `default` on a cluster several organizations hold names no owner, so the server asks an Admin
+  // which one owns the instance (RC5 follow-up FU-5). Nothing is preselected for them.
+  const candidates = [{ id: 7, slug: "globex", name: "Globex" }];
+  await authenticate(page.context(), "admin");
+  const api = await installMigrationFixtures(page, "admin", {
+    createRefusal: (body) =>
+      body.source_organization_id === 7
+        ? null
+        : {
+            status: 409,
+            body: {
+              detail: {
+                error: "source_owner_choice_required",
+                message: "The default project on this cluster is held by several organizations. Name the organization that owns this instance.",
+                candidates,
+              },
+            },
+          },
+  });
+  const dialog = page.getByRole("dialog");
+
+  await openNewMigration(page);
+  await chooseSourceAndDestination(page);
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  const asked = dialog.getByText("Name the organization that owns this instance.", { exact: false });
+  await expect(asked).toBeVisible();
+  const owner = dialog.getByLabel("Owning Organization", { exact: true });
+  await expect(owner).toBeVisible();
+  await expect(owner).toHaveText("Choose an organization");
+
+  await choose(page, "Owning Organization", "Globex");
+  await expect(asked).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  await expect(dialog.getByRole("heading", { name: "Review the strategy" })).toBeVisible();
+  expect(api.createdBodies.map((body) => body.source_organization_id)).toEqual([undefined, 7]);
+  await expectCleanMigrationHarness(api);
+});

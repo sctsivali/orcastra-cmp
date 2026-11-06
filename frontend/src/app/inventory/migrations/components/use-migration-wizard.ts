@@ -19,7 +19,13 @@ import { toast } from "@/hooks/use-toast";
 import { migrationsAPI } from "@/lib/migrations-api";
 import { describeReadError } from "@/lib/read-error";
 import { safeRandomUUID } from "@/lib/utils";
-import type { MigrationJob, MigrationPlan, MigrationPlanUpdateRequest } from "@/types/migrations";
+import { APIError } from "@/types/api";
+import type {
+  MigrationJob,
+  MigrationOwnerCandidate,
+  MigrationPlan,
+  MigrationPlanUpdateRequest,
+} from "@/types/migrations";
 import { requiredAcknowledgements } from "./migration-stage-review";
 import {
   LXD_NAME_PATTERN,
@@ -28,6 +34,7 @@ import {
   initialMigrationDraft,
   isSameLocation,
   mappingProblem,
+  ownerChoiceCandidates,
   parseRetention,
   projectDestinationProblem,
   type MigrationDraftState,
@@ -118,6 +125,8 @@ export function useMigrationWizard({
   const [planDirty, setPlanDirty] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
+  // Set when the server asks an Admin to name the owner of an ambiguous `default` source.
+  const [ownerChoices, setOwnerChoices] = React.useState<MigrationOwnerCandidate[] | null>(null);
   const loadedPlanRef = React.useRef<string | null>(null);
   const preserveDraftOnDetachRef = React.useRef(false);
   const submitInFlightRef = React.useRef(false);
@@ -215,7 +224,9 @@ export function useMigrationWizard({
 
   const updateDraft = React.useCallback(
     (patch: Partial<MigrationDraftState>, invalidate = false) => {
-      setDraft((current) => ({ ...current, ...patch }));
+      const sourceChanged = ["sourceCluster", "sourceProject", "resourceName", "scope"].some((key) => key in patch);
+      setDraft((current) => ({ ...current, ...patch, ...(sourceChanged ? { sourceOrganizationId: null } : {}) }));
+      if (sourceChanged) setOwnerChoices(null);
       setError(null);
       if (Object.keys(patch).some((key) => DRAFT_PLAN_KEYS.includes(key as keyof MigrationDraftState))) {
         setPlanDirty(true);
@@ -323,6 +334,8 @@ export function useMigrationWizard({
     } catch (caught) {
       if (!live()) return;
       const message = caught instanceof Error ? caught.message : fallback;
+      const choices = caught instanceof APIError && caught.status === 409 ? ownerChoiceCandidates(caught.detail) : null;
+      if (choices) setOwnerChoices(choices);
       if (isRevisionConflict(message)) await reloadAfterConflict(message, live);
       else setError(message);
     } finally {
@@ -442,6 +455,7 @@ export function useMigrationWizard({
     planDirty,
     error,
     notice,
+    ownerChoices,
     pending,
     expired,
     executed,

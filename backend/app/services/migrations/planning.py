@@ -24,7 +24,11 @@ from app.services.break_glass_service import (
     PinStoreUnavailable,
     cluster_pin_state,
 )
-from app.services.instance_job_identity import resolve_instance_job_organization
+from app.services.instance_job_identity import (
+    InstanceJobOrganization,
+    bound_organizations,
+    resolve_instance_job_organization,
+)
 from app.services.lxd.availability import require_client
 from app.services.lxd.connection import require_client_server_fingerprint
 from app.services.lxd.exceptions import LXDTransportPinError
@@ -45,6 +49,7 @@ from .contracts import (
     MigrationAuthorityError,
     MigrationConflict,
     MigrationNotFound,
+    MigrationOwnerChoiceRequired,
     _authority_pin,
     _authority_values,
     _blocking,
@@ -320,7 +325,22 @@ class MigrationPlanningMixin:
             cluster_id=request.target.cluster_id,
             project=request.target.project,
         )
-        if source.resolution != "exact" or source.organization_id is None:
+        chosen = request.source_organization_id
+        source_exact = source.resolution == "exact" and source.organization_id is not None
+        if chosen is not None and requester_role != "admin":
+            raise MigrationAuthorityError(
+                "Only an administrator names the owner of a migration source.",
+                code="source_owner_choice_not_allowed",
+            )
+        if source_exact and chosen is not None and chosen != source.organization_id:
+            raise MigrationConflict(
+                "The source project already belongs to one organization, so another cannot be named for it."
+            )
+        if not source_exact and not (
+            requester_role == "admin"
+            and source.resolution == "ambiguous"
+            and (request.source.project or "default") == "default"
+        ):
             raise MigrationConflict(
                 "Source project ownership is ambiguous. Migration fails closed on shared clusters."
             )
@@ -328,6 +348,24 @@ class MigrationPlanningMixin:
             raise MigrationConflict(
                 "Target project ownership is ambiguous. Bind it to one organization first."
             )
+        if not source_exact:
+            # important: `default` on a cluster several organizations hold names no owner, so an
+            # Admin says which one the instance belongs to (RC5 follow-up FU-5, owner decision
+            # 2026-11-06). Never picked for them, even with one candidate: an instance attributed
+            # to the wrong organization hands that organization's partners the job.
+            candidates = [
+                row for row in await bound_organizations(self.db, request.source.cluster_id)
+                # A plan's source and target belong to one organization (ck_migration_plan_org).
+                if row[0] == target.organization_id
+            ]
+            if chosen is None or chosen not in {row[0] for row in candidates}:
+                raise MigrationOwnerChoiceRequired(
+                    "The default project on this cluster is held by several organizations. Name the "
+                    "organization that owns this instance; only one bound to the source cluster that "
+                    "also owns the target can be named.",
+                    candidates,
+                )
+            source = InstanceJobOrganization(chosen, next(slug for oid, slug, _ in candidates if oid == chosen), "exact")
         if source.organization_id != target.organization_id:
             raise MigrationConflict("Source and target must belong to the same organization.")
         relocation = _enum_value(request.scope) == "project" and (

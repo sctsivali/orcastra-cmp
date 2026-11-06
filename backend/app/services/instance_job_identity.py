@@ -9,7 +9,7 @@ or a later ownership change. Ambiguous ownership is recorded explicitly and is n
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import List, Literal, Optional, Tuple
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -104,3 +104,24 @@ async def resolve_instance_job_organization(
         organization_id, slug = next(iter(exact))
         return InstanceJobOrganization(organization_id, slug, "exact")
     return InstanceJobOrganization(None, None, "ambiguous")
+
+
+async def bound_organizations(db: AsyncSession, cluster_id: str) -> List[Tuple[int, str, str]]:
+    """The active organizations bound to `cluster_id`, as (id, slug, name), by id.
+
+    For an Admin naming the owner of an ambiguous `default`. An unbound row is never a candidate:
+    it names no organization a job could be attributed to.
+    """
+    rows = (
+        await db.execute(
+            select(Organization.id, Organization.slug, Organization.name)
+            .join(OrganizationCluster, OrganizationCluster.organization_id == Organization.id)
+            .where(
+                OrganizationCluster.cluster_id == cluster_id,
+                Organization.is_active == True,  # noqa: E712 - SQLAlchemy expression
+            )
+            .distinct()
+            .order_by(Organization.id)
+        )
+    ).all()
+    return [(int(org_id), str(slug), str(name or slug)) for org_id, slug, name in rows]
