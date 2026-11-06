@@ -137,6 +137,11 @@ async def _settled(followup: store.Followup, *, settled_later: bool) -> None:
             exc_info=True,
         )
     announcer.clear_caches(followup.origin)
+    # Every delete path settles here (browser, both key doors, the sweeper), so a key held to its
+    # creator's bound stops listing the name on every worker (services/key_party_bound.py).
+    from app.services.key_party_bound import forget_cluster_bounds
+
+    forget_cluster_bounds(followup.cluster_id)
     spawn(announcer.announce_and_finish(followup, settled_later=settled_later))
 
 

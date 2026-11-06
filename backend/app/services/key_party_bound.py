@@ -242,13 +242,19 @@ async def record_key_created_project(
         forget_creator_bound(creator, cluster_id)
 
 
-def forget_creator_bound_of(api_key: Mapping[str, Any], cluster_id: str) -> None:
-    """Drop every cached bound on `cluster_id` after a key deleted a project there: the name may be
-    another party's next, and any creator's cached bound could still list it."""
+def forget_cluster_bounds(cluster_id: str) -> None:
+    """Drop every cached bound on `cluster_id`, here and on every worker. Called wherever a project
+    on the cluster is created or deleted, whoever did it: a deleted name may be another party's
+    next, and any creator's cached bound could still list it."""
     with _lock:
         for cache_key in [k for k in _bounds if k[1] == cluster_id]:
             _bounds.pop(cache_key, None)
     _publish_change(cluster_id)
+
+
+def forget_creator_bound_of(api_key: Mapping[str, Any], cluster_id: str) -> None:
+    """After a key deleted a project on `cluster_id`."""
+    forget_cluster_bounds(cluster_id)
 
 
 def forget_creator_bound(creator: str, cluster_id: str) -> None:

@@ -428,3 +428,27 @@ async def test_a_browser_rebuild_in_an_unisolated_shared_project_is_refused(monk
     await instance_rebuild._refuse_a_rebuild_in_an_unisolated_project(service, None, CLUSTER_ID, "own-a", None)
     monkeypatch.setattr(isp, "resolve_cluster_write_policy", await policy_of(exclusive))
     await instance_rebuild._refuse_a_rebuild_in_an_unisolated_project(service, None, CLUSTER_ID, "legacy", None)
+
+
+# ── third review: default is judged too, and every delete or create path publishes ─────────────
+
+async def test_a_teammates_key_writing_an_instance_in_default_is_judged_by_its_isolation(held, monkeypatch) -> None:
+    # The view-only rule counts a teammate's member row as its own side (the conftest seam says
+    # "not held" for it), but the browser refuses a Partner's write into an unrestricted default.
+    asked = _isolated_except(monkeypatch, "default")
+    api_key = await narrow_to_party_bound(dict(STAR))
+    made, session = await raw_write("PUT", "/1.0/instances/web", "default", {"config": {}}, api_key=api_key)
+    assert isinstance(made, HTTPException) and made.status_code == 409 and not session.sent
+    assert "default" in asked
+
+
+@pytest.mark.parametrize("module,function", [
+    ("services/project_deletion.py", "_settled"),
+    ("services/project_grants.py", "record_created_project"),
+])
+def test_every_project_delete_or_recorded_create_drops_the_bounds(module, function) -> None:
+    source = (Path(kpb.__file__).resolve().parents[1] / module).read_text()
+    fn = next(n for n in ast.walk(ast.parse(source))
+              if isinstance(n, ast.AsyncFunctionDef) and n.name == function)
+    called = {getattr(c.func, "id", None) for c in ast.walk(fn) if isinstance(c, ast.Call)}
+    assert "forget_cluster_bounds" in called, f"{module}::{function}"

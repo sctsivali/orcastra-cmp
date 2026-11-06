@@ -948,7 +948,7 @@ def _raw_isolation_targets(request: RawProxyRequest, project: str) -> List[str]:
     targets: List[str] = [project] if _raw_instance_config_write(request) else []
     if family in {"instances", "containers", "virtual-machines", "images"} and isinstance(request.body, dict):
         targets.extend(projects_named_in(request.body))
-    return sorted({t for t in targets if t and t != "default"})
+    return sorted({t for t in targets if t})
 
 
 def _project_isolation_config(client: Any, project: str) -> Dict[str, Any]:
@@ -961,9 +961,13 @@ def _project_isolation_config(client: Any, project: str) -> Dict[str, Any]:
 async def _refuse_an_unisolated_target(client: Any, cluster_id: str, projects: Any) -> None:
     """409 when a party-bounded key writes into, or names in a body, a project that shares
     `default`'s volumes, images, profiles or networks, as the browser refuses a Partner.
-    `default` itself is left to the view-only rule, which has already refused it."""
+
+    note: `default` is judged like any other project. The view-only rule usually refused it
+    already, but it counts a teammate's member row as the caller's side and this bound does not,
+    and the browser refuses a Partner's write into an unrestricted `default` on a shared cluster
+    (second security review of the key bound, 2026-11-06)."""
     names = [projects] if isinstance(projects, str) else list(projects)
-    for name in sorted({n for n in names if n and n != "default"}):
+    for name in sorted({n for n in names if n}):
         config = await run_blocking(
             _project_isolation_config, client, name,
             timeout=RAW_PROXY_TIMEOUT, label=f"key_party_bound[isolation {cluster_id}]",

@@ -229,6 +229,9 @@ async def record_created_project(
             "organization's policy"
         )
     widen_bound_in_request(cluster_id, project_name)
+    from app.services.key_party_bound import forget_cluster_bounds
+
+    forget_cluster_bounds(cluster_id)
     activity_logger.log_activity(
         action="project.access.grant",
         target_type="project",
