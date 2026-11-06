@@ -46,7 +46,7 @@ from .proxy import (
 )
 from app.core.error_sanitizer import sanitize_error
 from app.core.lxd_segment import lxd_segment
-from app.core.tenant_visibility import parse_lxd_reference
+from app.core.tenant_visibility import references_in_projects
 
 logger = logging.getLogger(__name__)
 
@@ -545,10 +545,7 @@ def execute_proxy_operation(
             # It keeps the references in its own grant, as the operation reads above do.
             for row in rows:
                 if "used_by" in row:
-                    row["used_by"] = [
-                        reference for reference in row["used_by"] or []
-                        if parse_lxd_reference(reference)[0] in visible_projects
-                    ]
+                    row["used_by"] = references_in_projects(row["used_by"] or [], visible_projects)
         return rows
 
     if operation == "list_snapshots":

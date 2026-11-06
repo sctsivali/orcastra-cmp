@@ -68,6 +68,7 @@ from app.services.lxd.limited_write_reach import (
 )
 from app.services.lxd.cloud_init_reach import cloud_init_changes, proxy_cloud_init_owed, refuse_changed_cloud_init
 from app.services.lxd.operation_metadata import redact_operation_response
+from app.core.tenant_visibility import used_by_in_projects
 from app.services.settle_invalidation import invalidate_when_settled
 from app.services.raw_project_delete import delete_through_core, raw_project_delete_target
 from app.core.tenant_term import TermDates, TermDatesInvalid, TermDatesStale, merge_and_validate, policy_phase
@@ -5088,6 +5089,12 @@ async def raw_proxy(
                 method=method,
                 sees_command=has_explicit_capability(api_key, "instance.exec"),
             )
+            # important: a pool's, network's, profile's or volume's used_by is cluster-wide, so a key
+            # granted some projects read every other project's instances through a plain GET on a
+            # shared cluster. The structured proxy and MCP already held it to the grant; the raw
+            # proxy now does too (RC5 acceptance FU-3, owner decision 2026-11-06).
+            if not project_grant_is_unrestricted(allowed_projects):
+                data = used_by_in_projects(data, frozenset(allowed_projects))
 
             logger.info(
                 f"Raw proxy: {method} {request.path} on {request.cluster_id}/{project} "

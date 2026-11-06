@@ -5,8 +5,9 @@ profiles and volumes, member names included. The structured proxy (`lxd.proxy` l
 list_storage_pools) and the MCP `lxd_list_resources` tool, which goes through it, emitted that list
 raw, so a key granted only its own organization's projects read another organization's inventory
 on a shared cluster. The key's own project grant (`visible_projects`, None for `*`) now holds the
-references, the same set the operation reads are already filtered by. The raw proxy stays raw by
-design.
+references, the same set the operation reads are already filtered by. The raw proxy was left raw
+at first and is held to the same grant since 2026-11-06
+(test_a_raw_read_keeps_used_by_in_the_key_projects.py).
 """
 
 from types import SimpleNamespace

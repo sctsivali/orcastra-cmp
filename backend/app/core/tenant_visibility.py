@@ -76,6 +76,41 @@ def parse_lxd_reference(reference: str) -> tuple[str, Optional[str]]:
     return project_name, None
 
 
+def references_in_projects(references: object, visible_projects: "frozenset[str] | set[str]") -> list:
+    """The references in `references` whose project is one of `visible_projects`.
+
+    note: for an API key's own grant, not for a tenant's policy (that is
+    `filter_visible_lxd_references`). Anything that is not a string reference is dropped.
+    """
+    if not isinstance(references, list):
+        return []
+    return [
+        reference for reference in references
+        if isinstance(reference, str) and parse_lxd_reference(reference)[0] in visible_projects
+    ]
+
+
+def used_by_in_projects(answer: object, visible_projects: "frozenset[str] | set[str]") -> object:
+    """Every `used_by` list anywhere in an LXD answer, kept to references in `visible_projects`.
+
+    A network's, pool's, profile's or volume's used_by is cluster-wide, and an answer can hold one
+    object or a recursion list of them, so the walk covers the whole envelope. Changes the answer in
+    place and returns it.
+    """
+    stack = [answer]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "used_by":
+                    node[key] = references_in_projects(value, visible_projects)
+                elif isinstance(value, (dict, list)):
+                    stack.append(value)
+        elif isinstance(node, list):
+            stack.extend(item for item in node if isinstance(item, (dict, list)))
+    return answer
+
+
 def tenant_can_view_lxd_reference(
     cluster_id: str,
     reference: str,
