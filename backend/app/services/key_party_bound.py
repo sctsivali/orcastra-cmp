@@ -295,6 +295,30 @@ def _shared_policy(cluster_id: str):
     return ClusterWritePolicy(cluster_id, Role.PARTNER, ClusterOwnership.SHARED)
 
 
+async def install_reaches_project(install: Any, cluster_id: str, project: Optional[str], *, db: Any = None) -> bool:
+    """Whether an add-on installation may hear about `project` on `cluster_id`.
+
+    note: webhooks were routed by cluster alone, so an add-on a Partner installed on a cluster
+    another party holds received that party's project, instance and volume names (security review,
+    2026-11-06). Where another party holds the cluster for the installer, the installation's grant
+    is held to the installer's bound exactly as its key is (narrow_to_party_bound), and the event's
+    project must be inside it. Elsewhere reaching the cluster still decides.
+    """
+    grants = [g for g in (getattr(install, "granted_scope", None) or []) if isinstance(g, dict)]
+    as_key = {
+        "id": str(getattr(install, "api_key_id", "") or ""),
+        "created_by": str(getattr(install, "installed_by", "") or ""),
+        "cluster_permissions": grants,
+    }
+    narrowed = await narrow_to_party_bound(as_key, db=db)
+    if not is_party_bounded(narrowed, cluster_id):
+        # No other party holds the cluster for the installer (or it is an Admin): reaching the
+        # cluster decides, as it always has.
+        return True
+    grant = next((g for g in narrowed["cluster_permissions"] if g.get("cluster_id") == cluster_id), None)
+    return grant is not None and ((project or "").strip() or "default") in grant.get("projects", [])
+
+
 def forget_party_bounds() -> None:
     """Tests only: drop every cached bound."""
     with _lock:

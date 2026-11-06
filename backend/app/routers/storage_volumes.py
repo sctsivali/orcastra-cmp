@@ -489,6 +489,7 @@ async def create_storage_volume(
             cluster_id=host,
             resource_type="volume",
             resource_name=request.name,
+            project=owner,
         )
 
         # Log activity: storage volume creation success
@@ -724,6 +725,7 @@ async def delete_storage_volume(
             cluster_id=host,
             resource_type="volume",
             resource_name=volume_name,
+            project=owner,
         )
 
         # Log activity: storage volume deletion success

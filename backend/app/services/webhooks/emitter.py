@@ -28,7 +28,7 @@ grant can change between enqueue and send. This is the cheap filter, not the bou
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional, Sequence
+from typing import Any, List, Optional, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -74,7 +74,7 @@ def _now() -> str:
 
 
 async def _subscriptions_for_cluster(
-    db: AsyncSession, cluster_id: str, event_type: str
+    db: AsyncSession, cluster_id: str, event_type: str, project: Optional[str] = None
 ) -> List[WebhookSubscription]:
     """Active subscriptions on active installations whose grant still covers this cluster.
 
@@ -106,9 +106,25 @@ async def _subscriptions_for_cluster(
     for subscription, install in rows:
         if event_type not in (subscription.event_types or []):
             continue
-        if cluster_id in cluster_generations.reachable(install.granted_scope, generations):
-            interested.append(subscription)
+        if cluster_id not in cluster_generations.reachable(install.granted_scope, generations):
+            continue
+        # important: and the event's project must be one the installation reaches, its grant held
+        # to its installer's bound (services/key_party_bound.py). Routed by cluster alone, an add-on
+        # a Partner installed on a shared cluster heard the other party's names.
+        if project is not None and not await _reaches_project(install, cluster_id, project, db):
+            continue
+        interested.append(subscription)
     return interested
+
+
+async def _reaches_project(install: Any, cluster_id: str, project: str, db: AsyncSession) -> bool:
+    from app.services.key_party_bound import install_reaches_project
+
+    try:
+        return await install_reaches_project(install, cluster_id, project, db=db)
+    except Exception as exc:  # noqa: BLE001 - not knowing whether it reaches the project is not a yes
+        logger.warning("Could not tell whether an installation reaches %s on %s: %s", project, cluster_id, sanitize_error(exc))
+        return False
 
 
 
@@ -136,7 +152,9 @@ async def emit_resource_event(
 
     try:
         async with async_session_maker() as db:
-            subscriptions = await _subscriptions_for_cluster(db, cluster_id, event_type)
+            # A project event is about the project it names; anything else about the one holding it.
+            event_project = resource_name if resource_type == "project" else (project or "default")
+            subscriptions = await _subscriptions_for_cluster(db, cluster_id, event_type, event_project)
             if not subscriptions:
                 return 0
             stable_event_id = event_id or f"evt_{uuid.uuid4()}"
