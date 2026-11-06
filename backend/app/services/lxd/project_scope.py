@@ -43,6 +43,7 @@ ALL_PROJECTS_EXTENSION: Dict[str, str] = {
 FEATURE_FOR_COLLECTION: Dict[str, str] = {
     "networks": "features.networks",
     "network-acls": "features.networks",
+    "network-zones": "features.networks.zones",
     "profiles": "features.profiles",
     "storage-volumes": "features.storage.volumes",
     # An image store is per project only when the project isolates it; LXD resolves an

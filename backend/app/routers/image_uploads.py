@@ -26,7 +26,7 @@ import secrets
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
@@ -42,6 +42,8 @@ from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from app.services.lxd.availability import require_client
+from app.services.lxd.project_scope import resolve_owner
 from app.core.cache import get_cache_manager
 from app.core.database import get_db, async_session_maker
 from app.core.dependencies import check_read_only_mode
@@ -227,7 +229,10 @@ async def create_upload(
     x_api_key_id: str = Header(None, alias="X-API-Key-ID"),
 ):
     _assert_project_permission(api_key, body.cluster_id, body.project, "write")
-    await refuse_key_default_operation(api_key, body.cluster_id, [body.project], db=db)
+    await refuse_key_default_operation(
+        api_key, body.cluster_id, [body.project], db=db,
+        lands_in=lambda: _image_store_project(body.cluster_id, body.project),
+    )
     # important: the alias is a path segment of the alias reads and the repoint delete, where requests
     # would fold a `.` or `..` out of the path (core/lxd_segment.py).
     if is_dot_segment(body.alias):
@@ -406,7 +411,10 @@ async def finalize_upload(
     row = await _get_session(db, session_id)
     _assert_session_owner(api_key, row)
     _assert_project_permission(api_key, row.cluster_id, row.project, "write")
-    await refuse_key_default_operation(api_key, row.cluster_id, [row.project], db=db)
+    await refuse_key_default_operation(
+        api_key, row.cluster_id, [row.project], db=db,
+        lands_in=lambda: _image_store_project(row.cluster_id, row.project),
+    )
 
     if row.status in ("ready", "failed", "importing"):
         return _status_payload(row)
@@ -516,6 +524,27 @@ def _ensure_alias(session, endpoint: str, project_q: str, alias: str, fingerprin
     )
     if r2.status_code >= 400 and "already exists" not in r2.text.lower():
         raise RuntimeError(f"Failed to repoint image alias: {r2.status_code} {r2.text[:200]}")
+
+
+async def _image_store_project(cluster_id: str, project: str) -> List[str]:
+    """The project whose image store an upload lands in.
+
+    important: a project without features.images keeps its images in `default`, so an upload "into"
+    it writes, and repoints aliases, in `default` (security review of the RC5 follow-up round).
+    """
+    if not project or project == "default":
+        return ["default"]
+    svc = get_lxd_service()
+    client = await run_blocking(
+        svc.connection_manager.get_client, cluster_id,
+        timeout=RECOVERY_CONNECT_TIMEOUT, label=f"image_store_connect[{cluster_id}]", executor=_executor,
+    )
+    client = require_client(client, cluster_id)
+    owner = await run_blocking(
+        resolve_owner, client, "images", project,
+        timeout=RECOVERY_CONNECT_TIMEOUT, label=f"image_store_project[{cluster_id}]", executor=_executor,
+    )
+    return [owner]
 
 
 def _resolve_alias_sync(cluster_id: str, alias: str, project: str) -> Optional[Dict[str, Any]]:

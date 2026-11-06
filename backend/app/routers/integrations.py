@@ -22,6 +22,7 @@ import requests
 
 from app.services.lxd_service import LXDService, get_lxd_service
 from app.services.lxd.proxy_path_params import assert_path_params
+from app.services.lxd.project_scope import resolve_owner
 from app.services import api_key_usage, cluster_generations, instance_grants, project_deletion
 from app.services.integration_cluster_checks import (
     cluster_display_names_sync as _cluster_display_names_sync,
@@ -827,6 +828,56 @@ def _raw_proxy_has_cluster_wide_write(request: RawProxyRequest) -> bool:
     return not any(segment in {"volumes", "buckets"} for segment in segments[2:])
 
 
+# Raw-proxy families LXD keeps in `default` for a project that does not isolate them.
+_RAW_FEATURE_FAMILIES = {
+    "images": "images",
+    "profiles": "profiles",
+    "network-acls": "network-acls",
+    "network-zones": "network-zones",
+}
+
+
+def _raw_proxy_landing(request: RawProxyRequest, project: str, client: Any, endpoint: str):
+    """An async callable answering where a raw write really lands, or None when it is what the key
+    named. Only asked by refuse_key_default_operation once the cluster is held by another party."""
+    method = request.method.upper()
+    mutating = method in {"POST", "PUT", "PATCH", "DELETE"}
+    segments = list(canonical_proxy_path(request.path).segments)
+    if not segments:
+        return None
+
+    operation_id = addressed_operation_id(canonical_proxy_path(request.path))
+    if operation_id is not None and (mutating or guest_access_capability_for(request.path)):
+        async def _operation_project() -> List[str]:
+            in_default = await run_blocking(
+                operation_is_visible, client.api.session, endpoint, operation_id,
+                frozenset({"default"}), socket_timeout_for(client),
+                timeout=RAW_PROXY_TIMEOUT, label=f"raw_proxy[operation project {request.cluster_id}]",
+                executor=proxy_executor, max_in_flight=PROXY_MAX_IN_FLIGHT,
+            )
+            return ["default"] if in_default else []
+
+        return _operation_project
+
+    if not mutating or project == "default":
+        return None
+    collection = _RAW_FEATURE_FAMILIES.get(segments[0])
+    if collection is None and segments[0] == "storage-pools" and len(segments) >= 4 \
+            and segments[2] == "volumes" and segments[3] == "custom":
+        collection = "storage-volumes"
+    if collection is None:
+        return None
+
+    async def _store_project() -> List[str]:
+        return [await run_blocking(
+            resolve_owner, client, collection, project,
+            timeout=RAW_PROXY_TIMEOUT, label=f"raw_proxy[store project {request.cluster_id}]",
+            executor=proxy_executor, max_in_flight=PROXY_MAX_IN_FLIGHT,
+        )]
+
+    return _store_project
+
+
 def _rule_reach(project_name: Optional[str]) -> str:
     """The project a tenant rule reaches for the view-only `default` rule: `*` includes `default`."""
     return "default" if (project_name or "").strip() in ("", "*") else str(project_name)
@@ -836,9 +887,10 @@ def _raw_proxy_default_reach(request: RawProxyRequest, ambient_project: str) -> 
     """The projects a raw request changes, or opens a guest session or file in, for the view-only
     `default` rule (services/key_default_view_only.py). Empty for a plain read.
 
-    note: a project's own address (`/projects/<name>`) names it; a cluster-wide write names none,
-    as the whole-cluster rule judges those; anything else lands in the request's project. A body
-    that names a project (a move into `default`, a copy out of it) adds that project too.
+    note: a project's own address (`/projects/<name>`) names it; a cluster-wide write names none
+    (for a key those need a `*` grant, _PROJECT_UNBOUNDABLE_PREFIXES); anything else lands in the
+    request's project, or where _raw_proxy_landing says LXD keeps it. A body that names a project
+    (a move into `default`, a copy out of it) adds that project too.
     """
     method = request.method.upper()
     mutating = method in {"POST", "PUT", "PATCH", "DELETE"}
@@ -5011,6 +5063,19 @@ async def raw_proxy(
         endpoint = client.api._api_endpoint
         full_url = f"{endpoint}{canonical_proxy_path(request.path).request_target(project)}"
 
+        # important: what the key names is not always where LXD writes. A project that does not
+        # isolate images, profiles, network ACLs or custom volumes keeps them in `default`, and an
+        # operation belongs to the project of its resources whatever `?project=` says (security
+        # review of the follow-up round, findings 2 and 3).
+        landing = _raw_proxy_landing(request, project, client, endpoint)
+        if landing is not None:
+            try:
+                await refuse_key_default_operation(api_key, request.cluster_id, [], lands_in=landing)
+            except HTTPException as refusal:
+                if refusal.status_code == 403:
+                    _audit_raw_refusal(api_key, request, method, project, refusal, "default_view_only")
+                raise
+
         # The raw path inspects no body at all, so this is the only place a policy-key write
         # through it is visible to anyone.
         _observe_policy_key_write(
@@ -5467,7 +5532,12 @@ async def proxy_operation(
         # created, as it is in the browser: no change, and no session or file inside a guest.
         # MCP tools reach this door too (mcp/dispatch.py).
         if required_permission != "read" or operation in GUEST_ACCESS_OPERATIONS:
-            touched = [] if operation in CLUSTER_WIDE_OPERATIONS else [request.project]
+            # create_instance sends params to LXD as the body, so a copy whose source names
+            # `default` reaches into it whatever request.project says.
+            touched = (
+                [] if operation in CLUSTER_WIDE_OPERATIONS
+                else [request.project, *projects_named_in(request.params or {})]
+            )
             try:
                 await refuse_key_default_operation(api_key, request.cluster_id, touched)
             except HTTPException as refusal:

@@ -230,3 +230,81 @@ def test_a_browser_tenant_rule_naming_a_view_only_default_is_refused() -> None:
             assert refused.value.status_code == 403
         _refuse_a_project_the_caller_cannot_see(SimpleNamespace(cluster_id=HELD, project_name="own"))
         _refuse_a_project_the_caller_cannot_see(SimpleNamespace(cluster_id=WHOLE, project_name="default"))
+
+
+# ── where a write really lands (security review of the follow-up round) ─────────────────────────
+
+async def test_a_structured_copy_out_of_default_is_refused(view_only) -> None:
+    params = {"name": "stolen", "source": {"type": "copy", "source": "their-vm", "project": "default"}}
+    result, client = await proxy_call("create_instance", "tenant-a", params, api_key=PARTNER_KEY)
+    assert _refusal(result) is not None and result.status_code == 403
+    assert client.created == []
+
+
+async def test_a_raw_write_into_a_project_that_keeps_its_profiles_in_default_is_refused(view_only, monkeypatch) -> None:
+    from app.routers import integrations
+
+    monkeypatch.setattr(integrations, "resolve_owner", lambda _client, collection, project: "default")
+    result, session = await raw_write("PUT", "/1.0/profiles/web", "tenant-a", {"config": {}}, api_key=PARTNER_KEY)
+    assert _refusal(result) is not None and result.status_code == 403
+    assert not session.sent
+
+
+async def test_a_raw_write_into_a_project_with_its_own_store_is_not_this_rules_business(view_only, monkeypatch) -> None:
+    from app.routers import integrations
+
+    asked = []
+    monkeypatch.setattr(integrations, "resolve_owner",
+                        lambda _client, collection, project: asked.append(collection) or project)
+    result, _session = await raw_write("PUT", "/1.0/profiles/web", "tenant-a", {"config": {}}, api_key=PARTNER_KEY)
+    assert asked == ["profiles"]
+    assert not (_refusal(result) is not None and "view only for keys" in str(result.detail))
+
+
+async def test_cancelling_an_operation_of_default_is_refused(view_only, monkeypatch) -> None:
+    from app.routers import integrations
+
+    monkeypatch.setattr(integrations, "operation_is_visible",
+                        lambda _session, _endpoint, _op, projects, _timeout: projects == frozenset({"default"}))
+    result, session = await raw_write("DELETE", "/1.0/operations/0b9e5b1e-1111-4c7e-9a4f-0f5d2a7f3c21",
+                                      "tenant-a", None, api_key=PARTNER_KEY)
+    assert _refusal(result) is not None and result.status_code == 403
+    assert not session.sent
+
+
+async def test_where_a_write_lands_is_asked_only_on_a_held_cluster(view_only) -> None:
+    asked = []
+
+    async def lands_in():
+        asked.append(1)
+        return ["default"]
+
+    view_only["held"] = False
+    await refuse_key_default_operation(PARTNER_KEY, CLUSTER_ID, ["tenant-a"], lands_in=lands_in)
+    assert asked == []
+    view_only["held"] = True
+    with pytest.raises(HTTPException) as refused:
+        await refuse_key_default_operation(PARTNER_KEY, CLUSTER_ID, ["tenant-a"], lands_in=lands_in)
+    assert refused.value.status_code == 403 and asked == [1]
+
+
+async def test_a_landing_in_the_named_project_passes_and_an_unknown_one_is_a_503(view_only) -> None:
+    async def own():
+        return ["tenant-a"]
+
+    async def broken():
+        raise RuntimeError("cluster went away")
+
+    await refuse_key_default_operation(PARTNER_KEY, CLUSTER_ID, ["tenant-a"], lands_in=own)
+    with pytest.raises(HTTPException) as refused:
+        await refuse_key_default_operation(PARTNER_KEY, CLUSTER_ID, ["tenant-a"], lands_in=broken)
+    assert refused.value.status_code == 503
+
+
+def test_image_uploads_ask_where_the_image_lands() -> None:
+    source = (Path(kdv.__file__).resolve().parents[1] / "routers" / "image_uploads.py").read_text()
+    functions = {n.name: n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.AsyncFunctionDef)}
+    for name in ("create_upload", "finalize_upload"):
+        gates = [c for c in ast.walk(functions[name]) if isinstance(c, ast.Call)
+                 and getattr(c.func, "id", None) == "refuse_key_default_operation"]
+        assert gates and any(k.arg == "lands_in" for k in gates[0].keywords), name

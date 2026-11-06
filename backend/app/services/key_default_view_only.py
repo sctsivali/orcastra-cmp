@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, Iterable, Mapping, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -94,14 +94,21 @@ async def refuse_key_default_operation(
     *,
     db: Any = None,
     roles: Optional[CurrentRoleReader] = None,
+    lands_in: Optional[Callable[[], Awaitable[Iterable[Optional[str]]]]] = None,
 ) -> None:
     """Refuse a key's change or guest access in a view-only `default`.
 
     Call it only for what the browser rule refuses: writes, and the reads that open a session or a
     file inside a guest. Plain reads of `default` stay open. 403 for a key whose creator is not an
     Admin, 503 while the creator's role or the parties cannot be read.
+
+    `lands_in` answers where the write really goes when that differs from what the key named: LXD
+    keeps images, profiles, network ACLs and custom volumes in `default` for a project that does
+    not isolate them, and an operation lives in the project of its resources. It costs a cluster
+    read, so it is asked only once the cluster is known to be held by another party.
     """
-    if not touches_default(projects):
+    projects = list(projects)
+    if not touches_default(projects) and lands_in is None:
         return
     try:
         creator, held = await _judge(api_key, cluster_id, db)
@@ -112,6 +119,18 @@ async def refuse_key_default_operation(
         raise HTTPException(status_code=503, detail="Authentication backend unavailable") from None
     if not held:
         return
+    if not touches_default(projects):
+        try:
+            landed = list(await lands_in()) if lands_in is not None else []
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 - not knowing where a write lands is not a pass
+            logger.warning("Could not tell where a key's write on %s lands: %s", cluster_id, type(exc).__name__)
+            raise HTTPException(
+                status_code=503, detail="The cluster could not say where this write lands. Retry shortly."
+            ) from None
+        if not touches_default(landed):
+            return
     admin = await creator_is_admin(creator, roles=roles)
     if admin:
         return
