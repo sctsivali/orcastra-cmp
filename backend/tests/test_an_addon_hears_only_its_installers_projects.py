@@ -365,3 +365,33 @@ async def test_a_cancelled_event_leaves_no_waiter_behind(monkeypatch) -> None:
     await asyncio.sleep(0)
     waiters = [t for t in asyncio.all_tasks() if t.get_coro().__name__ == "_installer_bound"]
     assert waiters == [], "the instance create emit's 2 s cut left a waiter holding the event"
+
+
+async def test_an_own_side_installer_does_not_queue_behind_a_silent_provider(monkeypatch) -> None:
+    from tests.test_a_lifecycle_change_reaches_the_addons_watching_it import FakeDB
+
+    async def bound(api_key, _cluster_id, _db):
+        own = api_key["created_by"] == "own@example.test"
+        return api_key["created_by"], None if own else BOUND
+
+    async def silent(_email, *, roles=None):
+        await asyncio.sleep(5)
+
+    async def no_generations():
+        return None
+
+    monkeypatch.setattr(kpb, "_bound", bound)
+    monkeypatch.setattr(kpb, "creator_is_admin", silent)
+    # Held reads wait 0.6 s on the provider; the event's deadline is 0.4 s.
+    monkeypatch.setattr(reach, "ROLE_SECONDS", 0.6)
+    monkeypatch.setattr(emitter, "EVENT_REACH_SECONDS", 0.4)
+    monkeypatch.setattr("app.services.cluster_generations.current_or_none", no_generations)
+    monkeypatch.setattr("app.services.cluster_generations.reachable", lambda scope, generations: {"nuc2"})
+    held = [f"p{i}@example.test" for i in range(reach.BOUND_READS_AT_ONCE + 1)]
+    rows = [
+        (FakeSubscription(id=10 + i, installation_id=i, event_types=["orcastra.instance.created.v1"]),
+         Install(id=i, installed_by=email))
+        for i, email in enumerate(held + ["own@example.test"])
+    ]
+    heard = await emitter._subscriptions_for_cluster(FakeDB(rows), "nuc2", "orcastra.instance.created.v1", "own")
+    assert 10 + len(held) in [s.id for s in heard], "the own-side read waited behind held ones for the provider"

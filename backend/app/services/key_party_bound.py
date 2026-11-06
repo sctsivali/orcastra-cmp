@@ -107,7 +107,7 @@ async def _bound(api_key: Mapping[str, Any], cluster_id: str, db: Any) -> Tuple[
 
 async def party_bound(
     api_key: Mapping[str, Any], cluster_id: str, *, db: Any = None, roles: Optional[CurrentRoleReader] = None,
-    role_seconds: Optional[float] = None,
+    role_seconds: Optional[float] = None, db_gate: Any = None,
 ) -> Tuple[Optional[FrozenSet[str]], bool]:
     """(the projects this key is held to on `cluster_id`, or None for no bound; whether the
     creator's role was unknown). An Admin's key and a cluster no other party holds have no bound.
@@ -117,7 +117,12 @@ async def party_bound(
     key everywhere. An unreadable party is a 503: the database is down for every request then.
     """
     try:
-        creator, bound = await _bound(api_key, cluster_id, db)
+        if db_gate is None:
+            creator, bound = await _bound(api_key, cluster_id, db)
+        else:
+            # Held for the database read only, never across the identity provider's wait.
+            async with db_gate:
+                creator, bound = await _bound(api_key, cluster_id, db)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001 - an unreadable party is not a verdict either way

@@ -78,10 +78,11 @@ def _bound_read_done(key: Tuple[str, str], task: "asyncio.Task[Any]") -> None:
 
 
 async def _read_installer_bound(as_key: Dict[str, str], cluster_id: str) -> Optional[FrozenSet[str]]:
-    async with _bound_slots():
-        bound, _unknown = await asyncio.wait_for(
-            party_bound(as_key, cluster_id, db=None, role_seconds=ROLE_SECONDS), REACH_SECONDS
-        )
+    # The slot covers the database read alone: an own-side read never queues behind held ones
+    # waiting on the identity provider.
+    bound, _unknown = await asyncio.wait_for(
+        party_bound(as_key, cluster_id, db=None, role_seconds=ROLE_SECONDS, db_gate=_bound_slots()), REACH_SECONDS
+    )
     return bound
 
 
