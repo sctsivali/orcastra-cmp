@@ -36,6 +36,7 @@ from app.core.api_key_capabilities import (
     project_grant_is_unrestricted,
 )
 from app.core.api_key_permissions import assert_cluster_permission
+from app.services.key_default_view_only import refuse_key_default_operation
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -226,6 +227,7 @@ async def create_upload(
     x_api_key_id: str = Header(None, alias="X-API-Key-ID"),
 ):
     _assert_project_permission(api_key, body.cluster_id, body.project, "write")
+    await refuse_key_default_operation(api_key, body.cluster_id, [body.project], db=db)
     # important: the alias is a path segment of the alias reads and the repoint delete, where requests
     # would fold a `.` or `..` out of the path (core/lxd_segment.py).
     if is_dot_segment(body.alias):
@@ -404,6 +406,7 @@ async def finalize_upload(
     row = await _get_session(db, session_id)
     _assert_session_owner(api_key, row)
     _assert_project_permission(api_key, row.cluster_id, row.project, "write")
+    await refuse_key_default_operation(api_key, row.cluster_id, [row.project], db=db)
 
     if row.status in ("ready", "failed", "importing"):
         return _status_payload(row)

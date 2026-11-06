@@ -46,6 +46,11 @@ class CurrentRoleReader(Protocol):
     async def read_current_roles(self, user_email: str) -> RoleReading: ...
 
 
+# Readings that are an answer about the account, not a failure to get one. Two accounts carrying
+# the email is one too: the identity is no longer pinned to one person.
+ENDED_REASONS = frozenset({"user_not_found", "user_inactive", "email_ambiguous"})
+
+
 def unknown_role(reason: str) -> RoleReading:
     return RoleReading(None, reason)
 

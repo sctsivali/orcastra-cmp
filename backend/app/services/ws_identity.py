@@ -20,13 +20,11 @@ from typing import Dict, FrozenSet, Optional, Tuple
 
 from app.core.auth import AuthenticatedUser
 from app.core.rbac import Role
-from app.services.authentik_role_reading import RoleReading
+from app.services.authentik_role_reading import ENDED_REASONS, RoleReading  # noqa: F401 - re-exported
 
 IDENTITY_CACHE_SECONDS = 55
-# Readings that are an answer about the account, not a failure to get one. Two accounts carrying
-# the email is one too: the identity is no longer pinned, and a second account must not keep the
-# first one's sessions alive after it is disabled.
-ENDED_REASONS = frozenset({"user_not_found", "user_inactive", "email_ambiguous"})
+# ENDED_REASONS: a second account carrying the email must not keep the first one's sessions alive
+# after it is disabled, so those readings end a session rather than retrying it.
 
 _readings: Dict[str, Tuple[float, RoleReading]] = {}
 

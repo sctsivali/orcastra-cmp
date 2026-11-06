@@ -69,6 +69,7 @@ from app.services.lxd.limited_write_reach import (
 from app.services.lxd.cloud_init_reach import cloud_init_changes, proxy_cloud_init_owed, refuse_changed_cloud_init
 from app.services.lxd.operation_metadata import redact_operation_response
 from app.core.tenant_visibility import used_by_in_projects
+from app.services.key_default_view_only import refuse_key_default_operation
 from app.services.settle_invalidation import invalidate_when_settled
 from app.services.raw_project_delete import delete_through_core, raw_project_delete_target
 from app.core.tenant_term import TermDates, TermDatesInvalid, TermDatesStale, merge_and_validate, policy_phase
@@ -134,7 +135,11 @@ from app.core.api_key_capabilities import (
 )
 from app.core import build_identity
 from app.core.api_key_body import assert_canonical_proxy_params, canonical_raw_proxy_body
-from app.core.guest_data_export import assert_guest_data_path_stays_inside, assert_guest_data_stays_inside
+from app.core.guest_data_export import (
+    assert_guest_data_path_stays_inside,
+    assert_guest_data_stays_inside,
+    guest_data_path_capability_for,
+)
 from app.core.cloud_init_config import assert_cloud_init_paid_for, cloud_init_keys_in
 from app.core.api_key_capability_audit import CAPABILITIES_UPDATE_ACTION, capability_audit_fields
 from app.core.limited_key_writes import (
@@ -142,6 +147,7 @@ from app.core.limited_key_writes import (
     assert_limited_body,
     instance_write_plan,
     limited_write_plan,
+    projects_named_in,
     proxy_instance_write,
 )
 from app.core.raw_proxy_path import assert_server_state_unchanged, canonical_proxy_path
@@ -819,6 +825,40 @@ def _raw_proxy_has_cluster_wide_write(request: RawProxyRequest) -> bool:
     if segments[0] != "storage-pools":
         return False
     return not any(segment in {"volumes", "buckets"} for segment in segments[2:])
+
+
+def _rule_reach(project_name: Optional[str]) -> str:
+    """The project a tenant rule reaches for the view-only `default` rule: `*` includes `default`."""
+    return "default" if (project_name or "").strip() in ("", "*") else str(project_name)
+
+
+def _raw_proxy_default_reach(request: RawProxyRequest, ambient_project: str) -> List[str]:
+    """The projects a raw request changes, or opens a guest session or file in, for the view-only
+    `default` rule (services/key_default_view_only.py). Empty for a plain read.
+
+    note: a project's own address (`/projects/<name>`) names it; a cluster-wide write names none,
+    as the whole-cluster rule judges those; anything else lands in the request's project. A body
+    that names a project (a move into `default`, a copy out of it) adds that project too.
+    """
+    method = request.method.upper()
+    mutating = method in {"POST", "PUT", "PATCH", "DELETE"}
+    if not mutating and not (
+        guest_access_capability_for(request.path) or guest_data_path_capability_for(request.path)
+    ):
+        return []
+    segments = list(canonical_proxy_path(request.path).segments)
+    touched: List[str] = []
+    if segments and segments[0] == "projects":
+        target = segments[1] if len(segments) >= 2 else None
+        if target is None and method == "POST" and isinstance(request.body, dict):
+            target = request.body.get("name")
+        if isinstance(target, str) and target:
+            touched.append(target)
+    elif not _raw_proxy_has_cluster_wide_write(request):
+        touched.append(ambient_project)
+    if mutating and isinstance(request.body, dict):
+        touched.extend(projects_named_in(request.body))
+    return touched
 
 
 async def _assert_proxy_write_is_not_fenced(
@@ -4882,6 +4922,17 @@ async def raw_proxy(
         # here and surfaced as a 500; it is a 403 now. See app/core/api_key_permissions.py.
         assert_cluster_permission(api_key, request.cluster_id, required_permission)
         await _refuse_a_cluster_not_registered(request.cluster_id)
+        # important: `default` on a cluster another party holds is view only for a key a partner
+        # created, as it is in the browser and on /proxy. A `?project=` in the path cannot move
+        # the call elsewhere: request_target replaces it with the authorised project below.
+        try:
+            await refuse_key_default_operation(
+                api_key, request.cluster_id, _raw_proxy_default_reach(request, project)
+            )
+        except HTTPException as refusal:
+            if refusal.status_code == 403:
+                _audit_raw_refusal(api_key, request, method, project, refusal, "default_view_only")
+            raise
 
         write_target = _raw_proxy_fenced_write_target(request)
         if write_target is not None:
@@ -5412,6 +5463,27 @@ async def proxy_operation(
             )
             raise
 
+        # important: `default` on a cluster another party holds is view only for a key a partner
+        # created, as it is in the browser: no change, and no session or file inside a guest.
+        # MCP tools reach this door too (mcp/dispatch.py).
+        if required_permission != "read" or operation in GUEST_ACCESS_OPERATIONS:
+            touched = [] if operation in CLUSTER_WIDE_OPERATIONS else [request.project]
+            try:
+                await refuse_key_default_operation(api_key, request.cluster_id, touched)
+            except HTTPException as refusal:
+                if refusal.status_code == 403:
+                    _audit_key_action(
+                        api_key,
+                        action=_guest_audit_action(operation),
+                        target_id=str((request.params or {}).get("name") or operation)[:512],
+                        cluster_id=request.cluster_id,
+                        project=request.project,
+                        result="failure",
+                        details={"operation": operation, "refused": "default_view_only"},
+                        external_user_email=request.external_user_email,
+                        error_message=str(refusal.detail),
+                    )
+                raise
         # important: an operation that reaches inside a guest costs a capability of its own, on
         # top of lxd.proxy and the level. It is never inherited by a key issued before
         # capabilities existed and never seeded by an application type, so an operator has to
@@ -7288,6 +7360,11 @@ async def sync_policies_from_external(
                 for rule in sync_policy.rules:
                     if rule.project_name != "*":
                         await refuse_a_project_another_party_holds(db, api_key, rule.cluster_id, rule.project_name)
+                    # A tenant rule in a view-only `default` would hand a partner's tenant the other
+                    # party's guests there; `*` reaches `default` too.
+                    await refuse_key_default_operation(
+                        api_key, rule.cluster_id, [_rule_reach(rule.project_name)], db=db
+                    )
             except HTTPException as refused:
                 errors.append(f"Policy '{sync_policy.name}': {refused.detail}")
                 continue
@@ -7713,6 +7790,9 @@ async def provision_tenant_access(
     # cluster is registered under; a rule written under such an id counts for nothing, so it is
     # refused here, before the organization, member and cluster rows below are written.
     await _refuse_an_unregistered_cluster(body.cluster_id)
+    # A tenant rule in a view-only `default` would hand a partner's tenant the other party's guests
+    # there; refused before any organization, member or policy row is written.
+    await refuse_key_default_operation(api_key, body.cluster_id, [_rule_reach(body.project_name)], db=db)
 
     api_key_id = api_key.get("id", "")
     org_created = False

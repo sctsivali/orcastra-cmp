@@ -35,6 +35,7 @@ from app.core.org_scope import (
     get_current_resolved_tenant_grants,
     get_tenant_scope,
     project_is_visible,
+    refuse_default_operation,
 )
 from app.core.rbac import resolve_roles, get_highest_role, Role
 from app.core.database import get_db
@@ -417,6 +418,9 @@ def _refuse_a_project_the_caller_cannot_see(rule) -> None:
     rule of theirs names yet. An Admin can, because no bound applies to them.
     """
     project = (rule.project_name or "").strip()
+    # A rule in a view-only `default` would hand a Partner's tenant the other party's guests there,
+    # and `*` reaches `default` too (RC5 follow-up, owner decision 2026-11-06).
+    refuse_default_operation(rule.cluster_id, project if project and project != "*" else "default")
     if not project or project == "*":
         return
     if not project_is_visible(rule.cluster_id, project):

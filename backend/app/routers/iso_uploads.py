@@ -32,6 +32,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 
+from app.services.key_default_view_only import refuse_key_default_operation
 from app.core.api_key_permissions import assert_cluster_permission
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
@@ -205,6 +206,8 @@ async def create_upload(
     x_api_key_id: str = Header(None, alias="X-API-Key-ID"),
 ):
     _assert_cluster_permission(api_key, body.cluster_id, "write")
+    # ISO uploads land in `default`, view only for a partner's key where another party holds it.
+    await refuse_key_default_operation(api_key, body.cluster_id, [body.project], db=db)
     if not _VOLUME_NAME_RE.match(body.volume_name):
         raise HTTPException(status_code=422, detail="Invalid ISO volume name")
     if not _POOL_NAME_RE.match(body.pool):
@@ -387,6 +390,7 @@ async def finalize_upload(
     row = await _get_session(db, session_id)
     _assert_session_owner(api_key, row)
     _assert_cluster_permission(api_key, row.cluster_id, "write")
+    await refuse_key_default_operation(api_key, row.cluster_id, [row.project], db=db)
 
     if row.status in ("ready", "failed", "importing"):
         return _status_payload(row)

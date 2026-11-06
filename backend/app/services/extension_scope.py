@@ -286,6 +286,8 @@ async def load_install_snapshot(db: AsyncSession, api_key_id: str) -> Optional[D
         "suspend_reason": install.suspend_reason,
         "granted_capabilities": list(install.granted_capabilities or []),
         "granted_scope": list(install.granted_scope or []),
+        # The stable creator: a rotation rewrites the key's `created_by` (key_default_view_only).
+        "installed_by": getattr(install, "installed_by", None),
     }
     with _install_cache_lock:
         _install_cache[api_key_id] = (time.monotonic(), snapshot)

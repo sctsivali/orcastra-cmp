@@ -1386,10 +1386,7 @@ async def _default_view_only(
 
     if not allowed or db is None or get_highest_role(resolve_roles(user)) != Role.PARTNER:
         return frozenset()
-    email = user.email or ""
-    teammates = await cluster_parties.member_orgs(db, email)
-    held = await cluster_parties.clusters_held_by_another_party(db, email, allowed, also_runs=teammates)
-    return frozenset(held & set(allowed))
+    return frozenset(await cluster_parties.default_view_only_clusters(db, user.email or "", allowed))
 
 
 def purchase_only_clusters() -> frozenset:

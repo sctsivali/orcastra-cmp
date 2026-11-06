@@ -25,6 +25,7 @@ from fastapi import HTTPException
 from mcp.types import CallToolResult, ImageContent, TextContent
 
 from app.core.blocking import BlockingPoolFull
+from app.services.key_default_view_only import CreatorRoleUnavailable
 from app.core.error_sanitizer import public_server_detail, reference_for
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,8 @@ def error_code_for(exc: HTTPException) -> str:
     note: a 503 caused by a full worker pool is the server being busy, not the cluster being down,
     so it is `overloaded`, matching what `proxy_operation` already answers for the same cause.
     """
-    if exc.status_code == 503 and isinstance(exc.__cause__, BlockingPoolFull):
+    # An unanswered identity provider is a wait too, not a cluster that is down (key_default_view_only).
+    if exc.status_code == 503 and isinstance(exc.__cause__, (BlockingPoolFull, CreatorRoleUnavailable)):
         return "overloaded"
     code = _STATUS_CODES.get(exc.status_code)
     if code is not None:

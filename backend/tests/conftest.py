@@ -183,6 +183,34 @@ def _isolate_registration_budget():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_creator_roles():
+    """A creator's role read by one test must not answer for the next."""
+    from app.services.creator_role import forget_creator_roles
+
+    forget_creator_roles()
+    yield
+    forget_creator_roles()
+
+
+@pytest.fixture(autouse=True)
+def _no_other_party_holds_default_for_a_key(monkeypatch):
+    """Key doors judge `default` by the creator's party, which needs the database.
+
+    The default is "no other party holds the cluster", so suites about something else stay
+    hermetic. test_a_key_cannot_change_a_view_only_default.py puts the real reader back.
+    """
+    from app.services import key_default_view_only
+
+    async def _not_held(api_key, _cluster_id, _db):
+        return str(api_key.get("created_by") or ""), False
+
+    monkeypatch.setattr(key_default_view_only, "_judge", _not_held)
+    key_default_view_only.forget_key_default_verdicts()
+    yield
+    key_default_view_only.forget_key_default_verdicts()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_monitoring_history_store():
     """Start every test with an empty history fallback buffer, body memo and import marks.
 

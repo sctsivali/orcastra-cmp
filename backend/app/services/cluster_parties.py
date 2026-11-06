@@ -233,6 +233,20 @@ async def member_orgs(db: AsyncSession, email: str) -> Set[int]:
     return set(rows)
 
 
+async def default_view_only_clusters(db: AsyncSession, email: str, cluster_ids: Iterable[str]) -> Set[str]:
+    """The clusters among `cluster_ids` where `default` is view only for this user's side.
+
+    The one rule the browser (org_scope._default_view_only), API keys and snapshot schedules read:
+    another party holds the cluster, counting the user's teammate member rows as its own side.
+    """
+    wanted = set(cluster_ids)
+    if not wanted:
+        return set()
+    teammates = await member_orgs(db, email)
+    held = await clusters_held_by_another_party(db, email, wanted, also_runs=teammates)
+    return held & wanted
+
+
 async def clusters_held_by_another_party(
     db: AsyncSession, email: str, cluster_ids: Iterable[str], also_runs: Iterable[int] = (),
 ) -> Set[str]:
