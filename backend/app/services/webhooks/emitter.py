@@ -44,7 +44,7 @@ from .dispatcher import enqueue_event
 from .envelope import ResourceEvent
 
 from app.services import cluster_generations
-from app.services.key_party_bound import (
+from app.services.webhooks.reach import (
     EVENT_REACH_SECONDS,
     PROJECT_DELETED,
     ReachMemo,

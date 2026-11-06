@@ -17,7 +17,7 @@ from sqlalchemy import delete, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.migration_models import MigrationJob, MigrationResource, MigrationResourceLock
-from app.services.key_party_bound import PROJECT_DELETED
+from app.services.webhooks.reach import PROJECT_DELETED
 from app.services.project_grants import revoke_project_grants
 
 from .metadata_cutover import InstanceIdentity

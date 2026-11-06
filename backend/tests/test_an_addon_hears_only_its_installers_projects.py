@@ -15,6 +15,7 @@ from typing import Any, Dict, List
 import pytest
 
 from app.services import key_party_bound as kpb
+from app.services.webhooks import reach
 from app.services.webhooks import emitter
 from tests._addon_reach_fakes import BOUND, Install, hold_installer
 from tests.test_a_lifecycle_change_reaches_the_addons_watching_it import FakeSubscription, _run
@@ -133,7 +134,7 @@ def test_a_slow_reach_is_not_reached(installer, monkeypatch) -> None:
         return "partner@example.test", BOUND
 
     monkeypatch.setattr(kpb, "_bound", slow)
-    monkeypatch.setattr(kpb, "REACH_SECONDS", 0.05)
+    monkeypatch.setattr(reach, "REACH_SECONDS", 0.05)
     assert _interested(Install(id=1), "own", monkeypatch) == []
 
 
@@ -165,7 +166,7 @@ def test_a_slow_identity_provider_holds_the_addon_to_the_bound(installer, monkey
         return True
 
     monkeypatch.setattr(kpb, "creator_is_admin", slow_admin)
-    monkeypatch.setattr(kpb, "ROLE_SECONDS", 0.05)
+    monkeypatch.setattr(reach, "ROLE_SECONDS", 0.05)
     assert _interested(Install(id=1), "own", monkeypatch) == [10], "its own projects are still heard"
     assert _interested(Install(id=1), "theirs", monkeypatch) == [], "an unanswered provider is not an Admin"
 
@@ -269,7 +270,7 @@ def test_a_slow_installer_does_not_cost_the_others_their_events(monkeypatch) -> 
 
     monkeypatch.setattr(kpb, "_bound", bound)
     monkeypatch.setattr(kpb, "creator_is_admin", not_admin)
-    monkeypatch.setattr(kpb, "EVENT_REACH_SECONDS", 0.2)
+    monkeypatch.setattr(reach, "EVENT_REACH_SECONDS", 0.2)
     monkeypatch.setattr(emitter, "EVENT_REACH_SECONDS", 0.2)
     monkeypatch.setattr("app.services.cluster_generations.current_or_none", no_generations)
     monkeypatch.setattr("app.services.cluster_generations.reachable", lambda scope, generations: {"nuc2"})
@@ -307,3 +308,60 @@ async def test_a_role_answer_that_arrives_late_still_fills_the_cache(monkeypatch
     assert await kpb.party_bound(as_key, "nuc2", roles=SlowRoles(), role_seconds=0.05) == (None, False)
     assert SlowRoles.calls == 1, "the late answer was kept rather than asked for again"
 
+
+
+async def test_concurrent_events_share_one_bound_read_and_a_cap(monkeypatch) -> None:
+    from tests.test_a_lifecycle_change_reaches_the_addons_watching_it import FakeDB
+
+    reads: List[str] = []
+    running = {"now": 0, "most": 0}
+
+    async def bound(api_key, _cluster_id, _db):
+        reads.append(api_key["created_by"])
+        running["now"] += 1
+        running["most"] = max(running["most"], running["now"])
+        await asyncio.sleep(0.05)
+        running["now"] -= 1
+        return api_key["created_by"], BOUND
+
+    async def not_admin(_email, *, roles=None):
+        return False
+
+    async def no_generations():
+        return None
+
+    monkeypatch.setattr(kpb, "_bound", bound)
+    monkeypatch.setattr(kpb, "creator_is_admin", not_admin)
+    monkeypatch.setattr("app.services.cluster_generations.current_or_none", no_generations)
+    monkeypatch.setattr("app.services.cluster_generations.reachable", lambda scope, generations: {"nuc2"})
+
+    def one_emit(installers):
+        rows = [
+            (FakeSubscription(id=10 + i, installation_id=i, event_types=["orcastra.instance.created.v1"]),
+             Install(id=i, installed_by=email))
+            for i, email in enumerate(installers)
+        ]
+        return emitter._subscriptions_for_cluster(FakeDB(rows), "nuc2", "orcastra.instance.created.v1", "own")
+
+    await asyncio.gather(one_emit(["a@example.test"]), one_emit(["a@example.test"]), one_emit(["a@example.test"]))
+    assert reads == ["a@example.test"], "three events at once, one read of that installer's bound"
+
+    reads.clear()
+    many = [f"p{i}@example.test" for i in range(12)]
+    heard = await one_emit(many)
+    assert len(heard) == 12 and sorted(reads) == sorted(many)
+    assert running["most"] <= reach.BOUND_READS_AT_ONCE, "a burst does not take a connection per installer"
+
+
+async def test_a_cancelled_event_leaves_no_waiter_behind(monkeypatch) -> None:
+    async def slow(_api_key, _cluster_id, _db):
+        await asyncio.sleep(1)
+        return "partner@example.test", BOUND
+
+    monkeypatch.setattr(kpb, "_bound", slow)
+    memo: Dict[Any, Any] = {}
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(reach.read_bounds([(Install(id=1), "nuc2")], memo, 5), 0.05)
+    await asyncio.sleep(0)
+    waiters = [t for t in asyncio.all_tasks() if t.get_coro().__name__ == "_installer_bound"]
+    assert waiters == [], "the instance create emit's 2 s cut left a waiter holding the event"

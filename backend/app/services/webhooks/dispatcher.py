@@ -24,7 +24,7 @@ import random
 import socket
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Sequence
 
 from sqlalchemy import select, text
@@ -175,14 +175,8 @@ async def reap_stuck(db: AsyncSession) -> List[int]:
 
 # ── delivering ─────────────────────────────────────────────────────────────────────────────────
 
-# Rows queued before this process started may come from a build that routed events by cluster
-# alone (before 1.0.0); those are judged by the installer's bound again before they go out.
-_STARTED_AT = datetime.now(timezone.utc)
-
-
 async def _still_authorised(
-    db: AsyncSession, subscription: WebhookSubscription, payload: Dict[str, Any],
-    queued_at: Optional[datetime] = None,
+    db: AsyncSession, subscription: WebhookSubscription, payload: Dict[str, Any]
 ) -> Optional[str]:
     """Why this delivery must not go out, or None.
 
@@ -208,25 +202,17 @@ async def _still_authorised(
         generations = await cluster_generations.current_or_none()
         if cluster_id not in cluster_generations.reachable(install.granted_scope, generations):
             return "the installation no longer reaches that cluster"
-        from app.services.key_party_bound import install_grant_names, payload_reach, payload_reaches
+        from app.services.webhooks.reach import install_grant_names, payload_reach
 
         # note: the installer's bound is judged when the event is queued (emitter.py). Here only the
-        # stored grant, so an identity provider outage cannot drop a delivery, and a project deleted
-        # after its instance events were queued does not cancel them (security review, 2026-11-06).
+        # stored grant, so an identity provider outage or a restart cannot drop a delivery, and a
+        # project deleted after its instance events were queued does not cancel them (security
+        # review, 2026-11-06). Owner decision: rows a cluster-routed build queued before the upgrade
+        # still go out on the stored grant within their retry window, as that build would have sent.
         about = payload_reach(payload)
         if about is not None and not (about[0] and install_grant_names(install, about[0], about[1])):
             return "the installation's grant no longer names that project"
-        if about is not None and _queued_before_start(queued_at) and not await payload_reaches(install, payload):
-            return "the installation does not reach that project"
     return None
-
-
-def _queued_before_start(queued_at: Optional[datetime]) -> bool:
-    if queued_at is None:
-        return False
-    if queued_at.tzinfo is None:
-        queued_at = queued_at.replace(tzinfo=timezone.utc)
-    return queued_at < _STARTED_AT
 
 
 async def deliver(
@@ -246,7 +232,7 @@ async def deliver(
         await db.commit()
         return delivery.state
 
-    refusal = await _still_authorised(db, subscription, delivery.payload or {}, delivery.created_at)
+    refusal = await _still_authorised(db, subscription, delivery.payload or {})
     if refusal is not None:
         # Recorded, not silently discarded. An operator asking why an add-on stopped hearing about
         # a cluster gets an answer.

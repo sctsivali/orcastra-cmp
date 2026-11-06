@@ -1,9 +1,9 @@
 """A queued add-on event is judged again where it is sent, listed or sent again.
 
 The bound is judged when the event is queued (test_an_addon_hears_only_its_installers_projects.py).
-Delivery then checks the stored grant only, so an identity provider outage cannot drop it; rows
-queued before this process started may come from a build that routed by cluster alone and are
-judged by the bound again. The delivery log and redeliver judge the current bound, so another
+Delivery then checks the stored grant only, so an identity provider outage or a restart cannot
+drop it (rows a cluster-routed build queued before the upgrade go out within their retry window,
+owner decision 2026-11-06). The delivery log and redeliver judge the current bound, so another
 party's names in old rows stay out of them (security review, 2026-11-06).
 """
 
@@ -11,6 +11,7 @@ import asyncio
 import pytest
 
 from app.services import key_party_bound as kpb
+from app.services.webhooks import reach
 from tests._addon_reach_fakes import BOUND, Install, hold_installer
 from tests.test_a_lifecycle_change_reaches_the_addons_watching_it import FakeSubscription
 
@@ -65,20 +66,20 @@ async def test_a_queued_payload_is_judged_by_what_it_names(installer) -> None:
         data = {"cluster_id": "nuc2", "resource_type": "instance", "resource_name": "vm"}
         return {"type": "orcastra.instance.created.v1", "data": {**data, **({"project": project} if project else {})}}
 
-    assert await kpb.payload_reaches(install, instance("own")) is True
-    assert await kpb.payload_reaches(install, instance("theirs")) is False
-    assert await kpb.payload_reaches(install, instance(None)) is False, "a row that names no project is not reached"
+    assert await reach.payload_reaches(install, instance("own")) is True
+    assert await reach.payload_reaches(install, instance("theirs")) is False
+    assert await reach.payload_reaches(install, instance(None)) is False, "a row that names no project is not reached"
     about_the_install = {"type": "orcastra.installation.updated.v1", "data": {"resource_type": "installation"}}
-    assert await kpb.payload_reaches(install, about_the_install) is True
+    assert await reach.payload_reaches(install, about_the_install) is True
     deleted = {"type": "orcastra.project.deleted.v1",
                "data": {"cluster_id": "nuc2", "resource_type": "project", "resource_name": "gone"}}
-    assert await kpb.payload_reaches(install, deleted) is False, (
+    assert await reach.payload_reaches(install, deleted) is False, (
         "the queue does not keep who held a deleted project, so on a held cluster it stays hidden"
     )
     installer["bound"] = None
-    assert await kpb.payload_reaches(install, deleted) is True, "elsewhere the stored grant decides"
+    assert await reach.payload_reaches(install, deleted) is True, "elsewhere the stored grant decides"
     named = Install(id=1, granted_scope=[{"cluster_id": "nuc2", "projects": ["own"]}])
-    assert await kpb.payload_reaches(named, deleted) is False
+    assert await reach.payload_reaches(named, deleted) is False
 
 
 
@@ -180,37 +181,6 @@ async def test_a_delivery_the_installation_does_not_reach_cannot_be_sent_again(i
 
 
 
-async def test_a_row_queued_before_this_process_started_is_judged_by_the_bound(installer, monkeypatch) -> None:
-    from datetime import timedelta
-
-    from app.services.webhooks import dispatcher
-
-    install = Install(id=1)
-
-    class _Rows:
-        def scalar_one_or_none(self):
-            return install
-
-    class _DB:
-        async def execute(self, _statement):
-            return _Rows()
-
-    async def no_generations():
-        return None
-
-    monkeypatch.setattr("app.services.cluster_generations.current_or_none", no_generations)
-    monkeypatch.setattr("app.services.cluster_generations.reachable", lambda scope, generations: {"nuc2"})
-    sub = FakeSubscription(id=10, installation_id=1, event_types=["orcastra.instance.created.v1"])
-    theirs = {"data": {"cluster_id": "nuc2", "resource_type": "instance", "resource_name": "vm", "project": "theirs"}}
-    before = dispatcher._STARTED_AT - timedelta(minutes=1)
-    after = dispatcher._STARTED_AT + timedelta(seconds=1)
-    assert await dispatcher._still_authorised(_DB(), sub, theirs, before) == (
-        "the installation does not reach that project"
-    ), "a build that routed by cluster alone may have queued it"
-    assert await dispatcher._still_authorised(_DB(), sub, theirs, after) is None
-
-
-
 async def test_a_page_of_the_log_waits_once_for_a_slow_cluster(installer, monkeypatch) -> None:
     import time
 
@@ -227,7 +197,7 @@ async def test_a_page_of_the_log_waits_once_for_a_slow_cluster(installer, monkey
                                             {"cluster_id": "slow", "projects": ["*"]}])
 
     monkeypatch.setattr(kpb, "_bound", bound)
-    monkeypatch.setattr(kpb, "REACH_SECONDS", 0.2)
+    monkeypatch.setattr(reach, "REACH_SECONDS", 0.2)
     monkeypatch.setattr(extension_webhooks, "_install_for", install_for)
     rows = [_delivery(5, "own")]
     for ident in (4, 3, 2):
