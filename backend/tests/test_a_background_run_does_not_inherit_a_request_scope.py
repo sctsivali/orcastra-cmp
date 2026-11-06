@@ -36,6 +36,10 @@ FORBIDDEN = {
     "filter_projects_by_acl",
     "filter_instances_by_acl",
     "tenant_acl_active",
+    "default_is_view_only",
+    "refuse_default_operation",
+    "verify_project_access",
+    "project_is_visible",
 }
 
 
@@ -97,5 +101,6 @@ def test_the_runner_authorizes_from_the_database_not_from_a_context():
     """The positive half. A ban with nothing in its place is a gap, not a guard."""
     source = (PACKAGE / "schedule_runner.py").read_text()
     assert "authority.db_refusal_for(db, schedule)" in source
+    assert "authority.default_view_only_refusal(db, schedule)" in source
     assert "authority.cluster_refusal_for(" in source
     assert "_stored_names_are_addressable(schedule)" in source

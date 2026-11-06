@@ -44,6 +44,10 @@ logger = logging.getLogger(__name__)
 MISSING_INSTANCE_GRACE = 3
 
 
+DEFAULT_VIEW_ONLY_FOR_THE_OWNER = "default_is_view_only_for_the_owner"
+OWNER_ROLE_UNREADABLE = "schedule_owner_role_unreadable"
+
+
 @dataclass(frozen=True)
 class Refusal:
     """Why this schedule must not fire now.
@@ -272,6 +276,8 @@ async def db_refusal_for(db: Any, schedule: Any) -> Optional[Refusal]:
     requires the persisted organization, the exact cluster/project ownership evidence, and the
     creator's current database-backed affiliation. Historical ``registered_by`` metadata is not
     current organization affiliation and cannot lend authority to this schedule after a rebind.
+    The one role the worker reads, for the view-only `default` exemption, is read from Authentik
+    in default_view_only_refusal, never reconstructed.
     """
     if schedule.state != "active":
         return Refusal(
@@ -286,6 +292,51 @@ async def db_refusal_for(db: Any, schedule: Any) -> Optional[Refusal]:
         organization_id=schedule.organization_id,
         cluster_id=schedule.cluster_id,
         project=schedule.project,
+    )
+
+
+async def default_view_only_refusal(db: Any, schedule: Any, *, roles: Any = None) -> Optional[Refusal]:
+    """`default` where another party holds the cluster is view only for the schedule's owner.
+
+    A schedule created before that rule kept taking snapshots in another party's `default`
+    (RC5 acceptance FU-2, 2026-11-06). The rule is the browser's, judged from the owner: the party
+    from the database (cluster_parties), the role from Authentik, because an Admin's schedule keeps
+    running (owner decision 2026-11-06). The worker has no request role, so this is the one place
+    it reads one; an unanswered identity provider defers the run rather than pausing it.
+
+    note: kept apart from standing_authority_refusal on purpose. That one also decides which
+    schedules and migration rows an owner may see, and an owner must still see, pause and delete a
+    schedule this stops.
+    """
+    from app.services.cluster_parties import default_view_only_clusters
+    from app.services.creator_role import creator_is_admin
+
+    if ((schedule.project or "").strip() or "default") != "default":
+        return None
+    held = await default_view_only_clusters(db, schedule.owner_email or "", {schedule.cluster_id})
+    if schedule.cluster_id not in held:
+        return None
+    admin = await creator_is_admin(schedule.owner_email, roles=roles)
+    if admin:
+        return None
+    if admin is None:
+        return Refusal(
+            code=OWNER_ROLE_UNREADABLE,
+            message=(
+                "Who owns this schedule could not be checked because the identity provider did not "
+                "answer. It is tried again at the next slot."
+            ),
+            terminal=False,
+        )
+    return Refusal(
+        code=DEFAULT_VIEW_ONLY_FOR_THE_OWNER,
+        message=(
+            f"The default project on cluster '{schedule.cluster_id}' is shared with another "
+            "organization, so it is view only for whoever owns this schedule, and the schedule "
+            "stopped. Schedule the instance from one of the owner's own projects, or ask an "
+            "administrator."
+        ),
+        terminal=True,
     )
 
 
@@ -402,4 +453,10 @@ def forbidden_scope_helpers() -> List[str]:
         "get_scope_cache_key",
         "filter_projects_by_acl",
         "filter_instances_by_acl",
+        # The view-only `default` rule's request half: a worker judges it from the owner instead
+        # (default_view_only_refusal).
+        "default_is_view_only",
+        "refuse_default_operation",
+        "verify_project_access",
+        "project_is_visible",
     ]

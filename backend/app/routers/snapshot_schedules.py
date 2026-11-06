@@ -93,6 +93,21 @@ async def _guard_schedule_mutation(
         raise HTTPException(status_code=409, detail=exc.detail) from exc
 
 
+
+
+def _verify_project_for_withdrawal(cluster_id: str, project: Optional[str]) -> str:
+    """verify_project_access for pause and delete, without the view-only `default` refusal.
+
+    note: both change only the dashboard's own row, never LXD, so an owner whose schedule the
+    view-only rule stopped can still stop or remove it (RC5 follow-up FU-2). Update, resume and
+    run-now keep verify_project_access.
+    """
+    project = (project or "default").strip() or "default"
+    verify_cluster_access(cluster_id)
+    if not project_is_visible(cluster_id, project):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied to this project")
+    return project
+
 @router.get("", response_model=SnapshotScheduleListResponse)
 async def list_schedules(
     host: Optional[str] = Query(None, pattern=LXD_NAME_PATTERN, description=LXD_NAME_DESCRIPTION),
@@ -255,7 +270,7 @@ async def pause_schedule(
 ):
     """Idempotent. Pausing a paused schedule is not an error, it is the state being asked for."""
     schedule = await svc.get_owned(db, schedule_id, user.email)
-    schedule.project = verify_project_access(schedule.cluster_id, schedule.project)
+    schedule.project = _verify_project_for_withdrawal(schedule.cluster_id, schedule.project)
     async with _guard_schedule_mutation(
         cluster_id=schedule.cluster_id,
         project=schedule.project,
@@ -300,6 +315,16 @@ async def resume_schedule(
             cluster_id=schedule.cluster_id,
             project=schedule.project,
         )
+        if refusal is None:
+            # The owner's own view-only `default` rule, so an Admin resuming a partner's schedule
+            # there is told now rather than watching it pause again at the next tick.
+            refusal = await schedule_authority.default_view_only_refusal(db, schedule)
+        if refusal is not None and refusal.code == schedule_authority.OWNER_ROLE_UNREADABLE:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"error": "identity_provider_unavailable", "message": refusal.message},
+                headers={"Retry-After": "30"},
+            )
         if refusal is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -357,7 +382,7 @@ async def delete_schedule(
     is gated on its own.
     """
     schedule = await svc.get_owned(db, schedule_id, user.email)
-    schedule.project = verify_project_access(schedule.cluster_id, schedule.project)
+    schedule.project = _verify_project_for_withdrawal(schedule.cluster_id, schedule.project)
     async with _guard_schedule_mutation(
         cluster_id=schedule.cluster_id,
         project=schedule.project,

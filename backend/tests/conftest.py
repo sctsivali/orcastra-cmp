@@ -211,6 +211,21 @@ def _no_other_party_holds_default_for_a_key(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_other_party_holds_default_for_a_schedule(monkeypatch):
+    """The schedule worker's view-only `default` rule reads parties from the database.
+
+    Schedule suites run on fakes that answer only the queries they are about, so the default is
+    "not refused". test_a_schedule_stops_in_a_view_only_default.py puts the real rule back.
+    """
+    from app.services.snapshots import schedule_authority
+
+    async def _not_refused(_db, _schedule, *, roles=None):
+        return None
+
+    monkeypatch.setattr(schedule_authority, "default_view_only_refusal", _not_refused)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_monitoring_history_store():
     """Start every test with an empty history fallback buffer, body memo and import marks.
 

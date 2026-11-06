@@ -254,6 +254,12 @@ async def _run_one_guarded(
 
     refusal = await authority.db_refusal_for(db, schedule)
     if refusal is None:
+        refusal = await authority.default_view_only_refusal(db, schedule)
+        if refusal is not None and refusal.code == authority.OWNER_ROLE_UNREADABLE:
+            # An identity provider outage is not this schedule's failure, so it never counts
+            # toward the pause.
+            return RunOutcome(result="deferred", error=refusal.message)
+    if refusal is None:
         refusal = _stored_names_are_addressable(schedule)
     if refusal is None and schedule.cluster_fingerprint:
         reader = fingerprint_reader
