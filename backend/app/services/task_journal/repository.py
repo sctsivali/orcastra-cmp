@@ -30,6 +30,7 @@ from app.services.task_journal.repository_sweeps import (  # noqa: F401 - public
     link_lifecycle_rows,
     mark_lost,
     mark_stale_open_rows_lost,
+    mark_unregistered_except,
     prune_batch,
     roll_up_key_usage,
     merge_racing_pairs,

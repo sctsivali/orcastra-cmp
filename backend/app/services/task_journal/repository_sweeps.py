@@ -211,11 +211,28 @@ async def touch_cluster_frame(db: AsyncSession, cluster_id: str) -> None:
 
 
 async def reset_cluster_states(db: AsyncSession) -> None:
+    # Only `connected` needs resetting at an election; an `unregistered` row stays the end state.
     await db.execute(
         text(
             "UPDATE task_follower_clusters SET state = 'disconnected', since = now(), "
-            "updated_at = now() WHERE state <> 'disconnected'"
+            "updated_at = now() WHERE state = 'connected'"
         )
+    )
+
+
+async def mark_unregistered_except(db: AsyncSession, registered: Iterable[str]) -> None:
+    """Every row whose cluster the registry no longer holds reads `unregistered`.
+
+    note: the registry loop unfollows only ids this worker follows in memory, which after a
+    restart is none, so a cluster deregistered earlier or on another worker kept its old row.
+    """
+    await db.execute(
+        text(
+            "UPDATE task_follower_clusters SET state = 'unregistered', since = now(), "
+            "updated_at = now() WHERE state <> 'unregistered' "
+            "AND cluster_id <> ALL(CAST(:registered AS text[]))"
+        ),
+        {"registered": sorted(registered)},
     )
 
 

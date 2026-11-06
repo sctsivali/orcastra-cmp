@@ -97,7 +97,7 @@ async def test_a_deleted_cluster_is_unsubscribed_marked_unregistered_and_its_row
     assert hub.unsubscribed == ["nuc2"]
     assert consumer.cancelled() or consumer.done()
     assert set(follower._consumers) == {"nuc1"} and "nuc2" not in follower._cluster_state
-    states = [p for db in maker.sessions for sql, p in db.calls if "task_follower_clusters" in sql]
+    states = [p for db in maker.sessions for sql, p in db.calls if "INSERT INTO task_follower_clusters" in sql]
     assert states[-1] == {"cluster_id": "nuc2", "state": "unregistered", "error": None, "seeded": False}
     for sql in maker.statements:
         assert not sql.startswith("DELETE"), "its rows are left alone"

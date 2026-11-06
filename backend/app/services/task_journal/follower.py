@@ -264,6 +264,10 @@ class JournalFollower:
             await self._follow(host)
         for host in sorted(current - wanted):
             await self._unfollow(host, record_state=True)
+        # Excluded clusters are still registered, so the registry's ids decide, not `wanted`.
+        async with self._session_maker() as db:
+            await repository.mark_unregistered_except(db, ids)
+            await db.commit()
 
     async def _follow(self, host: str) -> None:
         generation = object()

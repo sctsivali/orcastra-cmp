@@ -496,7 +496,7 @@ def test_a_websocket_operation_is_stored_without_its_command_line(loop, db):
 def test_every_sweep_and_the_cluster_state_helpers(loop, db):
     from app.services.task_journal import repository
     from app.services.task_journal.repository_sweeps import (
-        expire_stale_actions, follower_is_active, mark_lost, merge_racing_pairs,
+        expire_stale_actions, follower_is_active, mark_lost, mark_unregistered_except, merge_racing_pairs,
         read_cluster_states, reset_cluster_states, set_cluster_state, touch_cluster_frame,
     )
     from app.services.task_journal.repository_types import ActorFields, CorrelationKey
@@ -553,8 +553,15 @@ def test_every_sweep_and_the_cluster_state_helpers(loop, db):
             by = {r["cluster_id"]: r for r in states}
             assert by[HOST]["state"] == "connected" and by[HOST]["last_frame_at"] is not None
             assert by["rt-dead"]["last_error"] == "dial tcp: refused"
+            await set_cluster_state(s, "rt-gone", "unregistered")
             await reset_cluster_states(s)
-            assert all(r["state"] == "disconnected" for r in await read_cluster_states(s))
+            by = {r["cluster_id"]: r["state"] for r in await read_cluster_states(s)}
+            assert by == {HOST: "disconnected", "rt-dead": "disconnected", "rt-gone": "unregistered"}
+            await mark_unregistered_except(s, [HOST])
+            by = {r["cluster_id"]: r["state"] for r in await read_cluster_states(s)}
+            assert by == {HOST: "disconnected", "rt-dead": "unregistered", "rt-gone": "unregistered"}
+            await mark_unregistered_except(s, [])
+            assert all(r["state"] == "unregistered" for r in await read_cluster_states(s))
             assert await follower_is_active(s) is False
             await s.commit()
 
