@@ -71,6 +71,15 @@ from app.services.lxd.cloud_init_reach import cloud_init_changes, proxy_cloud_in
 from app.services.lxd.operation_metadata import redact_operation_response
 from app.core.tenant_visibility import used_by_in_projects
 from app.services.key_default_view_only import refuse_key_default_operation
+from app.services.key_party_bound import (
+    forget_creator_bound_of,
+    is_party_bounded,
+    narrow_to_party_bound,
+    project_change_refusal,
+    record_key_created_project,
+    refuse_an_unisolated_project,
+    shared_project_config,
+)
 from app.services.settle_invalidation import invalidate_when_settled
 from app.services.raw_project_delete import delete_through_core, raw_project_delete_target
 from app.core.tenant_term import TermDates, TermDatesInvalid, TermDatesStale, merge_and_validate, policy_phase
@@ -876,6 +885,91 @@ def _raw_proxy_landing(request: RawProxyRequest, project: str, client: Any, endp
         )]
 
     return _store_project
+
+
+async def _party_bounded_project_refusal(
+    api_key: Dict[str, Any], cluster_id: str, project_name: str, *, creating: bool
+) -> Optional[HTTPException]:
+    from app.core.database import async_session_maker
+
+    try:
+        async with async_session_maker() as db:
+            return await project_change_refusal(api_key, cluster_id, project_name, creating=creating, db=db)
+    except HTTPException as refusal:
+        return refusal
+    except Exception as exc:  # noqa: BLE001 - an unreadable party is not a pass
+        logger.warning("Project change check unavailable on %s: %s", cluster_id, type(exc).__name__)
+        return HTTPException(status_code=503, detail="Authentication backend unavailable")
+
+
+def _raw_party_bounded_project(api_key: Dict[str, Any], request: RawProxyRequest, method: str) -> Optional[str]:
+    """The project a raw project create or delete names, for a party-bounded key; else None.
+
+    Only `POST /projects` (the body's name) and `DELETE /projects/<name>`. A change to a project's
+    config, and anything below its address, keeps the project-limited rules: the browser lets a
+    Partner change only a project's description and limits (security review, 2026-11-06).
+    """
+    if not is_party_bounded(api_key, request.cluster_id) or method not in {"POST", "DELETE"}:
+        return None
+    segments = list(canonical_proxy_path(request.path).segments)
+    if not segments or segments[0] != "projects":
+        return None
+    if len(segments) == 1 and method == "POST" and isinstance(request.body, dict):
+        name = request.body.get("name")
+        return str(name) if isinstance(name, str) and name else ""
+    if len(segments) == 2 and method == "DELETE":
+        return segments[1]
+    return None
+
+
+def _raw_instance_config_write(request: RawProxyRequest) -> bool:
+    """An instance create, config change, restore, rename, move or copy: the writes the browser
+    refuses a Partner in a project that does not isolate itself. Power, exec and files are not."""
+    method = request.method.upper()
+    segments = list(canonical_proxy_path(request.path).segments)
+    if not segments or segments[0] not in {"instances", "containers", "virtual-machines"}:
+        return False
+    if len(segments) == 1:
+        return method == "POST"
+    if len(segments) == 3 and segments[2] == "rebuild":
+        return method == "POST"
+    return len(segments) == 2 and method in {"POST", "PUT", "PATCH"}
+
+
+def _raw_isolation_targets(request: RawProxyRequest, project: str) -> List[str]:
+    """The projects a raw write by a party-bounded key must find isolated: the request's own for an
+    instance create, change, restore, move or rebuild, and every project the body names for an
+    instance or image write (a move's target, a copy's or an image's source)."""
+    method = request.method.upper()
+    if method not in {"POST", "PUT", "PATCH"}:
+        return []
+    segments = list(canonical_proxy_path(request.path).segments)
+    family = segments[0] if segments else ""
+    targets: List[str] = [project] if _raw_instance_config_write(request) else []
+    if family in {"instances", "containers", "virtual-machines", "images"} and isinstance(request.body, dict):
+        targets.extend(projects_named_in(request.body))
+    return sorted({t for t in targets if t and t != "default"})
+
+
+def _project_isolation_config(client: Any, project: str) -> Dict[str, Any]:
+    """Blocking: the project's config, for the isolation check. A test seam."""
+    from app.services.lxd.project_scope import list_project_configs
+
+    return list_project_configs(client).get(project) or {}
+
+
+async def _refuse_an_unisolated_target(client: Any, cluster_id: str, projects: Any) -> None:
+    """409 when a party-bounded key writes into, or names in a body, a project that shares
+    `default`'s volumes, images, profiles or networks, as the browser refuses a Partner.
+    `default` itself is left to the view-only rule, which has already refused it."""
+    names = [projects] if isinstance(projects, str) else list(projects)
+    for name in sorted({n for n in names if n and n != "default"}):
+        config = await run_blocking(
+            _project_isolation_config, client, name,
+            timeout=RAW_PROXY_TIMEOUT, label=f"key_party_bound[isolation {cluster_id}]",
+            executor=proxy_executor, max_in_flight=PROXY_MAX_IN_FLIGHT,
+        )
+        refuse_an_unisolated_project(cluster_id, config)
 
 
 def _rule_reach(project_name: Optional[str]) -> str:
@@ -2386,6 +2480,10 @@ async def validate_api_key(
             ) from None
 
     metadata = await _bound_to_registrations(metadata)
+    # important: after the cache, into a copy, like the registration binding above. A key a Partner
+    # created is held to its creator's projects on a cluster another party holds, so a `*` grant
+    # minted before that was refused no longer reaches the other party (services/key_party_bound.py).
+    metadata = await narrow_to_party_bound(metadata)
     _schedule_last_used_update(x_api_key_id)
 
     return metadata
@@ -4960,7 +5058,28 @@ async def raw_proxy(
         # not bound a resource whose identity is itself a project name. A key granted only
         # "tenant-a" could send DELETE /1.0/projects/tenant-b with project=tenant-a and pass
         # every check here. Same for a cluster-wide storage pool.
-        assert_project_scope_allows_path(request.path, method, allowed_projects)
+        party_project = _raw_party_bounded_project(api_key, request, method)
+        if party_project is not None:
+            # A Partner's key on a cluster another party holds still creates, changes and deletes
+            # projects inside its creator's bound, as the browser does (services/key_party_bound.py).
+            refusal = await _party_bounded_project_refusal(
+                api_key, request.cluster_id, party_project, creating=method == "POST"
+            )
+            if refusal is None and method == "POST":
+                try:
+                    # The /proxy create_project asks admin; the raw door asks the same for this.
+                    assert_cluster_permission(api_key, request.cluster_id, "admin")
+                    request.body = {
+                        **request.body,
+                        "config": shared_project_config(request.cluster_id, request.body.get("config") or {}),
+                    }
+                except HTTPException as policy_refusal:
+                    refusal = policy_refusal
+            if refusal is not None:
+                _audit_raw_refusal(api_key, request, method, project, refusal, "outside_the_creators_bound")
+                raise refusal
+        else:
+            assert_project_scope_allows_path(request.path, method, allowed_projects)
         assert_body_within_grant(request.path, method, request.body, allowed_projects)
 
         required_permission = "read"
@@ -5067,6 +5186,14 @@ async def raw_proxy(
         # isolate images, profiles, network ACLs or custom volumes keeps them in `default`, and an
         # operation belongs to the project of its resources whatever `?project=` says (security
         # review of the follow-up round, findings 2 and 3).
+        isolation_targets = _raw_isolation_targets(request, project) if is_party_bounded(api_key, request.cluster_id) else []
+        if isolation_targets:
+            try:
+                await _refuse_an_unisolated_target(client, request.cluster_id, isolation_targets)
+            except HTTPException as refusal:
+                _audit_raw_refusal(api_key, request, method, project, refusal, "project_not_isolated")
+                raise
+
         landing = _raw_proxy_landing(request, project, client, endpoint)
         if landing is not None:
             try:
@@ -5165,9 +5292,13 @@ async def raw_proxy(
             # behind, and a buyer whose project OrcaHub removed kept the cluster in scope.
             deleted_project = raw_project_delete_target(method, request.path)
             if deleted_project is not None:
-                return await _raw_project_delete(
+                deleted = await _raw_project_delete(
                     lxd_service, client, request, api_key, project, deleted_project, full_url
                 )
+                if party_project and 200 <= deleted.status_code < 300:
+                    # The name may be another party's next; no worker's cached bound may still list it.
+                    forget_creator_bound_of(api_key, request.cluster_id)
+                return deleted
             # An instance delete, rename or move, or a project rename, leaves the rules naming the
             # old name for whatever is created under it next (services/stranded_rules.py).
             forget_stranded = await stranded_rules.capture(
@@ -5229,6 +5360,12 @@ async def raw_proxy(
             # missed invalidation hides an external system's change for the whole TTL.
             if method not in ("GET", "HEAD", "OPTIONS") and 200 <= status_code < 300:
                 get_cache_manager().invalidate_after_external_write()
+                if method == "POST" and party_project:
+                    # The project joins the creator's bound, as a browser create does.
+                    note = await record_key_created_project(api_key, request.cluster_id, party_project)
+                    if note:
+                        logger.warning("Raw project create on %s: %s", request.cluster_id, note.lstrip(". "))
+
                 # important: a 202 has not happened yet. A dashboard read in the meantime still
                 # sees the instance an OrcaHub delete is removing and caches it, so clear again
                 # when LXD reports the operation settled.
@@ -5685,13 +5822,49 @@ async def proxy_operation(
         if operation in CLUSTER_WIDE_OPERATIONS and not project_grant_is_unrestricted(
             perm.get("projects", ["default"])
         ):
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    f"{operation} acts on a resource no project contains, so it needs a key "
-                    f"granted all projects on {request.cluster_id}. This key is limited to "
-                    f"{sorted(perm.get('projects', ['default']))}."
+            # note: a Partner's key on a cluster another party holds still creates and deletes
+            # projects inside its creator's bound, as the browser does (services/key_party_bound.py).
+            if operation in ("create_project", "delete_project") and is_party_bounded(api_key, request.cluster_id):
+                refusal = await _party_bounded_project_refusal(
+                    api_key, request.cluster_id, str((request.params or {}).get("name") or ""),
+                    creating=operation == "create_project",
+                )
+                if refusal is not None:
+                    raise refusal
+                if operation == "create_project":
+                    # The browser's project policy: restricted, isolated features, user.* only.
+                    request.params = {
+                        **(request.params or {}),
+                        "config": shared_project_config(request.cluster_id, (request.params or {}).get("config") or {}),
+                    }
+            else:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"{operation} acts on a resource no project contains, so it needs a key "
+                        f"granted all projects on {request.cluster_id}. This key is limited to "
+                        f"{sorted(perm.get('projects', ['default']))}."
+                    ),
+                )
+        # important: a Partner's key on a cluster another party holds writes an instance only into
+        # a project that isolates itself, as the browser (security review, 2026-11-06).
+        if operation in ("create_instance", "update_instance", "restore_snapshot") and is_party_bounded(
+            api_key, request.cluster_id
+        ):
+            isolation_client = require_client(
+                await run_blocking(
+                    lxd_service.connection_manager.get_client,
+                    request.cluster_id,
+                    timeout=PROXY_CONNECT_TIMEOUT,
+                    label=f"get_client[{request.cluster_id}]",
+                    executor=proxy_executor,
+                    max_in_flight=PROXY_MAX_IN_FLIGHT,
                 ),
+                request.cluster_id,
+            )
+            await _refuse_an_unisolated_target(
+                isolation_client, request.cluster_id,
+                [request.project, *projects_named_in(request.params or {})],
             )
         # important: a project-limited key is held to the raw proxy's body rule on the operations
         # that write an instance's config, devices or profiles (core/limited_key_writes.py).
@@ -5805,6 +5978,8 @@ async def proxy_operation(
                 # rules naming the project go with it. Without that a same-name project another
                 # organization creates later inherits the old bound.
                 result_data = await _delete_project_for_proxy(lxd_service, request, api_key.get("id"))
+                if is_party_bounded(api_key, request.cluster_id):
+                    forget_creator_bound_of(api_key, request.cluster_id)
             else:
                 result_data = await run_blocking(
                     execute_proxy_operation,
@@ -5831,6 +6006,12 @@ async def proxy_operation(
                     max_in_flight=_operation_in_flight,
                 )
                 health.clear(request.cluster_id)
+                if operation == "create_project" and is_party_bounded(api_key, request.cluster_id):
+                    note = await record_key_created_project(
+                        api_key, request.cluster_id, str((request.params or {}).get("name") or "")
+                    )
+                    if note and isinstance(result_data, dict):
+                        result_data = {**result_data, "note": note.lstrip(". ")}
             if operation in LIST_MUTATIONS:
                 # The upstream product writes through this proxy rather than through the
                 # dashboard's own routes. Without this an operator watched an instance OrcaHub had

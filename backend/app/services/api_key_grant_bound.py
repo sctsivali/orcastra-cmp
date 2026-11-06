@@ -158,7 +158,9 @@ def rule_outside_the_key_grant(api_key: Mapping[str, Any], cluster_id: str, proj
     grant = by_cluster.get(cluster_id)
     if grant is None:
         return f"rule names cluster '{cluster_id}', which this key is not granted"
-    projects = grant.get("projects") or ["default"]
+    # note: a missing list means `default`, an empty one means nothing, as on every proxy door. A grant
+    # held to its creator's bound can be empty (services/key_party_bound.py).
+    projects = grant.get("projects", ["default"])
     if "*" not in projects and project_name not in projects:
         return f"rule names project '{project_name}' on '{cluster_id}', which this key is not granted"
     return None

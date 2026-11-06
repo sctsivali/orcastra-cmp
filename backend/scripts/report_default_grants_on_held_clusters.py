@@ -14,6 +14,9 @@ refused, admin-exempt, or unknown when Authentik did not answer or --no-idp was 
 lists the tenant rules naming `default` or `*` on a cluster several organizations hold, which a
 Partner can no longer write; existing ones are left in place and reported here.
 
+It also lists the grants a key's creator's bound narrows (services/key_party_bound.py): a `*`
+grant becomes the creator's own projects, and a named project another party holds is dropped.
+
 Nothing is written. Key ids are printed truncated.
 """
 
@@ -82,6 +85,7 @@ async def run(use_idp: bool) -> int:
     key_ids = await asyncio.to_thread(key_grant_hygiene.list_key_ids_strict, vault_client)
     cache: Dict = {}
     key_rows: List[tuple] = []
+    bound_rows: List[tuple] = []
     schedule_rows: List[tuple] = []
     async with async_session_maker() as db:
         installers = await _installers(db)
@@ -106,8 +110,24 @@ async def run(use_idp: bool) -> int:
                         creator or "(none)",
                         cluster_id,
                         ",".join(grant.get("permissions") or []),
+                        ",".join(grant.get("projects") or ["default"]),
                         verdict,
                     ))
+            for grant in metadata.get("cluster_permissions") or []:
+                if not isinstance(grant, dict):
+                    continue
+                cluster_id = str(grant.get("cluster_id") or "")
+                verdict = await _verdict(db, creator, cluster_id, use_idp, cache)
+                if verdict is None or verdict == "admin-exempt":
+                    continue
+                stored = list(grant.get("projects", ["default"]))
+                from app.core.org_scope import partner_projects_on
+
+                bound = (await partner_projects_on(db, creator, {cluster_id})).get(cluster_id, {"default"})
+                kept = sorted(bound) if "*" in stored else sorted(p for p in stored if p in bound)
+                if kept != sorted(stored):
+                    bound_rows.append((key_id[:12] + "…", creator or "(none)", cluster_id,
+                                       ",".join(stored), ",".join(kept) or "(nothing)", verdict))
 
         schedules = (await db.execute(
             select(SnapshotSchedule).where(SnapshotSchedule.project == "default", SnapshotSchedule.state == "active")
@@ -131,9 +151,15 @@ async def run(use_idp: bool) -> int:
 
     print(f"live keys read: {live} of {len(key_ids)}; identity provider: {'asked' if use_idp else 'not asked'}\n")
     if key_rows:
-        _print_table(key_rows, ["key", "app", "kind", "creator", "cluster", "level", "verdict"])
+        _print_table(key_rows, ["key", "app", "kind", "creator", "cluster", "level", "projects", "verdict"])
     else:
         print("no live key holds default on a cluster another party holds for its creator")
+    print()
+    if bound_rows:
+        print("grants narrowed to the creator's bound (other parties' projects, pools and networks):")
+        _print_table(bound_rows, ["key", "creator", "cluster", "stored", "kept", "verdict"])
+    else:
+        print("no live key grant is narrowed by its creator's bound")
     print()
     if schedule_rows:
         _print_table(schedule_rows, ["schedule", "instance", "cluster", "owner", "verdict"])

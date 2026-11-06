@@ -211,6 +211,23 @@ def _no_other_party_holds_default_for_a_key(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_party_bound_for_a_key(monkeypatch):
+    """A key's grants are narrowed to its creator's bound only where another party holds the
+    cluster, which needs the database. The default is "no bound", so the suites that drive `*`
+    keys stay hermetic. test_a_key_is_held_to_its_creators_bound.py puts the real reader back.
+    """
+    from app.services import key_party_bound
+
+    async def _no_bound(_api_key, _cluster_id, _db):
+        return "", None
+
+    monkeypatch.setattr(key_party_bound, "_bound", _no_bound)
+    key_party_bound.forget_party_bounds()
+    yield
+    key_party_bound.forget_party_bounds()
+
+
+@pytest.fixture(autouse=True)
 def _no_other_party_holds_default_for_a_schedule(monkeypatch):
     """The schedule worker's view-only `default` rule reads parties from the database.
 
