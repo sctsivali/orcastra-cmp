@@ -24,6 +24,8 @@ export interface ResourceUtilizationStats {
   total_gpu: number;
   used_gpu: number;
   total_gpu_cards?: number;
+  total_gpu_display_cards?: number;
+  total_gpu_integrated_cards?: number;
   status_message?: string | null;
 }
 

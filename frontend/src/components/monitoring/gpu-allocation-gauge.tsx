@@ -13,7 +13,13 @@ import {
 import { GaugeChart } from "./gauge-chart";
 
 interface GpuAllocationGaugeProps {
-  stats: { total_gpu: number; used_gpu: number; total_gpu_cards?: number };
+  stats: {
+    total_gpu: number;
+    used_gpu: number;
+    total_gpu_cards?: number;
+    total_gpu_display_cards?: number;
+    total_gpu_integrated_cards?: number;
+  };
   /** What the empty copy calls the scope: a cluster's name, or "all" for the whole fleet. */
   scope: string;
 }
@@ -30,6 +36,9 @@ export function GpuAllocationGauge({ stats, scope }: GpuAllocationGaugeProps) {
     gpu_total: stats.total_gpu,
     gpu_used: stats.used_gpu,
     gpu_cards_total: stats.total_gpu_cards,
+    // With the per-class counts the fleet says "2 display cards only", as each cluster row does.
+    gpu_display_total: stats.total_gpu_display_cards,
+    gpu_integrated_total: stats.total_gpu_integrated_cards,
   });
   const cardsCaption = gpuCardsCaption(gpu);
 

@@ -287,7 +287,7 @@ FLEET_HOST_FIGURES = (
     "cpu_busy_percent", "cpu_reporting_threads", "total_memory_bytes", "used_memory_bytes",
     "memory_usage_percent", "realtime_memory_bytes", "realtime_memory_percent",
     "total_storage_bytes", "used_storage_bytes", "storage_usage_percent", "total_gpu",
-    "total_gpu_cards", "used_gpu",
+    "total_gpu_cards", "total_gpu_display_cards", "total_gpu_integrated_cards", "used_gpu",
 )
 
 

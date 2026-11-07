@@ -33,7 +33,7 @@ HIDDEN_TOTALS = (
     "cpu_busy_percent", "cpu_reporting_threads", "total_memory_bytes", "used_memory_bytes",
     "memory_usage_percent", "realtime_memory_bytes", "realtime_memory_percent",
     "total_storage_bytes", "used_storage_bytes", "storage_usage_percent", "total_gpu",
-    "total_gpu_cards", "used_gpu",
+    "total_gpu_cards", "total_gpu_display_cards", "total_gpu_integrated_cards", "used_gpu",
 )
 # cpu_reporting_instances counts the Tenant's own running instances that reported CPU.
 KEPT_NODE_FIELDS = (
@@ -66,7 +66,7 @@ def _dashboard() -> MonitoringDashboardResponse:
         total_memory_bytes=512 * 1024**3, used_memory_bytes=300 * 1024**3, memory_usage_percent=58.6,
         realtime_memory_bytes=20 * 1024**3, realtime_memory_percent=3.9,
         total_storage_bytes=10 * 1024**4, used_storage_bytes=4 * 1024**4, storage_usage_percent=40.0,
-        total_gpu=2, total_gpu_cards=3, used_gpu=1,
+        total_gpu=2, total_gpu_cards=3, total_gpu_display_cards=1, total_gpu_integrated_cards=0, used_gpu=1,
         nodes=[node],
         storage_pools=[StoragePoolMetrics(
             name="local", node="nuc2", driver="zfs", total_bytes=1, used_bytes=1,
@@ -85,6 +85,10 @@ def test_a_tenant_dashboard_carries_no_host_figure():
 
     for field in HIDDEN_TOTALS:
         assert getattr(seen, field) is None, f"{field} reached a tenant"
+    # The fleet list is a deny-list, so a GPU total added later must be added there too.
+    for field in type(seen).model_fields:
+        if "gpu" in field:
+            assert getattr(seen, field) is None, f"{field} reached a tenant; add it to FLEET_HOST_FIGURES"
     assert seen.storage_pools == []
     assert seen.warnings is None
     node = seen.nodes[0]

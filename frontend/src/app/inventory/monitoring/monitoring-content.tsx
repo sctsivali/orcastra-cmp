@@ -927,6 +927,8 @@ export default function MonitoringContent() {
         used_storage_bytes: dashboardData.used_storage_bytes ?? 0,
         total_gpu: dashboardData.total_gpu ?? 0,
         total_gpu_cards: dashboardData.total_gpu_cards ?? 0,
+        total_gpu_display_cards: dashboardData.total_gpu_display_cards ?? undefined,
+        total_gpu_integrated_cards: dashboardData.total_gpu_integrated_cards ?? undefined,
         used_gpu: dashboardData.used_gpu ?? 0,
         warnings: dashboardData.warnings,
         cluster_status: singleNode?.cluster_status,
@@ -968,6 +970,8 @@ export default function MonitoringContent() {
       used_storage_bytes: node.storage_used_bytes || 0,
       total_gpu: node.gpu_total || 0,
       total_gpu_cards: node.gpu_cards_total ?? undefined,
+      total_gpu_display_cards: node.gpu_display_total ?? undefined,
+      total_gpu_integrated_cards: node.gpu_integrated_total ?? undefined,
       used_gpu: node.gpu_used || 0,
       warnings: dashboardData.warnings, // Keep global warnings
       // Status message for troubleshooting when metrics are 0

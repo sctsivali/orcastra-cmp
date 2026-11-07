@@ -1841,6 +1841,8 @@ class MonitoringDashboardResponse(BaseModel):
     
     total_gpu: Optional[int] = Field(0, description="Total compute GPUs across connected Clusters")
     total_gpu_cards: Optional[int] = Field(0, description="Total DRM/GPU cards detected (incl. display controllers)")
+    total_gpu_display_cards: Optional[int] = Field(0, description="Display-only controllers among total_gpu_cards, for example a server's onboard VGA")
+    total_gpu_integrated_cards: Optional[int] = Field(0, description="Integrated graphics among total_gpu_cards: attachable, not capacity")
     used_gpu: Optional[int] = Field(0, description="Used GPUs")
     
     # Detailed Per-Node Metrics

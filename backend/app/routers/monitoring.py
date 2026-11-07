@@ -222,6 +222,8 @@ async def get_monitoring_dashboard(
         used_storage = 0
         total_gpu = 0
         total_gpu_cards = 0
+        total_gpu_display_cards = 0
+        total_gpu_integrated_cards = 0
         used_gpu = 0
         
         storage_pools_list: List[StoragePoolMetrics] = []
@@ -265,6 +267,8 @@ async def get_monitoring_dashboard(
                     used_storage += resources.storage_used
                     total_gpu += resources.gpu_total
                     total_gpu_cards += resources.gpu_cards_total
+                    total_gpu_display_cards += resources.gpu_display_total
+                    total_gpu_integrated_cards += resources.gpu_integrated_total
                     used_gpu += resources.gpu_used
                     
                     # Aggregate storage pools
@@ -460,6 +464,8 @@ async def get_monitoring_dashboard(
             
             total_gpu=total_gpu,
             total_gpu_cards=total_gpu_cards,
+            total_gpu_display_cards=total_gpu_display_cards,
+            total_gpu_integrated_cards=total_gpu_integrated_cards,
             used_gpu=used_gpu,
             
             # Detailed Metrics

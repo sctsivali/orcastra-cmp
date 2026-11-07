@@ -1844,6 +1844,10 @@ export interface MonitoringDashboardResponse {
   
   total_gpu: number | null;
   total_gpu_cards?: number | null;
+  /** Display-only controllers among total_gpu_cards; null for a tenant. */
+  total_gpu_display_cards?: number | null;
+  /** Integrated graphics among total_gpu_cards; null for a tenant. */
+  total_gpu_integrated_cards?: number | null;
   used_gpu: number | null;
   
   // Detailed Metrics
