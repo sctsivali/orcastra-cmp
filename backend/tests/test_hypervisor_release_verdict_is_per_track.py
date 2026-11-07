@@ -159,3 +159,43 @@ def test_members_on_one_version_are_not_listed_and_unreadable_ones_are_ignored()
     capped = evaluate(engine=LXD, server_version="5.21.9", server_lts=True, engine_state=FRESH,
                       tracks=LXD_TRACKS, now=NOW, member_versions=many)
     assert len(capped["members"]) == 64
+
+
+@pytest.mark.parametrize("version, lts, security, fixed_in", [
+    # The 2026-10-29 Incus advisories are fixed in 7.6.0; the LTS backports land after the newest
+    # LTS tags, so 7.0.2 and 6.0.7 still read as needing a security update (core/engine_baseline.py).
+    ("7.6", False, False, None),
+    ("7.5", None, True, "7.6.0"),
+    ("7.0.2", True, True, "7.0.3"),
+    ("6.0.7", None, True, "6.0.8"),
+    ("7.0.3", True, False, None),
+])
+def test_an_incus_build_below_the_security_baseline_is_flagged(version, lts, security, fixed_in) -> None:
+    out = verdict(INCUS, version, lts)
+    assert (out["security_update"], out["security_fixed_in"]) == (security, fixed_in)
+
+
+def test_the_security_flag_does_not_wait_for_the_feed() -> None:
+    """The baseline is a fact about the build, not about the feed: an unreachable feed still flags it."""
+    out = verdict(INCUS, "7.0.2", True, tracks={})
+    assert out["status"] == "not_checked"
+    assert (out["security_update"], out["security_fixed_in"]) == (True, "7.0.3")
+
+
+def test_an_engine_without_a_baseline_is_not_judged() -> None:
+    """LXD has no security baseline wired, so the card must not read 'no known issue' either."""
+    out = verdict(LXD, "5.21.5", True)
+    assert (out["security_update"], out["security_fixed_in"]) == (None, None)
+
+
+def test_a_mixed_incus_cluster_is_flagged_by_its_oldest_member() -> None:
+    out = evaluate(
+        engine=INCUS,
+        server_version="7.6",
+        server_lts=False,
+        engine_state=FRESH,
+        tracks=INCUS_TRACKS,
+        now=NOW,
+        member_versions=[("a1", "7.6"), ("a2", "7.5"), ("a3", "7.6")],
+    )
+    assert (out["security_update"], out["security_fixed_in"]) == (True, "7.6.0")

@@ -16,6 +16,7 @@ import math
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from app.core.engine_baseline import floor_verdict
 from app.services.hypervisor_releases.feed import Track, Version, clean_version, parse_version
 
 GOOD_FOR_SECONDS = 7 * 86400
@@ -132,11 +133,19 @@ def evaluate(
         "attempted_at": _iso(state.get("last_attempt_at")),
         "mixed_versions": mixed,
         "members": [{"member": m, "version": v} for m, v, _p in members] if mixed else None,
+        "security_update": None,
+        "security_fixed_in": None,
     }
     version = members[0][2] if mixed else parse_version(server_version)
     if engine is None or version is None:
         out["reason"] = "unknown_version"
         return out
+    # note: before the feed checks on purpose. The baseline is a fact about the build, so a feed
+    # outage must not hide a known advisory.
+    security = floor_verdict("security_baseline", engine, ".".join(str(part) for part in version))
+    if security.code != "no_floor":
+        out["security_update"] = not security.allowed
+        out["security_fixed_in"] = security.minimum if not security.allowed else None
     if not tracks:
         out["reason"] = "feed_unreachable"
         return out

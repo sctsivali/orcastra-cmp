@@ -938,6 +938,14 @@ class HypervisorRelease(BaseModel):
     members: Optional[List[HypervisorMemberVersion]] = Field(
         None, description="Each member's version, oldest first, only while they differ"
     )
+    security_update: Optional[bool] = Field(
+        None,
+        description=(
+            "The build (the oldest member's) predates a published security fix on its line; "
+            "null when no security baseline is wired for the engine (core/engine_baseline.py)"
+        ),
+    )
+    security_fixed_in: Optional[str] = Field(None, description="The first build of its line with that fix")
 
 
 class NodeStatus(BaseModel):
