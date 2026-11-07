@@ -18,7 +18,8 @@ stale without anybody noticing.
 import asyncio
 import ipaddress
 import logging
-from typing import Any, FrozenSet, Mapping, Optional, Sequence, Tuple
+import zlib
+from typing import Any, AsyncIterator, FrozenSet, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
@@ -32,6 +33,111 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = httpx.Timeout(connect=3.0, read=10.0, write=5.0, pool=2.0)
 
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+
+# Every fetch asks for the body as it is stored. A server may still compress it, and httpx would
+# then hand out decompressed chunks of any size before a cap could look at them: one 64 KiB gzip
+# chunk inflates to about 64 MB (security review 2026-11-07). So bodies are read raw and inflated
+# here, never more than the caller's limit plus one byte at a time.
+_ACCEPT_ENCODING = "identity"
+
+
+class _Undecodable(Exception):
+    """A Content-Encoding this module does not inflate, or a body that is not what it claims."""
+
+
+class _Inflater:
+    """One gzip or deflate layer. "deflate" is meant to be zlib-wrapped, but some servers send the
+    bare stream, which httpx accepted; the first block decides, and the stream is read once."""
+
+    def __init__(self, gzip: bool) -> None:
+        self._raw_fallback = not gzip
+        self._fed = False
+        self._z = zlib.decompressobj(16 + zlib.MAX_WBITS if gzip else zlib.MAX_WBITS)
+
+    @property
+    def eof(self) -> bool:
+        return self._z.eof
+
+    @property
+    def unused_data(self) -> bytes:
+        return self._z.unused_data
+
+    @property
+    def unconsumed_tail(self) -> bytes:
+        return self._z.unconsumed_tail
+
+    def decompress(self, data: bytes, max_length: int) -> bytes:
+        try:
+            out = self._z.decompress(data, max_length)
+        except zlib.error:
+            if not (self._raw_fallback and not self._fed):
+                raise
+            self._z = zlib.decompressobj(-zlib.MAX_WBITS)
+            out = self._z.decompress(data, max_length)
+        self._fed = True
+        return out
+
+
+def _decoder(content_encoding: Optional[str]) -> Optional[_Inflater]:
+    """An inflater for one gzip or deflate layer, or None for a plain body."""
+    layers = [part.strip().lower() for part in (content_encoding or "").split(",")]
+    layers = [part for part in layers if part and part != "identity"]
+    if not layers:
+        return None
+    if len(layers) > 1:
+        raise _Undecodable("stacked content encodings")
+    if layers[0] in ("gzip", "x-gzip"):
+        return _Inflater(gzip=True)
+    if layers[0] == "deflate":
+        return _Inflater(gzip=False)
+    raise _Undecodable("unsupported content encoding")
+
+
+def _inflate_into(decoder: _Inflater, raw: bytes, body: bytearray, limit: int) -> bool:
+    """Append what `raw` inflates to, stopping one byte past `limit`. True when it went past.
+
+    Bytes after the end of the compressed stream are refused: zlib would keep copying them into
+    unused_data on every chunk, a cost that grows with the square of what a sender trickles in
+    (security review 2026-11-07), and a second gzip member is not something these callers expect.
+    """
+    data = raw
+    try:
+        while data:
+            if decoder.eof:
+                raise _Undecodable("data after the end of the compressed body")
+            out = decoder.decompress(data, limit + 1 - len(body))
+            body.extend(out)
+            if len(body) > limit:
+                return True
+            if decoder.unused_data:
+                raise _Undecodable("data after the end of the compressed body")
+            data = decoder.unconsumed_tail
+    except zlib.error as exc:
+        raise _Undecodable("body does not match its content encoding") from exc
+    return False
+
+
+async def _one(data: bytes) -> AsyncIterator[bytes]:
+    yield data
+
+
+def _body_source(response: httpx.Response) -> Tuple[AsyncIterator[bytes], Optional[str]]:
+    """(chunks, content encoding still to undo) for a streamed response.
+
+    The raw stream as it arrives, normally. httpx reads an in-memory body in full when the
+    response is built (a mock transport does this), and that body is already decoded, so it is
+    handed over as one plain chunk and still meets the same cap.
+    """
+    if response.is_stream_consumed:
+        return _one(response.content), None
+    return response.aiter_raw(), response.headers.get("content-encoding")
+
+
+def _with_accept_encoding(headers: Optional[Mapping[str, str]]) -> dict:
+    merged = dict(headers or {})
+    if not any(key.lower() == "accept-encoding" for key in merged):
+        merged["Accept-Encoding"] = _ACCEPT_ENCODING
+    return merged
 
 
 class SafeHTTPError(Exception):
@@ -94,7 +200,7 @@ async def fetch_guarded(
             except ValueError as exc:
                 raise SafeHTTPError(str(exc)) from exc
             request = client.build_request(
-                "GET", connect_url, headers={**(headers or {}), "Host": _host_header(current)},
+                "GET", connect_url, headers={**_with_accept_encoding(headers), "Host": _host_header(current)},
                 extensions={"sni_hostname": host},
             )
 
@@ -115,11 +221,31 @@ async def fetch_guarded(
                             f"upstream returned {response.status_code}", status_code=response.status_code
                         )
 
+                    chunks, encoding = _body_source(response)
+                    try:
+                        decoder = _decoder(encoding)
+                    except _Undecodable as exc:
+                        raise SafeHTTPError(str(exc)) from exc
                     body = bytearray()
-                    async for chunk in response.aiter_bytes():
-                        body.extend(chunk)
-                        if len(body) > max_bytes:
+                    raw_seen = 0
+                    # important: raw chunks, not aiter_bytes. Both the bytes on the wire and what
+                    # they inflate to are held to max_bytes (see _ACCEPT_ENCODING).
+                    async for chunk in chunks:
+                        raw_seen += len(chunk)
+                        if raw_seen > max_bytes:
                             raise SafeHTTPError("response exceeds the size limit")
+                        if decoder is None:
+                            body.extend(chunk)
+                            over = len(body) > max_bytes
+                        else:
+                            try:
+                                over = _inflate_into(decoder, chunk, body, max_bytes)
+                            except _Undecodable as exc:
+                                raise SafeHTTPError(str(exc)) from exc
+                        if over:
+                            raise SafeHTTPError("response exceeds the size limit")
+                    if decoder is not None and not decoder.eof:
+                        raise SafeHTTPError("response was cut short")
                     return response.headers.get("content-type", ""), bytes(body)
                 finally:
                     await response.aclose()
@@ -221,7 +347,7 @@ async def post_pinned(
             "POST",
             connect_url,
             content=content,
-            headers={**dict(headers), "Host": _host_header(url)},
+            headers={**_with_accept_encoding(headers), "Host": _host_header(url)},
             extensions={"sni_hostname": host},
         )
         try:
@@ -234,15 +360,32 @@ async def post_pinned(
             if response.status_code in _REDIRECT_STATUSES:
                 raise SafeHTTPError("endpoint redirected, which a delivery does not follow")
 
+            # Read raw and inflate here, as fetch_guarded does: a receiver is caller-registered,
+            # so a compressed reply is no reason to inflate megabytes for a log excerpt. An
+            # encoding this cannot read keeps the status and drops the excerpt.
+            chunks, encoding = _body_source(response)
+            try:
+                decoder = _decoder(encoding)
+            except _Undecodable:
+                decoder, readable = None, False
+            else:
+                readable = True
             seen = 0
             head = bytearray()
-            async for chunk in response.aiter_bytes():
+            async for chunk in chunks:
                 seen += len(chunk)
-                if len(head) < max_response_bytes:
-                    head.extend(chunk[: max_response_bytes - len(head)])
+                if readable and len(head) < max_response_bytes:
+                    if decoder is None:
+                        head.extend(chunk[: max_response_bytes - len(head)])
+                    else:
+                        try:
+                            _inflate_into(decoder, chunk, head, max_response_bytes)
+                        except _Undecodable:
+                            readable = False
+                            head.clear()
                 if seen > max_response_bytes:
                     # Stop reading. What the receiver says is diagnostic, not payload.
                     break
-            return response.status_code, bytes(head), seen
+            return response.status_code, bytes(head[:max_response_bytes]), seen
         finally:
             await response.aclose()
