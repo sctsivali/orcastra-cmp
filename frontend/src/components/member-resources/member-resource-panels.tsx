@@ -9,7 +9,7 @@ import { AlertTriangle, Cpu, HardDrive, Layers, MemoryStick, Sparkles } from "lu
 import { Badge } from "@/components/ui/badge";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
 import { cpuAllocation, cpuAllocationText, formatCpuThreads } from "@/lib/cpu-allocation";
-import { CpuAllocationInfo } from "@/components/cpu/cpu-allocation-info";
+import { CpuAllocationInfo, CpuAllocationText } from "@/components/cpu/cpu-allocation-info";
 import { formatLabel, formatVcpuCount } from "@/lib/utils";
 import { usageTone } from "@/lib/usage-tone";
 import type { MemberResources } from "@/types/api";
@@ -110,7 +110,7 @@ export function MemberResourcePanels({
                 {cpu.tone === "warning" && !instancesLost && (
                   <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
                 )}
-                {instancesLost ? "allocation unknown" : cpuAllocationText(cpu)}
+                {instancesLost ? "allocation unknown" : <CpuAllocationText cpu={cpu} />}
               </p>
             </div>
           </CardContent>

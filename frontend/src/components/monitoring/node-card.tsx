@@ -1,8 +1,8 @@
 "use client";
 
 import { memo } from "react";
-import { cpuAllocation, cpuAllocationFigure, cpuAllocationText } from "@/lib/cpu-allocation";
-import { CpuAllocationInfo } from "@/components/cpu/cpu-allocation-info";
+import { cpuAllocation } from "@/lib/cpu-allocation";
+import { CpuAllocationFigure, CpuAllocationInfo, CpuAllocationText } from "@/components/cpu/cpu-allocation-info";
 import { GpuCapacityInfo } from "@/components/gpu";
 import { Play, Server } from "lucide-react";
 
@@ -82,10 +82,12 @@ function NodeHostFigures({ host }: { host: NonNullable<ReturnType<typeof hostFig
             vCPU Allocation
             <CpuAllocationInfo cpu={cpu} />
           </span>
-          <span className="font-medium">{cpuAllocationFigure(cpu)}</span>
+          <CpuAllocationFigure cpu={cpu} className="text-right font-medium" />
         </div>
         <Progress value={cpu.percentClamped} className={`h-2 ${cpu.meterClassName}`} />
-        <p className={`text-xs text-right ${cpu.textClassName}`}>{cpuAllocationText(cpu)}</p>
+        <p className={`text-xs text-right ${cpu.textClassName}`}>
+          <CpuAllocationText cpu={cpu} />
+        </p>
       </div>
       
       {/* Memory */}

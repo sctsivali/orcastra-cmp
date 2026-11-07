@@ -1,6 +1,7 @@
 import { InfoToggletip } from "@/components/ui/info-toggletip";
 import {
   CPU_OVERCOMMIT_WARN_RATIO,
+  cpuAllocationText,
   formatCpuThreads,
   type CpuAllocationView,
 } from "@/lib/cpu-allocation";
@@ -12,6 +13,46 @@ interface CpuAllocationInfoProps {
   /** What the figure covers, as the sentence names it: "cluster", "cluster member", "fleet". */
   scope?: string;
   className?: string;
+}
+
+const OVER = "over-committed";
+
+/**
+ * "25 vCPUs / 12 CPU threads" with the unit "CPU threads" kept whole, so a narrow card never
+ * leaves "CPU" on one line and "threads" on the next. Only the unit: a whole "112 CPU threads"
+ * held on one line ran into the next column of a 95 px card. CSS rather than non-breaking
+ * spaces, so the text stays plain for copy, search and anything that matches it.
+ */
+export function CpuAllocationFigure({
+  cpu,
+  className,
+}: {
+  cpu: Pick<CpuAllocationView, "allocated" | "threads">;
+  className?: string;
+}) {
+  return (
+    <span className={className}>
+      {formatVcpuCount(cpu.allocated)} / {cpu.threads}{" "}
+      <span className="whitespace-nowrap">{cpu.threads === 1 ? "CPU thread" : "CPU threads"}</span>
+    </span>
+  );
+}
+
+/**
+ * cpuAllocationText with "over-committed" kept whole: a narrow card used to break it at the
+ * hyphen, leaving "over-" on one line.
+ */
+export function CpuAllocationText({ cpu, className }: { cpu: CpuAllocationView; className?: string }) {
+  const text = cpuAllocationText(cpu);
+  const at = text.indexOf(OVER);
+  if (at < 0) return <span className={className}>{text}</span>;
+  return (
+    <span className={className}>
+      {text.slice(0, at)}
+      <span className="whitespace-nowrap">{OVER}</span>
+      {text.slice(at + OVER.length)}
+    </span>
+  );
 }
 
 /**

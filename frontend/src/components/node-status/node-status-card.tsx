@@ -9,7 +9,7 @@ import {
   gpuNoComputeCaption,
   summarizeGpus,
 } from "@/lib/gpu";
-import { CpuAllocationInfo } from "@/components/cpu/cpu-allocation-info";
+import { CpuAllocationFigure, CpuAllocationInfo, CpuAllocationText } from "@/components/cpu/cpu-allocation-info";
 import { GpuCapacityInfo } from "@/components/gpu";
 import { HypervisorReleaseStatus } from "@/components/hypervisor-release";
 
@@ -261,12 +261,12 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
             {/* CPU Info */}
             <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Cpu className="h-3.5 w-3.5" aria-hidden="true" />
+                <Cpu className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 <span className="font-medium">vCPU Allocation</span>
                 <CpuAllocationInfo cpu={cpu} />
               </div>
               <div className="text-xs">
-                <div className="font-semibold text-foreground">{cpuFigure}</div>
+                <CpuAllocationFigure cpu={cpu} className="block font-semibold text-foreground" />
                 {/* The monitoring card's meter: the clamped share of threads in the allocation
                     tone, so an over-commit reads as a ratio rather than as a red bar.
                     important: role="meter", not Radix's progressbar. This is a level, not a task
@@ -281,14 +281,14 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
                     className={cn("my-1 h-2", cpu.meterClassName)}
                   />
                 )}
-                <div className={cpu.textClassName}>{cpuAllocationText(cpu)}</div>
+                <CpuAllocationText cpu={cpu} className={cn("block", cpu.textClassName)} />
               </div>
             </div>
 
             {/* Memory */}
             <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <MemoryStick className="h-3.5 w-3.5" />
+                <MemoryStick className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 <span className="font-medium">Memory</span>
               </div>
               <div className="text-xs">
@@ -310,7 +310,7 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
             {/* GPU Info */}
             <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 <span className="font-medium">GPU</span>
                 <GpuCapacityInfo />
               </div>

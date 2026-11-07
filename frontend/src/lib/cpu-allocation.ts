@@ -73,7 +73,10 @@ export function formatCpuThreads(count: number): string {
   return plural(count, "CPU thread");
 }
 
-/** "25 vCPUs / 12 CPU threads": the one way the allocation figure is written. */
+/**
+ * "25 vCPUs / 12 CPU threads": the one way the allocation figure is written. On a narrow card
+ * render it with CpuAllocationFigure (components/cpu), which keeps each side whole.
+ */
 export function cpuAllocationFigure(view: Pick<CpuAllocationView, "allocated" | "threads">): string {
   return `${formatVcpuCount(view.allocated)} / ${formatCpuThreads(view.threads)}`;
 }

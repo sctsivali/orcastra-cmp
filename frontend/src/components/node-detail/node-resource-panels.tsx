@@ -12,10 +12,11 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { GpuPanel } from "@/components/gpu";
 import { GPU_UTILIZATION_NOTE } from "@/lib/gpu";
 import { usePermissions } from "@/hooks/use-permissions";
-import { formatBytes, formatLabel, formatVcpuCount, EMPTY_VALUE } from "@/lib/utils";
+import { cn, formatBytes, formatLabel, formatVcpuCount, EMPTY_VALUE } from "@/lib/utils";
 import type { NodeResources } from "@/types";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
 import { UsageMeter } from "@/components/ui/usage-meter";
+import { Progress } from "@/components/ui/progress";
 import { usagePercent } from "@/lib/usage-tone";
 import { cpuAllocation, cpuAllocationFigure, cpuAllocationText, formatCpuThreads } from "@/lib/cpu-allocation";
 import { CpuAllocationInfo } from "@/components/cpu/cpu-allocation-info";
@@ -82,12 +83,25 @@ export function NodeCpuPanel({
                 <CpuAllocationInfo cpu={cpu} />
               </h4>
               <div className="space-y-3">
-                <UsageMeter
-                  label="Allocated"
-                  total={cpu.threads}
-                  used={cpu.allocated}
-                  value={`${cpuAllocationFigure(cpu)} (${cpu.ratioLabel})`}
-                />
+                {/* The card's allocation meter, not UsageMeter: that one turns red past 90%, and
+                    an over-commit is a ratio to read, not a fault (lib/cpu-allocation.ts). */}
+                <div className="space-y-1">
+                  <div className="flex justify-between gap-4 text-sm">
+                    <span className="text-muted-foreground">Allocated</span>
+                    <span className="text-right font-semibold tabular-nums">
+                      {`${cpuAllocationFigure(cpu)} (${cpu.ratioLabel})`}
+                    </span>
+                  </div>
+                  {cpu.threads > 0 && (
+                    <Progress
+                      role="meter"
+                      value={cpu.percentClamped}
+                      aria-label="vCPU allocation"
+                      getValueLabel={() => `${cpuAllocationFigure(cpu)}, ${cpuAllocationText(cpu)}`}
+                      className={cn("h-2", cpu.meterClassName)}
+                    />
+                  )}
+                </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">
                     {cpu.over > 0 ? "Beyond capacity" : "Unallocated"}
