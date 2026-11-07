@@ -784,6 +784,24 @@ class Settings(BaseSettings):
         description="Comma-separated private networks a KERNEL_CVE_FEED_URL mirror may sit on",
     )
 
+    # Hypervisor releases (services/hypervisor_releases/): the newest LXD and Incus release on each
+    # track, from the Snap Store and GitHub, read by one worker. Nothing identifying this
+    # deployment or its Clusters is sent. False for an install with no route to the internet.
+    hypervisor_release_check_enabled: bool = Field(
+        default=True,
+        alias="HYPERVISOR_RELEASE_CHECK_ENABLED",
+        description="Read the public LXD and Incus release feeds and tell Partners when a Cluster's track has a newer release",
+    )
+    # note: at most 48 so a read always lands well inside the seven days a verdict trusts the
+    # feed (hypervisor_releases.verdict.GOOD_FOR_SECONDS), with room for the failure backoff.
+    hypervisor_release_check_interval_hours: int = Field(
+        default=6,
+        ge=1,
+        le=48,
+        alias="HYPERVISOR_RELEASE_CHECK_INTERVAL_HOURS",
+        description="How often the LXD and Incus release feeds are read",
+    )
+
     # OpenSearch Archive Configuration
     opensearch_archive_enabled: bool = Field(
         default=False,

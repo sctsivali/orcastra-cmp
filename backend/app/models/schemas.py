@@ -895,6 +895,38 @@ class MemberResources(BaseModel):
     degraded_parts: List[str] = Field(default_factory=list, description="Which parts were lost: 'storage', 'storage:<pool>', 'instances'")
 
 
+class HypervisorNewerTrack(BaseModel):
+    """Another track with a newer release than the Cluster's own: a newer LTS, or the feature track."""
+    track: str = Field(..., description="The track as a phrase: '6.x', '5.21 LTS', '7.0 LTS', 'stable'")
+    version: str = Field(..., description="The newest stable release on that track")
+    channel: str = Field(..., description="Snap channel (LXD) or Zabbly repository (Incus)")
+    lts: bool = Field(..., description="Whether that track is a long-term support series")
+
+
+class HypervisorRelease(BaseModel):
+    """How the Cluster's hypervisor version compares with the newest release on its own track
+    (services/hypervisor_releases/). Computed on each read from the stored feeds."""
+    status: Literal["latest", "update_available", "ahead", "not_checked"] = Field(
+        ...,
+        description=(
+            "latest: the newest stable release on its track; update_available: that track has a "
+            "newer one (or the track is retired); ahead: newer than the track's stable release; "
+            "not_checked: no verdict, see reason"
+        ),
+    )
+    reason: Optional[Literal["feed_unreachable", "stale_feed", "unknown_version", "unknown_track"]] = None
+    engine: Optional[Literal["LXD", "Incus"]] = None
+    track: Optional[str] = Field(None, description="The Cluster's track as a phrase: '5.21 LTS', '6.x', '7.0 LTS', 'stable'")
+    lts: Optional[bool] = None
+    track_retired: bool = Field(False, description="The running feature release's track gets no more updates; `channel` is the LTS to move to")
+    latest_version: Optional[str] = None
+    released_at: Optional[datetime] = Field(None, description="When that release reached the stable channel (LXD only)")
+    channel: Optional[str] = Field(None, description="Snap channel (LXD) or Zabbly repository (Incus) that carries latest_version")
+    newer_track: Optional[HypervisorNewerTrack] = None
+    checked_at: Optional[datetime] = Field(None, description="When the feed this verdict uses was last read successfully")
+    attempted_at: Optional[datetime] = Field(None, description="When the feed was last tried, successful or not")
+
+
 class NodeStatus(BaseModel):
     """Registered LXD Cluster status information."""
     name: str = Field(..., description="Registered Cluster identifier")
@@ -910,6 +942,9 @@ class NodeStatus(BaseModel):
     )
     server_version: Optional[str] = None
     api_version: Optional[str] = None
+    hypervisor_release: Optional[HypervisorRelease] = Field(
+        None, description="Release verdict for server_version; None when the check is turned off or the Cluster is not connected"
+    )
     auth: Optional[str] = None
     environment: Optional[Dict[str, Any]] = None
     error: Optional[str] = None

@@ -565,6 +565,16 @@ async def lifespan(app: FastAPI):
     except Exception as cve_feed_err:
         logger.error("Could not start the kernel CVE feed: %s", cve_feed_err, exc_info=True)
 
+    # Hypervisor releases: one worker (Redis lease) reads the newest LXD and Incus release on each
+    # track, so a Cluster card says whether its own track has a newer one (services/hypervisor_releases/).
+    try:
+        from app.services.hypervisor_releases.service import start_hypervisor_release_check
+
+        start_hypervisor_release_check()
+        logger.info("Hypervisor release check started (enabled=%s)", settings.hypervisor_release_check_enabled)
+    except Exception as hv_release_err:
+        logger.error("Could not start the hypervisor release check: %s", hv_release_err, exc_info=True)
+
     # Host Health: one worker (Redis lease) re-checks Vault, logging, the IdP, Postgres, Redis and
     # disk every HOST_HEALTH_INTERVAL_SECONDS. Its own try, for the reason the block above gives.
     try:
@@ -789,6 +799,11 @@ async def lifespan(app: FastAPI):
     try:
         from app.services.kernel_cve_feed.service import stop_kernel_cve_feed
         await stop_kernel_cve_feed()
+    except Exception:
+        pass
+    try:
+        from app.services.hypervisor_releases.service import stop_hypervisor_release_check
+        await stop_hypervisor_release_check()
     except Exception:
         pass
     try:

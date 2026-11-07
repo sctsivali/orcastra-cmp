@@ -26,6 +26,7 @@ from app.services.lxd_service import (
     LXDOperationError,
 )
 from app.core import swr
+from app.services.hypervisor_releases import service as hypervisor_releases
 from app.core.swr import Built
 from app.core.config import get_settings
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, require_admin, AuthenticatedUser
@@ -229,7 +230,11 @@ async def get_nodes_status(
         generation=lambda: get_resource_list_generation(cache, CAPACITY_GENERATION_KIND),
         label="cluster status",
     )
-    return _nodes_for_project_scope(served.as_model(NodesStatusResponse))
+    response = _nodes_for_project_scope(served.as_model(NodesStatusResponse))
+    # note: after the cache, not inside build(): the verdict follows the release feed, which
+    # changes on its own clock, so a 180 s old body still gets today's answer.
+    await hypervisor_releases.attach(response.nodes)
+    return response
 
 
 

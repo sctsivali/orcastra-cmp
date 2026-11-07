@@ -46,8 +46,11 @@ def manifest_from_dict(data: Optional[Dict[str, Any]]) -> Optional[Manifest]:
 
 
 class ReleaseCheckStore:
-    def __init__(self, redis: Callable[[], Any] = _shared_redis) -> None:
+    def __init__(self, redis: Callable[[], Any] = _shared_redis, state_key: str = STATE_KEY) -> None:
         self._redis = redis
+        # note: other once-a-day public feeds (services/hypervisor_releases/) keep their state the
+        # same way under their own key.
+        self._state_key = state_key
         self._local: Dict[str, Any] = {}
         self._local_cooldown_until = 0.0
         self._lock = threading.Lock()
@@ -62,7 +65,7 @@ class ReleaseCheckStore:
         client = self._client()
         if client is not None:
             try:
-                raw = client.get(STATE_KEY)
+                raw = client.get(self._state_key)
                 if raw:
                     return json.loads(raw)
             except Exception as exc:  # noqa: BLE001 - fall back to this process's copy
@@ -77,7 +80,7 @@ class ReleaseCheckStore:
         if client is None:
             return
         try:
-            client.set(STATE_KEY, json.dumps(state), ex=STATE_TTL_SECONDS)
+            client.set(self._state_key, json.dumps(state), ex=STATE_TTL_SECONDS)
         except Exception as exc:  # noqa: BLE001
             logger.debug("Release check state not shared: %s", type(exc).__name__)
 
