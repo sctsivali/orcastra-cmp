@@ -269,6 +269,20 @@ _GUEST_ACCESS_PREFIXES: Dict[str, str] = {
     # A backup or a published image is the guest's filesystem in a tarball, which is the same
     # disclosure as reading its files one at a time.
     "/backups": "instance.files",
+    # SFTP to the guest filesystem (LXD and Incus), and Incus's dirty bitmaps, which an
+    # incremental disk export reads.
+    "/sftp": "instance.files",
+    "/bitmaps": "instance.files",
+    # important: each of these is root in the guest by another road. `nbd` opens the root and
+    # dependent disks, `nvram` (Incus) and `uefi-vars` (LXD) rewrite the boot variables, and
+    # `port-forward` (Incus) connects to any TCP port inside the instance past every network rule.
+    # `debug` holds Incus's memory dump, which carries every secret the guest has in memory, and
+    # its repair action. See tests/test_incus_guest_paths_cost_the_capability_they_reach.py.
+    "/nbd": "instance.exec",
+    "/nvram": "instance.exec",
+    "/uefi-vars": "instance.exec",
+    "/port-forward": "instance.exec",
+    "/debug": "instance.exec",
 }
 
 # Log files whose contents are the output of a command someone ran. Ordinary instance logs
