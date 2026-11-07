@@ -33,6 +33,7 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.single_flight import single_flight
+from app.core.type_utils import normalize_node_type
 from app.core.blocking import BlockingPoolFull, BlockingTimeout
 from app.core.error_sanitizer import sanitize_error
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
@@ -87,6 +88,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
+
+
+def count_engines(cluster_ids, read_type) -> tuple[int, int, int]:
+    """(lxd, microcloud, incus) among `cluster_ids`, by each one's registered type.
+
+    A type that is missing, undetermined or unreadable counts as LXD, the family the registry
+    falls back to everywhere else.
+    """
+    lxd = microcloud = incus = 0
+    for cluster_id in cluster_ids:
+        try:
+            family = normalize_node_type(read_type(cluster_id))
+        except Exception:  # noqa: BLE001 - see the docstring
+            family = "lxd"
+        if family == "incus":
+            incus += 1
+        elif family == "microcloud":
+            microcloud += 1
+        else:
+            lxd += 1
+    return lxd, microcloud, incus
 
 router = APIRouter(
     prefix="/vms",
@@ -431,48 +453,26 @@ async def list_vms(
             and check_tenant_permission(vm.host, vm.project or "default", vm.name, "view")
         ]
         
-        # Count LXD vs MicroCloud vs Incus nodes
-        lxd_count = 0
-        microcloud_count = 0
-        incus_count = 0
-        
-        # Config nodes are LXD - classify non-config nodes via Vault in parallel
-        config_nodes = lxd_service.get_node_names()
-        non_config_nodes = [n for n in connected_nodes if n not in config_nodes]
-        lxd_count = len(connected_nodes) - len(non_config_nodes)
-        
-        def _classify_node(node_name: str) -> str:
-            """Read node type from Vault metadata (runs in thread pool)."""
-            try:
-                metadata_path = f"secret/data/clusters/{node_name}/metadata"
-                metadata = lxd_service.cert_manager.vault.vault_read(metadata_path)
-                if metadata:
-                    # `or`, not a get default: the key exists with a null value for a
-                    # cluster whose type is not determined yet, and None has no .lower().
-                    return (metadata.get('type') or 'lxd').lower()
-            except Exception:
-                pass
-            return 'lxd'
+        # Count LXD vs MicroCloud vs Incus among the clusters that answered, from the type each
+        # registration recorded (written by the trusted Check Authentication read).
+        def _registered_type(node_name: str) -> Optional[str]:
+            metadata = lxd_service.cert_manager.vault.vault_read(
+                f"{lxd_service.cert_manager.clusters_path}/{node_name}/metadata"
+            )
+            return (metadata or {}).get("type")
 
-        if non_config_nodes:
-            import asyncio
-            from concurrent.futures import ThreadPoolExecutor
-            loop = asyncio.get_event_loop()
-            _classify_executor = ThreadPoolExecutor(max_workers=min(len(non_config_nodes), 10))
-            classify_tasks = [loop.run_in_executor(_classify_executor, _classify_node, n) for n in non_config_nodes]
-            classify_results = await asyncio.gather(*classify_tasks, return_exceptions=True)
-            _classify_executor.shutdown(wait=False)
-            for result in classify_results:
-                if isinstance(result, str):
-                    if result == 'microcloud':
-                        microcloud_count += 1
-                    elif result == 'incus':
-                        incus_count += 1
-                    else:
-                        lxd_count += 1
-                else:
-                    lxd_count += 1
-        
+        def _type_or_none(node_name: str) -> Optional[str]:
+            try:
+                return _registered_type(node_name)
+            except Exception:  # noqa: BLE001 - an unreadable record counts as LXD, as before
+                return None
+
+        registered = dict(zip(
+            connected_nodes,
+            await asyncio.gather(*(asyncio.to_thread(_type_or_none, n) for n in connected_nodes)),
+        ))
+        lxd_count, microcloud_count, incus_count = count_engines(connected_nodes, registered.get)
+
         # important: connected_nodes is what answered, not what exists. Both it and
         # get_node_names() pass through apply_cluster_filter, so the difference is the
         # registered clusters this operator can see that stayed silent. Without it the
