@@ -6,6 +6,7 @@ import {
   GPU_NO_COMPUTE_TITLE,
   gpuAllocationCaption,
   gpuCardsCaption,
+  gpuNoComputeCaption,
   summarizeGpus,
 } from "@/lib/gpu";
 
@@ -41,7 +42,7 @@ export function GpuAllocationGauge({ stats, scope }: GpuAllocationGaugeProps) {
         </p>
         <p className="text-xs text-muted-foreground">
           {gpu.hasCards
-            ? `${cardsCaption ?? `${gpu.cardsTotal} detected`}, none allocatable`
+            ? gpuNoComputeCaption(gpu)
             : scope === "all"
               ? "No GPU on any cluster"
               : `No GPU on ${scope}`}

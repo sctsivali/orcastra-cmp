@@ -8,8 +8,9 @@ import { TableLink } from "@/components/ui/table-link";
 import { AlertTriangle, Cpu, HardDrive, Layers, MemoryStick, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
-import { cpuAllocation, cpuAllocationText } from "@/lib/cpu-allocation";
-import { formatLabel, formatVcpuCount, plural } from "@/lib/utils";
+import { cpuAllocation, cpuAllocationText, formatCpuThreads } from "@/lib/cpu-allocation";
+import { CpuAllocationInfo } from "@/components/cpu/cpu-allocation-info";
+import { formatLabel, formatVcpuCount } from "@/lib/utils";
 import { usageTone } from "@/lib/usage-tone";
 import type { MemberResources } from "@/types/api";
 import { GpuPanel } from "../gpu";
@@ -88,8 +89,9 @@ export function MemberResourcePanels({
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Cpu className="h-4 w-4 text-muted-foreground" />
+              <Cpu className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
               vCPU Allocation
+              <CpuAllocationInfo cpu={instancesLost ? undefined : cpu} scope="cluster member" />
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -97,7 +99,7 @@ export function MemberResourcePanels({
               <div className="flex items-baseline justify-center gap-1">
                 <span className="text-2xl font-bold">{instancesLost ? "?" : cpu.allocated}</span>{" "}
                 <span className="text-sm text-muted-foreground">
-                  {cpu.allocated === 1 ? "vCPU" : "vCPUs"} on {plural(cpu.threads, "hardware thread")}
+                  {cpu.allocated === 1 ? "vCPU" : "vCPUs"} / {formatCpuThreads(cpu.threads)}
                 </span>
               </div>
               <Progress
@@ -301,13 +303,13 @@ export function MemberResourcePanels({
         <CardContent>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
             <div>
-              <p className="text-muted-foreground mb-1">{cpu.over > 0 ? "vCPU Over-Commit" : "Unallocated Hardware Threads"}</p>
+              <p className="text-muted-foreground mb-1">{cpu.over > 0 ? "Beyond Capacity" : "Unallocated CPU Threads"}</p>
               <p className="font-medium">
                 {instancesLost
                   ? "unknown"
                   : cpu.over > 0
-                    ? `${formatVcpuCount(cpu.over)} beyond capacity (${cpu.ratioLabel})`
-                    : plural(cpu.unallocated, "hardware thread")}
+                    ? `${formatVcpuCount(cpu.over)} (${cpuAllocationText(cpu)})`
+                    : formatCpuThreads(cpu.unallocated)}
               </p>
             </div>
             <div>

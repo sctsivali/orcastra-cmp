@@ -129,9 +129,32 @@ function nodeResources() {
   };
 }
 
-// `serverVersion` moves cluster-a off the latest LXD so the card offers its update instead;
-// `tags` gives cluster-a tags for the tag chip and the Tags facet.
-function platformNodes({ serverVersion = "6.9", tags = [] } = {}) {
+// The backend's release verdict for a cluster (schemas.HypervisorRelease). The card renders only
+// this: it knows no version numbers of its own.
+function hypervisorRelease(status = "latest", overrides = {}) {
+  const base = {
+    status,
+    reason: null,
+    engine: "LXD",
+    track: "6.x",
+    lts: false,
+    track_retired: false,
+    latest_version: "6.10.1",
+    released_at: "2026-10-29T01:10:05+00:00",
+    channel: "6/stable",
+    newer_track: null,
+    checked_at: iso(),
+    attempted_at: iso(),
+  };
+  if (status === "not_checked") {
+    Object.assign(base, { reason: "feed_unreachable", track: null, lts: null, latest_version: null, released_at: null, channel: null, checked_at: null });
+  }
+  return { ...base, ...overrides };
+}
+
+// `serverVersion` and `release` move cluster-a off the latest LXD so the card offers its update
+// instead; `tags` gives cluster-a tags for the tag chip and the Tags facet.
+function platformNodes({ serverVersion = "6.10.1", release, tags = [] } = {}) {
   return {
     all_connected: false,
     collected_at: iso(),
@@ -147,6 +170,7 @@ function platformNodes({ serverVersion = "6.9", tags = [] } = {}) {
         clustered: false,
         server_version: serverVersion,
         api_version: "1.0",
+        hypervisor_release: release === undefined ? hypervisorRelease() : release,
         auth: "trusted",
         error: null,
         tags,
@@ -459,6 +483,7 @@ function monitoringHistory(windowSeconds = 300) {
 
 module.exports = {
   fullInstance,
+  hypervisorRelease,
   instanceMetrics,
   iso,
   monitoringDashboard,

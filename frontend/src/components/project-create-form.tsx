@@ -124,7 +124,7 @@ export function ProjectCreateForm() {
       setValue("maxCpu", nodeResources.cpu_available.toString());
       toast({
         title: "vCPU limit exceeded",
-        description: `Max vCPU limited to ${nodeResources.cpu_available} available hardware threads.`,
+        description: `Max vCPU limited to ${nodeResources.cpu_available} available CPU threads.`,
         variant: "destructive",
       });
     }
@@ -356,7 +356,7 @@ export function ProjectCreateForm() {
                   <div className="p-3 bg-muted/50 rounded-md space-y-1 text-xs">
                     <div className="font-medium text-foreground mb-1">Available Resources on {selectedHost}:</div>
                     <div className="text-muted-foreground">
-                      Hardware threads: {nodeResources.cpu_available} available (of {nodeResources.cpu_total})
+                      CPU threads: {nodeResources.cpu_available} available (of {nodeResources.cpu_total})
                     </div>
                     <div className="text-muted-foreground">
                       Memory: {formatBytes(nodeResources.memory_available, 1)} available (of {formatBytes(nodeResources.memory_total, 1)})

@@ -12,7 +12,6 @@ export * from "./layout-provider";
 export * from "./personalization-provider";
 export * from "./personalization-settings";
 export * from "./main-layout";
-export * from "./lxd-version-checker";
 export * from "./read-only-banner";
 export * from "./node-register-form";
 export * from "./loading-lottie";

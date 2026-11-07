@@ -23,7 +23,7 @@ test("a cluster with no free threads still takes a project limit", async ({ page
   await page.getByLabel("Project Name").fill("qa-overcommitted");
   await page.getByRole("combobox").filter({ hasText: /Select a cluster/ }).click();
   await page.getByRole("option").first().click();
-  await expect(page.getByText("Hardware threads: 0 available (of 12)")).toBeVisible();
+  await expect(page.getByText("CPU threads: 0 available (of 12)")).toBeVisible();
   await page.getByLabel("Max vCPUs *").fill("1");
   await page.getByLabel("Max Memory *").fill("1");
   await page.getByLabel("Max Storage *").fill("1");

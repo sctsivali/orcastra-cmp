@@ -11,6 +11,7 @@ const {
   installInventoryHardeningFixtures,
 } = require("./support/inventory-hardening-fixtures.cjs");
 const { kernelCveUbuntuStatus } = require("./support/kernel-advisory-fixtures.cjs");
+const { hypervisorRelease } = require("./support/api-fixture-data.cjs");
 
 // The overview also reads /clusters, /instances and /projects, which the inventory fixture
 // serves; kernel answers come from the base fixture underneath it (options.kernel).
@@ -273,10 +274,19 @@ test("admin: a patched cluster grows no chip on its card but reads as patched in
 
 test("admin: an outdated LXD offers its update as an outline chip that opens the steps", async ({ page }) => {
   await authenticate(page.context(), "admin");
-  const fixture = await install(page, "admin", { nodeServerVersion: "5.0.2" });
+  const fixture = await install(page, "admin", {
+    nodeServerVersion: "5.0.2",
+    nodeRelease: hypervisorRelease("update_available", {
+      track: "5.0 LTS",
+      lts: true,
+      latest_version: "5.0.11",
+      channel: "5.0/stable",
+    }),
+  });
 
   await page.goto("/inventory");
-  const update = coreCard(page).getByRole("button", { name: "Update Available", exact: true });
+  const update = coreCard(page).getByRole("button", { name: "Update Available: LXD 5.0.11", exact: true });
+  await expect(update).toHaveText("Update Available");
   await expect(update).toBeVisible();
   await expect(update).toHaveAttribute("data-slot", "badge");
   await expect(update).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");

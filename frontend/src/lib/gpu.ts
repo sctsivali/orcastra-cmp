@@ -29,7 +29,12 @@ export const GPU_CLASS_LABEL: Record<GpuClass, string> = {
 export const GPU_UTILIZATION_NOTE =
   "Allocation only. LXD reports which GPUs are attached to an instance, not how busy they are.";
 export const GPU_EMPTY_TITLE = "No GPU detected";
-export const GPU_NO_COMPUTE_TITLE = "No compute GPU";
+// note: plain language since 2026-11-07. "No compute GPU" over "1 card detected" read as a
+// contradiction to anyone who does not know that a server's onboard VGA is a card too.
+export const GPU_NO_COMPUTE_TITLE = "No GPU for instances";
+export const GPU_CAPACITY_NOTE =
+  "A compute GPU is one an instance can be given, for example an NVIDIA, AMD or Intel discrete " +
+  "card. Display cards, such as a server's onboard VGA, are detected but cannot be allocated.";
 export const GPU_NOT_ALLOCATABLE = "Not allocatable";
 
 /** What the backend classified this card as. The fallback never invents a compute GPU. */
@@ -96,6 +101,8 @@ export interface GpuSummarySource {
   gpu_available?: number;
   gpu_cards?: GPUCardInfo[];
   gpu_cards_total?: number;
+  gpu_display_total?: number;
+  gpu_integrated_total?: number;
 }
 
 export interface GpuSummary {
@@ -108,6 +115,8 @@ export interface GpuSummary {
   hasCards: boolean;
   hasCompute: boolean;
   extraCards: number;
+  /** Every card is a display or integrated controller. False when the cards were not listed. */
+  displayOnly: boolean;
 }
 
 export function summarizeGpus(src: GpuSummarySource | null | undefined): GpuSummary {
@@ -115,6 +124,7 @@ export function summarizeGpus(src: GpuSummarySource | null | undefined): GpuSumm
   const used = Math.min(src?.gpu_used ?? 0, computeTotal);
   // Reads degrade rather than break while the backend rollout is in flight.
   const cardsTotal = src?.gpu_cards_total ?? src?.gpu_cards?.length ?? computeTotal;
+  const cards = src?.gpu_cards ?? [];
   return {
     computeTotal,
     used,
@@ -124,6 +134,17 @@ export function summarizeGpus(src: GpuSummarySource | null | undefined): GpuSumm
     hasCards: cardsTotal > 0,
     hasCompute: computeTotal > 0,
     extraCards: Math.max(0, cardsTotal - computeTotal),
+    // From the cards when they were listed, otherwise from the per-class counts; a read with
+    // neither cannot say "display" and falls back to "none allocatable".
+    displayOnly:
+      computeTotal === 0 &&
+      cardsTotal > 0 &&
+      (cards.length > 0
+        ? cards.every((card) => {
+            const cls = gpuClassOf(card);
+            return cls === "display" || cls === "integrated";
+          })
+        : (src?.gpu_display_total ?? 0) + (src?.gpu_integrated_total ?? 0) >= cardsTotal),
   };
 }
 
@@ -136,6 +157,13 @@ export function gpuAllocationCaption(s: GpuSummary): string {
 export function gpuCardsCaption(s: GpuSummary): string | null {
   if (s.extraCards <= 0) return null;
   return `${plural(s.cardsTotal, "card")} detected`;
+}
+
+/** "1 display card only", or "2 cards, none allocatable" when a card's class is not known. */
+export function gpuNoComputeCaption(s: GpuSummary): string {
+  return s.displayOnly
+    ? `${plural(s.cardsTotal, "display card")} only`
+    : `${plural(s.cardsTotal, "card")}, none allocatable`;
 }
 
 /** "0 / 1 GPUs", for a dense row that carries the cards count on the line below. */

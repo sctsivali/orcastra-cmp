@@ -5,6 +5,7 @@ import { Info } from "lucide-react";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { KernelAdvisoryBadge } from "@/components/kernel-advisory/kernel-advisory-badge";
+import { HypervisorReleaseStatus } from "@/components/hypervisor-release";
 import type { NodeStatus } from "@/types";
 
 const EMPTY = EMPTY_VALUE;
@@ -55,6 +56,17 @@ export function NodeSystemPanel({ node }: { node: NodeStatus }) {
           {isPartner ? <Field label="Storage Backend" value={String(env?.storage || EMPTY)} /> : null}
           <Field label="Firewall" value={String(env?.firewall || EMPTY)} />
         </div>
+        {/* the same verdict as the Overview card, beside the version it is about */}
+        {isPartner && node.server_version && node.hypervisor_release ? (
+          <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            <p className="font-medium">Version Check</p>
+            <HypervisorReleaseStatus
+              release={node.hypervisor_release}
+              currentVersion={node.server_version}
+              clustered={node.clustered}
+            />
+          </div>
+        ) : null}
         {/* every member's verdict, patched included: this panel is where an operator reads kernels */}
         {isPartner ? (
           <div className="flex flex-wrap items-center gap-2">

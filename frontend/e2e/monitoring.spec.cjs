@@ -63,7 +63,7 @@ test("Monitoring pause freezes automation while manual refresh and resume still 
   await expect(page.getByText("Real-time resource metrics across all clusters")).toHaveCount(0);
   await expect(page.getByText(/Updated /).first()).toBeVisible();
   await expect(page.getByText("2.8%", { exact: true })).toBeVisible();
-  await expect(page.getByText("0.9 of 32 hardware threads busy")).toBeVisible();
+  await expect(page.getByText("0.9 of 32 CPU threads busy")).toBeVisible();
 
   await pause.click();
   const resume = page.getByRole("button", { name: "Resume automatic monitoring updates" });
@@ -328,7 +328,7 @@ test("tenant: Monitoring shows its instances and cluster status, no host figure"
   for (const absent of ["Resource Utilization", "Resource Metrics", "Warnings"]) {
     await expect(main.getByText(absent, { exact: true })).toHaveCount(0);
   }
-  await expect(main).not.toContainText(/hardware threads|vCPU Allocation|GB \/|NaN|undefined/);
+  await expect(main).not.toContainText(/CPU threads|vCPU Allocation|GB \/|NaN|undefined/);
   await expect(main.getByText("Running", { exact: true }).first()).toBeVisible();
 
   await page.getByRole("button", { name: "Refresh monitoring" }).click();

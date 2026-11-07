@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { CpuUsageGauge, type CpuUsageReading } from "@/components/monitoring/cpu-usage-gauge";
 import { GaugeChart } from "@/components/monitoring/gauge-chart";
 import { GpuAllocationGauge } from "@/components/monitoring/gpu-allocation-gauge";
-import { cpuAllocation } from "@/lib/cpu-allocation";
+import { cpuAllocation, formatCpuThreads } from "@/lib/cpu-allocation";
 import { clusterStatusMeta } from "@/lib/cluster-status";
 import { formatBytes, formatVcpuCount, plural } from "@/lib/utils";
 import { ClusterStatus, type MonitoringDashboardResponse } from "@/types/api";
@@ -116,7 +116,7 @@ export function ResourceUtilizationCard({ stats, scope, scopeLabel, isPartner }:
                   statusMessage={stats.cpu_reading.status !== "ready" ? statusMessage : undefined}
                 />
                 <p className="text-sm text-muted-foreground mt-2">
-                  Allocated: {formatVcpuCount(stats.used_cpu)} / {plural(stats.total_cpu, "hardware thread")} (
+                  Allocated: {formatVcpuCount(stats.used_cpu)} / {formatCpuThreads(stats.total_cpu)} (
                   {cpuAllocation({ cpu_total: stats.total_cpu, cpu_used: stats.used_cpu }).ratioLabel})
                 </p>
               </>

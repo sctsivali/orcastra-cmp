@@ -1,7 +1,9 @@
 "use client";
 
 import { memo } from "react";
-import { cpuAllocation, cpuAllocationText } from "@/lib/cpu-allocation";
+import { cpuAllocation, cpuAllocationFigure, cpuAllocationText } from "@/lib/cpu-allocation";
+import { CpuAllocationInfo } from "@/components/cpu/cpu-allocation-info";
+import { GpuCapacityInfo } from "@/components/gpu";
 import { Play, Server } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -19,10 +21,11 @@ import {
   GPU_EMPTY_TITLE,
   GPU_NO_COMPUTE_TITLE,
   gpuCardsCaption,
+  gpuNoComputeCaption,
   gpuDenseRatio,
   summarizeGpus,
 } from "@/lib/gpu";
-import { formatBytes, formatHypervisorType, formatVcpuCount, plural } from "@/lib/utils";
+import { formatBytes, formatHypervisorType, plural } from "@/lib/utils";
 import { capacityReading } from "@/lib/capacity-reading";
 import type { ClusterMonitoringMetrics } from "@/types/api";
 
@@ -75,8 +78,11 @@ function NodeHostFigures({ host }: { host: NonNullable<ReturnType<typeof hostFig
       {/* CPU */}
       <div className="space-y-1.5">
         <div className="flex justify-between text-sm">
-          <span className="text-muted-foreground">vCPU Allocation</span>
-          <span className="font-medium">{formatVcpuCount(cpu.allocated)} / {plural(cpu.threads, "hardware thread")}</span>
+          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+            vCPU Allocation
+            <CpuAllocationInfo cpu={cpu} />
+          </span>
+          <span className="font-medium">{cpuAllocationFigure(cpu)}</span>
         </div>
         <Progress value={cpu.percentClamped} className={`h-2 ${cpu.meterClassName}`} />
         <p className={`text-xs text-right ${cpu.textClassName}`}>{cpuAllocationText(cpu)}</p>
@@ -106,7 +112,10 @@ function NodeHostFigures({ host }: { host: NonNullable<ReturnType<typeof hostFig
           the line below the ratio so "0 / 1" can never read as "not detected". */}
       <div className="space-y-1.5">
         <div className="flex justify-between text-sm">
-          <span className="text-muted-foreground">GPU</span>
+          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+            GPU
+            <GpuCapacityInfo />
+          </span>
           <span className="font-medium">
             {gpu.hasCompute
               ? gpuDenseRatio(gpu)
@@ -120,7 +129,7 @@ function NodeHostFigures({ host }: { host: NonNullable<ReturnType<typeof hostFig
           <p className="text-xs text-muted-foreground text-right">
             {gpu.hasCompute && `${(gpu.allocationPercent ?? 0).toFixed(1)}% allocated`}
             {gpu.hasCompute && gpuCardsCaption(gpu) ? " · " : ""}
-            {gpuCardsCaption(gpu)}
+            {gpu.hasCompute ? gpuCardsCaption(gpu) : gpuNoComputeCaption(gpu)}
           </p>
         )}
       </div>

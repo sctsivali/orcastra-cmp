@@ -1,6 +1,8 @@
+import { formatVcpuCount, plural } from "@/lib/utils";
+
 /**
  * CPU allocation as the console presents it. The figure the API calls cpu_used is the sum of
- * the running instances' CPU limits, which KVM lets exceed the hardware thread count: 307
+ * the running instances' CPU limits, which KVM lets exceed the host's CPU thread count: 307
  * vCPUs on 80 threads is a legitimate over-commit, not a fault, and it must not read as
  * "383.8 % used" with a bar that leaves its track. It is presented as a ratio, with a warning
  * tone only past the point a general-purpose fleet is normally sized to.
@@ -62,9 +64,23 @@ export function cpuAllocation(src: CpuAllocationSource): CpuAllocationView {
   };
 }
 
-/** "3.8x allocated (over-committed)", "0.4x allocated", or "5.2x allocated (above 4x)". */
+/**
+ * The host capacity unit. "CPU thread" keeps the word a non-specialist knows (CPU) and the exact
+ * kind (a thread, which is what LXD counts: cores x threads per core). It replaced "hardware
+ * thread" on 2026-11-07, which read as jargon to anyone who knows their server as "a CPU".
+ */
+export function formatCpuThreads(count: number): string {
+  return plural(count, "CPU thread");
+}
+
+/** "25 vCPUs / 12 CPU threads": the one way the allocation figure is written. */
+export function cpuAllocationFigure(view: Pick<CpuAllocationView, "allocated" | "threads">): string {
+  return `${formatVcpuCount(view.allocated)} / ${formatCpuThreads(view.threads)}`;
+}
+
+/** "0.4x allocated", "2.1x over-committed", or "5.2x, heavily over-committed" past 4x. */
 export function cpuAllocationText(view: CpuAllocationView): string {
   if (view.tone === "within") return `${view.ratioLabel} allocated`;
-  if (view.tone === "overcommitted") return `${view.ratioLabel} allocated (over-committed)`;
-  return `${view.ratioLabel} allocated (above ${CPU_OVERCOMMIT_WARN_RATIO}x)`;
+  if (view.tone === "overcommitted") return `${view.ratioLabel} over-committed`;
+  return `${view.ratioLabel}, heavily over-committed`;
 }

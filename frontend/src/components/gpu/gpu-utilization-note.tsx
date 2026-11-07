@@ -1,38 +1,26 @@
-import { Info } from "lucide-react";
-
-import {
-  Tooltip as UITooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { GPU_UTILIZATION_NOTE } from "@/lib/gpu";
+import { InfoToggletip } from "@/components/ui/info-toggletip";
+import { GPU_CAPACITY_NOTE, GPU_UTILIZATION_NOTE } from "@/lib/gpu";
 
 /**
  * Says plainly that the console reports GPU allocation, not utilization.
  *
- * A real button rather than a hover-only div: the sentence has to be reachable by keyboard
- * and on touch, and the accessible name carries the meaning even if the tooltip never opens.
+ * A toggletip rather than a tooltip: the sentence has to open on a tap and by keyboard, and the
+ * accessible name carries the meaning even before it is opened.
  */
 export function GpuUtilizationInfo({ className }: { className?: string }) {
   return (
-    <UITooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          className={
-            "inline-flex items-center rounded-sm text-muted-foreground transition-colors " +
-            "hover:text-foreground focus-visible:outline-none focus-visible:ring-2 " +
-            "focus-visible:ring-ring focus-visible:ring-offset-1 " +
-            (className ?? "")
-          }
-          aria-label="Why no GPU utilization is shown"
-        >
-          <Info className="h-3.5 w-3.5" aria-hidden="true" />
-        </button>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-xs">
-        <p className="text-sm">{GPU_UTILIZATION_NOTE}</p>
-      </TooltipContent>
-    </UITooltip>
+    <InfoToggletip label="Why no GPU utilization is shown" className={className}>
+      <p>{GPU_UTILIZATION_NOTE}</p>
+    </InfoToggletip>
+  );
+}
+
+/** The (i) beside a GPU heading: which cards count as GPUs for instances, and which do not. */
+export function GpuCapacityInfo({ className }: { className?: string }) {
+  return (
+    <InfoToggletip label="About GPUs for instances" className={className}>
+      <p>{GPU_CAPACITY_NOTE}</p>
+      <p>{GPU_UTILIZATION_NOTE}</p>
+    </InfoToggletip>
   );
 }

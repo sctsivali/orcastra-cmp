@@ -53,8 +53,8 @@ if (page.includes("Hardware by Node") || page.includes("NodeHardwareList")) {
 if (!hardware.includes("reportingNodeCount > 0 ? totalThreads.toString() : EMPTY_VALUE")) {
   failures.push("Hardware totals must not present missing node readings as zero capacity.");
 }
-if (!hardware.includes('label: "Hardware Threads"')) {
-  failures.push("Platform CPU capacity must be labelled as hardware threads, not cores.");
+if (!hardware.includes('label: "CPU Threads"')) {
+  failures.push("Platform CPU capacity must be labelled as CPU threads, not cores.");
 }
 if (!page.includes("nodes.length > 0 && hardwareInfo ?")) {
   failures.push("Platform Technologies must show its empty state when no nodes exist.");

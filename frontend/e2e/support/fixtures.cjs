@@ -418,7 +418,11 @@ async function installApiFixtures(page, role, options = {}) {
         status = 503;
         body = { detail: "Fixture node inventory unavailable" };
       } else {
-        body = platformNodes({ serverVersion: options.nodeServerVersion, tags: options.nodeTags });
+        body = platformNodes({
+          serverVersion: options.nodeServerVersion,
+          release: options.nodeRelease,
+          tags: options.nodeTags,
+        });
       }
     } else if (path === "/instances/specifications") {
       body = tenantSpecifications({ empty: state.tenantEmpty });

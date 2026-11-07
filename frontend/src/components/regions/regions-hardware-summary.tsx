@@ -4,7 +4,7 @@ import * as React from "react";
 import { Cpu, HardDrive, MemoryStick, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { formatBytes, plural } from "@/lib/utils";
-import { GPU_EMPTY_TITLE, GPU_NO_COMPUTE_TITLE } from "@/lib/gpu";
+import { GPU_EMPTY_TITLE, GPU_NO_COMPUTE_TITLE, gpuNoComputeCaption, summarizeGpus } from "@/lib/gpu";
 import { ExtendedHardwareInfo } from "@/types/api";
 
 /**
@@ -21,7 +21,7 @@ export function HardwareSummary({ hardware, compact = false }: { hardware: Exten
       <div className="flex flex-wrap gap-2 text-xs">
         <Badge variant="outline" className="gap-1">
           <Cpu className="h-3 w-3 text-foreground" />
-          {plural(hardware.cpu_total, "hardware thread")}
+          {plural(hardware.cpu_total, "CPU thread")}
         </Badge>
         <Badge variant="outline" className="gap-1">
           <MemoryStick className="h-3 w-3 text-foreground" />
@@ -50,7 +50,7 @@ export function HardwareSummary({ hardware, compact = false }: { hardware: Exten
           CPU
         </div>
         <div className="pl-6 text-sm text-muted-foreground">
-          <p>{plural(hardware.cpu_total, "hardware thread")} ({plural(hardware.cpu_sockets, "socket")})</p>
+          <p>{plural(hardware.cpu_total, "CPU thread")} ({plural(hardware.cpu_sockets, "socket")})</p>
           <p>{hardware.cpu_architecture}</p>
           {hardware.cpu_vendor && <p>{hardware.cpu_vendor}</p>}
         </div>
@@ -91,7 +91,16 @@ export function HardwareSummary({ hardware, compact = false }: { hardware: Exten
           ) : cardsTotal > 0 ? (
             <>
               <p>{GPU_NO_COMPUTE_TITLE}</p>
-              <p className="text-xs">{plural(cardsTotal, "card")} detected</p>
+              <p className="text-xs">
+                {gpuNoComputeCaption(
+                  summarizeGpus({
+                    gpu_total: 0,
+                    gpu_used: 0,
+                    gpu_cards_total: cardsTotal,
+                    gpu_integrated_total: hardware.gpu_integrated_total,
+                  })
+                )}
+              </p>
             </>
           ) : (
             <p>{GPU_EMPTY_TITLE}</p>

@@ -219,7 +219,7 @@ function RegionCard({
                     </div>
                     {node.hardware ? (
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <span>{plural(node.hardware.cpu_total, "hardware thread")}</span>
+                        <span>{plural(node.hardware.cpu_total, "CPU thread")}</span>
                         <span>•</span>
                         <span>{formatBytes(node.hardware.memory_total)}</span>
                         {node.hardware.gpu_total > 0 && (
@@ -386,7 +386,7 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
           <StatTile icon={Globe} label="Regions" value={data.regions.length} />
           <StatTile icon={Server} label="Clusters" value={data.total_nodes} />
-          <StatTile icon={Cpu} label="Hardware Threads" value={nothingRead ? NOT_READ : fleet.cpu} />
+          <StatTile icon={Cpu} label="CPU Threads" value={nothingRead ? NOT_READ : fleet.cpu} />
           <StatTile icon={MemoryStick} label="Memory" value={nothingRead ? NOT_READ : formatBytes(fleet.memory)} />
           <StatTile icon={HardDrive} label="Storage" value={nothingRead ? NOT_READ : formatBytes(fleet.storage)} />
           <StatTile

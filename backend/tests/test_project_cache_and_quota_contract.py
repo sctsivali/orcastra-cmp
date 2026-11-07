@@ -52,7 +52,7 @@ def test_project_quota_refusals_use_canonical_resource_vocabulary() -> None:
             storage_bytes=None,
         )
     assert cpu_error.value.detail == (
-        "Project allocation (81 vCPU) exceeds this cluster's capacity of 80 hardware threads"
+        "Project allocation (81 vCPU) exceeds this cluster's capacity of 80 CPU threads"
     )
 
     with pytest.raises(HTTPException) as memory_error:

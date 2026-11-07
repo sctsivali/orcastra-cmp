@@ -39,7 +39,7 @@ for (const role of ["admin", "partner"]) {
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole("heading", { name: "CPU Resources" })).toBeVisible();
     await expect(dialog.getByRole("region", { name: "Core Cluster hardware" })).toBeVisible();
-    await expect(dialog.getByText("Total Hardware Threads")).toBeVisible();
+    await expect(dialog.getByText("Total CPU Threads")).toBeVisible();
 
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();

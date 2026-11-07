@@ -58,7 +58,7 @@ test("tenant: Regions shows places and its own instances, no fleet hardware", as
   for (const label of ["Regions", "Clusters", "Instances", "Running"]) {
     await expect(tile(page, label).first()).toBeVisible();
   }
-  for (const label of ["Hardware Threads", "Memory", "Storage", "Compute GPUs"]) {
+  for (const label of ["CPU Threads", "Memory", "Storage", "Compute GPUs"]) {
     await expect(tile(page, label)).toHaveCount(0);
   }
 
@@ -68,7 +68,7 @@ test("tenant: Regions shows places and its own instances, no fleet hardware", as
   await card.locator("[aria-expanded]").first().click();
   await expect(card).toContainText("Clusters in this region");
   await expect(card).toContainText("NUC 2");
-  await expect(card).not.toContainText("hardware threads");
+  await expect(card).not.toContainText("CPU threads");
   await expect(card).not.toContainText("GPU");
   // the instance counts appear once, in the header, not again in the body
   await expect(card.getByText("3 instances")).toHaveCount(1);
@@ -87,7 +87,7 @@ test("tenant: a region popup on the map carries no hardware rows", async ({ page
   const popup = page.locator(".leaflet-popup-content");
   await expect(popup).toContainText("Clusters");
   await expect(popup).toContainText("Instances");
-  await expect(popup).not.toContainText("Hardware threads");
+  await expect(popup).not.toContainText("CPU threads");
   await expect(popup).not.toContainText("Memory");
   await expectCleanHarness(api);
 });
@@ -95,14 +95,14 @@ test("tenant: a region popup on the map carries no hardware rows", async ({ page
 test("partner: Regions keeps the fleet hardware tiles and the per-cluster figures", async ({ page }) => {
   const api = await openRegions(page, "partner", PARTNER_BODY);
 
-  for (const label of ["Regions", "Clusters", "Hardware Threads", "Memory", "Storage", "Compute GPUs"]) {
+  for (const label of ["Regions", "Clusters", "CPU Threads", "Memory", "Storage", "Compute GPUs"]) {
     await expect(tile(page, label).first()).toBeVisible();
   }
   await expect(tile(page, "Running")).toHaveCount(0);
   await expect(page.locator("main")).toContainText("3 cards detected");
 
   const card = page.locator("#region-card-id-3174");
-  await expect(card).toContainText("64 hardware threads");
+  await expect(card).toContainText("64 CPU threads");
   await card.locator("[aria-expanded]").first().click();
   await expect(card).toContainText("3 instances");
   await expect(card).toContainText("microcloud");
@@ -123,10 +123,10 @@ test("partner: a cluster whose hardware was not read says so instead of showing 
   await card.locator("[aria-expanded]").first().click();
   await expect(card).toContainText("BSD Lab");
   await expect(card).toContainText("0 instances");
-  await expect(card).not.toContainText("hardware threads");
+  await expect(card).not.toContainText("CPU threads");
   await expect(card).not.toContainText(/\b0 B\b/);
   // the region that was read keeps its figures
-  await expect(page.locator("#region-card-id-3174")).toContainText("64 hardware threads");
+  await expect(page.locator("#region-card-id-3174")).toContainText("64 CPU threads");
   await expectCleanHarness(api);
 });
 
@@ -140,7 +140,7 @@ test("partner: fleet tiles say Not read when no cluster's hardware was read", as
     total_cpu: 0, total_memory: 0, total_storage: 0, total_gpu: 0, total_gpu_cards: 0, total_gpu_integrated: 0,
   };
   const api = await openRegions(page, "partner", body);
-  for (const label of ["Hardware Threads", "Memory", "Storage", "Compute GPUs"]) {
+  for (const label of ["CPU Threads", "Memory", "Storage", "Compute GPUs"]) {
     await expect(tile(page, label).first()).toBeVisible();
   }
   await expect(page.locator("main").getByText("Not read", { exact: true })).toHaveCount(4);

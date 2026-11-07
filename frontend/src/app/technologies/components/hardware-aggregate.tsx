@@ -99,11 +99,11 @@ export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[]
       description: "Processor information across all clusters",
       items: [
         {
-          label: "Hardware Threads",
+          label: "CPU Threads",
           value: reportingNodeCount > 0 ? totalThreads.toString() : EMPTY_VALUE,
           detail:
             reportingNodeCount > 0
-              ? `${coverageDetail}. LXD reports this capacity as hardware threads`
+              ? `${coverageDetail}. LXD counts this capacity in CPU threads: cores × threads per core`
               : coverageDetail,
         },
         {

@@ -47,8 +47,11 @@ const forbidden = [
   [/\bRAM\b/g, 'use "Memory", not "RAM"'],
   [/\b(?:VCPU|VCPUs|Vcpu|Vcpus)\b/g, 'spell virtual allocation as "vCPU" or "vCPUs"'],
   [/\b(?:Kib|Mib|Gib|Tib|Pib)\b/g, "use canonical IEC capitalization"],
-  [/\b(?:CPU [Cc]ores?|Max CPU|Logical CPUs?|Total Threads|Unallocated Threads)\b/g, "distinguish vCPU allocation from hardware threads or physical cores"],
-  [/\b(?:CPU count|CPU Quota|Unallocated CPU|CPU over-commit)\b/g, "use vCPU for virtual allocation"],
+  [/\b(?:CPU [Cc]ores?|Max CPU|Logical CPUs?|Total Threads|Unallocated Threads)\b/g, "distinguish vCPU allocation from CPU threads or physical cores"],
+  // "Unallocated CPU Threads" is host capacity, the right term; "Unallocated CPU" alone is not.
+  [/\b(?:CPU count|CPU Quota|Unallocated CPU(?! [Tt]hreads?\b)|CPU over-commit)\b/g, "use vCPU for virtual allocation"],
+  // Owner, 2026-11-07: "hardware threads" read as jargon to anyone who knows their server as a CPU.
+  [/\b[Hh]ardware [Tt]hreads?\b/g, 'say "CPU threads" for host capacity'],
   [/\b(?:Register|Select|Search|Loading|Offline|Inactive|Total|Target|Reporting) Nodes?\b/gi, 'call a registered endpoint a "Cluster"'],
   [/\b(?:No|All) nodes?\b/gi, 'call registered endpoints "clusters"'],
   [/\bNode (?:Status|Type|Information|Registered)\b/g, 'call a registered endpoint a "Cluster"'],
@@ -67,14 +70,14 @@ const forbidden = [
 const requiredContracts = [
   ["components/project-create-form.tsx", "Max vCPUs", "project allocation uses vCPU"],
   ["components/project-create-form.tsx", "Max Memory", "project allocation uses Memory"],
-  ["components/project-create-form.tsx", "hardware threads", "host capacity uses hardware threads"],
+  ["components/project-create-form.tsx", "CPU threads", "host capacity uses CPU threads"],
   ["app/inventory/monitoring/monitoring-content.tsx", 'formatBytes(data.memoryUsedBytes)', "monitoring memory uses the one size formatter"],
   ["app/inventory/monitoring/monitoring-content.tsx", 'formatNetworkRate(', "monitoring rate uses the network formatter"],
   ["app/inventory/monitoring/monitoring-content.tsx", "CPU Usage", "utilization is CPU usage"],
   // The utilization gauges moved out of monitoring-content.tsx; the contract moved with them.
   ["app/inventory/monitoring/components/resource-utilization-card.tsx", 'label="CPU Usage"', "the utilization gauge is CPU usage"],
   ["app/inventory/monitoring/components/resource-utilization-card.tsx", 'formatBytes(stats.used_memory_bytes)', "the memory gauge uses the one size formatter"],
-  ["components/regions/regions-page.tsx", "Hardware Threads", "region capacity uses hardware threads"],
+  ["components/regions/regions-page.tsx", "CPU Threads", "region capacity uses CPU threads"],
   ["app/technologies/components/hardware-aggregate.tsx", 'label: "Reporting Clusters"', "technology coverage uses clusters"],
   ["app/technologies/components/hardware-aggregate.tsx", 'label: "Memory per Cluster"', "technology averages use clusters"],
   ["app/inventory/warnings/components/warning-detail-dialog.tsx", 'label="Cluster Member"', "LXD machine location uses Cluster Member"],
@@ -136,8 +139,8 @@ const backendRequiredContracts = [
   ],
   [
     "backend/app/routers/projects.py",
-    'f"{resources.get(\'cpu_total\', 0)} hardware threads"',
-    "project capacity refusal distinguishes host hardware threads",
+    'f"{resources.get(\'cpu_total\', 0)} CPU threads"',
+    "project capacity refusal distinguishes host CPU threads",
   ],
   [
     "backend/app/routers/projects.py",
@@ -172,7 +175,7 @@ const backendGlossaryFiles = [
 
 const backendForbidden = [
   [/\bRAM\b/g, 'use "Memory", not "RAM"'],
-  [/\bCPU cores?\b/g, 'use "hardware threads", verified "physical cores", or "vCPUs"'],
+  [/\bCPU cores?\b/g, 'use "CPU threads", verified "physical cores", or "vCPUs"'],
   [/\bex;,/g, 'write "for example" in operator-facing API descriptions'],
   [/\bdef\s+format_bytes\s*\(/g, "do not restore a private ambiguous byte formatter"],
   [/\bNode is not reachable\b/g, 'a registered endpoint is a "Cluster" in operator messages'],

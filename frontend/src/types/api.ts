@@ -797,6 +797,40 @@ export interface NodeEnvironment {
   [key: string]: unknown;
 }
 
+/** Another track with a newer release than the Cluster's own (backend schemas.HypervisorNewerTrack). */
+export interface HypervisorNewerTrack {
+  /** "6.x", "5.21 LTS", "7.0 LTS", "stable" */
+  track: string;
+  version: string;
+  /** Snap channel (LXD) or Zabbly repository (Incus) */
+  channel: string;
+  lts: boolean;
+}
+
+/**
+ * How the Cluster's hypervisor version compares with the newest release on its own track,
+ * computed by the backend from the Snap Store and GitHub feeds (services/hypervisor_releases/).
+ */
+export interface HypervisorRelease {
+  status: "latest" | "update_available" | "ahead" | "not_checked";
+  reason: "feed_unreachable" | "stale_feed" | "unknown_version" | "unknown_track" | null;
+  engine: "LXD" | "Incus" | null;
+  /** "5.21 LTS", "6.x", "7.0 LTS", "stable" */
+  track: string | null;
+  lts: boolean | null;
+  /** The running feature release's track gets no more updates; `channel` is the LTS to move to. */
+  track_retired: boolean;
+  latest_version: string | null;
+  /** ISO 8601; LXD only. */
+  released_at: string | null;
+  channel: string | null;
+  newer_track: HypervisorNewerTrack | null;
+  /** When the feed was last read successfully. */
+  checked_at: string | null;
+  /** When the feed was last tried. */
+  attempted_at: string | null;
+}
+
 // Node Status
 export interface NodeStatus {
   name: string;
@@ -807,6 +841,8 @@ export interface NodeStatus {
   clustered?: boolean | null;
   server_version: string | null;
   api_version: string | null;
+  /** null when the release check is turned off or the Cluster is not connected. */
+  hypervisor_release?: HypervisorRelease | null;
   auth: string | null;
   environment: NodeEnvironment | null;
   error: string | null;

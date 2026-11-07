@@ -79,7 +79,7 @@ export function HostSection({ host, os, cpu, containerised }: HostSectionProps) 
 function HostCpuCard({ host, reading }: { host: HostInfo | null; reading: WindowedReading | null }) {
   const cpu = host?.cpu ?? null;
   const virtual = host?.is_virtual_machine === true;
-  const unit = virtual ? "vCPU" : "hardware thread";
+  const unit = virtual ? "vCPU" : "CPU thread";
   // a backend older than the counters sends no cpu_times, and its own percent has no stated window
   const canMeasure = Boolean(cpu && host?.cpu_times);
   const load = (value: number | null | undefined) => (value === null || value === undefined ? EMPTY_VALUE : value.toFixed(2));
@@ -92,7 +92,7 @@ function HostCpuCard({ host, reading }: { host: HostInfo | null; reading: Window
             ? "CPU not reported by this backend"
             : virtual
               ? plural(cpu.count_logical, "vCPU")
-              : `${plural(cpu.count_physical, "core")}, ${plural(cpu.count_logical, "hardware thread")}`}
+              : `${plural(cpu.count_physical, "core")}, ${plural(cpu.count_logical, "CPU thread")}`}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">

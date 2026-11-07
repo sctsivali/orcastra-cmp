@@ -84,13 +84,13 @@ function CpuDetail({ node }: { node: NodeStatus }) {
     <div className="space-y-5">
       <DetailSection title="Capacity">
         <DetailGrid cols={4}>
-          <DetailField label="Total Hardware Threads" value={resources.cpu_total} />
+          <DetailField label="Total CPU Threads" value={resources.cpu_total} />
           <DetailField label="Allocated vCPUs" value={resources.cpu_used} />
-          <DetailField label="Unallocated Hardware Threads" value={resources.cpu_available} />
+          <DetailField label="Unallocated CPU Threads" value={resources.cpu_available} />
           <DetailField label="Sockets" value={resources.cpu_sockets} />
           <DetailField label="Architecture" value={architectures || undefined} mono />
           <DetailField label="Physical Cores" value={hardware?.cpu.cores} />
-          <DetailField label="Topology Hardware Threads" value={hardware?.cpu.threads} />
+          <DetailField label="Topology CPU Threads" value={hardware?.cpu.threads} />
           <DetailField label="NUMA Nodes" value={hardware?.cpu.numa_nodes} />
         </DetailGrid>
       </DetailSection>

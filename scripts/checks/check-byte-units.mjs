@@ -148,7 +148,7 @@ for (const snippet of [
   '"MIB": 1024**2',
   '"GIB": 1024**3',
   'format_size(ram_bytes)',
-  'f"{resources.get(\'cpu_total\', 0)} hardware threads"',
+  'f"{resources.get(\'cpu_total\', 0)} CPU threads"',
 ]) {
   if (!backendProjects.includes(snippet)) {
     failures.push(`backend project quotas are missing unit contract ${JSON.stringify(snippet)}`);

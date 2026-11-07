@@ -185,7 +185,7 @@ export function createPopupContent(region: RegionSummary): string {
         (cardsTotal > hardware.gpu_total ? row("Cards detected", cardsTotal) : "")
       : "";
   const hardwareSection = hardware
-    ? row("Hardware threads", hardware.cpu_total) +
+    ? row("CPU threads", hardware.cpu_total) +
       row("Memory", formatBytes(hardware.memory_total)) +
       gpuSection
     : "";

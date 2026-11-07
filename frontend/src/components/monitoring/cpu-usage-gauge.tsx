@@ -9,16 +9,16 @@ export interface CpuUsageReading {
   status: InstanceRateStatus;
   busyPercent: number | null;
   busyThreads: number | null;
-  /** Hardware threads behind busyPercent: the Clusters that reported. */
+  /** CPU threads behind busyPercent: the Clusters that reported. */
   threads: number;
   reportingInstances: number;
   runningInstances: number;
 }
 
 /**
- * CPU utilisation as busy hardware threads, with its state spelled out.
+ * CPU utilisation as busy CPU threads, with its state spelled out.
  *
- * note: utilisation only. The allocation line beside it (vCPUs allocated per hardware thread)
+ * note: utilisation only. The allocation line beside it (vCPUs allocated per CPU thread)
  * stays with the caller; this gauge used to show allocation for one Cluster and average usage
  * for several, under the same label.
  */
@@ -54,7 +54,7 @@ export function CpuUsageGauge({
 function caption(reading: CpuUsageReading, idle: boolean, ready: boolean): string {
   if (idle) return "No running instances";
   if (ready && reading.busyThreads !== null && reading.threads > 0) {
-    return `${formatVcpuAmount(reading.busyThreads)} of ${plural(reading.threads, "hardware thread")} busy`;
+    return `${formatVcpuAmount(reading.busyThreads)} of ${plural(reading.threads, "CPU thread")} busy`;
   }
   if (reading.status === "calculating") return "Waiting for a second sample";
   return "Live usage not reported by the cluster";

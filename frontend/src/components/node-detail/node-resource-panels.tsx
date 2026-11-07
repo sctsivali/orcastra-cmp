@@ -12,12 +12,13 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { GpuPanel } from "@/components/gpu";
 import { GPU_UTILIZATION_NOTE } from "@/lib/gpu";
 import { usePermissions } from "@/hooks/use-permissions";
-import { formatBytes, formatLabel, formatVcpuCount, plural, EMPTY_VALUE } from "@/lib/utils";
+import { formatBytes, formatLabel, formatVcpuCount, EMPTY_VALUE } from "@/lib/utils";
 import type { NodeResources } from "@/types";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
 import { UsageMeter } from "@/components/ui/usage-meter";
 import { usagePercent } from "@/lib/usage-tone";
-import { cpuAllocation, cpuAllocationText } from "@/lib/cpu-allocation";
+import { cpuAllocation, cpuAllocationFigure, cpuAllocationText, formatCpuThreads } from "@/lib/cpu-allocation";
+import { CpuAllocationInfo } from "@/components/cpu/cpu-allocation-info";
 
 /**
  * The four tabs that read NodeResources.
@@ -63,7 +64,7 @@ export function NodeCpuPanel({
           <>
             <div className="grid grid-cols-2 gap-4">
               <Field label="Architecture" value={architecture} />
-              <Field label="Hardware Threads" value={String(resources.cpu_total)} />
+              <Field label="CPU Threads" value={String(resources.cpu_total)} />
               <Field label="CPU Sockets" value={String(resources.cpu_sockets)} />
               <Field
                 label="Threads per Socket"
@@ -76,20 +77,23 @@ export function NodeCpuPanel({
             </div>
 
             <div className="border-t pt-4">
-              <h4 className="mb-3 text-sm font-semibold">Resource Usage</h4>
+              <h4 className="mb-3 flex items-center gap-1.5 text-sm font-semibold">
+                Resource Usage
+                <CpuAllocationInfo cpu={cpu} />
+              </h4>
               <div className="space-y-3">
                 <UsageMeter
                   label="Allocated"
                   total={cpu.threads}
                   used={cpu.allocated}
-                  value={`${formatVcpuCount(cpu.allocated)} / ${plural(cpu.threads, "hardware thread")} (${cpu.ratioLabel})`}
+                  value={`${cpuAllocationFigure(cpu)} (${cpu.ratioLabel})`}
                 />
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">
                     {cpu.over > 0 ? "Beyond capacity" : "Unallocated"}
                   </span>
                   <span className={`font-semibold tabular-nums ${cpu.over > 0 ? cpu.textClassName : ""}`}>
-                    {cpu.over > 0 ? `${formatVcpuCount(cpu.over)} (${cpuAllocationText(cpu)})` : plural(cpu.unallocated, "hardware thread")}
+                    {cpu.over > 0 ? `${formatVcpuCount(cpu.over)} (${cpuAllocationText(cpu)})` : formatCpuThreads(cpu.unallocated)}
                   </span>
                 </div>
               </div>

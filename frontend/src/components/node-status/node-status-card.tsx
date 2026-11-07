@@ -1,21 +1,23 @@
 "use client";
 
 import { useState } from "react";
-import { cpuAllocation, cpuAllocationText } from "@/lib/cpu-allocation";
+import { cpuAllocation, cpuAllocationFigure, cpuAllocationText } from "@/lib/cpu-allocation";
 import {
   GPU_EMPTY_TITLE,
   GPU_NO_COMPUTE_TITLE,
-  gpuCardsCaption,
   gpuDenseRatio,
+  gpuNoComputeCaption,
   summarizeGpus,
 } from "@/lib/gpu";
+import { CpuAllocationInfo } from "@/components/cpu/cpu-allocation-info";
+import { GpuCapacityInfo } from "@/components/gpu";
+import { HypervisorReleaseStatus } from "@/components/hypervisor-release";
 
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { Server, Cloud, Cpu, MemoryStick, Sparkles, MoreVertical, Edit, Users } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { LXDVersionChecker } from "@/components/lxd-version-checker";
 import { KernelAdvisoryBadge } from "@/components/kernel-advisory/kernel-advisory-badge";
 import {
   DropdownMenu,
@@ -37,7 +39,7 @@ import { NodeStatus } from "@/types";
 import { useUpdateNodeTags, useUpdateNodeDisplayName } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { usePermissions } from "@/hooks/use-permissions";
-import { cn, formatBytes, formatVcpuCount, plural } from "@/lib/utils";
+import { cn, formatBytes } from "@/lib/utils";
 import { capacityReading } from "@/lib/capacity-reading";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { Progress } from "@/components/ui/progress";
@@ -137,7 +139,7 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
   };
 
   const cpu = cpuAllocation(node.resources ?? { cpu_total: 0, cpu_used: 0 });
-  const cpuFigure = `${formatVcpuCount(cpu.allocated)} / ${plural(cpu.threads, "hardware thread")}`;
+  const cpuFigure = cpuAllocationFigure(cpu);
   const memoryFigure = node.resources
     ? `${formatBytes(node.resources.memory_used)} / ${formatBytes(node.resources.memory_total)}`
     : "";
@@ -239,11 +241,15 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
                 <span className="font-medium">API Version:</span> {node.api_version}
               </span>
             )}
-            {/* Version checker supports the current hypervisor families. Partner+ only: it
-                carries the upgrade command and warns about instance restarts, which is a
-                maintenance instruction a tenant can neither run nor act on. */}
+            {/* The backend's verdict against the Cluster's own release track. Partner+ only: it
+                carries the upgrade command, a maintenance instruction a tenant can neither run
+                nor act on. */}
             {isPartner && (
-              <LXDVersionChecker currentVersion={node.server_version} nodeType={node.node_type ?? undefined} />
+              <HypervisorReleaseStatus
+                release={node.hypervisor_release}
+                currentVersion={node.server_version}
+                clustered={node.clustered}
+              />
             )}
             {/* Partner+ for the same reason: an open kernel CVE is a maintenance finding. The chip
                 renders nothing while every member reads as patched. */}
@@ -255,8 +261,9 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
             {/* CPU Info */}
             <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Cpu className="h-3.5 w-3.5" />
+                <Cpu className="h-3.5 w-3.5" aria-hidden="true" />
                 <span className="font-medium">vCPU Allocation</span>
+                <CpuAllocationInfo cpu={cpu} />
               </div>
               <div className="text-xs">
                 <div className="font-semibold text-foreground">{cpuFigure}</div>
@@ -303,8 +310,9 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
             {/* GPU Info */}
             <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Sparkles className="h-3.5 w-3.5" />
+                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
                 <span className="font-medium">GPU</span>
+                <GpuCapacityInfo />
               </div>
               {(() => {
                 const gpu = summarizeGpus(node.resources);
@@ -315,17 +323,17 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
                         ? gpuDenseRatio(gpu)
                         : gpu.hasCards
                           ? GPU_NO_COMPUTE_TITLE
-                          : "None"}
-                    </div>
-                    <div className="text-muted-foreground">
-                      {gpu.hasCompute
-                        ? `${(gpu.allocationPercent ?? 0).toFixed(1)}% allocated${
-                            gpu.extraCards > 0 ? ` · ${gpu.cardsTotal} cards` : ""
-                          }`
-                        : gpu.hasCards
-                          ? gpuCardsCaption(gpu)
                           : GPU_EMPTY_TITLE}
                     </div>
+                    {(gpu.hasCompute || gpu.hasCards) && (
+                      <div className="text-muted-foreground">
+                        {gpu.hasCompute
+                          ? `${(gpu.allocationPercent ?? 0).toFixed(1)}% allocated${
+                              gpu.extraCards > 0 ? ` · ${gpu.cardsTotal} cards` : ""
+                            }`
+                          : gpuNoComputeCaption(gpu)}
+                      </div>
+                    )}
                   </div>
                 );
               })()}

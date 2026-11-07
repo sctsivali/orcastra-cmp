@@ -221,7 +221,7 @@ def _refuse_cap_above_hardware(
             status_code=400,
             detail=(
                 f"Project allocation ({max_cpu} vCPU) exceeds this cluster's capacity of "
-                f"{resources.get('cpu_total', 0)} hardware threads"
+                f"{resources.get('cpu_total', 0)} CPU threads"
             ),
         )
     if ram_bytes is not None and ram_bytes > resources.get("memory_total", 0):
