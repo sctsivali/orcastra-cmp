@@ -46,6 +46,7 @@ from app.core.type_utils import (
     detect_cluster_type_from_metadata,
     detect_clustered_from_metadata,
     detect_hypervisor_type_from_endpoint,
+    get_cli_command_prefix,
     resolve_cluster_type,
     resolve_clustered,
 )
@@ -500,8 +501,11 @@ async def register_cluster(
             certificate_pem = cert_data.get("cert")
             
             # Build CLI-friendly message based on detected type
-            cli_tool = "incus" if cluster_type == "Incus" else "lxc"
-            register_message = f"Certificate generated! Run the {cli_tool} command to add trust. Detected hypervisor: {cluster_type}."
+            cli_tool = get_cli_command_prefix(cluster_type)
+            register_message = (
+                f"Certificate generated! Run the {cli_tool} command to add trust. "
+                f"Detected hypervisor: {cluster_type or 'LXD family, confirmed after trust'}."
+            )
             if org_bind_warning:
                 register_message = f"{register_message} {org_bind_warning}"
 
@@ -1607,7 +1611,7 @@ async def regenerate_certificate(
             # must not keep serving the absence.
             from app.core.cache import get_cache_manager
             get_cache_manager().invalidate_cluster_cache(cluster_id)
-        cli_tool = "incus" if cluster_type == "Incus" else "lxc"
+        cli_tool = get_cli_command_prefix(cluster_type)
         message = (
             f"Certificate issued and active. Run the {cli_tool} command to add trust. Detected: {cluster_type}."
             if issued.activated

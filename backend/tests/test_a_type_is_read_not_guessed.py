@@ -111,6 +111,30 @@ class ClusteredIsNotMicroCloudTests(unittest.TestCase):
         self.assertIsNone(detect_clustered_from_metadata(UNTRUSTED))
 
 
+class AHostNameIsNotAnEngineTests(unittest.TestCase):
+    """`server_name` is the member's host name, chosen by whoever installed it. LXD reports
+    `server: "lxd"` on every host, so a name check only ever fired on an LXD host whose name
+    happened to contain the word: an LXD box called `incus-lab` was labelled Incus and was told
+    to run `incus config trust add-certificate`, a CLI it does not have."""
+
+    def test_an_lxd_host_named_after_incus_stays_lxd(self):
+        payload = {
+            "auth": "trusted",
+            "api_extensions": ["clustering", "devlxd_images_vm"],
+            "environment": {"server": "lxd", "server_name": "incus-lab", "server_version": "5.21.8"},
+        }
+        self.assertEqual(detect_cluster_type_from_metadata(payload), "LXD")
+
+    def test_incus_is_read_from_its_server_field_alone(self):
+        """A trusted Incus /1.0 says `server: "incus"`; that is enough without the extensions."""
+        payload = {
+            "auth": "trusted",
+            "api_extensions": ["clustering"],
+            "environment": {"server": "incus", "server_name": "a1", "server_version": "7.6"},
+        }
+        self.assertEqual(detect_cluster_type_from_metadata(payload), "Incus")
+
+
 class LiveOutranksStoredTests(unittest.TestCase):
     def test_a_trusted_payload_overrides_a_stale_stored_type(self):
         self.assertEqual(resolve_cluster_type("LXD", _Client(MICROCLOUD)), "MicroCloud")

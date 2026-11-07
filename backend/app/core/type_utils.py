@@ -57,7 +57,7 @@ def detect_cluster_type_from_metadata(metadata: Dict[str, Any]) -> str:
     Priority order:
     1. Check api_extensions for Incus-specific patterns (dev_incus, etc.)
     2. Check 'server' field in environment for explicit type
-    3. Check 'server_name' for patterns
+    3. Check 'server_name' for the MicroCloud pattern
     4. Check api_extensions for 'microcloud'
     5. Default to LXD
 
@@ -85,10 +85,9 @@ def detect_cluster_type_from_metadata(metadata: Dict[str, Any]) -> str:
             return "MicroCloud"
         
         # Priority 3: Check server_name for patterns
+        # note: not for Incus. `server` above already names it, and server_name is only the host
+        # name, so an "incus" match there could only ever relabel an LXD host.
         server_name = environment.get("server_name", "").lower()
-        if "incus" in server_name:
-            logger.debug(f"Detected Incus from server_name: {server_name}")
-            return "Incus"
         if "microcloud" in server_name:
             logger.debug(f"Detected MicroCloud from server_name: {server_name}")
             return "MicroCloud"
