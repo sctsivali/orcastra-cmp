@@ -43,7 +43,12 @@ from app.core.org_scope import (
 from app.core.tenant_visibility import tenant_acl_active, tenant_may_see_project
 from app.services.activity_logger import get_activity_logger
 from app.services.lxd.fanout import failure_text
-from app.services.remote_image_catalog import _fetch_remote_catalog, _REMOTE_FETCH_TIMEOUT
+from app.services.remote_image_catalog import (
+    REMOTE_CATALOG_CACHE_KEY,
+    _REMOTE_FETCH_TIMEOUT,
+    _fetch_remote_catalog,
+    rows_for_engine,
+)
 from app.services.migration_fence import (
     MigrationFenceConflict,
     assert_project_not_migration_fenced,
@@ -268,17 +273,25 @@ async def list_all_images(
     response_model=RemoteImageListResponse,
     summary="Browse images from the remote image catalogs",
     description="List images aggregated from the configured remote simplestreams "
-                "catalogs (images.lxd.canonical.com and cloud-images.ubuntu.com), one "
-                "row per distribution/release/variant/architecture/type. Cached 1h. "
-                "Selected images are pulled on instance creation.",
+                "catalogs (images.lxd.canonical.com and cloud-images.ubuntu.com for LXD, "
+                "images.linuxcontainers.org for Incus), one row per distribution/release/"
+                "variant/architecture/type. Pass engine to keep the rows that engine can "
+                "pull. Cached 1h. Selected images are pulled on instance creation.",
     responses={
         200: {"description": "Remote images listed successfully"},
     }
 )
-async def list_remote_images(fresh: bool = False):
+async def list_remote_images(
+    fresh: bool = False,
+    engine: Optional[str] = Query(
+        None,
+        pattern="^(?i:lxd|incus|microcloud)$",
+        description="Only images this engine can pull (Incus reads images.linuxcontainers.org)",
+    ),
+):
     """Browse the aggregated remote image catalogs (cached 1h)."""
     cache = get_cache_manager()
-    cache_key = "images:remote:all"
+    cache_key = REMOTE_CATALOG_CACHE_KEY
     images = None if fresh else cache.get("api_responses", cache_key)
     if images is None:
         # Cold cache: each remote has its own 15s/90s urllib timeouts, so bound
@@ -297,6 +310,7 @@ async def list_remote_images(fresh: bool = False):
             )
             images = []
 
+    images = rows_for_engine(images, engine)
     return RemoteImageListResponse(
         images=[RemoteImageInfo(**img) for img in images],
         total=len(images),

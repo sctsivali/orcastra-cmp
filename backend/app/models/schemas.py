@@ -521,6 +521,7 @@ class RemoteImageInfo(BaseModel):
     source: str = ""  # e.g. Custom, Ubuntu
     server: str = ""  # remote server URL to pull from
     fingerprint: str = ""  # LXD image fingerprint (for cached detection)
+    engines: List[str] = Field(default_factory=lambda: ["lxd"], description="Engines that can pull this image: lxd, incus")
 
 
 class RemoteImageListResponse(BaseModel):

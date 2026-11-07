@@ -11,7 +11,6 @@ import hashlib
 import json
 import logging
 import secrets
-from urllib.parse import urlparse
 
 from app.models.schemas import (
     VMListResponse,
@@ -33,6 +32,7 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.single_flight import single_flight
+from app.services.remote_image_catalog import target_engine, validate_image_server
 from app.core.type_utils import normalize_node_type
 from app.core.blocking import BlockingPoolFull, BlockingTimeout
 from app.core.error_sanitizer import sanitize_error
@@ -163,22 +163,9 @@ def _legacy_create_requester(user: AuthenticatedUser) -> str:
     return requester
 
 
-def _validate_legacy_image_server(image_server: Optional[str]) -> None:
-    """Keep the durable legacy path from turning LXD's remote pull into SSRF."""
-    if not image_server:
-        return
-    from app.services.remote_image_catalog import REMOTE_IMAGE_SERVERS
-
-    allowed_hosts = {urlparse(row["server"]).hostname for row in REMOTE_IMAGE_SERVERS}
-    parsed = urlparse(image_server)
-    if parsed.scheme != "https" or parsed.hostname not in allowed_hosts:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Invalid image_server. Allowed remote image servers: "
-                + ", ".join(sorted(host for host in allowed_hosts if host))
-            ),
-        )
+def _validate_legacy_image_server(image_server: Optional[str], engine: Optional[str] = None) -> None:
+    """Keep the durable legacy path from turning the daemon's remote pull into SSRF."""
+    validate_image_server(image_server, engine)
 
 
 async def _legacy_effective_payload(
@@ -607,7 +594,7 @@ async def create_vm(
     """Create a new VM on the specified host."""
     project = verify_project_access(request.host, request.project)
     request = request.model_copy(update={"project": project})
-    _validate_legacy_image_server(request.image_server)
+    _validate_legacy_image_server(request.image_server, target_engine(lxd_service, request.host))
     try:
         # Validate host
         valid_nodes = lxd_service.get_node_names()

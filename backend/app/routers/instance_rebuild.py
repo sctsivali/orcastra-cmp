@@ -45,7 +45,7 @@ from app.services.lxd_service import (
     LXDConnectionError,
     get_lxd_service,
 )
-from app.routers.instances import _validate_image_server
+from app.routers.instances import _target_engine, _validate_image_server
 from app.services.activity_logger import get_activity_logger
 from app.services.migration_fence import (
     MigrationFenceConflict,
@@ -315,7 +315,7 @@ async def rebuild_instance(
         raise HTTPException(status_code=422, detail="An image is required for this rebuild mode")
     if body.mode == "cloud-init" and not (body.cloud_init or "").strip():
         raise HTTPException(status_code=422, detail="cloud-init user-data is required for the cloud-init mode")
-    _validate_image_server(body.image_server)
+    _validate_image_server(body.image_server, _target_engine(lxd_service, body.host))
 
     try:
         # Admission is committed under the same advisory lock as migration execution. The

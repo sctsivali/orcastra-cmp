@@ -5,7 +5,6 @@ Provides endpoints for managing LXD instances (containers and VMs).
 
 from fastapi import APIRouter, HTTPException, Depends, Header, Query
 from typing import Dict, Literal, Optional
-from urllib.parse import urlparse
 import sys
 import asyncio
 import hashlib
@@ -41,6 +40,7 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.services.lxd.exceptions import LXDProjectLimitError
+from app.services.remote_image_catalog import target_engine, validate_image_server
 from app.core.single_flight import single_flight
 from app.core import swr
 from app.core.swr import Built
@@ -211,31 +211,19 @@ def _instance_specification(vm: VMInfo) -> InstanceSpecification:
     )
 
 
-def _validate_image_server(image_server: Optional[str]) -> None:
-    """Guard against SSRF on instance creation.
+def _validate_image_server(image_server: Optional[str], engine: Optional[str] = None) -> None:
+    """Guard against SSRF on instance creation, and refuse a server the target cannot read.
 
-    `image_server` is handed straight to the LXD daemon, which then fetches the
-    image from that URL. Since `POST /instances` only requires Partner, an
-    unvalidated value lets a Partner point the daemon at internal/metadata
-    endpoints. Restrict it to the same public simplestreams catalogs the image
-    picker uses (the `/images/remote` allowlist), over https only.
+    `image_server` is handed straight to the daemon, which then fetches the image from that URL.
+    Since `POST /instances` only requires Partner, an unvalidated value lets a Partner point the
+    daemon at internal/metadata endpoints, so it must be one of the public simplestreams catalogs
+    the picker uses, over https (services/remote_image_catalog.py).
     """
-    if not image_server:
-        return
-    from app.services.remote_image_catalog import REMOTE_IMAGE_SERVERS
+    validate_image_server(image_server, engine)
 
-    allowed_hosts = {
-        urlparse(s["server"]).hostname for s in REMOTE_IMAGE_SERVERS
-    }
-    parsed = urlparse(image_server)
-    if parsed.scheme != "https" or parsed.hostname not in allowed_hosts:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Invalid image_server. Allowed remote image servers: "
-                + ", ".join(sorted(h for h in allowed_hosts if h))
-            ),
-        )
+
+def _target_engine(lxd_service: LXDService, host: str) -> Optional[str]:
+    return target_engine(lxd_service, host)
 
 
 @router.get(
@@ -703,7 +691,7 @@ async def preflight_create_instance(
     project = verify_project_access(request.host, request.project)
     request = request.model_copy(update={"project": project})
     request = _normalize_create_tags(request)
-    _validate_image_server(request.image_server)
+    _validate_image_server(request.image_server, _target_engine(lxd_service, request.host))
     async with serialize_cluster_configuration(db, request.host):
         evaluation = await _run_create_preflight(request, lxd_service)
         response = evaluation.response
@@ -836,6 +824,9 @@ async def create_instance(
             job_id=replay.job_id,
             status="unknown" if replay.status == "unknown" else "accepted",
         )
+    # note: after the replay lookup, which must not reach the daemon service; the SSRF allowlist
+    # above already ran without it.
+    _validate_image_server(request.image_server, _target_engine(lxd_service, request.host))
 
     # The ownership lock closes the race between an exclusive Partner write and another
     # request sharing the same cluster. Authoritative preflight, project-isolation admission,

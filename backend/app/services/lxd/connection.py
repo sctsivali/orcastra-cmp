@@ -633,6 +633,14 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
             )
             raise LXDConnectionError(f"Cannot connect to {cluster_id}: {str(e)}")
     
+    def peek_client(self, cluster_id: str) -> Optional[pylxd.Client]:
+        """The pooled client as it is: no validation round trip, no connect.
+
+        For reading what the host already said about itself (pylxd's cached `host_info`), never
+        for sending a request; get_client is the way to a client that is known to answer.
+        """
+        return self._clients.get(cluster_id)
+
     def get_client(
         self,
         cluster_id: str,
