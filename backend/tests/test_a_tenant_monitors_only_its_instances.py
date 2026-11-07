@@ -51,7 +51,7 @@ def _dashboard() -> MonitoringDashboardResponse:
         cpu_busy_percent=19.5, cpu_status="ready", cpu_reporting_instances=4,
         memory_total_bytes=512 * 1024**3, memory_used_bytes=300 * 1024**3, memory_usage_percent=58.6,
         storage_total_bytes=10 * 1024**4, storage_used_bytes=4 * 1024**4, storage_usage_percent=40.0,
-        gpu_total=2, gpu_used=1, gpu_available=1, gpu_cards_total=3, gpu_integrated_total=0,
+        gpu_total=2, gpu_used=1, gpu_available=1, gpu_cards_total=3, gpu_integrated_total=0, gpu_display_total=1,
         gpu_models=["A100"], gpu_utilization_supported=True,
         instance_count=5, running_instances=3, container_count=4, vm_count=1,
     )

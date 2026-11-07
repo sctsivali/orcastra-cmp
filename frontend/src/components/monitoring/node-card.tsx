@@ -61,6 +61,8 @@ function hostFigures(node: ClusterMonitoringMetrics) {
       gpu_used,
       gpu_available: node.gpu_available ?? undefined,
       gpu_cards_total: node.gpu_cards_total ?? undefined,
+      gpu_display_total: node.gpu_display_total ?? undefined,
+      gpu_integrated_total: node.gpu_integrated_total ?? undefined,
     }),
     memoryUsed: memory_used_bytes,
     memoryTotal: memory_total_bytes,

@@ -1648,6 +1648,7 @@ class ClusterMonitoringMetrics(BaseModel):
     gpu_available: Optional[int] = Field(0, description="Compute GPUs free on this Cluster")
     gpu_cards_total: Optional[int] = Field(0, description="Total DRM/GPU cards detected (incl. display controllers)")
     gpu_integrated_total: Optional[int] = Field(0, description="Integrated graphics cards: attachable, not capacity")
+    gpu_display_total: Optional[int] = Field(0, description="Display-only controllers detected, for example a server's onboard VGA")
     gpu_models: List[str] = Field(default_factory=list, description="Models of the compute GPUs")
     gpu_utilization_supported: Optional[bool] = Field(False, description="LXD reports allocation only; there is no GPU telemetry")
     

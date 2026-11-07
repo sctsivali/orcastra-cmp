@@ -140,7 +140,7 @@ def _node_resources() -> SimpleNamespace:
         gpu_used=0,
         gpu_available=1,
         gpu_cards_total=1,
-        gpu_integrated_total=0,
+        gpu_integrated_total=0, gpu_display_total=0,
         gpu_models=["Example GPU"],
         gpu_utilization_supported=False,
     )

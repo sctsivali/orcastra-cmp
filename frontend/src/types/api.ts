@@ -1699,6 +1699,7 @@ export interface ClusterMonitoringMetrics {
   gpu_available?: number | null;
   gpu_cards_total?: number | null;
   gpu_integrated_total?: number | null;
+  gpu_display_total?: number | null;
   gpu_models?: string[];
   gpu_utilization_supported?: boolean | null;
   instance_count: number;
