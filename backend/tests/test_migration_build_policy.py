@@ -103,15 +103,49 @@ def test_the_legacy_approved_builds_setting_is_read_as_the_allow_list() -> None:
     assert (verdict.approved, verdict.basis) == (True, "allow")
 
 
-def test_an_incus_build_is_refused_unless_it_is_allow_listed() -> None:
+def test_an_incus_build_below_the_baseline_is_refused_unless_it_is_allow_listed() -> None:
     identity = {"engine": "incus", "version": "6.0.1"}
 
     refused = build_verdict(identity, _settings())
     admitted = build_verdict(identity, _settings(allow="incus:6.0.1"))
 
-    assert (refused.approved, refused.basis) == (False, "not_allowlisted")
-    assert "MIGRATION_BUILD_ALLOW" in refused.reason
+    assert (refused.approved, refused.basis) == (False, "below_patched_minimum")
+    assert "6.0.8" in refused.reason
     assert (admitted.approved, admitted.basis) == (True, "allow")
+
+
+@pytest.mark.parametrize(
+    "version,approved,basis",
+    [
+        # The 2026-10-29 advisory batch (migration websocket secrets, dependent volumes) is fixed in
+        # 7.6.0; the LTS backports first ship in 7.0.3 and 6.0.8 (core/engine_baseline.py).
+        ("7.6", True, "policy"),
+        ("7.6.0", True, "policy"),
+        ("7.5.1", False, "below_patched_minimum"),
+        ("7.0.2", False, "below_patched_minimum"),
+        ("7.0.3", True, "policy"),
+        ("6.0.7", False, "below_patched_minimum"),
+        ("6.0.8", True, "policy"),
+        ("8.0.0", False, "newer_series"),
+        ("not-a-version", False, "unreadable_version"),
+    ],
+)
+def test_an_incus_build_is_admitted_by_its_patched_baseline(version: str, approved: bool, basis: str) -> None:
+    verdict = build_verdict({"engine": "incus", "version": version}, _settings())
+
+    assert (verdict.approved, verdict.basis) == (approved, basis)
+
+
+def test_the_deny_list_still_outranks_the_incus_baseline() -> None:
+    verdict = build_verdict({"engine": "incus", "version": "7.6"}, _settings(deny="incus:7.6"))
+
+    assert (verdict.approved, verdict.basis) == (False, "deny")
+
+
+def test_an_unknown_engine_is_still_refused_unless_it_is_allow_listed() -> None:
+    verdict = build_verdict({"engine": "canonical-next", "version": "1.0"}, _settings())
+
+    assert (verdict.approved, verdict.basis) == (False, "not_allowlisted")
 
 
 def test_list_tokens_match_without_regard_to_case_or_padding() -> None:

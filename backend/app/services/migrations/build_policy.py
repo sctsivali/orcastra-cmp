@@ -7,9 +7,14 @@ LXD builds are admitted by a minimum patched version per release series. GHSA-5g
 knows about is refused too, until an operator reviews it and lists its token in
 MIGRATION_BUILD_ALLOW.
 
-Incus has no comparable public baseline wired here, so an Incus build is admitted only when an
-operator lists its exact token in MIGRATION_BUILD_ALLOW. A token in MIGRATION_BUILD_DENY always
-wins. MIGRATION_APPROVED_BUILDS is read as an alias of the allow list.
+Incus builds are admitted by the patched baseline of the 2026-10-29 advisory batch (migration
+websocket secrets exposed to event listeners, path traversal through dependent volumes): 7.6.0 on
+the feature track, 7.0.3 and 6.0.8 on the LTS lines. A series newer than 7 is refused until
+reviewed, as for LXD. Both tables live in core/engine_baseline.py ("migration").
+
+Any other engine is admitted only when an operator lists its exact token in MIGRATION_BUILD_ALLOW.
+A token in MIGRATION_BUILD_DENY always wins. MIGRATION_APPROVED_BUILDS is read as an alias of the
+allow list.
 """
 
 from __future__ import annotations
@@ -19,13 +24,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from app.core.engine_baseline import FLOORS, floor_verdict
+
 _VERSION = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+))?")
-_LXD_MINIMUMS: dict[tuple[int, int], tuple[int, int, int]] = {
-    (5, 0): (5, 0, 8),
-    (5, 21): (5, 21, 6),
-}
-_LXD_6_MINIMUM = (6, 10, 0)
-_NEWEST_KNOWN_LXD_MAJOR = 6
+_LXD_FLOOR = FLOORS["migration"]["lxd"]
+_LXD_MINIMUMS: dict[tuple[int, int], tuple[int, int, int]] = dict(_LXD_FLOOR.lines)
+_LXD_6_MINIMUM = _LXD_FLOOR.track
+_NEWEST_KNOWN_LXD_MAJOR = _LXD_FLOOR.newest_major
 
 
 @dataclass(frozen=True)
@@ -89,6 +94,30 @@ def _lxd_verdict(version: tuple[int, int, int], raw: str) -> BuildVerdict:
     return BuildVerdict(True, "policy", f"LXD {raw} meets the patched build policy.")
 
 
+_INCUS_BASIS = {
+    "ok": "policy",
+    "below_floor": "below_patched_minimum",
+    "newer_series": "newer_series",
+    "unknown_version": "unreadable_version",
+}
+
+
+def _incus_verdict(raw: str) -> BuildVerdict:
+    verdict = floor_verdict("migration", "incus", raw)
+    if verdict.code == "newer_series":
+        reason = (
+            f"Incus {raw} belongs to a release series the migration build policy does not list yet. "
+            f"Add incus:{raw} to MIGRATION_BUILD_ALLOW once it is confirmed to carry the 7.6.0 fixes."
+        )
+    elif verdict.code == "below_floor":
+        reason = f"Incus {raw} is older than {verdict.minimum}, the first patched build of its line."
+    elif verdict.code == "unknown_version":
+        reason = "The daemon did not report a readable Incus version."
+    else:
+        reason = f"Incus {raw} meets the patched build policy."
+    return BuildVerdict(verdict.allowed, _INCUS_BASIS[verdict.code], reason)
+
+
 def build_verdict(identity: Mapping[str, Any], settings: Any) -> BuildVerdict:
     """Decide one daemon build, deny list first, then allow list, then the series policy."""
     token = build_token(identity)
@@ -103,6 +132,8 @@ def build_verdict(identity: Mapping[str, Any], settings: Any) -> BuildVerdict:
         return BuildVerdict(False, "deny", f"Build {token} is on the migration deny list.")
     if token in allow:
         return BuildVerdict(True, "allow", f"Build {token} is explicitly allowed.")
+    if engine == "incus":
+        return _incus_verdict(raw_version)
     if engine != "lxd":
         return BuildVerdict(
             False,

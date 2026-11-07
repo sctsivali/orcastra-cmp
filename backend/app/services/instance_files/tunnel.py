@@ -16,10 +16,11 @@ import re
 import ssl
 import time
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, Tuple
 from urllib.parse import quote, urlsplit
 
 from app.core.blocking import BlockingPoolFull, BlockingTimeout
+from app.core.engine_baseline import FloorVerdict, floor_verdict
 from app.core.lxd_path import safe_segment
 
 from .errors import (
@@ -42,12 +43,9 @@ _MAX_ERROR_BODY_BYTES = 8 * 1024
 _STATUS_LINE = re.compile(rb"^HTTP/1\.[01] (\d{3})")
 _CONTENT_LENGTH = re.compile(rb"(?im)^content-length:\s*(\d+)\s*$")
 
-# Releases carrying the image-symlink fixes (Canonical advisory of 2026-07-31; Incus 7.3.0).
-_LXD_LTS_FLOORS = {(4, 0): (4, 0, 12), (5, 0): (5, 0, 8), (5, 21): (5, 21, 6)}
-_LXD_FLOOR = (6, 9, 0)
-_INCUS_FLOOR = (7, 3, 0)
+# The releases carrying the image-symlink fixes live in core/engine_baseline.py ("instance_files").
 _SERVER_CHECK_SECONDS = 600.0
-_server_checks: Dict[str, Tuple[float, bool]] = {}
+_server_checks: Dict[str, Tuple[float, FloorVerdict]] = {}
 
 
 async def _running_record(host: str, project: str, instance_name: str) -> Dict[str, Any]:
@@ -73,26 +71,18 @@ async def _running_record(host: str, project: str, instance_name: str) -> Dict[s
     return record
 
 
-def parse_version(text: str) -> Optional[Tuple[int, ...]]:
-    match = re.match(r"^\s*(\d+)\.(\d+)(?:\.(\d+))?", text or "")
-    return tuple(int(part or 0) for part in match.groups()) if match else None
-
-
-def is_supported_server(server: str, version: str) -> bool:
+def server_verdict(server: str, version: str) -> FloorVerdict:
     """Whether this daemon carries the fixes for files reached through a symlink in an image.
 
     Stopped instances are refused, but a stop can race the upgrade, so a daemon that follows such a
-    link from the host must not be reachable through here at all.
+    link from the host must not be reachable through here at all. Anything that does not say Incus
+    is judged by the LXD lines, as before.
     """
-    parsed = parse_version(version)
-    if parsed is None:
-        return False
-    line = parsed[:2]
-    if server == "incus":
-        return parsed >= _INCUS_FLOOR
-    if line in _LXD_LTS_FLOORS:
-        return parsed >= _LXD_LTS_FLOORS[line]
-    return parsed >= _LXD_FLOOR
+    return floor_verdict("instance_files", "incus" if server == "incus" else "lxd", version)
+
+
+def is_supported_server(server: str, version: str) -> bool:
+    return server_verdict(server, version).allowed
 
 
 async def _require_supported_server(host: str) -> None:
@@ -102,24 +92,27 @@ async def _require_supported_server(host: str) -> None:
     now = time.monotonic()
     if cached is None or now - cached[0] > _SERVER_CHECK_SECONDS:
 
-        def read() -> bool:
+        def read() -> FloorVerdict:
             client = lxd_client(host)
             if client is None:
                 raise ValueError("no client")
             environment = (client.api.get().json().get("metadata") or {}).get("environment") or {}
-            return is_supported_server(str(environment.get("server") or ""), str(environment.get("server_version") or ""))
+            return server_verdict(str(environment.get("server") or ""), str(environment.get("server_version") or ""))
 
         try:
-            supported = await session_io(read, label="file_server_version", host=host)
+            verdict = await session_io(read, label="file_server_version", host=host)
         except BlockingPoolFull as exc:
             raise busy() from exc
         except Exception as exc:  # noqa: BLE001 - not knowing is not a yes
             raise cluster_unreachable() from exc
-        cached = (now, supported)
+        cached = (now, verdict)
         _server_checks[host] = cached
-    if not cached[1]:
+    verdict = cached[1]
+    if not verdict.allowed:
+        running = f"{verdict.engine} {verdict.seen}" if verdict.seen else "a version"
+        upgrade = f" Upgrade to {verdict.minimum} or later." if verdict.minimum else ""
         raise GuestFileError(
-            "unsupported_server", 503, "This cluster runs a version too old for safe file access. Upgrade LXD."
+            "unsupported_server", 503, f"This cluster runs {running}, too old for safe file access.{upgrade}"
         )
 
 

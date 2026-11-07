@@ -361,7 +361,13 @@ def test_a_cluster_past_its_paid_term_refuses_files_like_a_console(partner_scope
         ("lxd", "6.9", True),
         ("lxd", "6.8", False),
         ("incus", "7.3.0", True),
-        ("incus", "6.0.7", False),
+        ("incus", "7.2.0", False),
+        # The LTS lines carry the symlink fixes as backports from 7.0.2 and 6.0.7 on
+        # (test_every_feature_floor_reads_one_table.py has the commits).
+        ("incus", "7.0.2", True),
+        ("incus", "7.0.1", False),
+        ("incus", "6.0.7", True),
+        ("incus", "6.0.6", False),
         ("lxd", "not-a-version", False),
         ("", "", False),
     ],

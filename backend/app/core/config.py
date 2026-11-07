@@ -368,7 +368,7 @@ class Settings(BaseSettings):
         alias="MIGRATION_BUILD_ALLOW",
         description=(
             "Comma-separated exact engine:server_version builds admitted in addition to the "
-            "built-in minimum patched LXD policy. Incus builds are admitted only from this list."
+            "built-in minimum patched LXD and Incus policies (core/engine_baseline.py)."
         ),
     )
     migration_build_deny: str = Field(
