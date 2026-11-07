@@ -21,6 +21,8 @@ import {
   RELEASE_NOTES_URL,
   channelPhrase,
   engineName,
+  judgedVersion,
+  membersSentence,
   newerTrackSentence,
   trackPhrase,
   updateCommand,
@@ -46,10 +48,12 @@ export function HypervisorUpdateDialog({ release, currentVersion, clustered }: H
   const engine = engineName(release);
   const engineKey = release.engine === "Incus" ? "Incus" : "LXD";
   const track = trackPhrase(release.track ?? "", release.lts);
+  const judged = judgedVersion(release, currentVersion);
   const description = release.track_retired
-    ? `${engine} ${currentVersion} is on a track that no longer gets updates. The supported way forward is ${track}.`
+    ? `${engine} ${judged} is on a track that no longer gets updates. The supported way forward is ${track}.`
     : `A newer release is out on ${track}, the track this Cluster follows.`;
   const newer = newerTrackSentence(release);
+  const members = membersSentence(release);
 
   return (
     <Dialog>
@@ -71,8 +75,8 @@ export function HypervisorUpdateDialog({ release, currentVersion, clustered }: H
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <dl className="grid">
-          <Row label="Current Version">
-            <span className="font-mono">{currentVersion}</span>
+          <Row label={release.mixed_versions ? "Oldest Member" : "Current Version"}>
+            <span className="font-mono">{judged}</span>
           </Row>
           <Row label="Latest Version">
             <span className="font-mono">{release.latest_version}</span>
@@ -91,6 +95,7 @@ export function HypervisorUpdateDialog({ release, currentVersion, clustered }: H
           copyLabel="Update command"
         />
         <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+          {members && <li>{members}</li>}
           {clustered && (
             <li>
               Run it on every cluster member, and only while all of them are online. An upgraded

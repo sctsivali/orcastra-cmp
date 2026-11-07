@@ -18,7 +18,7 @@ import logging
 import math
 import random
 import time
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import httpx
 
@@ -150,6 +150,21 @@ def due(state: Dict[str, Any], now: float) -> bool:
     return False
 
 
+def _member_versions(cluster_ids: List[str]) -> Dict[str, Any]:
+    """Each clustered Cluster's member versions from the host facts cache. Blocking; no LXD call."""
+    from app.core.cache import get_cache_manager
+    from app.services.lxd.host_kernels import cached_member_versions
+
+    cache = get_cache_manager()
+    out: Dict[str, Any] = {}
+    for cluster_id in cluster_ids:
+        try:
+            out[cluster_id] = cached_member_versions(cache, cluster_id)
+        except Exception:  # noqa: BLE001 - no member view is the endpoint's version, as before
+            out[cluster_id] = None
+    return out
+
+
 async def attach(nodes: Iterable[Any], now: Optional[float] = None) -> None:
     """Set `hypervisor_release` on each NodeStatus from the stored feeds. Reads Redis once.
 
@@ -172,6 +187,15 @@ async def attach(nodes: Iterable[Any], now: Optional[float] = None) -> None:
     if not isinstance(state, dict):
         state = {}
     entries = {engine: state.get(engine) if isinstance(state.get(engine), dict) else {} for engine, *_r in SOURCES}
+    clustered = [
+        node.name for node in nodes
+        if getattr(node, "connected", False) and getattr(node, "clustered", False) and getattr(node, "server_version", None)
+    ]
+    try:
+        members = await asyncio.to_thread(_member_versions, clustered) if clustered else {}
+    except Exception:  # noqa: BLE001
+        logger.debug("Member versions unreadable", exc_info=True)
+        members = {}
     tracks = {engine: feed.tracks_from_dict(entry.get("tracks")) for engine, entry in entries.items()}
     for node in nodes:
         if not getattr(node, "connected", False) or not getattr(node, "server_version", None):
@@ -188,6 +212,7 @@ async def attach(nodes: Iterable[Any], now: Optional[float] = None) -> None:
                 engine_state=entries.get(engine) if engine else None,
                 tracks=tracks.get(engine, {}) if engine else {},
                 now=now,
+                member_versions=members.get(node.name),
             ))
         except Exception:  # noqa: BLE001 - one odd stored value must not take the Clusters page down
             logger.warning("Hypervisor release verdict failed for %s", getattr(node, "name", "?"), exc_info=True)

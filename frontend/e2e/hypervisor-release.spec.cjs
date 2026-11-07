@@ -244,3 +244,32 @@ test("admin: a cluster with only a display card says no GPU is for instances", a
   await expect(page.getByRole("dialog")).toContainText("Display cards, such as a server's onboard VGA, are detected but cannot be allocated.");
   await expectCleanInventoryHarness(state);
 });
+
+test("admin: a rolling upgrade shows the version range and is judged by its oldest member", async ({ page }) => {
+  await authenticate(page.context(), "admin");
+  const state = await install(page, "admin", {
+    serverVersion: "5.21.9",
+    clustered: true,
+    release: hypervisorRelease("update_available", {
+      track: "5.21 LTS",
+      lts: true,
+      latest_version: "5.21.9",
+      channel: "5.21/stable",
+      mixed_versions: true,
+      members: [
+        { member: "mc2", version: "5.21.5" },
+        { member: "mc1", version: "5.21.9" },
+      ],
+    }),
+  });
+  await page.goto("/inventory");
+
+  const card = coreCard(page);
+  await expect(card).toContainText("Hypervisor Version: 5.21.5 to 5.21.9");
+  await card.getByRole("button", { name: "Update Available: LXD 5.21.9", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.locator("dt").filter({ hasText: "Oldest Member" })).toHaveCount(1);
+  await expect(dialog.locator("dd").filter({ hasText: "5.21.5" })).toHaveCount(1);
+  await expect(dialog).toContainText("The members run different versions (mc2 on 5.21.5, mc1 on 5.21.9), so this is for the oldest.");
+  await expectCleanInventoryHarness(state);
+});

@@ -135,3 +135,38 @@ def test_a_tampered_store_never_turns_the_page_into_a_500(stored, enabled, monke
     assert verdict is not None and verdict.status in ("not_checked", "update_available")
     response.model_dump(mode="json")
     assert service.due(state, NOW) in (True, False)
+
+
+def test_a_clustered_card_reads_member_versions_from_the_host_facts_cache_only(stored, enabled, monkeypatch) -> None:
+    from app.core import cache as cache_module
+    from app.services.lxd import host_kernels
+
+    facts = CacheManager(redis_url=None)
+    facts.set("api_responses", host_kernels._cache_key("microcloud"), {
+        "cluster_id": "microcloud", "clustered": True, "members_listed": True, "collected_at": "2027-01-15T08:00:00+00:00",
+        "members": [
+            {"member": "mc1", "server_version": "5.21.9"},
+            {"member": "mc2", "server_version": "5.21.5"},
+            {"member": "mc3", "server_version": "5.21.4", "error": "offline: down"},
+        ],
+    }, ttl=600)
+    monkeypatch.setattr(cache_module, "get_cache_manager", lambda: facts)
+
+    def no_lxd(*_args, **_kwargs):
+        raise AssertionError("GET /nodes read a cluster member")
+
+    monkeypatch.setattr(host_kernels, "read_cluster_kernels", no_lxd)
+
+    clustered = _node("microcloud", "5.21.9")
+    clustered.clustered = True
+    uncached = _node("other", "5.21.9")
+    uncached.clustered = True
+    response = _get_nodes(monkeypatch, [clustered, uncached])
+    by_name = {n.name: n.hypervisor_release for n in response.nodes}
+
+    mixed = by_name["microcloud"]
+    assert (mixed.status, mixed.mixed_versions) == ("update_available", True)
+    # the offline member's stale answer is not counted
+    assert [(m.member, m.version) for m in mixed.members] == [("mc2", "5.21.5"), ("mc1", "5.21.9")]
+    # nothing cached: the endpoint's own version, as before
+    assert (by_name["other"].status, by_name["other"].mixed_versions, by_name["other"].members) == ("latest", False, None)

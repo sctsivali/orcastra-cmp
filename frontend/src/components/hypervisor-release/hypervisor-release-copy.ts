@@ -32,6 +32,26 @@ export function newerTrackSentence(release: HypervisorRelease): string | null {
   return `${where}.`;
 }
 
+/** The version the verdict is for: the oldest member's while the members differ. */
+export function judgedVersion(release: HypervisorRelease | null | undefined, current: string): string {
+  const members = release?.mixed_versions ? release.members ?? [] : [];
+  return members.length > 0 ? members[0].version : current;
+}
+
+/** "5.21.5 to 5.21.9" while a rolling upgrade is under way, otherwise the version itself. */
+export function versionRange(release: HypervisorRelease | null | undefined, current: string): string {
+  const members = release?.mixed_versions ? release.members ?? [] : [];
+  return members.length > 1 ? `${members[0].version} to ${members[members.length - 1].version}` : current;
+}
+
+/** Which member runs what, while they differ; null otherwise. */
+export function membersSentence(release: HypervisorRelease): string | null {
+  const members = release.mixed_versions ? release.members ?? [] : [];
+  if (members.length < 2) return null;
+  const list = members.map((m) => `${m.member} on ${m.version}`).join(", ");
+  return `The members run different versions (${list}), so this is for the oldest. An upgraded member can stop answering until the last one matches.`;
+}
+
 export function checkedSentence(release: HypervisorRelease): string | null {
   return release.checked_at ? `Checked ${formatDateTime(release.checked_at)}.` : null;
 }

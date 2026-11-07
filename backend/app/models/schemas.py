@@ -903,6 +903,12 @@ class HypervisorNewerTrack(BaseModel):
     lts: bool = Field(..., description="Whether that track is a long-term support series")
 
 
+class HypervisorMemberVersion(BaseModel):
+    """One cluster member's own hypervisor version, listed while the members differ."""
+    member: str
+    version: str
+
+
 class HypervisorRelease(BaseModel):
     """How the Cluster's hypervisor version compares with the newest release on its own track
     (services/hypervisor_releases/). Computed on each read from the stored feeds."""
@@ -925,6 +931,13 @@ class HypervisorRelease(BaseModel):
     newer_track: Optional[HypervisorNewerTrack] = None
     checked_at: Optional[datetime] = Field(None, description="When the feed this verdict uses was last read successfully")
     attempted_at: Optional[datetime] = Field(None, description="When the feed was last tried, successful or not")
+    mixed_versions: bool = Field(
+        False,
+        description="The members run different versions (a rolling upgrade); the verdict is for the oldest member",
+    )
+    members: Optional[List[HypervisorMemberVersion]] = Field(
+        None, description="Each member's version, oldest first, only while they differ"
+    )
 
 
 class NodeStatus(BaseModel):

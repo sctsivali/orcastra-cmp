@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from app.services.hypervisor_releases.feed import Track, Version, parse_version
+from app.services.hypervisor_releases.feed import Track, Version, clean_version, parse_version
 
 GOOD_FOR_SECONDS = 7 * 86400
 
@@ -84,6 +84,19 @@ def _iso(epoch: Any) -> Optional[str]:
         return None
 
 
+MEMBER_LIST_CAP = 64
+
+
+def _members(member_versions: Optional[Sequence[Tuple[str, str]]]) -> List[Tuple[str, str, Version]]:
+    """(member, version, parsed) for each member whose version reads, oldest first."""
+    out = []
+    for member, version in list(member_versions or [])[:MEMBER_LIST_CAP]:
+        parsed = parse_version(version)
+        if isinstance(member, str) and parsed is not None:
+            out.append((member[:64], clean_version(version), parsed))
+    return sorted(out, key=lambda row: (row[2], row[0]))
+
+
 def evaluate(
     *,
     engine: Optional[str],
@@ -92,9 +105,18 @@ def evaluate(
     engine_state: Optional[Dict[str, Any]],
     tracks: Dict[str, Track],
     now: float,
+    member_versions: Optional[Sequence[Tuple[str, str]]] = None,
 ) -> Dict[str, Any]:
-    """The `hypervisor_release` block of one Cluster's status (schemas.HypervisorRelease)."""
+    """The `hypervisor_release` block of one Cluster's status (schemas.HypervisorRelease).
+
+    `member_versions` is each member's own version when a cluster read has them. Members on
+    different versions are a rolling upgrade, and a cluster is only as current as its oldest
+    member (LXD keeps the upgraded ones blocked until the last one matches), so the verdict is
+    for the oldest and the members are listed.
+    """
     state = engine_state or {}
+    members = _members(member_versions)
+    mixed = len({row[2] for row in members}) > 1
     out: Dict[str, Any] = {
         "status": "not_checked",
         "reason": None,
@@ -108,8 +130,10 @@ def evaluate(
         "newer_track": None,
         "checked_at": _iso(state.get("last_success_at")),
         "attempted_at": _iso(state.get("last_attempt_at")),
+        "mixed_versions": mixed,
+        "members": [{"member": m, "version": v} for m, v, _p in members] if mixed else None,
     }
-    version = parse_version(server_version)
+    version = members[0][2] if mixed else parse_version(server_version)
     if engine is None or version is None:
         out["reason"] = "unknown_version"
         return out

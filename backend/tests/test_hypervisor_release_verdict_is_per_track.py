@@ -132,3 +132,30 @@ def test_a_feed_older_than_a_week_stops_speaking() -> None:
 ])
 def test_the_engine_comes_from_the_type_then_the_server_name(node_type, environment, engine) -> None:
     assert engine_of(node_type, environment) == engine
+
+
+def test_a_rolling_upgrade_is_judged_by_its_oldest_member() -> None:
+    # LXD keeps upgraded members blocked until the last one matches, so the cluster is only as
+    # current as its oldest member, whatever the endpoint member answers.
+    out = evaluate(
+        engine=LXD, server_version="5.21.9", server_lts=True, engine_state=FRESH, tracks=LXD_TRACKS, now=NOW,
+        member_versions=[("node-a", "5.21.9"), ("node-c", "5.21.5"), ("node-b", "5.21.9-2313ff2")],
+    )
+    assert (out["status"], out["latest_version"], out["mixed_versions"]) == ("update_available", "5.21.9", True)
+    assert out["members"] == [
+        {"member": "node-c", "version": "5.21.5"},
+        {"member": "node-a", "version": "5.21.9"},
+        {"member": "node-b", "version": "5.21.9"},
+    ]
+
+
+def test_members_on_one_version_are_not_listed_and_unreadable_ones_are_ignored() -> None:
+    out = evaluate(
+        engine=LXD, server_version="5.21.9", server_lts=True, engine_state=FRESH, tracks=LXD_TRACKS, now=NOW,
+        member_versions=[("node-a", "5.21.9"), ("node-b", "5.21.9"), ("node-c", "garbage"), (7, "5.21.1")],
+    )
+    assert (out["status"], out["mixed_versions"], out["members"]) == ("latest", False, None)
+    many = [(f"m{i}", "5.21.5" if i % 2 else "5.21.9") for i in range(500)]
+    capped = evaluate(engine=LXD, server_version="5.21.9", server_lts=True, engine_state=FRESH,
+                      tracks=LXD_TRACKS, now=NOW, member_versions=many)
+    assert len(capped["members"]) == 64

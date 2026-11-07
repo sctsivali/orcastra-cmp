@@ -8,6 +8,8 @@ import {
   channelPhrase,
   checkedSentence,
   engineName,
+  judgedVersion,
+  membersSentence,
   newerTrackSentence,
   notCheckedSentence,
   trackPhrase,
@@ -41,6 +43,8 @@ export function HypervisorReleaseStatus({ release, currentVersion, clustered }: 
   const ownTrack = release.track ? trackPhrase(release.track, release.lts) : null;
   const channel = release.channel ? ` (${channelPhrase(release, release.channel)})` : "";
   const checked = checkedSentence(release);
+  const judged = judgedVersion(release, currentVersion);
+  const members = membersSentence(release);
 
   if (release.status === "latest") {
     const newer = newerTrackSentence(release);
@@ -48,11 +52,12 @@ export function HypervisorReleaseStatus({ release, currentVersion, clustered }: 
       <span className="inline-flex items-center gap-1" data-hypervisor-release="latest">
         <CheckCircle className="h-3 w-3 text-status-online" aria-hidden="true" />
         {release.lts ? "Latest LTS" : "Latest"}
-        <InfoToggletip label={`About ${engine} ${currentVersion}`}>
+        <InfoToggletip label={`About ${engine} ${judged}`}>
           <p>
-            {engine} {currentVersion} is the newest release on {ownTrack}
+            {engine} {judged} is the newest release on {ownTrack}
             {channel}.
           </p>
+          {members && <p>{members}</p>}
           {newer && <p>{newer}</p>}
           {checked && <p className="text-muted-foreground">{checked}</p>}
         </InfoToggletip>
@@ -65,12 +70,13 @@ export function HypervisorReleaseStatus({ release, currentVersion, clustered }: 
       <span className="inline-flex items-center gap-1" data-hypervisor-release="ahead">
         <ArrowUpCircle className="h-3 w-3" aria-hidden="true" />
         Newer than stable
-        <InfoToggletip label={`About ${engine} ${currentVersion}`}>
+        <InfoToggletip label={`About ${engine} ${judged}`}>
           <p>
-            {engine} {currentVersion} is newer than {release.latest_version}, the stable release on{" "}
+            {engine} {judged} is newer than {release.latest_version}, the stable release on{" "}
             {ownTrack}
             {channel}. It is most likely a candidate or edge build.
           </p>
+          {members && <p>{members}</p>}
           {checked && <p className="text-muted-foreground">{checked}</p>}
         </InfoToggletip>
       </span>

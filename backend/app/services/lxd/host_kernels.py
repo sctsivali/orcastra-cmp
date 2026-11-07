@@ -46,8 +46,10 @@ MEMBER_READS_PER_CLUSTER = 4
 MEMBER_PHASE_SECONDS = 20.0
 MEMBER_BODY_LIMIT = 256 * 1024
 _TEXT_CAP = 128
-_KERNEL_KEYS = ("kernel_version", "os_name", "os_version", "instance_types", "server_name")
-_TEXT_FIELDS = ("kernel_version", "os_name", "os_version")
+# note: server_version rides along so the release check can see a rolling upgrade
+# (services/hypervisor_releases); the read is the same, and the version is a fact like the kernel.
+_KERNEL_KEYS = ("kernel_version", "os_name", "os_version", "instance_types", "server_name", "server_version")
+_TEXT_FIELDS = ("kernel_version", "os_name", "os_version", "server_version")
 
 _cluster_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="host_kernel_cluster")
 
@@ -60,6 +62,7 @@ class MemberKernel:
     os_version: Optional[str] = None
     instance_types: List[str] = field(default_factory=list)
     error: Optional[str] = None
+    server_version: Optional[str] = None
 
 
 @dataclass
@@ -110,6 +113,7 @@ def _member_record(record: Dict[str, Any]) -> MemberKernel:
         os_version=_text(record.get("os_version")),
         instance_types=[t[:32] for t in types[:8]] if "instance_types" not in invalid and types else [],
         error=error,
+        server_version=_text(record.get("server_version")),
     )
 
 
@@ -252,6 +256,18 @@ def _from_cache(cache: Any, cluster_id: str) -> Optional[ClusterKernels]:
         )
     except Exception:  # noqa: BLE001 - a malformed entry is a cache miss
         return None
+
+
+def cached_member_versions(cache: Any, cluster_id: str) -> Optional[List[Tuple[str, str]]]:
+    """(member, server_version) from the last complete-enough read, or None when nothing is cached.
+
+    Cache only, never a read: GET /nodes asks this on every poll, and the kernel advisories keep
+    the entry warm. A member without a version (an older entry, a failed read) is left out.
+    """
+    cached = _from_cache(cache, cluster_id)
+    if cached is None:
+        return None
+    return [(m.member, m.server_version) for m in cached.members if m.server_version and m.error is None]
 
 
 async def fleet_kernels(

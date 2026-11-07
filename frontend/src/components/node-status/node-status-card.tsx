@@ -11,7 +11,7 @@ import {
 } from "@/lib/gpu";
 import { CpuAllocationFigure, CpuAllocationInfo, CpuAllocationText } from "@/components/cpu/cpu-allocation-info";
 import { GpuCapacityInfo } from "@/components/gpu";
-import { HypervisorReleaseStatus } from "@/components/hypervisor-release";
+import { HypervisorReleaseStatus, versionRange } from "@/components/hypervisor-release";
 
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { Server, Cloud, Cpu, MemoryStick, Sparkles, MoreVertical, Edit, Users } from "lucide-react";
@@ -234,7 +234,7 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
           <div className="mt-3 flex flex-wrap gap-2 md:gap-4 text-xs text-muted-foreground items-center">
             <span>
               <span className="font-medium">Hypervisor Version:</span>{" "}
-              {node.server_version}
+              {versionRange(node.hypervisor_release, node.server_version)}
             </span>
             {node.api_version && (
               <span>

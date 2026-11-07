@@ -829,6 +829,10 @@ export interface HypervisorRelease {
   checked_at: string | null;
   /** When the feed was last tried. */
   attempted_at: string | null;
+  /** The members run different versions (a rolling upgrade); the verdict is for the oldest. */
+  mixed_versions?: boolean;
+  /** Each member's version, oldest first, only while they differ. */
+  members?: { member: string; version: string }[] | null;
 }
 
 // Node Status
