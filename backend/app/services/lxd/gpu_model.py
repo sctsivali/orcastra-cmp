@@ -86,6 +86,12 @@ def classify_gpu_card(card: Dict[str, Any]) -> GpuClassification:
     if driver in GPU_DISPLAY_DRIVERS:
         return GpuClassification("display", False, False, False)
 
+    # A VM's virtio GPU can be reported by its PCI transport ("virtio-pci") rather than by
+    # virtio-gpu; the product ("Virtio 1.0 GPU") is what names it. It is the guest's virtual
+    # display, never capacity. Seen live on Console Lab (nested LXD), 2026-11-07.
+    if driver == "virtio-pci" and "gpu" in product:
+        return GpuClassification("display", False, False, False)
+
     if driver in GPU_COMPUTE_DRIVERS or has_nvidia_block:
         unified = (
             driver in ("nv_platform", "nvgpu")

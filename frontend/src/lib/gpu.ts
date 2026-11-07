@@ -135,13 +135,15 @@ export function summarizeGpus(src: GpuSummarySource | null | undefined): GpuSumm
     hasCompute: computeTotal > 0,
     extraCards: Math.max(0, cardsTotal - computeTotal),
     // From the cards when they were listed, otherwise from the per-class counts; a read with
-    // neither cannot say "display" and falls back to "none allocatable".
+    // neither cannot say "display" and falls back to "none allocatable". The backend's own class
+    // decides: gpuClassOf's label fallback calls an unknown card "display", but the counts the
+    // Monitoring rows read keep it unknown, and the two surfaces must say the same thing.
     displayOnly:
       computeTotal === 0 &&
       cardsTotal > 0 &&
       (cards.length > 0
         ? cards.every((card) => {
-            const cls = gpuClassOf(card);
+            const cls = card.gpu_class ?? gpuClassOf(card);
             return cls === "display" || cls === "integrated";
           })
         : (src?.gpu_display_total ?? 0) + (src?.gpu_integrated_total ?? 0) >= cardsTotal),

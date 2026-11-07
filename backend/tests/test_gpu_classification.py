@@ -111,6 +111,15 @@ def test_a_bmc_display_controller_is_display_not_unknown() -> None:
     assert classify_gpu_card(ASPEED_BMC_CARD).gpu_class == "display"
 
 
+def test_a_virtio_gpu_reported_by_its_pci_transport_is_display() -> None:
+    """A nested LXD VM reports driver "virtio-pci" and product "Virtio 1.0 GPU" (Console Lab)."""
+    card = {"driver": "virtio-pci", "vendor": "Red Hat, Inc.", "product": "Virtio 1.0 GPU"}
+    classified = classify_gpu_card(card)
+    assert (classified.gpu_class, classified.is_compute, classified.attachable) == ("display", False, False)
+    # Only the GPU: another virtio device behind the same transport stays unknown.
+    assert classify_gpu_card({"driver": "virtio-pci", "product": "Virtio 1.0 network device"}).gpu_class == "unknown"
+
+
 def test_an_unknown_driver_fails_closed_but_stays_visible() -> None:
     inventory = build_gpu_inventory(resources_with([UNKNOWN_DRIVER_CARD]))
 
