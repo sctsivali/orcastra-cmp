@@ -854,6 +854,15 @@ def _drop_unsupported_config(client, instance_type: str, config: dict) -> dict:
     return kept
 
 
+def _reads_stopped(instance) -> bool:
+    """Whether a fresh read of `instance` says Stopped; False when it cannot be read."""
+    try:
+        instance.sync()
+    except Exception:  # noqa: BLE001 - an unreadable state is not evidence of a stop
+        return False
+    return getattr(instance, "status", None) == "Stopped"
+
+
 class InstanceManager:
     """
     Manages LXD instance operations.
@@ -1574,6 +1583,14 @@ class InstanceManager:
                     except Exception as e:
                         if not force and _is_graceful_timeout(e):
                             raise self._graceful_timeout(name, "stop", timeout) from e
+                        # note: Incus 7.6 fails a graceful VM stop sent in early boot with "The
+                        # instance is already running" and stops it anyway (reproduced with the
+                        # CLI). The state, not the operation, says whether the stop happened.
+                        if isinstance(e, LXDAPIException) and _reads_stopped(target):
+                            logger.warning(
+                                "Stop of %s on %s reported '%s' but the instance is Stopped", name, host, e
+                            )
+                            return target
                         raise
                     target.sync()
                     return target
