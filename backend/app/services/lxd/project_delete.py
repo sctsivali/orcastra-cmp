@@ -54,6 +54,41 @@ def project_exists_sync(client_for: ClientFor, host: str, name: str) -> bool:
     return True
 
 
+def _send_delete(client: Any, name: str) -> None:
+    response = client.api.projects[lxd_segment(name, what="Project name")].delete(timeout=DELETE_TIMEOUT)
+    wait_for_lxd_operation(client, response, timeout=DELETE_OPERATION_SECONDS)
+
+
+def _drop_cached_images(client: Any, name: str) -> bool:
+    """Remove the project's daemon-cached images when they are all that keeps it non-empty.
+
+    Returns False, removing nothing, when anything else is left: an instance, a volume, a profile
+    other than default, or an image someone uploaded or named (`cached` false). Only a project
+    with its own image store is touched; one sharing default's store has none of its own.
+    """
+    project = client.api.projects[lxd_segment(name, what="Project name")].get(timeout=PROBE_TIMEOUT).json().get("metadata") or {}
+    if str((project.get("config") or {}).get("features.images", "")).lower() != "true":
+        return False
+    images = client.api.images.get(params={"recursion": "1", "project": name}, timeout=PROBE_TIMEOUT).json().get("metadata") or []
+    cached = {img.get("fingerprint") for img in images if isinstance(img, dict) and img.get("cached") is True}
+    default_profile = f"/1.0/profiles/default?project={name}"
+    for entry in project.get("used_by") or []:
+        if entry == default_profile:
+            continue
+        path = entry.split("?", 1)[0]
+        if not (path.startswith("/1.0/images/") and path.rsplit("/", 1)[-1] in cached):
+            return False
+    if not cached:
+        return False
+    for fingerprint in sorted(cached):
+        response = client.api.images[lxd_segment(fingerprint, what="Image fingerprint")].delete(
+            params={"project": name}, timeout=DELETE_TIMEOUT
+        )
+        wait_for_lxd_operation(client, response, timeout=DELETE_OPERATION_SECONDS)
+        logger.info(f"Removed cached image {fingerprint[:12]} from project '{name}' before deleting it")
+    return True
+
+
 def delete_project_sync(client_for: ClientFor, host: str, name: str) -> None:
     """Send the DELETE; after it was sent, any failure but LXD's own refusal is unknown."""
     # note: before the try: a `.` or `..` is the caller's 400, not an outcome to settle.
@@ -64,9 +99,17 @@ def delete_project_sync(client_for: ClientFor, host: str, name: str) -> None:
         if client is None:
             raise LXDConnectionError(f"Could not connect to {host}")
         phase = "submitting"
-        response = client.api.projects[lxd_segment(name, what="Project name")].delete(timeout=DELETE_TIMEOUT)
-        phase = "waiting"
-        wait_for_lxd_operation(client, response, timeout=DELETE_OPERATION_SECONDS)
+        try:
+            _send_delete(client, name)
+        except NotFound:
+            raise
+        except LXDAPIException as refusal:
+            # note: Incus counts the images it cached for an instance's create as use and refuses
+            # the project; LXD 5.21 skips and removes them. Same outcome on both: when they are all
+            # that is left, they go and the delete is sent once more.
+            if NOT_EMPTY_REFUSAL not in str(refusal) or not _drop_cached_images(client, name):
+                raise
+            _send_delete(client, name)
         logger.info(f"Deleted project '{name}' from {host}")
     except LXDConnectionError:
         raise
