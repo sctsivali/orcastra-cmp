@@ -32,6 +32,8 @@ interface ImageCatalogueInput {
   remoteIntent: boolean;
   selectionEpoch: number;
   seedValidationPending: boolean;
+  /** The target cluster's hypervisor type; null while unknown, which offers every catalogue. */
+  engine?: string | null;
 }
 
 const normalizeArchitecture = (architecture: string) =>
@@ -49,6 +51,7 @@ export function useImageCatalogue({
   remoteIntent,
   selectionEpoch,
   seedValidationPending,
+  engine,
 }: ImageCatalogueInput) {
   const wantedImageType: "container" | "virtual-machine" =
     type === "vm" ? "virtual-machine" : "container";
@@ -79,7 +82,7 @@ export function useImageCatalogue({
     loading: localQuery.isLoading,
   });
 
-  const remoteQuery = useRemoteImages({ enabled: actorSelectionActive && remoteIntent });
+  const remoteQuery = useRemoteImages({ enabled: actorSelectionActive && remoteIntent, engine });
   const remoteImages = (remoteQuery.data?.images ?? []) as RemoteImageInfo[];
   const localRows: ImageCatalogueRow[] = localImages.map((image) => {
     const name = image.aliases?.find(Boolean) || image.description || image.fingerprint;

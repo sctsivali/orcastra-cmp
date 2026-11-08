@@ -42,3 +42,14 @@ export function imageStoreEmptyHint(input: Pick<ImageStoreCopyInput, "project" |
   }
   return "Widen the filters, or pick a different cluster.";
 }
+
+/**
+ * Which catalogues the picker browses for this engine. Incus reads images.linuxcontainers.org only
+ * (Canonical's servers ship LXD metadata), and Ubuntu is in that catalogue on Incus.
+ */
+export function remoteCatalogueSentence(engine: string | null | undefined): string {
+  const kind = (engine ?? "").trim().toLowerCase();
+  if (kind === "incus") return "Local and Custom (images.linuxcontainers.org) images, Ubuntu included";
+  if (kind === "lxd" || kind === "microcloud") return "Local, Custom (images.lxd.canonical.com) and Ubuntu images";
+  return "Local and remote catalogue images";
+}

@@ -20,6 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useToast } from "@/hooks/use-toast";
 import { useImagesByHost, useRemoteImages } from "@/hooks/use-lxd";
+import { useClusterType } from "@/hooks/use-node-picker-options";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import {
   api,
@@ -185,12 +186,13 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
     open ? instance.host : "",
     instance.project || "default",
   );
+  const hostEngine = useClusterType(open ? instance.host : undefined);
   const {
     data: remoteResp,
     isLoading: loadingRemote,
     isError: remoteImagesFailed,
     refetch: refetchRemoteImages,
-  } = useRemoteImages({ enabled: open && remoteImageIntent });
+  } = useRemoteImages({ enabled: open && remoteImageIntent, engine: hostEngine });
 
   const imageRows = useMemo(() => {
     const local = ((localResp?.images ?? []) as ImageInfo[]).map((img) => ({

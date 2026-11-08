@@ -62,6 +62,12 @@ export interface UseNodePickerOptionsResult {
   retryNames: () => Promise<unknown>;
 }
 
+/** The hypervisor type availability reports for one cluster ("LXD", "Incus"...), null while unknown. */
+export function useClusterType(host: string | undefined): string | null {
+  const { byName } = useAvailabilityByName();
+  return host ? byName.get(host)?.node_type ?? null : null;
+}
+
 /** Availability rows keyed by cluster id. */
 function useAvailabilityByName() {
   const availability = useNodeAvailability();

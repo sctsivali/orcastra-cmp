@@ -940,10 +940,11 @@ export const imageAPI = {
     return fetchAPI<ImageListResponse>(`/images/${encodeURIComponent(host)}?all_projects=true`);
   },
 
-  listRemote: async (opts: ReadOptions = {}): Promise<RemoteImageListResponse> => {
+  listRemote: async (opts: ReadOptions = {}, engine?: string | null): Promise<RemoteImageListResponse> => {
     // The aggregated catalog can take ~30s on a cold cache (Ubuntu remote is
     // ~17 MB); allow a longer timeout than the 45s default.
-    return fetchRead<RemoteImageListResponse>("/images/remote", opts, 120000);
+    const query = engine ? `?engine=${encodeURIComponent(engine.toLowerCase())}` : "";
+    return fetchRead<RemoteImageListResponse>(`/images/remote${query}`, opts, 120000);
   },
 
   // The authoritative dependent list, read before a delete is offered. The page's own count

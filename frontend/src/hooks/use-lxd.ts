@@ -414,11 +414,13 @@ export function useDeleteImage() {
   });
 }
 
-export function useRemoteImages(opts?: { enabled?: boolean }) {
+/** The remote catalogue, narrowed to what `engine` can pull (Incus reads its own server). */
+export function useRemoteImages(opts?: { enabled?: boolean; engine?: string | null }) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
+  const engine = opts?.engine ? opts.engine.toLowerCase() : null;
   return useRefreshableQuery({
-    queryKey: ["remoteImages", scopeKey, "all"],
-    queryFn: (read) => imageAPI.listRemote(read),
+    queryKey: ["remoteImages", scopeKey, engine ?? "all"],
+    queryFn: (read) => imageAPI.listRemote(read, engine),
     enabled: isAuthenticated && (opts?.enabled ?? true),
     // Remote catalog changes ~daily and the backend caches it for 1h.
     staleTime: 1000 * 60 * 30,

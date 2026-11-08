@@ -112,7 +112,7 @@ requireText(rebuildPath, rebuild, [
   "const [selectedImageKey, setSelectedImageKey] = useState<string>(\"\")",
   "const [remoteImageIntent, setRemoteImageIntent] = useState(false)",
   "useImagesByHost(",
-  "useRemoteImages({ enabled: open && remoteImageIntent })",
+  "useRemoteImages({ enabled: open && remoteImageIntent, engine: hostEngine })",
   "const local = ((localResp?.images ?? []) as ImageInfo[])",
   "const remote = ((remoteResp?.images ?? []) as RemoteImageInfo[])",
   "return [...local, ...remote].filter",

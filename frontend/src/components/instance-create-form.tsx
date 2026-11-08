@@ -72,7 +72,7 @@ import {
   ProjectChangeNotice,
   projectChangeNotice,
 } from "@/components/instance-create/project-change-notice";
-import { imageStoreEmptyHint } from "@/components/instance-create/image-store-copy";
+import { imageStoreEmptyHint, remoteCatalogueSentence } from "@/components/instance-create/image-store-copy";
 import { parseLxdSize } from "@/lib/lxd-limits";
 import {
   gpuCardLabel,
@@ -582,7 +582,9 @@ function InstanceCreateFormContent() {
   };
 
   // --- Base image selection (Local + remote catalogs, browsable dialog) ------
+  const targetEngine = form.selectedNode ? nodePicker.availabilityOf(form.selectedNode)?.node_type ?? null : null;
   const imageCatalogue = useImageCatalogue({
+    engine: targetEngine,
     actorSelectionActive,
     host: form.selectedNode,
     project: form.selectedProject || "default",
@@ -1730,8 +1732,7 @@ function InstanceCreateFormContent() {
                           : "Select base image")}
                   </Button>
                   <p className="text-xs text-muted-foreground">
-                    Browse Local, Custom (images.lxd.canonical.com) and Ubuntu
-                    images. Remote images are pulled on creation.
+                    Browse {remoteCatalogueSentence(targetEngine)}. Remote images are pulled on creation.
                   </p>
                   {form.selectedImage && form.imageServer === "" && (
                     <PickerNotice
@@ -2587,8 +2588,7 @@ function InstanceCreateFormContent() {
           <DialogHeader className="pb-4">
             <DialogTitle>Select Base Image</DialogTitle>
             <DialogDescription>
-              Local images, plus the Custom (images.lxd.canonical.com) and Ubuntu
-              catalogs. Remote images are pulled on creation.
+              {remoteCatalogueSentence(targetEngine)}. Remote images are pulled on creation.
             </DialogDescription>
             {imageStoreLine ? (
               <p id="image-store-note" className="text-sm text-muted-foreground">

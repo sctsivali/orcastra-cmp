@@ -137,7 +137,7 @@ requireText(imageCataloguePath, imageCatalogue, [
   "useImagesByHost(host, project",
   "enabled: actorSelectionActive && !!host && localIntent",
   "requestEpoch: selectionEpoch",
-  "useRemoteImages({ enabled: actorSelectionActive && remoteIntent })",
+  "useRemoteImages({ enabled: actorSelectionActive && remoteIntent, engine })",
   "imageRows.length === 0 && (localQuery.isLoading || remoteQuery.isLoading)",
 ]);
 requireText(seedValidationPath, seedValidationSource, [
