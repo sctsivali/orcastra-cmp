@@ -962,7 +962,8 @@ function ActiveRow({ session, onSelect, scope }: {
         </Tooltip>
       </TableCell>
       <TableCell>
-        <div className="flex flex-col tabular-nums">
+        {/* nowrap: one line per direction. In a narrow column `↓119.69 MB` split from its unit. */}
+        <div className="flex flex-col whitespace-nowrap tabular-nums">
           {/* Plain text: a direction, not a state. The arrow carries it. */}
           <span>
             <ArrowDownToLine className="h-3 w-3 inline mr-1 text-muted-foreground" aria-hidden="true" />
@@ -975,7 +976,7 @@ function ActiveRow({ session, onSelect, scope }: {
         </div>
       </TableCell>
       <TableCell>
-        <div className="flex flex-col tabular-nums">
+        <div className="flex flex-col whitespace-nowrap tabular-nums">
           <span>↓{formatNetworkRate(session.bandwidth.download_rate_bps, 1)}</span>
           <span>↑{formatNetworkRate(session.bandwidth.upload_rate_bps, 1)}</span>
         </div>
@@ -1030,7 +1031,7 @@ function HistoryRow({ log, onSelect, scope }: {
       </TableCell>
       <TableCell>
         {log.download_bytes != null || log.upload_bytes != null ? (
-          <div className="flex flex-col tabular-nums">
+          <div className="flex flex-col whitespace-nowrap tabular-nums">
             <span>↓{formatBytes(log.download_bytes ?? 0)}</span>
             <span>↑{formatBytes(log.upload_bytes ?? 0)}</span>
           </div>
