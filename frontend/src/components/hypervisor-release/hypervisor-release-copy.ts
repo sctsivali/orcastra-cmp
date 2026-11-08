@@ -77,6 +77,32 @@ export function notCheckedSentence(release: HypervisorRelease, version: string):
 }
 
 /**
+ * Why the build needs a security update, or null. The baseline lives in
+ * backend/app/core/engine_baseline.py; when the fixed build is not on the track yet (an LTS line
+ * waiting for its next point release) the sentence says so instead of sending the operator to a
+ * build that does not exist.
+ */
+export function securitySentence(release: HypervisorRelease, current: string): string | null {
+  if (!release.security_update || !release.security_fixed_in) return null;
+  const engine = engineName(release);
+  const fixed = release.security_fixed_in;
+  const head = `${engine} ${judgedVersion(release, current)} predates ${fixed}, the first build of its line with the fixes for published ${engine} security advisories.`;
+  const onTrack = release.latest_version && compareVersions(release.latest_version, fixed) >= 0;
+  if (onTrack || !release.channel) return `${head} Upgrade to ${fixed} or later.`;
+  return `${head} ${fixed} is not on ${channelPhrase(release, release.channel)} yet; it is expected in the next point release.`;
+}
+
+function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = b.split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i += 1) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/**
  * The upgrade command. A clustered LXD refreshes in a cohort so every member gets the same
  * snap revision (LXD docs, "Synchronize updates for a LXD cluster cohort").
  */

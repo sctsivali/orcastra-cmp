@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpCircle, CheckCircle, HelpCircle } from "lucide-react";
+import { ArrowUpCircle, CheckCircle, HelpCircle, ShieldAlert } from "lucide-react";
 
 import type { HypervisorRelease } from "@/types/api";
 import { InfoToggletip } from "@/components/ui/info-toggletip";
@@ -12,6 +12,7 @@ import {
   membersSentence,
   newerTrackSentence,
   notCheckedSentence,
+  securitySentence,
   trackPhrase,
 } from "./hypervisor-release-copy";
 import { HypervisorUpdateDialog } from "./hypervisor-update-dialog";
@@ -34,6 +35,25 @@ interface HypervisorReleaseStatusProps {
  */
 export function HypervisorReleaseStatus({ release, currentVersion, clustered }: HypervisorReleaseStatusProps) {
   if (!release) return null;
+  const security = securitySentence(release, currentVersion);
+  if (!security) return <TrackVerdict release={release} currentVersion={currentVersion} clustered={clustered} />;
+  // note: beside the track verdict, not instead of it. An LTS build can be the newest on its line
+  // and still carry an open advisory until the next point release.
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+      <TrackVerdict release={release} currentVersion={currentVersion} clustered={clustered} />
+      <span className="inline-flex items-center gap-1 text-warning" data-hypervisor-release="security_update">
+        <ShieldAlert className="h-3 w-3" aria-hidden="true" />
+        Security update
+        <InfoToggletip label={`About the security update for ${engineName(release)}`}>
+          <p>{security}</p>
+        </InfoToggletip>
+      </span>
+    </span>
+  );
+}
+
+function TrackVerdict({ release, currentVersion, clustered }: HypervisorReleaseStatusProps & { release: HypervisorRelease }) {
 
   if (release.status === "update_available") {
     return <HypervisorUpdateDialog release={release} currentVersion={currentVersion} clustered={Boolean(clustered)} />;

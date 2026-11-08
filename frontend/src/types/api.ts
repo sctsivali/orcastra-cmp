@@ -833,6 +833,10 @@ export interface HypervisorRelease {
   mixed_versions?: boolean;
   /** Each member's version, oldest first, only while they differ. */
   members?: { member: string; version: string }[] | null;
+  /** The (oldest member's) build predates a published security fix; null when no baseline is wired. */
+  security_update?: boolean | null;
+  /** The first build of its line with that fix. */
+  security_fixed_in?: string | null;
 }
 
 // Node Status
