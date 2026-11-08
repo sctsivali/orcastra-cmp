@@ -27,7 +27,7 @@ import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { toast } from "@/hooks/use-toast";
 import { projectRowKey, requestRowFocus } from "@/lib/row-focus";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, isIncusType } from "@/lib/utils";
 
 const projectCreateSchema = z.object({
   name: z
@@ -109,6 +109,12 @@ export function ProjectCreateForm() {
   });
 
   const selectedHost = watch("host");
+  // note: Incus gives a project its own networks only through OVN and refuses the project
+  // otherwise, so on Incus the default is the default project's networks.
+  const hostIsIncus = isIncusType(selectedHost ? nodePicker.availabilityOf(selectedHost)?.node_type : null);
+  React.useEffect(() => {
+    if (selectedHost) setValue("enableNetworks", !hostIsIncus);
+  }, [selectedHost, hostIsIncus, setValue]);
   const maxCpuValue = watch("maxCpu");
   const maxRamValueInput = watch("maxRamValue");
   const maxRamUnitInput = watch("maxRamUnit");
@@ -526,7 +532,9 @@ export function ProjectCreateForm() {
                   <div>
                     <div className="font-medium text-sm">Networks</div>
                     <div className="text-xs text-muted-foreground">
-                      Allow project-specific networks
+                      {hostIsIncus
+                        ? "Allow project-specific networks. Incus needs OVN on the cluster for this; without it, leave this off to use the default project's networks."
+                        : "Allow project-specific networks"}
                     </div>
                   </div>
                 </label>

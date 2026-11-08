@@ -18,6 +18,7 @@ from app.core.blocking import (
     run_blocking,
 )
 from app.core.lxd_path import safe_segment
+from app.core.type_utils import is_incus, resolve_cluster_type
 from app.services.lxd.utils import wait_for_lxd_operation, write_timeout
 
 from . import health, project_delete
@@ -69,13 +70,19 @@ def _create_config(
     max_storage: Optional[str],
     *,
     creation_id: Optional[str] = None,
+    own_networks: bool = True,
 ) -> Dict[str, str]:
-    project_config = dict(config or {
+    """The config a create sends. `own_networks=False` (Incus) leaves features.networks out of the
+    default, because Incus gives a project its own networks only through OVN and refuses it
+    otherwise. An explicit config is sent as given."""
+    defaults = {
         "features.images": "true",
         "features.profiles": "true",
         "features.storage.volumes": "true",
-        "features.networks": "true",
-    })
+    }
+    if own_networks:
+        defaults["features.networks"] = "true"
+    project_config = dict(config or defaults)
     if max_cpu is not None:
         project_config["limits.cpu"] = str(max_cpu)
     if max_ram is not None:
@@ -460,6 +467,7 @@ class ProjectManager:
                 max_ram,
                 max_storage,
                 creation_id=creation_id,
+                own_networks=not is_incus(resolve_cluster_type(None, client)),
             )
 
             project_data = {

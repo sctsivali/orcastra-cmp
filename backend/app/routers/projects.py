@@ -4,7 +4,7 @@ Provides endpoints for listing and creating projects.
 """
 
 from fastapi import APIRouter, HTTPException, Depends
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 import logging
 from datetime import datetime, timezone
 import asyncio
@@ -524,6 +524,25 @@ async def _cluster_write_policy(
         ) from exc
 
 
+
+def project_create_refusal(message: str) -> Tuple[int, Any]:
+    """The status and detail a daemon refusal of a project create answers with."""
+    lowered = message.lower()
+    if "already exists" in lowered:
+        # A taken name is a conflict the caller resolves (another name, or reuse the project).
+        return 409, message
+    if "ovn is required" in lowered and "features.networks" in lowered:
+        # note: Incus gives a project its own networks only through OVN; LXD does not ask.
+        return 422, {
+            "code": "project_networks_need_ovn",
+            "message": (
+                "This cluster gives a project its own networks only through OVN, which it does not "
+                "have. Untick Networks to use the default project's networks, or set up OVN on the "
+                "cluster first."
+            ),
+        }
+    return 400, message
+
 @router.post(
     "",
     response_model=ProjectCreateResponse,
@@ -730,9 +749,8 @@ async def create_project(
             error_code="LXDOperationError",
             error_message=str(e),
         )
-        # A taken name is a conflict the caller resolves (another name, or reuse the project).
-        conflict = "already exists" in str(e).lower()
-        raise HTTPException(status_code=409 if conflict else 400, detail=str(e))
+        status_code, detail = project_create_refusal(str(e))
+        raise HTTPException(status_code=status_code, detail=detail)
     except HTTPException:
         # important: let a deliberate status through. This try raises HTTPException
         # itself, and the broad handler below rewrote it, so an unreachable cluster
