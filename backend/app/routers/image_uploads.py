@@ -36,6 +36,7 @@ from app.core.api_key_capabilities import (
     project_grant_is_unrestricted,
 )
 from app.core.api_key_permissions import assert_cluster_permission
+from app.services.image_import_gate import refuse_unpatched_import
 from app.services.key_default_view_only import refuse_key_default_operation
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
@@ -246,6 +247,8 @@ async def create_upload(
     if body.total_bytes > body.max_bytes:
         raise HTTPException(status_code=413, detail="Declared size exceeds the allowed maximum")
 
+    # After the request is validated: this one reads the cluster.
+    await refuse_unpatched_import(get_lxd_service(), body.cluster_id, via_api_key=True)
     _ensure_dir()
     await _gc_expired(db)
 

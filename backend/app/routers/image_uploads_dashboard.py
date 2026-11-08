@@ -34,6 +34,7 @@ from app.core.database import get_db, async_session_maker
 from app.core.upload_stream import UploadStagingUnavailable, append_request_body
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, project_is_visible
+from app.services.image_import_gate import refuse_unpatched_import
 from app.services.lxd import LXDService, get_lxd_service
 from app.services.lxd.exceptions import LXDConnectionError
 from app.core.api_key_capabilities import is_valid_project_name
@@ -112,6 +113,7 @@ async def _reclaim_idle_sessions(db: AsyncSession) -> None:
     if rows:
         await db.commit()
         logger.info("Reclaimed %d idle image upload session(s)", len(rows))
+
 
 
 router = APIRouter(
@@ -201,6 +203,8 @@ async def create_upload(
             detail=f"Declared size exceeds the server maximum of {MAX_UPLOAD_BYTES} bytes",
         )
 
+    # After the request is validated: this one reads the cluster.
+    await refuse_unpatched_import(lxd_service, body.cluster_id, db=db, user=_rbac)
     _ensure_dir()
     await _gc_expired(db)
     await _reclaim_idle_sessions(db)  # free slots held by abandoned browser uploads

@@ -63,6 +63,9 @@ FLOORS: dict[str, dict[str, Floor]] = {
     # What the release card calls a security update.
     "security_baseline": {"incus": _INCUS_SECURITY_BASELINE},
 }
+# An image import unpacks the image's metadata area as root on the host: LXD needs the image
+# symlink fixes, Incus the 7.6 batch as well (non-regular files and hard links, GHSA-5pgx-q9xx-j3qv).
+FLOORS["image_import"] = {"lxd": FLOORS["instance_files"]["lxd"], "incus": _INCUS_SECURITY_BASELINE}
 
 
 @dataclass(frozen=True)
