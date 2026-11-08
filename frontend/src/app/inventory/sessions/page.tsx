@@ -37,6 +37,7 @@ import {
   SessionScopeToggle,
   type SessionScope,
 } from "./components/session-scope-toggle";
+import { ActiveSummary, HistorySummary } from "./components/session-summary";
 import {
   Tooltip,
   TooltipContent,
@@ -49,13 +50,12 @@ import {
   Clock,
   Wifi,
   WifiOff,
-  Activity,
   ArrowDownToLine,
   ArrowUpFromLine,
   Loader2,
   History,
   ShieldAlert } from "lucide-react";
-import { formatBytes, formatLabel, formatNetworkRate, formatDateTimeSeconds, formatCount, plural } from "@/lib/utils";
+import { formatBytes, formatElapsed, formatLabel, formatNetworkRate, formatDateTimeSeconds, formatCount, plural } from "@/lib/utils";
 import { BreakGlassPanel } from "@/components/break-glass/break-glass-panel";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
@@ -111,20 +111,6 @@ interface AuditLogEntry {
   upload_bytes: number | null;
   is_break_glass: boolean;
   created_at: string;
-}
-
-// ============ Utility functions ============
-
-function formatDuration(seconds: number | null): string {
-  if (!seconds || seconds === 0) return EMPTY_VALUE;
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  const parts: string[] = [];
-  if (h > 0) parts.push(`${h}h`);
-  parts.push(`${m}m`);
-  parts.push(`${s}s`);
-  return parts.join(" ");
 }
 
 // Use relative URLs - Next.js rewrites proxy to backend
@@ -413,42 +399,12 @@ function ActiveSessionsTab() {
 
   return (
     <div className="space-y-4">
-      {/* Summary strip */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Card>
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Active</p>
-              <p className="text-2xl font-bold mt-1">{countUnknown ? EMPTY_VALUE : currentSessions.length}</p>
-            </div>
-            <Wifi className="h-8 w-8 shrink-0 text-muted-foreground" />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Download</p>
-              <p className="text-lg font-bold mt-1 font-mono">
-                {countUnknown ? EMPTY_VALUE : `↓${formatNetworkRate(totalDlRate, 1)}`}
-              </p>
-            </div>
-            <ArrowDownToLine className="h-8 w-8 shrink-0 text-muted-foreground" />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Upload</p>
-              <p className="text-lg font-bold mt-1 font-mono">
-                {countUnknown ? EMPTY_VALUE : `↑${formatNetworkRate(totalUlRate, 1)}`}
-              </p>
-            </div>
-            <ArrowUpFromLine className="h-8 w-8 shrink-0 text-muted-foreground" />
-          </CardContent>
-        </Card>
-      </div>
+      <ActiveSummary
+        countUnknown={countUnknown}
+        count={currentSessions.length}
+        downloadRate={totalDlRate}
+        uploadRate={totalUlRate}
+      />
 
       {/* Table */}
       <Card>
@@ -816,45 +772,29 @@ function SessionHistoryTab() {
   const totalDuration = disconnects.reduce((sum, l) => sum + (l.duration_seconds ?? 0), 0);
   const totalDl = disconnects.reduce((sum, l) => sum + (l.download_bytes ?? 0), 0);
   const totalUl = disconnects.reduce((sum, l) => sum + (l.upload_bytes ?? 0), 0);
+  // Same rule as the Active tab: nothing read for this actor and scope yet means no number.
+  const countUnknown = currentLogs.length === 0 && (currentLoading || Boolean(currentError));
 
   return (
     <div className="space-y-4">
-      {/* Summary strip */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Card>
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Past Sessions</p>
-              <p className="text-2xl font-bold mt-1">{disconnects.length}</p>
-            </div>
-            <History className="h-8 w-8 shrink-0 text-muted-foreground" />
-          </CardContent>
-        </Card>
+      {/* note: above the strip, not inside the table card. The totals sum the same capped read
+          as the table, and the filters run in the browser over those rows, so neither reaches an
+          entry past the cap; the old copy sent people to the filters to find older sessions. */}
+      {currentTrailTotal > currentLogs.length && (
+        <PartialReadNotice>
+          Showing the {formatCount(currentLogs.length)} most recent entries of{" "}
+          {formatCount(currentTrailTotal)}. The totals, the filters and the table cover these
+          entries only.
+        </PartialReadNotice>
+      )}
 
-        <Card>
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Time</p>
-              <p className="text-lg font-bold mt-1 font-mono">{formatDuration(totalDuration)}</p>
-            </div>
-            <Clock className="h-8 w-8 shrink-0 text-muted-foreground" />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Transfer</p>
-              <p className="text-sm font-bold mt-1">
-                <span>↓{formatBytes(totalDl)}</span>
-                {" / "}
-                <span>↑{formatBytes(totalUl)}</span>
-              </p>
-            </div>
-            <Activity className="h-8 w-8 shrink-0 text-muted-foreground" />
-          </CardContent>
-        </Card>
-      </div>
+      <HistorySummary
+        countUnknown={countUnknown}
+        sessions={disconnects.length}
+        durationSeconds={totalDuration}
+        downloadBytes={totalDl}
+        uploadBytes={totalUl}
+      />
 
       {/* Table */}
       <Card>
@@ -885,15 +825,6 @@ function SessionHistoryTab() {
           />
         </CardHeader>
         <CardContent>
-          {currentTrailTotal > currentLogs.length && (
-            <div className="mb-3">
-              <PartialReadNotice>
-                Showing the {formatCount(currentLogs.length)} most recent entries of{" "}
-                {formatCount(currentTrailTotal)}. Narrow the scope or the filters to reach older
-                sessions.
-              </PartialReadNotice>
-            </div>
-          )}
           {currentError && currentLogs.length > 0 && (
             <div className="mb-3">
               <PartialReadNotice>Showing the last known data. {currentError}</PartialReadNotice>
@@ -1022,14 +953,14 @@ function ActiveRow({ session, onSelect, scope }: {
           <TooltipTrigger asChild>
             <div className="flex items-center gap-1.5 text-sm">
               <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-              <span className="font-mono">{formatDuration(session.duration_seconds)}</span>
+              <span className="tabular-nums">{formatElapsed(session.duration_seconds)}</span>
             </div>
           </TooltipTrigger>
           <TooltipContent>Started {formatDateTimeSeconds(new Date(session.started_at * 1000).toISOString())}</TooltipContent>
         </Tooltip>
       </TableCell>
       <TableCell>
-        <div className="flex flex-col text-xs font-mono">
+        <div className="flex flex-col tabular-nums">
           {/* Plain text: a direction, not a state. The arrow carries it. */}
           <span>
             <ArrowDownToLine className="h-3 w-3 inline mr-1 text-muted-foreground" aria-hidden="true" />
@@ -1042,7 +973,7 @@ function ActiveRow({ session, onSelect, scope }: {
         </div>
       </TableCell>
       <TableCell>
-        <div className="flex flex-col text-xs font-mono">
+        <div className="flex flex-col tabular-nums">
           <span>↓{formatNetworkRate(session.bandwidth.download_rate_bps, 1)}</span>
           <span>↑{formatNetworkRate(session.bandwidth.upload_rate_bps, 1)}</span>
         </div>
@@ -1092,12 +1023,12 @@ function HistoryRow({ log, onSelect, scope }: {
       <TableCell>
 {protocolLabel}
       </TableCell>
-      <TableCell className="font-mono whitespace-nowrap">
-        {formatDuration(log.duration_seconds)}
+      <TableCell className="whitespace-nowrap">
+        <span className="tabular-nums">{formatElapsed(log.duration_seconds)}</span>
       </TableCell>
       <TableCell>
         {log.download_bytes != null || log.upload_bytes != null ? (
-          <div className="flex flex-col font-mono">
+          <div className="flex flex-col tabular-nums">
             <span>↓{formatBytes(log.download_bytes ?? 0)}</span>
             <span>↑{formatBytes(log.upload_bytes ?? 0)}</span>
           </div>

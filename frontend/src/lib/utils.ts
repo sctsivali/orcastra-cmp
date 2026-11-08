@@ -112,27 +112,39 @@ export function formatNetworkRate(bytesPerSecond: number, decimals = 2): string 
 }
 
 /**
- * A span of CPU time, from LXD's cumulative nanosecond counter.
+ * A length of time from seconds, in its two largest units: `45s`, `5m 3s`, `8h 46m`, `2d 3h`.
+ * A single time is glued and a compound keeps two units (frontend-design-language.md).
  *
  * important: zero is a real reading, not an absent one, so it formats as "0s" rather than the
- * placeholder. An instance whose guest reports nothing genuinely has no CPU time to show, and
- * that is the signal worth seeing. This is why formatUptime in the metrics tab is not reused:
- * it returns undefined for 0 and floors at whole minutes, so 45 seconds of CPU time would read
- * "0m" and a genuine zero would vanish behind the missing-value dash.
+ * placeholder: a session that closed at once, an instance with no CPU time. Only a value nobody
+ * recorded (null, not finite, negative) is the missing-value dash.
+ */
+export function formatElapsed(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return EMPTY_VALUE;
+  if (!Number.isFinite(seconds) || seconds < 0) return EMPTY_VALUE;
+
+  const whole = Math.floor(seconds);
+  const days = Math.floor(whole / 86400);
+  const hours = Math.floor((whole % 86400) / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${whole % 60}s`;
+  return `${whole}s`;
+}
+
+/**
+ * A span of CPU time, from LXD's cumulative nanosecond counter.
+ *
+ * note: formatUptime in the metrics tab is not reused: it returns undefined for 0 and floors at
+ * whole minutes, so 45 seconds of CPU time would read "0m" and a genuine zero would vanish behind
+ * the missing-value dash.
  */
 export function formatCpuTime(nanoseconds: number | null | undefined): string {
   if (nanoseconds === null || nanoseconds === undefined) return EMPTY_VALUE;
   if (!Number.isFinite(nanoseconds) || nanoseconds < 0) return EMPTY_VALUE;
-
-  const seconds = Math.floor(nanoseconds / 1e9);
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
-  return `${seconds}s`;
+  return formatElapsed(nanoseconds / 1e9);
 }
 
 /**
