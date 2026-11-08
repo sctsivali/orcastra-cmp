@@ -18,6 +18,8 @@ from fastapi import HTTPException
 from app.routers import permissions
 from tests.test_an_incus_key_is_a_restricted_certificate_on_its_project import _Incus, _Store
 
+_REAL_DASHBOARD_FINGERPRINTS = permissions._dashboard_fingerprints
+
 OWN = "d" * 64
 CLIENT = "e" * 64
 MEMBER = "f" * 64
@@ -51,7 +53,7 @@ def fleet(monkeypatch):
         peek_client=lambda node: clients.get(node),
         active_certificate_fingerprint=lambda node: OWN,
     )
-    service = SimpleNamespace(connection_manager=manager, get_node_names=lambda: list(clients))
+    service = SimpleNamespace(connection_manager=manager, get_node_names=lambda: list(clients), cert_manager=object())
 
     async def _client_for(_service, host):
         return clients.get(host)
@@ -66,6 +68,7 @@ def fleet(monkeypatch):
     monkeypatch.setattr(permissions, "clusters_held_elsewhere", _held)
     monkeypatch.setattr(permissions, "verify_whole_cluster_access", _whole)
     monkeypatch.setattr(permissions, "verify_cluster_access", lambda host: None)
+    monkeypatch.setattr(permissions, "_dashboard_fingerprints", lambda manager, cluster: {OWN})
     return SimpleNamespace(service=service, incus=incus)
 
 
@@ -125,3 +128,56 @@ async def test_a_prefix_is_not_an_identity(fleet):
     with pytest.raises(HTTPException) as caught:
         await permissions.get_identity(CLIENT[:12], host="incus-lab", lxd_service=fleet.service, db=None, user=None)
     assert caught.value.status_code == 404
+
+
+class _Vault:
+    """Vault paths of one cluster; a value that is an exception is raised on read."""
+
+    def __init__(self, leaves):
+        self.leaves = leaves
+
+    def vault_read(self, path, use_cache=True):
+        from app.core.vault_client import VaultClientError
+
+        value = self.leaves.get(path.rsplit("/", 1)[-1], VaultClientError("not there", status_code=404))
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+
+def _pem():
+    from app.routers.my_keys import generate_certificate
+
+    cert_pem, _key, fingerprint = generate_certificate("orca-incus-lab", 30)
+    return cert_pem.decode(), fingerprint
+
+
+def test_the_dashboards_current_and_pending_certificates_are_both_its_own():
+    """During a regenerate or a rotation the certificate a worker presents is not the only one the
+    dashboard holds: Vault's current and pending certificates are its own as well."""
+    (current, fp1), (pending, fp2) = _pem(), _pem()
+    manager = SimpleNamespace(clusters_path="secret/data/clusters",
+                              vault=_Vault({"certs": {"client.crt": current}, "pending_certs": {"client.crt": pending}}))
+    assert permissions._dashboard_fingerprints(manager, "incus-lab") == {fp1, fp2}
+
+
+def test_a_cluster_without_pending_or_any_certificate_reads_as_holding_none_of_them():
+    manager = SimpleNamespace(clusters_path="secret/data/clusters", vault=_Vault({}))
+    assert permissions._dashboard_fingerprints(manager, "incus-lab") == set()
+
+
+async def test_a_pending_certificate_vault_cannot_read_stops_the_delete(fleet, monkeypatch):
+    """The page reader takes any pending-read failure for "no pending certificate"; here that
+    left a rotation's new certificate open to deletion (security review, 2026-11-08)."""
+    from app.core.vault_client import VaultClientError
+
+    current, _fp = _pem()
+    monkeypatch.setattr(permissions, "_dashboard_fingerprints", _REAL_DASHBOARD_FINGERPRINTS)
+    fleet.service.cert_manager = SimpleNamespace(
+        clusters_path="secret/data/clusters",
+        vault=_Vault({"certs": {"client.crt": current}, "pending_certs": VaultClientError("sealed", status_code=503)}),
+    )
+    with pytest.raises(HTTPException) as caught:
+        await permissions.delete_identity("tls", CLIENT, host="incus-lab", lxd_service=fleet.service, _=None, db=None, user=None)
+    assert caught.value.status_code == 503 and "could not be read" in caught.value.detail
+    assert CLIENT in fleet.incus.api.certificates.entries

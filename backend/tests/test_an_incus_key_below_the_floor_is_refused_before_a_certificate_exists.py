@@ -125,3 +125,22 @@ async def test_a_key_for_a_project_that_does_not_exist_is_refused_before_anythin
         await my_keys.create_key(request, _service(client), None, _user(), None)
     assert caught.value.status_code == 404 and "nope" in caught.value.detail
     assert issuing["minted"] == [] and store.posts == []
+
+
+async def test_a_worker_that_never_connected_to_the_cluster_connects_to_create(issuing):
+    """get_client is memory-only, so on a worker with no pooled client the create answered 404
+    "not connected" depending on which worker took it (services/lxd/lazy_client.py)."""
+    store = _Store()
+    pool: dict = {}
+
+    def _ensure(node, **_kw):
+        pool[node] = _Incus(store, "7.0.2")
+        return True
+
+    service = SimpleNamespace(connection_manager=SimpleNamespace(get_client=lambda node, **_kw: pool.get(node)),
+                              ensure_connection=_ensure)
+    request = my_keys.KeyCreateRequest(name="ci", node="incus-lts", project="web", auth_level="standard", expire_days=30)
+    with pytest.raises(HTTPException) as caught:
+        await my_keys.create_key(request, service, None, _user(), None)
+    # it reached the cluster: the floor answered, not "not connected"
+    assert caught.value.status_code == 409 and caught.value.detail["error"] == "below_floor"

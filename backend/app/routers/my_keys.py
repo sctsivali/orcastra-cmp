@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field
 import asyncio
 import logging
 import io
+import re
+import secrets
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
@@ -106,6 +108,16 @@ class KeyListResponse(BaseModel):
     active: int = Field(..., description="Number of active keys")
     expired: int = Field(..., description="Number of expired keys")
     keys: List[KeyInfo] = Field(..., description="List of keys")
+
+
+def _new_key_id(name: str) -> str:
+    """key_<UTC second>_<random>_<name slug>.
+
+    The random part keeps two creates in one second under one name from sharing a Vault record and,
+    on Incus, a trust name (security review, 2026-11-08). The slug keeps to [a-z0-9_-].
+    """
+    slug = re.sub(r"[^a-z0-9_-]+", "_", name.lower())[:20].strip("_") or "key"
+    return f"key_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(3)}_{slug}"
 
 
 def get_vault_keys_client():
@@ -438,32 +450,27 @@ async def create_key(
 
     try:
         # Generate unique key ID
-        key_id = f"key_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{request.name.lower().replace(' ', '_')[:20]}"
+        key_id = _new_key_id(request.name)
 
         # Calculate expiration date
         created_at = datetime.utcnow()
         expires_at = created_at + timedelta(days=request.expire_days)
 
-        # Connect to the cluster
-        client = lxd_service.connection_manager.get_client(request.node)
-        if client is None:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    f"Cluster '{request.node}' was not found or is not connected. "
-                    "Check the available clusters."
-                )
-            )
+        # note: get_client is memory-only, so on a worker that never connected to this cluster the
+        # create answered 404 "not connected"; client_for connects from Vault (lazy_client.py).
+        client = require_client(await client_for(lxd_service, request.node, label="my_keys_create"), request.node)
 
         if target.isolated_project_required:
             # important: before the credential exists, so a refusal leaves nothing on the cluster
             await asyncio.to_thread(refuse_an_unisolated_project, client, request.node, project)
 
         engine = _key_engine(client, request.node)
+        # note: off the event loop; each of these waits on the cluster for up to 30 s.
         if request.auth_level != "admin":
-            _require_project(client, request.node, project)
+            await asyncio.to_thread(_require_project, client, request.node, project)
         try:
-            issued = client_identities.issue(
+            issued = await asyncio.to_thread(
+                client_identities.issue,
                 client,
                 engine=engine,
                 key_id=key_id,
@@ -491,6 +498,7 @@ async def create_key(
             "identity_id": identity_id,
             "group_name": group_name,
             "fingerprint": fingerprint,
+            "trust_name": issued.trust_name,
             # important: the record carried no owner at all, so `list_keys` could only scope by
             # cluster and two people in the same scope saw each other's key records. There is
             # nothing to backfill from on existing records (no created_by, and identity_id is the
@@ -505,7 +513,7 @@ async def create_key(
         except Exception:
             # important: the private key exists only in this request. Without the record nobody
             # can download or revoke the credential, so it must not outlive the failure.
-            leftovers = client_identities.revoke(client, key_metadata)
+            leftovers = await asyncio.to_thread(client_identities.revoke, client, key_metadata)
             if leftovers:
                 logger.error(f"Key {key_id} not stored and its cluster credential not removed: {leftovers}")
             raise
@@ -808,25 +816,43 @@ async def delete_key(
         if not key_meta:
             raise HTTPException(status_code=404, detail="Key not found")
         
-        # Delete from LXD
+        # important: the record is the only way to find the cluster credential again, so it goes
+        # only once the cluster confirmed the removal, or once the cluster is no longer registered
+        # here and nothing could reach it anyway. get_client is memory-only: on a worker that never
+        # connected to the cluster it answered None and the revoke was skipped (security review,
+        # 2026-11-08), so the client comes from client_for.
+        node = key_meta["node"]
         cleanup_errors = []
-        try:
-            client = lxd_service.connection_manager.get_client(key_meta["node"])
-            
-            if client is None:
-                logger.warning(f"Node '{key_meta['node']}' not connected, skipping cluster cleanup")
-            else:
-                # The identity and its group on LXD, the certificate on Incus (by exact fingerprint).
-                cleanup_errors.extend(client_identities.revoke(client, key_meta))
-                if cleanup_errors:
-                    logger.warning(f"Cluster cleanup completed with {len(cleanup_errors)} errors: {cleanup_errors}")
-                else:
-                    logger.info(f"Cluster cleanup completed for key {key_id}")
-        except Exception as e:
-            error_msg = f"Failed to connect to LXD for cleanup: {str(e)}"
-            cleanup_errors.append(error_msg)
-            logger.error(error_msg)
-        
+        client = await client_for(lxd_service, node, label="my_keys_delete")
+        if client is None:
+            if node in set(lxd_service.get_node_names()):
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "cluster_unreachable",
+                        "message": f"{node} did not answer, so the key was kept. Delete it again once the cluster is reachable.",
+                    },
+                )
+            cleanup_errors.append(f"{node} is no longer registered; its credential could not be removed")
+            logger.warning(f"Key {key_id}: {cleanup_errors[0]}")
+        else:
+            try:
+                # The identity and its group on LXD, the certificate carrying the key's trust name on Incus.
+                revoke_errors = await asyncio.to_thread(client_identities.revoke, client, key_meta)
+            except Exception as exc:  # noqa: BLE001 - not knowing is not "removed"
+                revoke_errors = [f"{type(exc).__name__}: {exc}"]
+            if revoke_errors:
+                logger.warning(f"Key {key_id} not revoked on {node}: {revoke_errors}")
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "error": "key_not_revoked",
+                        "message": "The cluster did not confirm the key was removed, so it was kept. "
+                        + "; ".join(revoke_errors)[:400],
+                    },
+                )
+            logger.info(f"Cluster cleanup completed for key {key_id}")
+
         # Delete from Vault
         delete_key_from_vault(vault_client, key_id)
         

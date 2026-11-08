@@ -139,7 +139,8 @@ def test_a_standard_key_is_a_certificate_restricted_to_its_project():
     issued, _ = _issue(store)
     [body] = store.posts
     assert body["type"] == "client" and body["restricted"] is True and body["projects"] == ["tenant-web"]
-    assert body["description"] == "orcastra-key:key_1"
+    # a restricted client can list descriptions, so the key's id and name are not in it
+    assert "key_1" not in body["description"] and "ci" not in body["description"].lower().split()
     # base64 DER, not PEM, is what POST /1.0/certificates takes
     assert "BEGIN" not in body["certificate"]
     entry = store.entries[issued.fingerprint]
@@ -246,15 +247,82 @@ def test_revocation_deletes_exactly_the_stored_fingerprint():
     assert issued.fingerprint not in store.entries and other in store.entries
 
 
-def test_a_self_renewed_certificate_is_found_by_its_marker():
+def test_the_trust_entry_is_named_after_the_key_not_its_holder():
+    """A holder can replace its certificate and description (Incus certificate_self_renewal, shown on
+    the lab 2026-11-08) but never the name, so the name is what ties the entry to the key. It is
+    opaque: a restricted client can list the trust store, so it must not carry the key's name."""
+    store = _Store()
+    issued, _ = _issue(store)
+    entry = store.entries[issued.fingerprint]
+    assert entry["name"] == issued.trust_name == ci.incus_trust_name("key_1")
+    assert "ci" not in entry["name"].split("orcastra-key-", 1)[1]
+
+
+def test_a_self_renewed_certificate_with_its_marker_stripped_is_found_by_its_name():
     store = _Store()
     issued, _ = _issue(store)
     renewed = "c" * 64
     entry = store.entries.pop(issued.fingerprint)
-    store.entries[renewed] = {**entry, "fingerprint": renewed}
-    record = {"id": "key_1", "engine": "incus", "fingerprint": issued.fingerprint}
+    store.entries[renewed] = {**entry, "fingerprint": renewed, "description": "stripped"}
+    record = {"id": "key_1", "engine": "incus", "fingerprint": issued.fingerprint, "trust_name": issued.trust_name,
+              "project": "tenant-web", "auth_level": "standard"}
     assert ci.revoke(_Incus(store), record) == []
     assert store.entries == {} and store.deleted == [renewed]
+
+
+def test_two_entries_answering_to_one_name_are_not_guessed_between():
+    store = _Store()
+    issued, _ = _issue(store)
+    entry = store.entries.pop(issued.fingerprint)
+    for fp in ("c" * 64, "d" * 64):
+        store.entries[fp] = {**entry, "fingerprint": fp}
+    record = {"id": "key_1", "engine": "incus", "fingerprint": issued.fingerprint, "trust_name": issued.trust_name,
+              "project": "tenant-web", "auth_level": "standard"}
+    errors = ci.revoke(_Incus(store), record)
+    assert errors and "more than one" in errors[0]
+    assert len(store.entries) == 2
+
+
+def test_a_holder_who_swaps_two_keys_certificates_cannot_keep_either(  # security review 2026-11-08
+):
+    """K1 renews to C, then K2 renews to K1's original certificate F1 (its holder has F1's key).
+    Revoking K1 by its stored fingerprint found F1, now K2's entry, deleted that, and left K1
+    trusted on C, marked revoked and never retried. The name, which a holder cannot change, decides."""
+    store = _Store()
+    issued, _ = _issue(store)
+    f1, c = issued.fingerprint, "c" * 64
+    k1_entry = store.entries.pop(f1)
+    store.entries[c] = {**k1_entry, "fingerprint": c}
+    store.entries[f1] = {**k1_entry, "fingerprint": f1, "name": ci.incus_trust_name("key_2")}
+    record = {"id": "key_1", "engine": "incus", "fingerprint": f1, "trust_name": issued.trust_name,
+              "project": "tenant-web", "auth_level": "standard"}
+    assert ci.revoke(_Incus(store), record) == []
+    assert c not in store.entries and f1 in store.entries
+
+
+def test_an_entry_named_for_the_key_is_removed_even_if_its_project_list_changed():
+    """A project renamed under a renewed key changes the entry's project list, not whose it is; it
+    read as gone, so the key was marked revoked while still trusted."""
+    store = _Store()
+    issued, _ = _issue(store)
+    entry = store.entries.pop(issued.fingerprint)
+    store.entries["c" * 64] = {**entry, "fingerprint": "c" * 64, "projects": ["renamed"]}
+    record = {"id": "key_1", "engine": "incus", "fingerprint": issued.fingerprint, "trust_name": issued.trust_name,
+              "project": "tenant-web", "auth_level": "standard"}
+    assert ci.revoke(_Incus(store), record) == [] and store.entries == {}
+
+
+def test_a_trust_store_that_does_not_answer_is_a_problem_not_a_crash():
+    store = _Store()
+    issued, _ = _issue(store)
+
+    def _timeout(params=None, timeout=None):
+        raise requests.exceptions.ReadTimeout("read timed out")
+
+    store.get = _timeout
+    errors = ci.revoke(_Incus(store), {"id": "key_1", "engine": "incus", "fingerprint": issued.fingerprint,
+                                       "trust_name": issued.trust_name})
+    assert errors and issued.fingerprint in store.entries
 
 
 def test_revoking_a_key_already_gone_is_not_an_error():
@@ -276,6 +344,8 @@ def test_a_record_without_an_engine_is_lxd():
         def __getattr__(self, key):
             if key == "delete":
                 return lambda timeout=None: calls.append(self.path)
+            if key == "get":
+                return lambda timeout=None: _Response(200, {"metadata": {"identities": {"tls": ["id-1"]}}})
             return _Node(f"{self.path}/{key}")
 
     client = type("c", (), {"api": _Node("")})()
@@ -303,3 +373,187 @@ def test_a_new_key_is_valid_on_a_member_whose_clock_is_a_little_behind():
     cert_pem, _key, _fp = REAL_GENERATE_CERTIFICATE("ci@orcastra", 30)
     not_before = x509.load_pem_x509_certificate(cert_pem).not_valid_before_utc.replace(tzinfo=None)
     assert not_before <= datetime.utcnow() - timedelta(minutes=4)
+
+
+async def test_a_key_the_cluster_did_not_revoke_keeps_its_record(monkeypatch):
+    """Before this, delete_key removed the Vault record whatever the cluster answered, so a renewed
+    certificate nobody could find stayed trusted with nothing left to retry from (lab, 2026-11-08)."""
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from app.core import org_scope
+    from app.core.auth import AuthenticatedUser
+    from app.routers import my_keys
+
+    store = _Store()
+    issued, _ = _issue(store)
+    entry = store.entries.pop(issued.fingerprint)
+    for fp in ("c" * 64, "d" * 64):  # two entries answering to one name: never guessed between
+        store.entries[fp] = {**entry, "fingerprint": fp}
+    record = {"id": "key_1", "node": "incus-lab", "engine": "incus", "fingerprint": issued.fingerprint,
+              "trust_name": issued.trust_name, "project": "tenant-web", "auth_level": "standard",
+              "owner_email": "p@example.test"}
+    deleted: list = []
+    vault = SimpleNamespace(vault_read=lambda path: record, vault_delete=lambda path: deleted.append(path))
+    monkeypatch.setattr(my_keys, "get_vault_keys_client", lambda: vault)
+    service = SimpleNamespace(connection_manager=SimpleNamespace(get_client=lambda node: _Incus(store)))
+    user = AuthenticatedUser(user_id="role_partner:p@example.test", email="p@example.test", groups=["role_partner"])
+    token = org_scope._allowed_clusters_var.set({"incus-lab"})
+    try:
+        with pytest.raises(HTTPException) as caught:
+            await my_keys.delete_key("key_1", lxd_service=service, _=None, _rbac=user, db=None)
+    finally:
+        org_scope._allowed_clusters_var.reset(token)
+    assert caught.value.status_code == 502 and caught.value.detail["error"] == "key_not_revoked"
+    assert deleted == [] and len(store.entries) == 2
+
+
+async def _delete(monkeypatch, store, service):
+    """delete_key against a fake Vault record for key_1 on incus-lab; returns (outcome, vault deletes)."""
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from app.core import org_scope
+    from app.core.auth import AuthenticatedUser
+    from app.routers import my_keys
+
+    record = {"id": "key_1", "node": "incus-lab", "engine": "incus", "fingerprint": next(iter(store.entries), FP),
+              "trust_name": ci.incus_trust_name("key_1"), "project": "tenant-web", "auth_level": "standard",
+              "owner_email": "p@example.test"}
+    deleted: list = []
+    vault = SimpleNamespace(vault_read=lambda path: record, vault_delete=lambda path: deleted.append(path))
+    monkeypatch.setattr(my_keys, "get_vault_keys_client", lambda: vault)
+
+    async def _noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(my_keys.my_keys_registry, "record_deleted", _noop)
+    monkeypatch.setattr(my_keys, "get_cache_manager", lambda: SimpleNamespace(invalidate_resource_cache=lambda *a: None))
+    user = AuthenticatedUser(user_id="role_partner:p@example.test", email="p@example.test", groups=["role_partner"])
+    token = org_scope._allowed_clusters_var.set({"incus-lab"})
+    try:
+        return await my_keys.delete_key("key_1", lxd_service=service, _=None, _rbac=user, db=None), deleted
+    except HTTPException as refusal:
+        return refusal, deleted
+    finally:
+        org_scope._allowed_clusters_var.reset(token)
+
+
+def _service(*, pooled=None, connects_to=None, registered=("incus-lab",)):
+    from types import SimpleNamespace
+
+    pool = {} if pooled is None else {"incus-lab": pooled}
+
+    def _ensure(node, **_kw):
+        if connects_to is None:
+            return False
+        pool[node] = connects_to
+        return True
+
+    return SimpleNamespace(
+        connection_manager=SimpleNamespace(get_client=lambda node, **_kw: pool.get(node)),
+        ensure_connection=_ensure,
+        get_node_names=lambda: list(registered),
+    )
+
+
+async def test_a_worker_with_no_pooled_client_still_revokes_on_delete(monkeypatch):
+    """Security review 2026-11-08: delete used the memory-only get_client, so on a worker that had
+    never connected to the cluster it skipped the revoke, deleted the record and answered success."""
+    store = _Store()
+    _issue(store)
+    outcome, deleted = await _delete(monkeypatch, store, _service(connects_to=_Incus(store)))
+    assert outcome["success"] is True and store.entries == {} and deleted
+
+
+async def test_a_registered_cluster_that_does_not_answer_keeps_the_key(monkeypatch):
+    store = _Store()
+    _issue(store)
+    outcome, deleted = await _delete(monkeypatch, store, _service())
+    assert outcome.status_code == 503 and outcome.detail["error"] == "cluster_unreachable"
+    assert deleted == [] and len(store.entries) == 1
+
+
+async def test_a_key_on_a_cluster_no_longer_registered_can_still_be_deleted(monkeypatch):
+    """Nothing here can reach that cluster again, so the record would otherwise stay forever."""
+    store = _Store()
+    _issue(store)
+    outcome, deleted = await _delete(monkeypatch, store, _service(registered=()))
+    assert outcome["success"] is True and deleted
+
+
+async def test_a_revoke_that_raises_keeps_the_key(monkeypatch):
+    store = _Store()
+    _issue(store)
+
+    def _boom(client, record):
+        raise RuntimeError("socket reset")
+
+    monkeypatch.setattr(ci, "revoke", _boom)
+    outcome, deleted = await _delete(monkeypatch, store, _service(pooled=_Incus(store)))
+    assert outcome.status_code == 502 and outcome.detail["error"] == "key_not_revoked" and deleted == []
+
+
+def test_two_keys_made_in_one_second_with_one_name_get_different_ids():
+    """Security review 2026-11-08: the id was the second and the name, so the second create
+    overwrote the first's Vault record and, on Incus, shared its trust name."""
+    from app.routers.my_keys import _new_key_id
+
+    first, second = _new_key_id("CI deploy"), _new_key_id("CI deploy")
+    assert first != second and ci.incus_trust_name(first) != ci.incus_trust_name(second)
+    assert first.startswith("key_") and first.endswith("_ci_deploy")
+    assert "/" not in _new_key_id("a/../b") and ".." not in _new_key_id("a/../b")
+
+
+class _LxdAuth:
+    """/1.0/auth of one fake LXD daemon: identities by id and groups with their tls members."""
+
+    def __init__(self, identities: Dict[str, Dict[str, Any]], groups: Dict[str, List[str]], *, group_read: Optional[Exception] = None):
+        self.identities_by_id = identities
+        self.groups_by_name = groups
+        self.group_read = group_read
+        auth = self
+
+        class _Node:
+            def __init__(self, table, key=None):
+                self.table, self.key = table, key
+
+            def __getitem__(self, key):
+                return _Node(self.table, key)
+
+            def get(self, timeout=None):
+                if auth.group_read is not None and self.table is auth.groups_by_name:
+                    raise auth.group_read
+                if self.key not in self.table:
+                    _raise(404)
+                members = self.table[self.key]
+                return _Response(200, {"metadata": {"identities": {"tls": list(members)}} if isinstance(members, list) else members})
+
+            def delete(self, timeout=None):
+                if self.key not in self.table:
+                    _raise(404)
+                del self.table[self.key]
+
+        self.api = type("api", (), {"auth": type("auth", (), {
+            "identities": {"tls": _Node(identities)}, "groups": _Node(groups)})()})()
+
+
+def test_an_lxd_identity_that_replaced_its_own_certificate_is_revoked_through_its_group():
+    """Shown on console-lab (LXD 5.21.9, 2026-11-08): a My Keys identity PATCHed its own
+    tls_certificate (200), which changes its id; the revoke deleted the old id (gone), then the
+    group, and left a trusted identity with no groups. The group is the key's own, so its members
+    are the key's identities."""
+    old, renewed = "a" * 64, "e" * 64
+    auth = _LxdAuth({renewed: {"name": "ci@orcastra"}}, {"key_1_group": [renewed]})
+    record = {"id": "key_1", "engine": "lxd", "identity_id": old, "group_name": "key_1_group"}
+    assert ci.revoke(auth, record) == []
+    assert auth.identities_by_id == {} and auth.groups_by_name == {}
+
+
+def test_an_lxd_group_that_cannot_be_read_keeps_the_key():
+    auth = _LxdAuth({"a" * 64: {}}, {"key_1_group": ["a" * 64]},
+                    group_read=requests.exceptions.ReadTimeout("read timed out"))
+    record = {"id": "key_1", "engine": "lxd", "identity_id": "a" * 64, "group_name": "key_1_group"}
+    assert ci.revoke(auth, record) and "key_1_group" in auth.groups_by_name

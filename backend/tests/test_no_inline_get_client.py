@@ -86,7 +86,7 @@ BASELINE = {
     # this tracks. What is left below is genuine: a blocking revalidation on the event loop.
     "app/routers/cluster_registration.py": 0,
     "app/routers/console.py": 0,
-    "app/routers/my_keys.py": 3,
+    "app/routers/my_keys.py": 1,
     "app/services/lxd/lxd_service.py": 0,
     "app/services/tag_service.py": 6,
 }

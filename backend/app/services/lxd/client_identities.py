@@ -17,6 +17,7 @@ an already-blocking route.
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -33,8 +34,9 @@ logger = logging.getLogger(__name__)
 LXD = "lxd"
 INCUS = "incus"
 TIMEOUT = (5, 30)
-# Marks a certificate as the cluster half of one key, so a self-renewed one is still found.
-INCUS_MARKER = "orcastra-key:"
+# Tells a person reading the trust store what the entry is. A holder can rewrite it (and its
+# certificate); the name it cannot (see incus_trust_name), so only the name ties it to a key.
+INCUS_DESCRIPTION = "Orcastra My Keys credential"
 
 # (common_name) -> (cert_pem, key_pem, fingerprint)
 Mint = Callable[[str], Tuple[bytes, bytes, str]]
@@ -57,6 +59,18 @@ class Issued:
     cert_pem: bytes
     key_pem: bytes
     fingerprint: str
+    trust_name: str = ""  # Incus: the trust entry's name, which a holder cannot change
+
+
+def incus_trust_name(key_id: str) -> str:
+    """The name an Incus trust entry carries for one key.
+
+    important: Incus lets a restricted client replace its own certificate and description
+    (certificate_self_renewal) but not its name, restriction or projects (cmd/incusd/certificates.go
+    doCertificateUpdate, v7.6.0), so the name is what still ties a renewed entry to its key. It is a
+    digest because a client can list the trust store and should not read other keys' names there.
+    """
+    return "orcastra-key-" + hashlib.sha256(key_id.encode("utf-8")).hexdigest()[:24]
 
 
 def engine_of(client: Any) -> str:
@@ -105,8 +119,9 @@ def _incus_body(key_id: str, common_name: str, cert_pem: bytes, auth_level: str,
     restricted = auth_level != "admin"
     return {
         "type": "client",
-        "name": common_name,
-        "description": f"{INCUS_MARKER}{key_id}",
+        "name": incus_trust_name(key_id),
+        # note: no key id or name; a restricted client can list every entry's description.
+        "description": INCUS_DESCRIPTION,
         # note: base64 DER, which is what POST takes (CertificatesPost.certificate).
         "certificate": base64.b64encode(der_from_pem(cert_pem.decode("utf-8"))).decode("ascii"),
         "restricted": restricted,
@@ -138,7 +153,7 @@ def _issue_incus(client: Any, *, key_id: str, name: str, auth_level: str, projec
     if problem:
         delete_certificate(client, fingerprint)
         raise IssueFailed(problem)
-    return Issued(INCUS, common_name, fingerprint, "", cert_pem, key_pem, fingerprint)
+    return Issued(INCUS, common_name, fingerprint, "", cert_pem, key_pem, fingerprint, incus_trust_name(key_id))
 
 
 def _post_or_undo(post: Callable[[], Any], undo: Callable[[], Optional[str]]) -> Any:
@@ -185,7 +200,7 @@ def delete_certificate(client: Any, fingerprint: str) -> Optional[str]:
         found = client.api.certificates[safe_segment(fingerprint)].get(timeout=TIMEOUT).json().get("metadata") or {}
     except lxd_exceptions.NotFound:
         return None
-    except lxd_exceptions.LXDAPIException as exc:
+    except Exception as exc:  # noqa: BLE001 - a timeout is an answer too, never "gone"
         return f"lookup failed: {_reason(exc)}"
     if found.get("fingerprint") != fingerprint:
         # The daemon resolves a prefix; anything but the exact entry is not ours to delete.
@@ -194,36 +209,47 @@ def delete_certificate(client: Any, fingerprint: str) -> Optional[str]:
         client.api.certificates[safe_segment(fingerprint)].delete(timeout=TIMEOUT)
     except lxd_exceptions.NotFound:
         return None
-    except lxd_exceptions.LXDAPIException as exc:
+    except Exception as exc:  # noqa: BLE001
         return f"removal failed: {_reason(exc)}"
     return None
 
 
 def _revoke_incus(client: Any, record: Mapping[str, Any]) -> List[str]:
-    fingerprint = str(record.get("fingerprint") or record.get("identity_id") or "")
-    marker = f"{INCUS_MARKER}{record.get('id') or ''}"
-    try:
-        client.api.certificates[safe_segment(fingerprint)].get(timeout=TIMEOUT)
-    except lxd_exceptions.NotFound:
-        # note: a restricted client may replace its own certificate (certificate_self_renewal),
-        # which changes the fingerprint. The description travels with it.
-        renewed = _find_by_marker(client, marker)
-        if renewed is None:
+    # note: read again after each removal. A holder renewing between the read and the delete would
+    # leave an entry under a new fingerprint while the delete answered "already gone".
+    for _ in range(3):
+        entry, problem = _entry_for(client, record)
+        if problem:
+            return [problem]
+        if entry is None:
             return []
-        fingerprint = renewed
-    except lxd_exceptions.LXDAPIException as exc:
-        return [f"Certificate lookup failed: {_reason(exc)}"]
-    error = delete_certificate(client, fingerprint)
-    return [f"Certificate removal: {error}"] if error else []
+        error = delete_certificate(client, str(entry.get("fingerprint") or ""))
+        if error:
+            return [f"Certificate removal: {error}"]
+    return ["the key's trust entry was still present after three removals; remove it by hand"]
 
 
-def _find_by_marker(client: Any, marker: str) -> Optional[str]:
+def _entry_for(client: Any, record: Mapping[str, Any]) -> Tuple[Optional[Mapping[str, Any]], Optional[str]]:
+    """(entry, problem): the one client entry carrying this key's trust name, None when gone.
+
+    important: the name decides, never the stored fingerprint. A holder may replace an entry's
+    certificate with any certificate it holds a key for, including another of its keys' original
+    one, so the stored fingerprint can name someone else's entry (security review, 2026-11-08).
+    Restriction and projects are not compared: a project renamed under a key changes the list,
+    not whose entry it is, and a holder cannot change either.
+    """
+    name = str(record.get("trust_name") or incus_trust_name(str(record.get("id") or "")))
     try:
         entries = client.api.certificates.get(params={"recursion": "1"}, timeout=TIMEOUT).json().get("metadata") or []
-    except lxd_exceptions.LXDAPIException:
-        return None
-    matches = [e.get("fingerprint") for e in entries if isinstance(e, dict) and e.get("description") == marker]
-    return matches[0] if len(matches) == 1 else None
+    except Exception as exc:  # noqa: BLE001 - not knowing is not "gone"
+        return None, f"Could not read the trust store: {_reason(exc)}"
+    matches = [e for e in entries if isinstance(e, dict) and e.get("name") == name and e.get("type") == "client"]
+    if len(matches) > 1:
+        return None, f"more than one trust entry answers to {name}; remove the right one by hand"
+    if matches and (record.get("project") and record.get("auth_level") != "admin"
+                    and list(matches[0].get("projects") or []) != [record.get("project")]):
+        logger.warning("Trust entry %s now lists projects %s", name, matches[0].get("projects"))
+    return (matches[0] if matches else None), None
 
 
 # ── LXD: a TLS identity in a group ──────────────────────────────────────────────────────────────
@@ -304,15 +330,30 @@ def _delete_lxd_identity(client: Any, fingerprint: str) -> Optional[str]:
 
 def _revoke_lxd(client: Any, record: Mapping[str, Any]) -> List[str]:
     errors: List[str] = []
-    # Delete identity first (this automatically removes it from groups)
     identity_id = str(record.get("identity_id") or "")
-    try:
-        client.api.auth.identities["tls"][safe_segment(identity_id)].delete(timeout=TIMEOUT)
-    except lxd_exceptions.NotFound:
-        pass
-    except Exception as exc:  # noqa: BLE001 - reported, the next step still runs
-        errors.append(f"Failed to delete identity {identity_id}: {exc}")
     group_name = str(record.get("group_name") or "")
+    # important: an LXD identity may replace its own certificate (PATCH tls_certificate; shown on
+    # console-lab, LXD 5.21.9, 2026-11-08), which changes its id, so the stored id alone left it
+    # trusted. The group is this key's own, so every identity in it is this key's.
+    members: List[str] = []
+    if group_name:
+        try:
+            group = client.api.auth.groups[safe_segment(group_name)].get(timeout=TIMEOUT).json().get("metadata") or {}
+            members = list((group.get("identities") or {}).get("tls") or [])
+        except lxd_exceptions.NotFound:
+            pass
+        except Exception as exc:  # noqa: BLE001 - not knowing the members is not "removed"
+            return [f"Failed to read group {group_name}: {_reason(exc)}"]
+    # Identities first (deleting one removes it from its groups), then the group.
+    for member in dict.fromkeys([identity_id, *members]):
+        if not member:
+            continue
+        try:
+            client.api.auth.identities["tls"][safe_segment(member)].delete(timeout=TIMEOUT)
+        except lxd_exceptions.NotFound:
+            pass
+        except Exception as exc:  # noqa: BLE001 - reported, the next step still runs
+            errors.append(f"Failed to delete identity {member}: {exc}")
     if group_name:
         try:
             client.api.auth.groups[safe_segment(group_name)].delete(timeout=TIMEOUT)

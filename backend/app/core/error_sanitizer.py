@@ -101,6 +101,8 @@ _STRUCTURED_5XX: Dict[int, Dict[str, str]] = {
         "guest_io_error": "The guest could not complete this operation.",
         "read_only_fs": "This filesystem is read only.",
         "cluster_refused": "The cluster refused this service's certificate.",
+        # routers/my_keys.py: the record stays so the key can be revoked again.
+        "key_not_revoked": "The cluster did not confirm the key was removed, so it was kept.",
         # services/guest_credentials/errors.py: the credentials panel names the step that failed.
         "guest_command_failed": "The guest could not complete this change.",
         "user_create_failed": "The guest could not create this account.",

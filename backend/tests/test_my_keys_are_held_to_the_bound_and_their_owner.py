@@ -42,7 +42,7 @@ def scope():
 
 @pytest.fixture
 def minting(monkeypatch: pytest.MonkeyPatch) -> Dict[str, List[Any]]:
-    """Certificate generation and the LXD client, recorded. The client answers 'not connected'."""
+    """Certificate generation and the LXD client, recorded. The cluster does not answer (503)."""
     seen: Dict[str, List[Any]] = {"certificates": [], "clients": []}
 
     def _certificate(common_name: str, expire_days: int) -> Any:
@@ -51,8 +51,10 @@ def minting(monkeypatch: pytest.MonkeyPatch) -> Dict[str, List[Any]]:
 
     monkeypatch.setattr(my_keys, "generate_certificate", _certificate)
     monkeypatch.setattr(my_keys, "get_vault_keys_client", lambda: object())
-    seen["lxd"] = SimpleNamespace(connection_manager=SimpleNamespace(
-        get_client=lambda node: seen["clients"].append(node)))
+    seen["lxd"] = SimpleNamespace(
+        connection_manager=SimpleNamespace(get_client=lambda node, **_kw: seen["clients"].append(node)),
+        ensure_connection=lambda node, **_kw: False,
+    )
     return seen
 
 
@@ -79,7 +81,7 @@ async def test_a_key_inside_the_bound_is_minted(scope, minting, node, project, l
     db = await _world()
     with pytest.raises(HTTPException) as caught:
         await my_keys.create_key(_mint(node, project, level), minting["lxd"], None, _user(ME), db)
-    assert caught.value.status_code == 404 and "not connected" in caught.value.detail
+    assert caught.value.status_code == 503
     # Past the bound means the cluster was asked for. Key material is minted only once the
     # cluster answers and says which engine it is (services/lxd/client_identities.py).
     assert minting["clients"] == [node] and minting["certificates"] == []
@@ -94,7 +96,7 @@ async def test_an_admin_mints_a_server_key_anywhere(scope, minting) -> None:
     db = await _world()
     with pytest.raises(HTTPException) as caught:
         await my_keys.create_key(_mint(SOLO, "default", "admin"), minting["lxd"], None, _user(ADMIN, "role_admin"), db)
-    assert caught.value.status_code == 404 and minting["clients"] == [SOLO]
+    assert caught.value.status_code == 503 and minting["clients"] == [SOLO]
 
 
 

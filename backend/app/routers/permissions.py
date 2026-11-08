@@ -4,7 +4,7 @@ Provides endpoints for managing LXD identities and groups.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Set
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -996,14 +996,47 @@ async def remove_identity_from_group(
 
 
 # Delete Identity Endpoint
-def _delete_incus_certificate(lxd_service: LXDService, client: Any, host: str, fingerprint: str) -> Dict[str, Any]:
+def _dashboard_fingerprints(cert_manager: Any, host: str) -> Set[str]:
+    """Blocking. The fingerprints of the certificates Vault holds for this dashboard on `host`.
+
+    Current and pending both count. Only "not there" (404) reads as absent: the certificates page
+    reader treats every pending-read failure as no pending certificate, which here would leave a
+    rotation's new certificate unprotected (security review, 2026-11-08).
+    """
+    from app.core.vault_client import VaultClientError
+    from app.services.lxd_certs.inspect import parse_certificate_pem
+
+    held: Set[str] = set()
+    for leaf in ("certs", "pending_certs"):
+        try:
+            pem = (cert_manager.vault.vault_read(f"{cert_manager.clusters_path}/{host}/{leaf}") or {}).get("client.crt")
+        except VaultClientError as exc:
+            if getattr(exc, "status_code", None) == 404:
+                continue
+            raise
+        if pem:
+            fingerprint = parse_certificate_pem(pem).get("fingerprint")
+            if not fingerprint:
+                raise ValueError(f"the {leaf} certificate for {host} could not be read")
+            held.add(fingerprint)
+    return held
+
+
+async def _delete_incus_certificate(lxd_service: LXDService, client: Any, host: str, fingerprint: str) -> Dict[str, Any]:
     """Remove one client certificate from an Incus trust store, never the dashboard's own."""
-    # important: removing the certificate this dashboard presents cuts it off the cluster, and only
-    # shell access to the host could bring it back. Deregistration is the way to do that on purpose.
-    if fingerprint == lxd_service.connection_manager.active_certificate_fingerprint(host):
+    # important: removing a certificate this dashboard holds cuts it off the cluster, and only shell
+    # access to the host could bring it back. Deregistration is the way to do that on purpose. During
+    # a regenerate or a rotation that is more than the one this worker presents: Vault's current and
+    # pending certificates count too, and not being able to read them is not a yes.
+    try:
+        held = await asyncio.to_thread(_dashboard_fingerprints, lxd_service.cert_manager, host)
+    except Exception:  # noqa: BLE001 - logged by the Vault client
+        raise HTTPException(status_code=503, detail="The dashboard's own certificates could not be read; nothing was removed.")
+    own = {lxd_service.connection_manager.active_certificate_fingerprint(host)} | held
+    if fingerprint in own - {None}:
         raise HTTPException(
             status_code=409,
-            detail={"error": "own_certificate", "message": "This is the certificate the dashboard uses on this cluster."},
+            detail={"error": "own_certificate", "message": "This is a certificate the dashboard uses on this cluster."},
         )
     try:
         entry = client.api.certificates[safe_segment(fingerprint)].get(timeout=(5, 30)).json().get('metadata') or {}
@@ -1048,7 +1081,7 @@ async def delete_identity(
     try:
         client = require_client(await client_for(lxd_service, host), host)
         if _known_incus(client):
-            return _delete_incus_certificate(lxd_service, client, host, identity_id)
+            return await _delete_incus_certificate(lxd_service, client, host, identity_id)
         
         auth_type_lower = auth_type.lower()
         
