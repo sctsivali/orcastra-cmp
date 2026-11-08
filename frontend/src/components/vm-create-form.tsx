@@ -124,7 +124,7 @@ function ImageSelector({
             >
               <div className="flex flex-wrap items-center gap-2">
                 <span className="min-w-0 break-all">{getImageLabel(image)}</span>
-                <Badge variant="outline" className="text-xs font-mono">
+                <Badge variant="outline" className="text-xs tabular-nums">
                   {formatBytes(image.size)}
                 </Badge>
               </div>

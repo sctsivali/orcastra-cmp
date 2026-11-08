@@ -64,7 +64,7 @@ export function WorkersCard({ workers, python }: { workers: WorkersInfo | null; 
           <ul className="flex flex-wrap gap-2" aria-label="Worker processes">
             {w.workers.map((p) => (
               <li key={p.pid}>
-                <Badge variant="outline" className="font-mono text-xs">
+                <Badge variant="outline" className="text-xs tabular-nums">
                   PID {p.pid} · {formatBytes(p.memory_rss)} · up {formatUptime(p.uptime_seconds)}
                 </Badge>
               </li>
