@@ -799,7 +799,9 @@ function SessionHistoryTab() {
       {/* Table */}
       <Card>
         <CardHeader className="pb-3 space-y-4">
-          <div className="flex items-center justify-between">
+          {/* flex-wrap, as on the Active card: at 375 px the scope toggle and the refresh stamp
+              pushed the whole page 11 px sideways. */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <CardTitle className="text-lg">Session History</CardTitle>
               <CardDescription>
@@ -808,7 +810,7 @@ function SessionHistoryTab() {
                   : "Your connection history"}
               </CardDescription>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <SessionScopeToggle scope={scope} onChange={changeScope} />
               <RefreshButton
                 iconClassName="h-3.5 w-3.5"
