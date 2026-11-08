@@ -36,6 +36,10 @@ from app.core.api_key_capabilities import guest_access_capability_for
         ("/1.0/instances/web-01/bitmaps", "instance.files"),
         ("/1.0/instances/web-01/sftp", "instance.files"),
         ("/1.0/%2569nstances/web-01/sftp", "instance.files"),
+        # Templates in the metadata area are rendered into the guest as root on create, copy and
+        # start, so writing one is writing a guest file (owner decision 2026-11-08: instance.files).
+        ("/1.0/instances/web-01/metadata", "instance.files"),
+        ("/1.0/instances/web-01/metadata/templates?path=hostname.tpl", "instance.files"),
     ],
 )
 def test_a_guest_reaching_path_costs_its_capability(path, capability):

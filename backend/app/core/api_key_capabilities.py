@@ -273,6 +273,9 @@ _GUEST_ACCESS_PREFIXES: Dict[str, str] = {
     # incremental disk export reads.
     "/sftp": "instance.files",
     "/bitmaps": "instance.files",
+    # The metadata area's templates are rendered into the guest as root on create, copy and start,
+    # so a template written here is a guest file written by another road (owner, 2026-11-08).
+    "/metadata": "instance.files",
     # important: each of these is root in the guest by another road. `nbd` opens the root and
     # dependent disks, `nvram` (Incus) and `uefi-vars` (LXD) rewrite the boot variables, and
     # `port-forward` (Incus) connects to any TCP port inside the instance past every network rule.
