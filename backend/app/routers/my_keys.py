@@ -246,7 +246,10 @@ def generate_certificate(common_name: str, expire_days: int) -> tuple[bytes, byt
         .issuer_name(issuer)
         .public_key(private_key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.utcnow())
+        # note: five minutes back. A cluster member forwards a new client certificate to its
+        # peers, and a peer whose clock is a moment behind refused one valid from this second
+        # ("The provided certificate isn't valid yet", Incus lab 2026-11-08).
+        .not_valid_before(datetime.utcnow() - timedelta(minutes=5))
         .not_valid_after(datetime.utcnow() + timedelta(days=expire_days))
         .add_extension(
             x509.SubjectAlternativeName([x509.DNSName(common_name)]),

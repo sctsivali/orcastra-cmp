@@ -290,3 +290,16 @@ def test_the_engine_is_read_from_the_trusted_client_only():
     untrusted.host_info = {"auth": "untrusted"}
     with pytest.raises(ci.EngineUnknown):
         ci.engine_of(untrusted)
+
+
+def test_a_new_key_is_valid_on_a_member_whose_clock_is_a_little_behind():
+    """Found on the Incus lab: the member that received the key forwarded it to its peers, and one
+    refused it, "failed to notify peer 10.1.1.243:8443: The provided certificate isn't valid yet",
+    because NotBefore was this second and the peer's clock was under a second behind."""
+    from datetime import datetime, timedelta
+
+    from cryptography import x509
+
+    cert_pem, _key, _fp = REAL_GENERATE_CERTIFICATE("ci@orcastra", 30)
+    not_before = x509.load_pem_x509_certificate(cert_pem).not_valid_before_utc.replace(tzinfo=None)
+    assert not_before <= datetime.utcnow() - timedelta(minutes=4)
