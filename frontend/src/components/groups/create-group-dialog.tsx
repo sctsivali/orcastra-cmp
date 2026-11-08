@@ -71,13 +71,16 @@ interface Permission {
 
 type Resource = PermissionResource;
 
+// Stable identity, so the picker's memo does not rebuild on every render.
+const INCUS_HAS_NO_GROUPS = { types: ["incus"], reason: "Incus has no groups; its clients are certificates restricted to projects" };
+
 /** A checkbox list inside a 64-unit scroller. Ten rows fills it without hiding the pager. */
 const RESOURCE_PAGE_SIZE = PANEL_PAGE_SIZE;
 
 export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDialogProps) {
   const { toast } = useToast();
   const createGroupMutation = useCreateGroup();
-  const nodePicker = useNodePickerOptions();
+  const nodePicker = useNodePickerOptions({ disableTypes: INCUS_HAS_NO_GROUPS });
   const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;
 
   // The list is ordered reachable-first, so the first selectable option is a cluster that can

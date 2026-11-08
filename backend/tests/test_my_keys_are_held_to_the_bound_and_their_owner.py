@@ -80,7 +80,9 @@ async def test_a_key_inside_the_bound_is_minted(scope, minting, node, project, l
     with pytest.raises(HTTPException) as caught:
         await my_keys.create_key(_mint(node, project, level), minting["lxd"], None, _user(ME), db)
     assert caught.value.status_code == 404 and "not connected" in caught.value.detail
-    assert minting["certificates"] == ["ci@orcastra"] and minting["clients"] == [node]
+    # Past the bound means the cluster was asked for. Key material is minted only once the
+    # cluster answers and says which engine it is (services/lxd/client_identities.py).
+    assert minting["clients"] == [node] and minting["certificates"] == []
 
 
 async def test_the_project_provisioned_is_the_one_authorized(scope) -> None:

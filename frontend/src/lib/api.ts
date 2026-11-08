@@ -6,6 +6,7 @@ import {
   IPAMListResponse,
   KeyCreateRequest,
   KeyInfo,
+  KeyCapability,
   NetworkACLDetail,
   ProfileCreateRequest,
   ProfileDetail,
@@ -2335,6 +2336,11 @@ export const myKeysAPI = {
     if (search) params.append("search", search);
     if (params.toString()) url += `?${params.toString()}`;
     return fetchRead(url, opts);
+  },
+
+  // Which engine a key on this cluster would be issued on, and whether its build allows one.
+  capability: async (node: string): Promise<KeyCapability> => {
+    return fetchAPI<KeyCapability>(`/my-keys/capability?node=${encodeURIComponent(node)}`);
   },
 
   // The backend answers with the KeyInfo it will list (routers/my_keys.py `response_model`),

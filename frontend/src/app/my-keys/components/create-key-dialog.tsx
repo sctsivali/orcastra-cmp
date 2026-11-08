@@ -2,6 +2,10 @@
 
 import { formatDate } from "@/lib/utils";
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { ShieldAlert } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -43,6 +47,17 @@ export function CreateKeyDialog({
     auth_level: "standard",
     expire_days: 365 });
 
+  // Which engine the key would be issued on, and whether the cluster's build allows one at all.
+  const capability = useQuery({
+    queryKey: ["my-keys", "capability", formData.node],
+    queryFn: () => api.myKeys.capability(formData.node),
+    enabled: !!formData.node,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const engine = capability.data?.engine ?? null;
+  const refused = capability.data ? !capability.data.allowed : false;
+
   // Get unique projects for the selected node
   const filteredProjects = formData.node 
     ? projects.filter((p: any) => !p.host || p.host === formData.node)
@@ -64,6 +79,9 @@ export function CreateKeyDialog({
     if (formData.auth_level === "standard" && !formData.project) {
       return; // Don't submit without project for standard auth
     }
+    if (refused) {
+      return; // The capability notice says why
+    }
     onSubmit(formData);
   };
 
@@ -77,7 +95,7 @@ export function CreateKeyDialog({
       <DialogHeader>
         <DialogTitle>Generate New Key</DialogTitle>
         <DialogDescription>
-          Generate a new TLS identity key for accessing hypervisor resources. The key will
+          Generate a new TLS client key for accessing hypervisor resources. The key will
           be generated with specific permissions for the selected project.
         </DialogDescription>
       </DialogHeader>
@@ -120,6 +138,12 @@ export function CreateKeyDialog({
               updatedAt={nodePicker.statusUpdatedAt}
               onRecheck={nodePicker.refreshNow}
             />
+            {capability.data && !capability.data.allowed && capability.data.reason && (
+              <Alert variant="destructive" data-key-capability="refused">
+                <ShieldAlert className="h-4 w-4" />
+                <AlertDescription>{capability.data.reason}</AlertDescription>
+              </Alert>
+            )}
           </div>
           {formData.auth_level === "standard" && (
             <div className="grid gap-2">
@@ -166,7 +190,17 @@ export function CreateKeyDialog({
               </SelectContent>
             </Select>
             <div className="text-xs text-muted-foreground space-y-1">
-              {formData.auth_level === "standard" ? (
+              {engine === "incus" ? (
+                formData.auth_level === "standard" ? (
+                  <p>
+                    Project certificate: full control of instances, storage and networks in the selected
+                    project, including shell, console and file access. No other projects and no server
+                    configuration.
+                  </p>
+                ) : (
+                  <p>Unrestricted certificate: full administrator of the cluster.</p>
+                )
+              ) : formData.auth_level === "standard" ? (
                 <p>Project-level access: manage instances and resources within the selected project only.</p>
               ) : (
                 <p>Cluster-level access: full administrative control across all projects and the cluster&apos;s server configuration.</p>
@@ -217,7 +251,7 @@ export function CreateKeyDialog({
           </div>
         </div>
         <DialogFooter>
-          <Button type="submit" disabled={isSubmitting}>
+          <Button type="submit" disabled={isSubmitting || refused}>
             {isSubmitting ? "Generating…" : "Generate Key"}
           </Button>
         </DialogFooter>

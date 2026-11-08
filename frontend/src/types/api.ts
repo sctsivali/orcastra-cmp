@@ -1236,12 +1236,19 @@ export interface IdentityInfo {
   auth_type: string;
   groups: string[];
   node: string;
+  /** lxd: an identity; incus: a trust-store certificate (id is its fingerprint, no groups). */
+  engine?: "lxd" | "incus";
+  /** Incus only: whether the certificate is held to `projects`. */
+  restricted?: boolean | null;
+  projects?: string[] | null;
 }
 
 export interface IdentityListResponse extends FanoutReachability {
   total: number;
   identities: IdentityInfo[];
   nodes: string[];
+  /** Engine per answering cluster. */
+  node_engines?: Record<string, "lxd" | "incus">;
 }
 
 // Group Types
@@ -1262,6 +1269,8 @@ export interface GroupListResponse extends FanoutReachability {
   total: number;
   groups: GroupInfo[];
   nodes: string[];
+  /** Clusters not asked because their engine (Incus) has no groups. */
+  unsupported_nodes?: string[];
 }
 
 export interface GroupCreateRequest {
@@ -1562,6 +1571,18 @@ export interface KeyInfo {
   identity_id: string;
   group_name: string;
   fingerprint: string;
+  /** lxd: an identity in a group; incus: a trust-store certificate (identity_id is its fingerprint). */
+  engine?: "lxd" | "incus";
+}
+
+/** GET /my-keys/capability: whether a key can be issued on one cluster, and why not. */
+export interface KeyCapability {
+  node: string;
+  engine: "lxd" | "incus" | null;
+  allowed: boolean;
+  reason?: string | null;
+  version?: string | null;
+  minimum?: string | null;
 }
 
 export interface KeyCreateRequest {

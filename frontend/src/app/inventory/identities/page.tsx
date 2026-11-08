@@ -31,7 +31,8 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Trash2, MoreVertical } from "lucide-react";
+import { Info, Trash2, MoreVertical } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { useIdentities, useDeleteIdentity } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -68,9 +69,9 @@ const IDENTITIES = defineTable<any>()({
       facetSpec: { role: "node", primary: true } },
     {
       field: "groups",
-      label: "Groups",
+      label: "Access",
       sort: (i) => i.groups?.length ?? 0,
-      search: (i) => (i.groups ?? []).join(" "),
+      search: (i) => [...(i.groups ?? []), ...(i.projects ?? [])].join(" "),
       // Multi-value: an identity matches when any of its groups is selected. Behind
       // "Add filter" because group cardinality grows with the fleet.
       facet: (i) => i.groups ?? [],
@@ -84,6 +85,7 @@ function IdentitiesContent() {
   // Nodes the fan-out could not reach. Their rows are absent, so say so rather
   // than let an outage read as an empty list.
   const reach = reachabilityOf(data);
+  const hasIncus = Object.values(((data as any)?.node_engines ?? {}) as Record<string, string>).includes("incus");
   const deleteIdentityMutation = useDeleteIdentity();
   const { isReadOnly } = useReadOnlyMode();
   
@@ -176,6 +178,16 @@ function IdentitiesContent() {
         reasons={reach.reasons}
       />
 
+      {hasIncus && (
+        <Alert data-identities-incus="notice">
+          <Info className="h-4 w-4" />
+          <AlertDescription>
+            Incus clusters have no identities or groups. Their clients are trust-store certificates,
+            and Access shows the projects each one is restricted to.
+          </AlertDescription>
+        </Alert>
+      )}
+
       <Card>
         <CardHeader className="space-y-4">
           <CardTitle>All Identities</CardTitle>
@@ -195,7 +207,7 @@ function IdentitiesContent() {
                     <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                     <SortableTableHead label="Type" field="type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                     <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Groups" field="groups" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Access" field="groups" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                     <TableHead className="text-right"><span className="sr-only">Actions</span></TableHead>
                   </TableRow>
                 </TableHeader>
@@ -216,14 +228,30 @@ function IdentitiesContent() {
                       </TableCell>
                       <TableCell><NodeLink clusterId={identity.node} /></TableCell>
                       <TableCell>
-                        <OverflowCell
-                          items={identity.groups}
-                          preview={3}
-                          noun="groups"
-                          ownerLabel={identity.name}
-                          emptyLabel="No groups"
-                          itemLabel="group"
-                        />
+                        {identity.engine === "incus" ? (
+                          // An Incus client is a certificate, held to its projects or not.
+                          identity.restricted ? (
+                            <OverflowCell
+                              items={identity.projects ?? []}
+                              preview={3}
+                              noun="projects"
+                              ownerLabel={identity.name}
+                              emptyLabel="Restricted, no project"
+                              itemLabel="project"
+                            />
+                          ) : (
+                            "Unrestricted"
+                          )
+                        ) : (
+                          <OverflowCell
+                            items={identity.groups}
+                            preview={3}
+                            noun="groups"
+                            ownerLabel={identity.name}
+                            emptyLabel="No groups"
+                            itemLabel="group"
+                          />
+                        )}
                       </TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>

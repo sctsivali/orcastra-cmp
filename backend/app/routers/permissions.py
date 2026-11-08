@@ -27,6 +27,7 @@ from app.core.cache import get_cache_manager
 from app.services.lxd.lazy_client import client_for
 from pydantic import BaseModel, Field
 from app.core.lxd_path import safe_segment
+from app.services.lxd import client_identities
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,11 @@ class IdentityInfo(BaseModel):
     auth_type: str = Field("", description="Authentication type for API (tls or oidc)")
     groups: List[str] = Field(default_factory=list, description="Groups this identity belongs to")
     node: str = Field("", description="Cluster this identity belongs to")
+    # Incus has no identities or groups: its clients are trust-store certificates, each restricted
+    # to a list of projects or not. On an Incus row `id` is the fingerprint and `groups` is empty.
+    engine: str = Field("lxd", description="lxd (an identity) or incus (a trust-store certificate)")
+    restricted: Optional[bool] = Field(None, description="Incus only: whether the certificate is held to `projects`")
+    projects: Optional[List[str]] = Field(None, description="Incus only: the projects a restricted certificate reaches")
 
 
 class GroupIdentities(BaseModel):
@@ -78,6 +84,7 @@ class IdentityListResponse(FanoutReachability):
     total: int = Field(..., description="Total number of identities")
     identities: List[IdentityInfo] = Field(..., description="List of identities")
     nodes: List[str] = Field(..., description="Clusters included in this response")
+    node_engines: Dict[str, str] = Field(default_factory=dict, description="Engine per answering cluster: lxd or incus")
 
 
 class GroupListResponse(FanoutReachability):
@@ -85,6 +92,9 @@ class GroupListResponse(FanoutReachability):
     total: int = Field(..., description="Total number of groups")
     groups: List[GroupInfo] = Field(..., description="List of groups")
     nodes: List[str] = Field(..., description="Clusters included in this response")
+    unsupported_nodes: List[str] = Field(
+        default_factory=list, description="Clusters not asked because their engine (Incus) has no groups"
+    )
 
 
 class IdentityAddRequest(BaseModel):
@@ -102,6 +112,46 @@ def _get_auth_type_from_type(identity_type: str) -> str:
     return "tls"
 
 
+def _known_incus(client: Any) -> bool:
+    """True only when the cluster has said it is Incus; an unknown engine keeps the LXD path."""
+    try:
+        return client_identities.engine_of(client) == client_identities.INCUS
+    except client_identities.EngineUnknown:
+        return False
+
+
+def _pooled_is_incus(lxd_service: LXDService, node: str) -> bool:
+    """From what the node's pooled client already says, without a round trip."""
+    peek = getattr(lxd_service.connection_manager, "peek_client", None)
+    return _known_incus(peek(node)) if callable(peek) else False
+
+
+def _refuse_groups_on_incus(client: Any, host: str) -> None:
+    if _known_incus(client):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "groups_not_on_incus",
+                "message": f"{host} runs Incus, which has no groups. Its clients are trust-store certificates, "
+                "each restricted to its projects; see Identities.",
+            },
+        )
+
+
+def _certificate_row(entry: Dict[str, Any], node_name: str) -> IdentityInfo:
+    return IdentityInfo(
+        id=entry.get("fingerprint") or "",
+        name=entry.get("name") or "",
+        type=entry.get("type") or "",
+        auth_type="tls",
+        groups=[],
+        node=node_name,
+        engine=client_identities.INCUS,
+        restricted=bool(entry.get("restricted")),
+        projects=list(entry.get("projects") or []),
+    )
+
+
 def _fetch_identities_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[IdentityInfo]:
     """Fetch identities for a single node - runs in thread pool.
 
@@ -115,9 +165,15 @@ def _fetch_identities_for_node(lxd_service: LXDService, node_name: str) -> NodeR
         # raises AttributeError on None, which the generic handler below
         # turns into a partial result and the node is never named.
         raise LXDConnectionError(f"Could not connect to {node_name}")
+    read: NodeRead[IdentityInfo] = NodeRead()
+    if _known_incus(client):
+        entries = client.api.certificates.get(params={'recursion': '1'}, timeout=(5, 30)).json().get('metadata') or []
+        for entry in entries:
+            if isinstance(entry, dict):
+                read.rows.append(_certificate_row(entry, node_name))
+        return read
     # Use recursion=1 to get full details in one call
     response = client.api.auth.identities.get(params={'recursion': '1'}, timeout=(5, 30))
-    read: NodeRead[IdentityInfo] = NodeRead()
     for identity_data in response.json().get('metadata') or []:
         if not isinstance(identity_data, dict):
             continue
@@ -129,7 +185,10 @@ def _fetch_identities_for_node(lxd_service: LXDService, node_name: str) -> NodeR
                 type=identity_type,
                 auth_type=_get_auth_type_from_type(identity_type),
                 groups=identity_data.get('groups') or [],
-                node=node_name
+                node=node_name,
+                engine=client_identities.LXD,
+                restricted=None,
+                projects=None,
             ))
         except Exception as exc:  # noqa: BLE001 - one malformed row is named, not fatal
             read.lost(f"identity {identity_data.get('id', '?')}: {type(exc).__name__}")
@@ -185,10 +244,16 @@ async def list_identities(
         fan = collect(nodes_to_query, results, noun="identities")
         unreachable_nodes.extend(fan.unreachable_nodes)
         all_identities = fan.rows
+        node_engines = {
+            node: (client_identities.INCUS if _pooled_is_incus(lxd_service, node) else client_identities.LXD)
+            for node in nodes_to_query
+            if node not in unreachable_nodes
+        }
         
         return IdentityListResponse(
             total=len(all_identities),
             identities=all_identities,
+            node_engines=node_engines,
             nodes=[node for node in lxd_service.connection_manager.get_node_names() if node not in held],
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
@@ -220,6 +285,12 @@ async def get_identity(
     await verify_whole_cluster_access(host, db, user)
     try:
         client = require_client(await client_for(lxd_service, host), host)
+        if _known_incus(client):
+            entry = client.api.certificates[safe_segment(identity_id)].get(timeout=(5, 30)).json().get('metadata') or {}
+            if entry.get('fingerprint') != identity_id:
+                # The daemon resolves a prefix; only the exact entry is the one asked for.
+                raise HTTPException(status_code=404, detail=f"Identity {identity_id} not found")
+            return _certificate_row(entry, host)
         response = client.api["auth"]["identities"][safe_segment(identity_id)].get()
         
         if response.status_code == 200:
@@ -235,6 +306,9 @@ async def get_identity(
                 auth_type=_get_auth_type_from_type(identity_data.get('type', '')),
                 groups=identity_data.get('groups', []),
                 node=host,
+                engine=client_identities.LXD,
+                restricted=None,
+                projects=None,
             )
         else:
             raise HTTPException(status_code=404, detail=f"Identity {identity_id} not found")
@@ -243,6 +317,10 @@ async def get_identity(
     except Exception as e:
         logger.error(f"Error getting identity {identity_id}: {e}")
         raise HTTPException(status_code=404, detail=f"Identity {identity_id} not found")
+
+
+class _NoGroupsHere(Exception):
+    """The node turned out to be Incus once connected: unsupported, not unreachable."""
 
 
 def _fetch_groups_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[GroupInfo]:
@@ -264,6 +342,8 @@ def _fetch_groups_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[
             # here leaves the caller nothing to label, which is how a dead
             # cluster read as a cluster with nothing.
             raise LXDConnectionError(f"Could not connect to {node_name}")
+    if _known_incus(client):
+        raise _NoGroupsHere(node_name)
 
     # Use recursion=1 to get full details in one call
     response = client.api.auth.groups.get(params={'recursion': '1'}, timeout=(5, 30))
@@ -320,6 +400,10 @@ async def list_groups(
         nodes_to_query = [host] if host else [
             node for node in lxd_service.connection_manager.get_node_names() if node not in held
         ]
+        # note: an Incus node has no /1.0/auth, so asking it answers 404, which read as an
+        # unreachable cluster. It is named apart instead, from what its pooled client already says.
+        unsupported_nodes = [n for n in nodes_to_query if _pooled_is_incus(lxd_service, n)]
+        nodes_to_query = [n for n in nodes_to_query if n not in unsupported_nodes]
         
         # Fetch groups from all nodes in parallel
         loop = asyncio.get_event_loop()
@@ -328,7 +412,13 @@ async def list_groups(
             for node_name in nodes_to_query
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+        # A worker with no pooled client only learns the engine inside the fan-out.
+        found_incus = [n for n, r in zip(nodes_to_query, results) if isinstance(r, _NoGroupsHere)]
+        if found_incus:
+            unsupported_nodes += found_incus
+            kept = [(n, r) for n, r in zip(nodes_to_query, results) if n not in found_incus]
+            nodes_to_query, results = [n for n, _ in kept], [r for _, r in kept]
+
         # important: two different things make a node absent, and both must be named.
         # A node can fail during the fan-out, or never be asked at all, because
         # connection_manager.get_node_names() returns only nodes with a live client while
@@ -336,7 +426,7 @@ async def list_groups(
         # dead cluster silently missing rather than merely empty.
         unreachable_nodes: List[str] = (
             [] if host else [
-                node for node in sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
+                node for node in sorted(set(lxd_service.get_node_names()) - set(nodes_to_query) - set(unsupported_nodes))
                 if node not in held
             ]
         )
@@ -347,6 +437,7 @@ async def list_groups(
         return GroupListResponse(
             total=len(all_groups),
             groups=all_groups,
+            unsupported_nodes=unsupported_nodes,
             nodes=[node for node in lxd_service.connection_manager.get_node_names() if node not in held],
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
@@ -378,6 +469,7 @@ async def get_group(
     await verify_whole_cluster_access(host, db, user)
     try:
         client = require_client(await client_for(lxd_service, host), host)
+        _refuse_groups_on_incus(client, host)
         
         response = client.api.auth.groups[safe_segment(group_name)].get(timeout=(5, 30))
         
@@ -435,6 +527,7 @@ async def create_group(
     await verify_whole_cluster_access(host, db, user)
     try:
         client = require_client(await client_for(lxd_service, host), host)
+        _refuse_groups_on_incus(client, host)
         
         group_data = {
             "name": name,
@@ -525,6 +618,7 @@ async def update_group(
     
     try:
         client = require_client(await client_for(lxd_service, host), host)
+        _refuse_groups_on_incus(client, host)
         
         # Build update data - only include fields that were provided
         update_data = {}
@@ -735,6 +829,7 @@ async def delete_group(
     await verify_whole_cluster_access(host, db, user)
     try:
         client = require_client(await client_for(lxd_service, host), host)
+        _refuse_groups_on_incus(client, host)
         
         response = client.api.auth.groups[safe_segment(group_name)].delete(timeout=(5, 30))
         
@@ -772,6 +867,7 @@ async def add_identity_to_group(
     await verify_whole_cluster_access(host, db, user)
     try:
         client = require_client(await client_for(lxd_service, host), host)
+        _refuse_groups_on_incus(client, host)
         
         # Get current identity data
         auth_type = request.auth_type.lower()
@@ -842,6 +938,7 @@ async def remove_identity_from_group(
     await verify_whole_cluster_access(host, db, user)
     try:
         client = require_client(await client_for(lxd_service, host), host)
+        _refuse_groups_on_incus(client, host)
         
         # Get current identity data
         auth_type_lower = auth_type.lower()
@@ -899,6 +996,37 @@ async def remove_identity_from_group(
 
 
 # Delete Identity Endpoint
+def _delete_incus_certificate(lxd_service: LXDService, client: Any, host: str, fingerprint: str) -> Dict[str, Any]:
+    """Remove one client certificate from an Incus trust store, never the dashboard's own."""
+    # important: removing the certificate this dashboard presents cuts it off the cluster, and only
+    # shell access to the host could bring it back. Deregistration is the way to do that on purpose.
+    if fingerprint == lxd_service.connection_manager.active_certificate_fingerprint(host):
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "own_certificate", "message": "This is the certificate the dashboard uses on this cluster."},
+        )
+    try:
+        entry = client.api.certificates[safe_segment(fingerprint)].get(timeout=(5, 30)).json().get('metadata') or {}
+    except LXDAPIException:
+        raise HTTPException(status_code=404, detail=f"Identity {fingerprint} not found")
+    if entry.get('fingerprint') != fingerprint:
+        raise HTTPException(status_code=404, detail=f"Identity {fingerprint} not found")
+    if entry.get('type') != 'client':
+        # A server entry is a cluster member's own certificate; removing it breaks the cluster.
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "not_a_client", "message": f"{entry.get('name') or fingerprint} is a {entry.get('type')} certificate, not a client."},
+        )
+    error = client_identities.delete_certificate(client, fingerprint)
+    if error:
+        raise HTTPException(status_code=502, detail=f"The cluster did not remove the certificate: {error}")
+    cache = get_cache_manager()
+    cache.delete_pattern("api_responses", "groups:*")
+    cache.delete_pattern("api_responses", "identities:*")
+    logger.info(f"Deleted Incus certificate {fingerprint} from {host}")
+    return {"success": True, "message": f"Identity {fingerprint} deleted successfully"}
+
+
 @identities_router.delete(
     "/{auth_type}/{identity_id}",
     response_model=dict,
@@ -919,6 +1047,8 @@ async def delete_identity(
     await verify_whole_cluster_access(host, db, user)
     try:
         client = require_client(await client_for(lxd_service, host), host)
+        if _known_incus(client):
+            return _delete_incus_certificate(lxd_service, client, host, identity_id)
         
         auth_type_lower = auth_type.lower()
         

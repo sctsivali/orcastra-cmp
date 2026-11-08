@@ -44,7 +44,9 @@ import {
   Trash2, 
   MoreVertical,
   
+  Info,
   Loader2 } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { IdentityInfo, IdentityListResponse } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { useGroups, useDeleteGroup, useIdentities } from "@/hooks/use-lxd";
@@ -111,6 +113,7 @@ function GroupsContent() {
   // Nodes the fan-out could not reach. Their rows are absent, so say so rather
   // than let an outage read as an empty list.
   const reach = reachabilityOf(data);
+  const unsupportedNodes: string[] = (data as any)?.unsupported_nodes ?? [];
   const deleteGroupMutation = useDeleteGroup();
   const { isReadOnly } = useReadOnlyMode();
   
@@ -258,6 +261,16 @@ function GroupsContent() {
         lateNodes={reach.late}
         reasons={reach.reasons}
       />
+
+      {unsupportedNodes.length > 0 && (
+        <Alert data-groups-incus="notice">
+          <Info className="h-4 w-4" />
+          <AlertDescription>
+            {unsupportedNodes.join(", ")} {unsupportedNodes.length === 1 ? "runs" : "run"} Incus, which has no
+            groups. Its clients are trust-store certificates restricted to projects; see Identities.
+          </AlertDescription>
+        </Alert>
+      )}
 
       <Card>
         <CardHeader className="space-y-4">

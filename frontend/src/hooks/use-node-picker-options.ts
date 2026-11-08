@@ -34,6 +34,11 @@ export interface UseNodePickerOptionsParams {
   disableUnreachable?: boolean;
   /** Show the cluster endpoint as the option's second line. Default true. */
   showEndpoint?: boolean;
+  /**
+   * Listed but not selectable for these hypervisor families, with the reason shown, ex;
+   * groups on Incus, which has none. Unlike clusterType the cluster stays visible.
+   */
+  disableTypes?: { types: string[]; reason: string };
 }
 
 export interface UseNodePickerOptionsResult {
@@ -109,6 +114,7 @@ export function useNodePickerOptions(
     disableUntrusted = true,
     disableUnreachable = false,
     showEndpoint = true,
+    disableTypes,
   } = params;
 
   const names = useNodeNames();
@@ -137,6 +143,9 @@ export function useNodePickerOptions(
       const untrusted =
         row?.status === ClusterStatus.NOT_AUTHORIZED ||
         row?.status === ClusterStatus.PENDING;
+      const wrongType = Boolean(
+        disableTypes && row?.node_type && disableTypes.types.includes(row.node_type.toLowerCase()),
+      );
 
       // The label is the display name, which is what an operator named the cluster. The id is
       // what a create request sends and what every table and URL uses, so it has to stay
@@ -156,8 +165,9 @@ export function useNodePickerOptions(
         status: meta
           ? { label: meta.label, tone: meta.tone }
           : undefined,
-        statusReason: row?.reason ?? undefined,
+        statusReason: (wrongType ? disableTypes?.reason : undefined) ?? row?.reason ?? undefined,
         disabled:
+          wrongType ||
           (disableUntrusted && untrusted) ||
           (disableUnreachable && Boolean(meta && !meta.reachable)),
         // kept out of the option so the sort below can read it without a second lookup
@@ -183,6 +193,7 @@ export function useNodePickerOptions(
     disableUnreachable,
     showEndpoint,
     leading,
+    disableTypes,
   ]);
 
   const statusOf = useCallback(

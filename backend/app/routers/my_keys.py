@@ -12,19 +12,19 @@ from pydantic import BaseModel, Field
 import asyncio
 import logging
 import io
-import json
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.serialization import pkcs12
-from pylxd import exceptions as lxd_exceptions
 
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
+    require_client,
 )
+from app.services.lxd.lazy_client import client_for
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, AuthenticatedUser
 from app.core.api_key_expiry import is_expired as key_expired, now_utc
 from app.core.cache import get_cache_manager, get_resource_list_generation
@@ -40,6 +40,9 @@ from app.core.org_scope import (
 from app.services.activity_logger import get_activity_logger
 from app.services import my_keys_registry
 from app.services.lxd_key_bounds import authorize_new_key, refuse_an_unisolated_project
+from app.services.lxd import client_identities
+from pylxd.exceptions import NotFound
+from app.core.engine_baseline import floor_verdict
 from app.core.lxd_path import safe_segment
 from app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,9 +75,20 @@ class KeyInfo(BaseModel):
     created_at: str = Field(..., description="Creation timestamp")
     expires_at: Optional[str] = Field(None, description="Expiration timestamp")
     is_expired: bool = Field(False, description="Whether key is expired")
-    identity_id: str = Field(..., description="LXD identity ID")
-    group_name: str = Field(..., description="LXD group name")
+    identity_id: str = Field(..., description="LXD identity ID, or the certificate fingerprint on Incus")
+    group_name: str = Field(..., description="LXD group name; empty on Incus, which has no groups")
     fingerprint: str = Field("", description="Certificate fingerprint")
+    engine: str = Field("lxd", description="Engine the key was issued on: lxd (identity + group) or incus (certificate)")
+
+
+class KeyCapability(BaseModel):
+    """Whether a key can be issued on one cluster, and why not."""
+    node: str
+    engine: Optional[str] = Field(None, description="lxd or incus; null when the cluster has not said")
+    allowed: bool
+    reason: Optional[str] = None
+    version: Optional[str] = Field(None, description="The build the cluster runs")
+    minimum: Optional[str] = Field(None, description="The first build of its line keys need")
 
 
 class KeyCreateRequest(BaseModel):
@@ -341,6 +355,62 @@ def _authorize_key(vault_client, key_id: str, caller_email: Optional[str]) -> Di
     return metadata
 
 
+def _key_capability(client: Any, node: str) -> KeyCapability:
+    """What issuing a key on this cluster would meet, without issuing anything."""
+    try:
+        engine = client_identities.engine_of(client)
+    except client_identities.EngineUnknown:
+        return KeyCapability(
+            node=node, allowed=False, reason="The cluster has not confirmed its hypervisor type yet. Try again shortly."
+        )
+    verdict = floor_verdict("client_keys", engine, client_identities.server_version(client))
+    if verdict.allowed:
+        return KeyCapability(node=node, engine=engine, allowed=True, version=verdict.seen, minimum=verdict.minimum)
+    # important: the 2026-10-29 Incus advisories let a restricted certificate reach the default
+    # project, so below the baseline a project key would not be held to its project.
+    reason = (
+        f"{verdict.engine} {verdict.seen} predates {verdict.minimum}, the first build that holds a "
+        "project certificate to its project. Upgrade the cluster to issue keys."
+        if verdict.code == "below_floor"
+        else verdict.reason
+    )
+    return KeyCapability(
+        node=node, engine=engine, allowed=False, reason=reason, version=verdict.seen, minimum=verdict.minimum
+    )
+
+
+def _known_incus(client: Any) -> bool:
+    """True only when the cluster has said it is Incus; an unknown engine keeps the LXD path."""
+    try:
+        return client_identities.engine_of(client) == client_identities.INCUS
+    except client_identities.EngineUnknown:
+        return False
+
+
+def _require_project(client: Any, node: str, project: str) -> None:
+    """404 before anything is minted when the key's project does not exist on the cluster.
+
+    Found on the Incus lab: the daemon refused the certificate with "Project not found" and the
+    caller got a 500. Anything but a definite not-found is left to the daemon to judge.
+    """
+    try:
+        client.api.projects[safe_segment(project)].get(timeout=(5, 30))
+    except NotFound:
+        raise HTTPException(status_code=404, detail=f"Project '{project}' does not exist on {node}.")
+    except Exception:  # noqa: BLE001 - not a refusal of ours to make
+        return
+
+
+def _key_engine(client: Any, node: str) -> str:
+    """The engine to issue on, or the refusal: 503 when unknown, 409 below the floor."""
+    capability = _key_capability(client, node)
+    if capability.engine is None:
+        raise HTTPException(status_code=503, detail=capability.reason)
+    if not capability.allowed:
+        raise HTTPException(status_code=409, detail={"error": "below_floor", "message": capability.reason})
+    return capability.engine
+
+
 @router.post(
     "",
     response_model=KeyInfo,
@@ -366,16 +436,12 @@ async def create_key(
     try:
         # Generate unique key ID
         key_id = f"key_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{request.name.lower().replace(' ', '_')[:20]}"
-        
-        # Generate certificate
-        common_name = f"{request.name}@orcastra"
-        cert_pem, key_pem, fingerprint = generate_certificate(common_name, request.expire_days)
-        
+
         # Calculate expiration date
         created_at = datetime.utcnow()
         expires_at = created_at + timedelta(days=request.expire_days)
-        
-        # Connect to LXD node
+
+        # Connect to the cluster
         client = lxd_service.connection_manager.get_client(request.node)
         if client is None:
             raise HTTPException(
@@ -385,216 +451,29 @@ async def create_key(
                     "Check the available clusters."
                 )
             )
-        
+
         if target.isolated_project_required:
-            # important: before the identity exists, so a refusal leaves nothing on the cluster
+            # important: before the credential exists, so a refusal leaves nothing on the cluster
             await asyncio.to_thread(refuse_an_unisolated_project, client, request.node, project)
 
-        # Create TLS identity in LXD
-        # LXD expects certificate in body field for TLS identity creation
-        identity_data = {
-            "name": common_name,
-            "type": "tls",
-            "certificate": cert_pem.decode('utf-8')
-        }
-        
+        engine = _key_engine(client, request.node)
+        if request.auth_level != "admin":
+            _require_project(client, request.node, project)
         try:
-            identity_response = client.api.auth.identities["tls"].post(
-                json=identity_data,
-                timeout=(5, 30)
+            issued = client_identities.issue(
+                client,
+                engine=engine,
+                key_id=key_id,
+                name=request.name,
+                auth_level=request.auth_level,
+                project=project,
+                mint=lambda common_name: generate_certificate(common_name, request.expire_days),
             )
-            logger.info(f"Identity creation response: status={identity_response.status_code}")
-        except lxd_exceptions.Conflict:
-            # Identity with this name already exists, generate a unique name with timestamp
-            common_name = f"{request.name}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}@orcastra"
-            cert_pem, key_pem, fingerprint = generate_certificate(common_name, request.expire_days)
-            identity_data["name"] = common_name
-            identity_data["certificate"] = cert_pem.decode('utf-8')
-            
-            identity_response = client.api.auth.identities["tls"].post(
-                json=identity_data,
-                timeout=(5, 30)
-            )
-            logger.info(f"Identity creation response (retry with unique name): status={identity_response.status_code}")
-        
-        if identity_response.status_code not in [200, 201, 202]:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Could not create identity: HTTP {identity_response.status_code}"
-            )
-        
-        # Extract identity ID from response
-        # LXD returns metadata=null for TLS identity creation, so we need to use alternative methods
-        response_data = identity_response.json() if identity_response.text else {}
-        metadata = response_data.get('metadata') if response_data else None
-        
-        # Try to get ID from metadata if it exists and is not None
-        identity_id = ''
-        if metadata and isinstance(metadata, dict):
-            identity_id = metadata.get('id', '')
-        
-        # If no ID in metadata, try location header
-        if not identity_id:
-            location = identity_response.headers.get('Location', '')
-            if location:
-                # Location format: /1.0/auth/identities/tls/<id>
-                identity_id = location.split('/')[-1]
-        
-        # If still no ID, use common_name as fallback
-        if not identity_id:
-            identity_id = common_name
-        
-        logger.info(f"Created identity with ID: {identity_id}")
-        
-        # Create group name
-        group_name = f"{key_id}_group"
-        
-        # Define permissions based on auth level
-        # Standard: project-level access (restricted to specific project)
-        # Admin: server-level access (global access to all projects and resources)
-        
-        if request.auth_level == "admin":
-            # Admin gets server-level access with admin entitlement
-            permissions = [
-                {
-                    "entity_type": "server",
-                    "url": "/1.0",
-                    "entitlement": "admin"
-                }
-            ]
-            description = f"Admin group for {request.name} with full server access"
-            logger.info("Creating admin permissions: server-level admin access")
-        else:
-            # Standard gets project-level access with operator entitlement
-            project_url = f"/1.0/projects/{project}"
-            permissions = [
-                {
-                    "entity_type": "project",
-                    "url": project_url,
-                    "entitlement": "operator"
-                }
-            ]
-            description = f"Group for {request.name} with operator access to project {project}"
-            logger.info(f"Creating standard permissions for project: {project}, URL: {project_url}")
-        
-        logger.info(f"Permissions to be created: {permissions}")
-        
-        # Create group in LXD
-        group_data = {
-            "name": group_name,
-            "description": description,
-            "permissions": permissions
-        }
-        
-        logger.info(f"Group data to send to LXD: {json.dumps(group_data, indent=2)}")
-        
-        group_response = client.api.auth.groups.post(
-            json=group_data,
-            timeout=(5, 30)
-        )
-        
-        if group_response.status_code not in [200, 201, 202]:
-            # Rollback: delete identity
-            try:
-                client.api.auth.identities["tls"][safe_segment(identity_id)].delete(timeout=(5, 30))
-            except:
-                pass
-            raise HTTPException(
-                status_code=500,
-                detail=f"Could not create group: {group_response.text}"
-            )
-        
-        logger.info(f"Group created successfully: {group_name}")
-        
-        # Verify group was created with permissions
-        try:
-            verify_response = client.api.auth.groups[safe_segment(group_name)].get(timeout=(5, 30))
-            if verify_response.status_code == 200:
-                verify_data = verify_response.json().get('metadata', {})
-                logger.info(f"Group verification - permissions count: {len(verify_data.get('permissions', []))}")
-            else:
-                logger.warning(f"Failed to verify group creation: status={verify_response.status_code}")
-        except Exception as e:
-            logger.warning(f"Failed to verify group: {e}")
-        
-        # Add identity to group
-        try:
-            group_get_response = client.api.auth.groups[safe_segment(group_name)].get(timeout=(5, 30))
-            if group_get_response.status_code != 200:
-                raise Exception(f"Could not get group: status={group_get_response.status_code}")
-            
-            group_info = group_get_response.json().get('metadata', {})
-            current_identities = group_info.get('identities', {})
-            
-            logger.info(f"Current identities in group before update: {current_identities}")
-            
-            # Add TLS identity
-            if 'tls' not in current_identities:
-                current_identities['tls'] = []
-            if identity_id not in current_identities['tls']:
-                current_identities['tls'].append(identity_id)
-            
-            logger.info("Trying alternative approach: PATCH identity to add group membership")
-            
-            # Alternative approach: Instead of adding identity to group,
-            # add group to identity's groups list
-            # This is the recommended way in LXD API
-            
-            # Get current identity info
-            identity_response = client.api.auth.identities["tls"][safe_segment(identity_id)].get(timeout=(5, 30))
-            if identity_response.status_code != 200:
-                raise Exception(f"Could not get identity: status={identity_response.status_code}")
-            
-            identity_info = identity_response.json().get('metadata', {})
-            current_groups = identity_info.get('groups', [])
-            
-            logger.info(f"Current groups for identity {identity_id}: {current_groups}")
-            
-            # Add our group to identity's groups list
-            if group_name not in current_groups:
-                current_groups.append(group_name)
-            
-            logger.info(f"Updating identity with groups: {current_groups}")
-            
-            # PATCH identity with updated groups list
-            identity_update_data = {"groups": current_groups}
-            identity_patch_response = client.api.auth.identities["tls"][safe_segment(identity_id)].patch(
-                json=identity_update_data,
-                timeout=(5, 30)
-            )
-            
-            if identity_patch_response.status_code not in [200, 201, 202]:
-                raise Exception(f"Identity PATCH failed: HTTP {identity_patch_response.status_code}")
-            
-            logger.info(f"Successfully added group {group_name} to identity {identity_id}")
-            
-            # Verify identity was added
-            verify_response = client.api.auth.groups[safe_segment(group_name)].get(timeout=(5, 30))
-            if verify_response.status_code == 200:
-                verify_data = verify_response.json().get('metadata', {})
-                final_identities = verify_data.get('identities', {})
-                final_permissions = verify_data.get('permissions', [])
-                logger.info(f"Final verification - identities: {final_identities}, permissions count: {len(final_permissions)}")
-                
-                # Check if identity is actually in the group
-                if 'tls' not in final_identities or identity_id not in final_identities.get('tls', []):
-                    raise Exception("Identity verification failed: identity not found in group after PATCH")
-                if len(final_permissions) == 0:
-                    raise Exception("Permission verification failed: no permissions in group after creation")
-            
-        except Exception as e:
-            logger.error(f"Failed to add identity to group: {e}")
-            # Rollback: delete group and identity
-            try:
-                client.api.auth.groups[safe_segment(group_name)].delete(timeout=(5, 30))
-                client.api.auth.identities["tls"][safe_segment(identity_id)].delete(timeout=(5, 30))
-            except:
-                pass
-            raise HTTPException(
-                status_code=500,
-                detail=f"Could not configure group membership: {str(e)}"
-            )
-        
+        except client_identities.IssueFailed as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        identity_id, group_name, fingerprint = issued.identity_id, issued.group_name, issued.fingerprint
+        logger.info(f"Created {engine} credential {identity_id} for key {key_id}")
+
         # Prepare metadata
         key_metadata = {
             "id": key_id,
@@ -604,6 +483,8 @@ async def create_key(
             "auth_level": request.auth_level,
             "created_at": created_at.isoformat(),
             "expires_at": expires_at.isoformat(),
+            # On Incus identity_id is the certificate fingerprint and there is no group.
+            "engine": engine,
             "identity_id": identity_id,
             "group_name": group_name,
             "fingerprint": fingerprint,
@@ -614,9 +495,17 @@ async def create_key(
             # filter falls back to cluster scope for records issued before it.
             "owner_email": _rbac.email,
         }
-        
+
         # Save to Vault (secure storage)
-        save_key_to_vault(vault_client, key_id, cert_pem, key_pem, key_metadata)
+        try:
+            save_key_to_vault(vault_client, key_id, issued.cert_pem, issued.key_pem, key_metadata)
+        except Exception:
+            # important: the private key exists only in this request. Without the record nobody
+            # can download or revoke the credential, so it must not outlive the failure.
+            leftovers = client_identities.revoke(client, key_metadata)
+            if leftovers:
+                logger.error(f"Key {key_id} not stored and its cluster credential not removed: {leftovers}")
+            raise
         
         # Log activity for audit trail (HIGH severity - SSH key creation)
         activity_logger.log_activity(
@@ -652,6 +541,7 @@ async def create_key(
             identity_id=identity_id,
             group_name=group_name,
             fingerprint=fingerprint,
+            engine=engine,
         )
         
     except HTTPException as refusal:
@@ -679,6 +569,21 @@ def _audit_create_failure(request: KeyCreateRequest, code: str, message: str) ->
         error_message=message,
         details={"name": request.name, "auth_level": request.auth_level},
     )
+
+
+@router.get(
+    "/capability",
+    response_model=KeyCapability,
+    summary="Whether a key can be issued on a cluster",
+    description="The engine a key on this cluster would be issued on, and whether its build allows one.",
+)
+async def key_capability(
+    node: str = Query(..., description="Target cluster"),
+    lxd_service: LXDService = Depends(get_lxd_service),
+):
+    verify_cluster_access(node)
+    client = require_client(await client_for(lxd_service, node), node)
+    return _key_capability(client, node)
 
 
 @router.get(
@@ -879,7 +784,7 @@ def _audit_download(
     "/{key_id}",
     response_model=dict,
     summary="Delete key",
-    description="Delete a key and its associated identity and group from Vault and LXD.",
+    description="Delete a key and its cluster credential: the identity and group on LXD, the certificate on Incus.",
 )
 async def delete_key(
     key_id: str,
@@ -906,50 +811,14 @@ async def delete_key(
             client = lxd_service.connection_manager.get_client(key_meta["node"])
             
             if client is None:
-                logger.warning(f"Node '{key_meta['node']}' not connected, skipping LXD cleanup")
+                logger.warning(f"Node '{key_meta['node']}' not connected, skipping cluster cleanup")
             else:
-                # Delete identity first (this automatically removes it from groups)
-                try:
-                    identity_id = key_meta["identity_id"]
-                    logger.info(f"Deleting identity: {identity_id}")
-                    
-                    identity_response = client.api.auth.identities["tls"][safe_segment(identity_id)].delete(timeout=(5, 30))
-                    
-                    if identity_response.status_code not in [200, 202, 204]:
-                        cleanup_errors.append(f"Identity deletion returned status {identity_response.status_code}")
-                        logger.warning(f"Identity deletion warning: HTTP {identity_response.status_code}")
-                    else:
-                        logger.info(f"Successfully deleted identity: {identity_id}")
-                        
-                except Exception as e:
-                    error_msg = f"Failed to delete identity {key_meta['identity_id']}: {str(e)}"
-                    cleanup_errors.append(error_msg)
-                    logger.error(error_msg)
-                
-                # Delete group
-                try:
-                    group_name = key_meta["group_name"]
-                    logger.info(f"Deleting group: {group_name}")
-                    
-                    group_response = client.api.auth.groups[safe_segment(group_name)].delete(timeout=(5, 30))
-                    
-                    if group_response.status_code not in [200, 202, 204]:
-                        cleanup_errors.append(f"Group deletion returned status {group_response.status_code}")
-                        logger.warning(f"Group deletion warning: {group_response.text}")
-                    else:
-                        logger.info(f"Successfully deleted group: {group_name}")
-                        
-                except Exception as e:
-                    error_msg = f"Failed to delete group {key_meta['group_name']}: {str(e)}"
-                    cleanup_errors.append(error_msg)
-                    logger.error(error_msg)
-                
-                # Log summary
+                # The identity and its group on LXD, the certificate on Incus (by exact fingerprint).
+                cleanup_errors.extend(client_identities.revoke(client, key_meta))
                 if cleanup_errors:
-                    logger.warning(f"LXD cleanup completed with {len(cleanup_errors)} errors: {cleanup_errors}")
+                    logger.warning(f"Cluster cleanup completed with {len(cleanup_errors)} errors: {cleanup_errors}")
                 else:
-                    logger.info("LXD cleanup completed successfully (identity & group deleted)")
-                    
+                    logger.info(f"Cluster cleanup completed for key {key_id}")
         except Exception as e:
             error_msg = f"Failed to connect to LXD for cleanup: {str(e)}"
             cleanup_errors.append(error_msg)
@@ -1050,6 +919,9 @@ async def cleanup_orphaned_groups(
             try:
                 client = lxd_service.connection_manager.get_client(node)
                 if client is None:
+                    continue
+                if _known_incus(client):
+                    # Incus has no groups: a key there is one certificate, removed with the key.
                     continue
                 
                 # Get all groups from LXD
