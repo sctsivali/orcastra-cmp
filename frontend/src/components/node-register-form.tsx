@@ -209,8 +209,8 @@ export function NodeRegisterForm() {
         certificate_generated: response.certificate_generated,
         certificate: response.certificate,
         cluster_id: data.cluster_id,
-        // note: the pre-trust probe names Incus only (its dev_incus extensions are public) and
-        // answers null for the LXD family, so the lxc default below stays right until check-auth.
+        // note: the pre-trust probe answers null unless the host names itself (older Incus did,
+        // through public dev_incus extensions); the form then offers both commands.
         cluster_type: response.cluster_type ?? undefined,
       });
 
@@ -301,26 +301,49 @@ export function NodeRegisterForm() {
               <Alert>
                 <Terminal className="h-4 w-4" />
                 <AlertDescription className="space-y-3">
-                  <p className="text-sm font-medium">Run this command on the cluster (any one member is enough):</p>
-                  
-                  {/* Dynamic CLI Command based on detected type */}
                   {(() => {
-                    const isIncus = isIncusType(registrationResult.cluster_type);
-                    const cliTool = hypervisorCli(registrationResult.cluster_type);
-                    const trustSubCmd = isIncus ? "add-certificate" : "add";
-                    const typeLabel = registrationResult.cluster_type ? formatHypervisorType(registrationResult.cluster_type) : null; // only show badge when type is detected
-                    
+                    const command = (type: string | null | undefined) =>
+                      `cat <<EOF | ${hypervisorCli(type)} config trust ${isIncusType(type) ? "add-certificate" : "add"} - --name "${identityName}"\n${registrationResult.certificate}\nEOF`;
+                    const identity = <>Identity: <span className="font-mono">{identityName}</span></>;
+                    const known = registrationResult.cluster_type;
+                    if (known) {
+                      return (
+                        <>
+                          <p className="text-sm font-medium">Run this command on the cluster (any one member is enough):</p>
+                          <CodeBlock
+                            value={command(known)}
+                            label={
+                              <>
+                                <Badge variant={isIncusType(known) ? "secondary" : "outline"} className="mr-2">
+                                  {formatHypervisorType(known)}
+                                </Badge>
+                                {identity}
+                              </>
+                            }
+                            copyLabel="CLI command"
+                          />
+                        </>
+                      );
+                    }
+                    // note: before trust the type is usually unknown. Incus 6.0.7 and 7.6 tell an
+                    // untrusted caller nothing about themselves, so both commands are offered and
+                    // Check Authentication confirms which one it was.
                     return (
-                      <CodeBlock
-                        value={`cat <<EOF | ${cliTool} config trust ${trustSubCmd} - --name "${identityName}"\n${registrationResult.certificate}\nEOF`}
-                        label={
-                          <>
-                            {typeLabel && <Badge variant={isIncus ? "secondary" : "outline"} className="mr-2">{typeLabel}</Badge>}
-                            Identity: <span className="font-mono">{identityName}</span>
-                          </>
-                        }
-                        copyLabel="CLI command"
-                      />
+                      <>
+                        <p className="text-sm font-medium">
+                          Run the command for your hypervisor on the cluster (any one member is enough):
+                        </p>
+                        <CodeBlock
+                          value={command("LXD")}
+                          label={<><Badge variant="outline" className="mr-2">LXD or MicroCloud</Badge>{identity}</>}
+                          copyLabel="LXD CLI command"
+                        />
+                        <CodeBlock
+                          value={command("Incus")}
+                          label={<><Badge variant="secondary" className="mr-2">Incus</Badge>{identity}</>}
+                          copyLabel="Incus CLI command"
+                        />
+                      </>
                     );
                   })()}
                 </AlertDescription>

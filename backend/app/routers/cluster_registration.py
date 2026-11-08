@@ -501,10 +501,14 @@ async def register_cluster(
             certificate_pem = cert_data.get("cert")
             
             # Build CLI-friendly message based on detected type
-            cli_tool = get_cli_command_prefix(cluster_type)
+            # note: Incus 6.0.7 and 7.6 send an untrusted caller no api_extensions at all, so before
+            # trust the type is usually unknown for every engine, and the form shows both commands.
             register_message = (
-                f"Certificate generated! Run the {cli_tool} command to add trust. "
-                f"Detected hypervisor: {cluster_type or 'LXD family, confirmed after trust'}."
+                f"Certificate generated! Run the {get_cli_command_prefix(cluster_type)} command to add trust. "
+                f"Detected hypervisor: {cluster_type}."
+                if cluster_type
+                else "Certificate generated! Run the trust command for your hypervisor (lxc on LXD or "
+                "MicroCloud, incus on Incus). The type is confirmed once the certificate is trusted."
             )
             if org_bind_warning:
                 register_message = f"{register_message} {org_bind_warning}"
