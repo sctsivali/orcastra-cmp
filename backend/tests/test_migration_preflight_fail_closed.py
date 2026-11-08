@@ -610,3 +610,26 @@ def test_restricted_incus_pull_is_blocked_when_target_will_be_created(
     result = _inspect(source, target, intent="copy")
 
     assert "restricted_incus_pull_target_unsupported" in _codes(result)
+
+
+@pytest.mark.parametrize("source_engine,target_engine", [("lxd", "incus"), ("incus", "lxd")])
+def test_a_migration_between_lxd_and_incus_is_refused_with_its_reason(
+    monkeypatch: pytest.MonkeyPatch, source_engine: str, target_engine: str
+) -> None:
+    """The two engines' migration protocols are not interchangeable, so a cross-engine move or copy
+    is blocked at preflight with a code the plan names, in both directions (owner, 2026-11-07)."""
+    source, target = _patch_inspect(monkeypatch)
+    monkeypatch.setattr(
+        preflight,
+        "daemon_identity",
+        lambda client: {
+            "engine": source_engine if client is source else target_engine,
+            "version": "7.6" if (client is source and source_engine == "incus") or (client is target and target_engine == "incus") else "5.21.8",
+            "extensions": ["container_copy_project"],
+            "architectures": ["x86_64"],
+        },
+    )
+
+    result = _inspect(source, target, intent="copy")
+
+    assert "cross_engine_not_supported" in _codes(result)
