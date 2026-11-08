@@ -528,6 +528,19 @@ async def lifespan(app: FastAPI):
     except Exception as term_err:
         logger.error("Could not start the tenant term sweeper: %s", term_err, exc_info=True)
 
+    # My Keys expiry: one worker (Redis lease) revokes a key's cluster credential once its expiry
+    # passes. A client can replace its own certificate, so the certificate's date alone binds nothing.
+    try:
+        from app.core.database import async_session_maker
+        from app.routers.my_keys import get_vault_keys_client
+        from app.services.lxd_service import get_lxd_service as _lxd_service
+        from app.services.my_keys_expiry import start_my_keys_expiry
+
+        start_my_keys_expiry(async_session_maker, _lxd_service, get_vault_keys_client)
+        logger.info("My Keys expiry sweeper started")
+    except Exception as expiry_err:
+        logger.error("Could not start the My Keys expiry sweeper: %s", expiry_err, exc_info=True)
+
     # Tenant rule audit: one worker (Redis lease) reports access rules naming a project or instance
     # that is gone. Report only; a partner removes a rule from Tenant Access.
     try:
@@ -789,6 +802,11 @@ async def lifespan(app: FastAPI):
     try:
         from app.services.tenant_term_sweeper import stop_tenant_term_sweeper
         await stop_tenant_term_sweeper()
+    except Exception:
+        pass
+    try:
+        from app.services.my_keys_expiry import stop_my_keys_expiry
+        await stop_my_keys_expiry()
     except Exception:
         pass
     try:
