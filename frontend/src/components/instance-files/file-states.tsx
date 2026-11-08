@@ -30,7 +30,7 @@ export function FileStates({ target, error, path, onRetry, onUp, onRequestAccess
           onRetry={onRetry}
           onOpenConsoleTab={onOpenConsoleTab}
           windowsTitle="Files are not available for this Windows guest"
-          windowsDescription="File access goes through a guest agent, and LXD supports that agent only on Linux with systemd. Use the Graphics tab to work in the guest."
+          windowsDescription="File access goes through a guest agent, and the hypervisor supports that agent only on Linux with systemd. Use the Graphics tab to work in the guest."
           agentDescription="File access inside a virtual machine goes through the guest agent, and it is not answering. If this VM has just started, give it a minute."
         />
       );
@@ -55,6 +55,15 @@ export function FileStates({ target, error, path, onRetry, onUp, onRequestAccess
       return <EmptyState icon={Clock} title="The guest did not answer" description="It may be busy or still starting. Nothing changed." action={retry} />;
     case "migration_fenced":
       return <EmptyState icon={HardDrive} title="This instance is being migrated" description="Files are unavailable until the move finishes." action={retry} />;
+    case "unsupported_server":
+      // The backend names the running build and the first one with the fix (core/engine_baseline.py).
+      return (
+        <EmptyState
+          icon={ShieldAlert}
+          title="This hypervisor version cannot offer file access"
+          description={error instanceof Error && error.message ? error.message : "The cluster runs a build without the fixes file access needs. Upgrade the hypervisor."}
+        />
+      );
     case "feature_disabled":
       return <EmptyState icon={Ban} title="File access is turned off" description="This deployment does not offer file access." />;
     case "break_glass_required":

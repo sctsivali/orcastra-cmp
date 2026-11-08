@@ -191,9 +191,9 @@ def build_report(stdout: str, *, agent: bool) -> ProbeReport:
             ready=False,
             agent=False,
             reason=(
-                "this guest reports no LXD agent, so neither commands nor files can reach inside "
-                "it. A virtual machine needs lxd-agent running; it is present in the official "
-                "images and absent from many custom ones."
+                "this guest reports no guest agent, so neither commands nor files can reach inside "
+                "it. A virtual machine needs the agent running (lxd-agent on LXD, incus-agent on "
+                "Incus); it is present in the official images and absent from many custom ones."
             ),
         )
 

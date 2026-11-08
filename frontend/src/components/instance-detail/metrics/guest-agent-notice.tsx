@@ -19,7 +19,7 @@ export function GuestAgentNotice({ status }: { status: InstanceGuestAgentStatus 
       <AlertDescription>
         {status === "disabled"
           ? "security.agent.metrics is false on this instance, so the cluster does not ask the guest for vCPU, memory or processes."
-          : "The cluster cannot read vCPU, memory or processes from inside this virtual machine. Check that lxd-agent is running in the guest."}{" "}
+          : "The cluster cannot read vCPU, memory or processes from inside this virtual machine. Check that the guest agent (lxd-agent on LXD, incus-agent on Incus) is running in the guest."}{" "}
         Network and disk figures still come from the host.
       </AlertDescription>
     </Alert>

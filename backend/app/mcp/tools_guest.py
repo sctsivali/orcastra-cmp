@@ -22,7 +22,7 @@ from .limits import request_body_limit
 __all__ = ["register"]
 
 Cluster = Annotated[str, Field(description="Target cluster id.")]
-Project = Annotated[str, Field(default="default", description="LXD project.")]
+Project = Annotated[str, Field(default="default", description="Project on the cluster (LXD and Incus alike).")]
 InstanceName = Annotated[str, Field(description="Instance name.")]
 
 # Untrusted-content framing, prepended to every description on this module. Command output and

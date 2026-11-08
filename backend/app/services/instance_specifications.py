@@ -284,8 +284,8 @@ def read_specification_sync(
         root_reason = "The instance has no effective root disk."
     elif pending_quota_change:
         root_reason = (
-            "Incus has a deferred root-disk quota change pending. Resolve and verify it "
-            "directly in Incus before requesting another resize; Orcastra will not start "
+            "The hypervisor has a deferred root-disk quota change pending. Resolve and verify it "
+            "directly on the hypervisor before requesting another resize; Orcastra will not start "
             "the instance automatically."
         )
     elif root_size is None:
@@ -531,7 +531,7 @@ def build_preflight(
             _message(
                 "ROOT_DISK_QUOTA_PENDING",
                 (
-                    "Incus has a deferred root-disk quota change pending, so an automatic "
+                    "The hypervisor has a deferred root-disk quota change pending, so an automatic "
                     "restart is unsafe until that change has been verified."
                 ),
                 field="root_disk_bytes",
@@ -1364,8 +1364,8 @@ async def _read_before_automatic_start(
                 "instance_status": fresh.public.get("status"),
             },
             error=(
-                f"{outcome_prefix}, but automatic start was withheld because Incus reports "
-                "a deferred root-disk quota change that could resize storage during start."
+                f"{outcome_prefix}, but automatic start was withheld because the hypervisor "
+                "reports a deferred root-disk quota change that could resize storage during start."
             )[:1000],
         )
         return None
@@ -2050,7 +2050,7 @@ async def _run_claimed_specification_job(
                         "instance_status": current_status,
                     },
                     error=(
-                        "The job stopped the instance, but Incus now reports a deferred "
+                        "The job stopped the instance, but the hypervisor now reports a deferred "
                         "root-disk quota change. No specification update was submitted and "
                         "automatic start was withheld."
                     ),

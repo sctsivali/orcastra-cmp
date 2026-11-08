@@ -19,7 +19,7 @@ __all__ = ["register"]
 _READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True)
 
 Cluster = Annotated[str, Field(description="Target cluster id.")]
-Project = Annotated[str, Field(default="default", description="LXD project.")]
+Project = Annotated[str, Field(default="default", description="Project on the cluster (LXD and Incus alike).")]
 InstanceName = Annotated[str, Field(description="Instance name.")]
 
 # networks, storage pools and profiles share one code path and one price on the proxy, so they are

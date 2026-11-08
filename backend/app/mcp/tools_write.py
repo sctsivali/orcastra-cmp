@@ -19,7 +19,7 @@ __all__ = ["register"]
 _MUTATES = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False)
 
 Cluster = Annotated[str, Field(description="Target cluster id.")]
-Project = Annotated[str, Field(default="default", description="LXD project.")]
+Project = Annotated[str, Field(default="default", description="Project on the cluster (LXD and Incus alike).")]
 InstanceName = Annotated[str, Field(description="Instance name.")]
 Wait = Annotated[
     bool,
@@ -51,14 +51,14 @@ def register(mcp: MCPServer) -> None:
         name: InstanceName,
         project: Project = "default",
         source: Annotated[
-            Optional[Dict[str, Any]], Field(default=None, description="LXD source block, ex; an image alias.")
+            Optional[Dict[str, Any]], Field(default=None, description="The hypervisor's source block, ex; an image alias.")
         ] = None,
         config: Annotated[Optional[Dict[str, Any]], Field(default=None)] = None,
         devices: Annotated[Optional[Dict[str, Any]], Field(default=None)] = None,
         profiles: Annotated[Optional[list[str]], Field(default=None)] = None,
         instance_type: Annotated[
             Optional[Literal["container", "virtual-machine"]],
-            Field(default=None, description="Defaults to LXD's own default when omitted."),
+            Field(default=None, description="Defaults to the hypervisor's own default when omitted."),
         ] = None,
         wait: Wait = True,
     ) -> CallToolResult:

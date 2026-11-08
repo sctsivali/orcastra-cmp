@@ -23,7 +23,7 @@ from .errors import desktop_result
 __all__ = ["register"]
 
 Cluster = Annotated[str, Field(description="Target cluster id.")]
-Project = Annotated[str, Field(default="default", description="LXD project.")]
+Project = Annotated[str, Field(default="default", description="Project on the cluster (LXD and Incus alike).")]
 InstanceName = Annotated[str, Field(description="Instance name.")]
 Coordinate = Annotated[
     Optional[List[int]],

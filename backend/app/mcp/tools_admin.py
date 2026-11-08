@@ -31,7 +31,7 @@ _CLUSTER_WIDE = ToolAnnotations(
 )
 
 Cluster = Annotated[str, Field(description="Target cluster id.")]
-Project = Annotated[str, Field(default="default", description="LXD project.")]
+Project = Annotated[str, Field(default="default", description="Project on the cluster (LXD and Incus alike).")]
 Wait = Annotated[bool, Field(default=True, description="Wait for the operation to finish.")]
 
 

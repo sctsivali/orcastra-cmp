@@ -23,7 +23,7 @@ _READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempo
 ClusterId = Annotated[
     Optional[str], Field(default=None, description="Narrow to one cluster id. Omit to fan out.")
 ]
-Project = Annotated[Optional[str], Field(default=None, description="Narrow to one LXD project.")]
+Project = Annotated[Optional[str], Field(default=None, description="Narrow to one project.")]
 
 
 def register(mcp: MCPServer) -> None:
@@ -59,7 +59,7 @@ def register(mcp: MCPServer) -> None:
     @mcp.tool(
         name="orcastra_list_projects",
         annotations=_READ_ONLY,
-        description="LXD projects visible to this key, across its granted clusters.",
+        description="Projects visible to this key, across its granted clusters.",
     )
     async def orcastra_list_projects(cluster_id: ClusterId = None) -> CallToolResult:
         return await run_inventory(
