@@ -230,10 +230,16 @@ assert.equal(numeric.formatBytes(0), "0 B");
 assert.equal(numeric.formatBytes(0, { zeroDisplay: "empty" }), "\u2014");
 assert.equal(numeric.formatBytes(NaN, { split: true }).unit, "");
 for (const decimals of [NaN, Infinity, -1, 300, 1.5]) assert.doesNotThrow(() => numeric.formatBytes(0.5, { decimals }));
-for (const format of [numeric.formatFrequency, numeric.formatLinkSpeed, numeric.formatCpuTime]) {
+for (const format of [numeric.formatFrequency, numeric.formatLinkSpeed, numeric.formatCpuTime, numeric.formatElapsed]) {
   for (const value of [NaN, Infinity, -Infinity, -1, null, undefined]) assert.equal(format(value), "\u2014");
 }
 assert.equal(numeric.formatCpuTime(0), "0s");
+// A single time is glued and a compound keeps its two largest units (frontend-design-language.md).
+// The Sessions tables read "0m 5s" and "8h 46m 10s" before this formatter was shared.
+for (const [seconds, text] of [[0, "0s"], [0.4, "0s"], [5, "5s"], [125, "2m 5s"], [31570, "8h 46m"], [4330000, "50d 2h"]]) {
+  assert.equal(numeric.formatElapsed(seconds), text);
+}
+assert.equal(numeric.formatCpuTime(31570e9), numeric.formatElapsed(31570));
 assert.deepEqual(numeric.formatByteQuota(NaN, NaN), { value: "\u2014", unit: "" });
 const tones = loadNumericModule(join(src, "lib", "usage-tone.ts"), requireFromFrontend);
 const { capacityReading } = loadNumericModule(join(src, "lib", "capacity-reading.ts"), (name) => {
