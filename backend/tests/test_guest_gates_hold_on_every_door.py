@@ -220,7 +220,8 @@ SOURCES = {
     "snapshot": {"type": "snapshot", "name": "web-1/s0"},
     "upper-type": {"type": "INSTANCE", "name": "web-1"},
     "local-fingerprint": {"type": "image", "fingerprint": FP},
-    "pull": {"type": "image", "mode": "pull", "protocol": "simplestreams", "server": "https://images.example.test",
+    # note: a trusted catalogue; any other server is refused (test_a_key_cannot_make_the_cluster_fetch_from_anywhere.py)
+    "pull": {"type": "image", "mode": "pull", "protocol": "simplestreams", "server": "https://images.lxd.canonical.com",
              "alias": "ubuntu/24.04"},
     "push": {"type": "image", "mode": "push", "fingerprint": FP},
     "url": {"type": "url", "url": "https://images.example.test/x.tar.gz"},
@@ -246,10 +247,20 @@ def test_a_public_image_create_costs_files_for_every_source(door: Any, source: s
     _refused(seen, 403, "instance.files", "capability_not_granted", "integration.proxy.request")
 
 
+SENT_SOURCES = [name for name in SOURCES if name != "url"]
+
+
 @pytest.mark.parametrize("public", PUBLIC_FALSY, ids=repr)
-@pytest.mark.parametrize("source", list(SOURCES), ids=list(SOURCES))
+@pytest.mark.parametrize("source", SENT_SOURCES, ids=SENT_SOURCES)
 def test_a_private_image_create_is_sent_for_every_source(door: Any, source: str, public: Any) -> None:
     _sent(door.raw(NO_GUEST, "POST", "/1.0/images", body=_image_body(SOURCES[source], public)), "POST")
+
+
+@pytest.mark.parametrize("public", PUBLIC_FALSY, ids=repr)
+def test_a_private_image_from_a_url_is_never_sent(door: Any, public: Any) -> None:
+    """The daemon would fetch any URL a key names (owner decision 2026-11-08)."""
+    seen = door.raw(NO_GUEST, "POST", "/1.0/images", body=_image_body(SOURCES["url"], public))
+    _refused(seen, 403, "pull_source_not_allowed", "pull_source_not_allowed")
 
 
 @pytest.mark.parametrize("how", SPELLING_IDS)

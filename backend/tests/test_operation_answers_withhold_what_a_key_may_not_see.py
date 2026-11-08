@@ -185,8 +185,8 @@ async def test_a_raw_operation_listing_never_returns_an_environment(path: str, a
         ("POST", "/1.0/instances/web-1", {"migration": True}),
         ("POST", "/1.0/instances/web-1/snapshots/snap0", {"migration": True}),
         ("POST", "/1.0/storage-pools/default/volumes/custom/vol1", {"migration": True}),
-        # The target side of a push migration answers with the same three secrets.
-        ("POST", "/1.0/instances", {"name": "web-2", "source": {"type": "migration", "mode": "push"}}),
+        # note: the target side of a push migration is no longer sent for a key at all
+        # (test_a_key_cannot_make_the_cluster_fetch_from_anywhere.py).
     ],
 )
 async def test_no_write_answer_carries_a_migration_secret(method: str, path: str, body: Dict[str, Any]) -> None:

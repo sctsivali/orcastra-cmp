@@ -40,10 +40,11 @@ ORCAHUB_PUBLISH = {
     "public": False,
     "compression_algorithm": "gzip",
 }
-# The integrator's pre-cache pull, as the same file builds it.
+# The integrator's pre-cache pull, as the same file builds it. note: from a trusted catalogue; any
+# other server needs KEY_IMAGE_SERVERS_ALLOW (core/key_pull_sources.py).
 ORCAHUB_PULL = {
     "source": {"type": "image", "mode": "pull", "protocol": "simplestreams",
-               "server": "https://images.example.test", "alias": "ubuntu/24.04", "image_type": "container"},
+               "server": "https://images.lxd.canonical.com", "alias": "ubuntu/24.04", "image_type": "container"},
     "aliases": [{"name": "ubuntu/24.04"}], "public": False, "auto_update": True,
 }
 
@@ -158,12 +159,23 @@ async def test_the_raw_proxy_refuses_it_without_files(
     ]
 
 
+GRANTED = [
+    (case, case_id)
+    for case, case_id in zip(PRICED[:5] + PRICED[7:9] + PRICED[11:18], PRICED_IDS[:5] + PRICED_IDS[7:9] + PRICED_IDS[11:18])
+    # A URL source is never sent for a key (test_a_key_cannot_make_the_cluster_fetch_from_anywhere.py).
+    if case_id != "url-public"
+]
+
+
 @pytest.mark.usefixtures("fence_calls")
-@pytest.mark.parametrize("method,path,body", PRICED[:5] + PRICED[7:9] + PRICED[11:18],
-                         ids=PRICED_IDS[:5] + PRICED_IDS[7:9] + PRICED_IDS[11:18])
+@pytest.mark.parametrize("method,path,body", [case for case, _ in GRANTED], ids=[case_id for _, case_id in GRANTED])
 async def test_a_key_granted_files_sends_it_as_asked(
-    method: str, path: str, body: Dict[str, Any], audits: List[Dict[str, Any]]
+    method: str, path: str, body: Dict[str, Any], audits: List[Dict[str, Any]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from app.core import key_pull_sources
+
+    # cluster-a is the cluster a copy names as its source, registered in this dashboard.
+    monkeypatch.setattr(key_pull_sources, "_is_registered_cluster", lambda server: "cluster-a.example.test" in server)
     outcome, session = await call_raw_proxy(WITH_FILES, method, path, body=body)
 
     assert outcome.status_code == 200, outcome

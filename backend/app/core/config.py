@@ -363,6 +363,15 @@ class Settings(BaseSettings):
         alias="MIGRATION_APPROVED_BUILDS",
         description="Deprecated alias of MIGRATION_BUILD_ALLOW, kept for existing deployments.",
     )
+    key_image_servers_allow: str = Field(
+        default="",
+        alias="KEY_IMAGE_SERVERS_ALLOW",
+        description=(
+            "Comma-separated https hosts an API key may name as an image server, in addition to the "
+            "public catalogues and the registered clusters (core/key_pull_sources.py), ex; an "
+            "integrator's own simplestreams mirror."
+        ),
+    )
     migration_build_allow: str = Field(
         default="",
         alias="MIGRATION_BUILD_ALLOW",

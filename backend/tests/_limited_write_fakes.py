@@ -28,7 +28,7 @@ FLEET = {"default": PLAIN, "web": PLAIN, "priv": PRIVILEGED, "disk": PASSTHROUGH
 NARROW = key(["tenant-a"])
 WILDCARD = key(["*"])
 TWO = key(["tenant-a", "tenant-b"])
-SERVER = "https://images.example.test"
+SERVER = "https://images.lxd.canonical.com"  # a trusted catalogue (core/key_pull_sources.py)
 
 
 def _response(status: int, body: Any) -> requests.Response:

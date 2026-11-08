@@ -113,6 +113,9 @@ services:
       - MIGRATION_GLOBAL_CONCURRENCY=${MIGRATION_GLOBAL_CONCURRENCY:-2}
       - MIGRATION_APPROVED_BUILDS=${MIGRATION_APPROVED_BUILDS:-}
       - MIGRATION_BUILD_ALLOW=${MIGRATION_BUILD_ALLOW:-}
+      # Extra https image servers an API key may name, beyond the public catalogues and the
+      # registered clusters, ex; an integrator's own simplestreams mirror.
+      - KEY_IMAGE_SERVERS_ALLOW=${KEY_IMAGE_SERVERS_ALLOW:-}
       - MIGRATION_BUILD_DENY=${MIGRATION_BUILD_DENY:-}
       - MIGRATION_RECOVERY_ACTIONS_ENABLED=${MIGRATION_RECOVERY_ACTIONS_ENABLED:-true}
       - MIGRATION_AUTO_CLEANUP_ENABLED=${MIGRATION_AUTO_CLEANUP_ENABLED:-true}

@@ -418,11 +418,22 @@ async def test_a_narrow_key_body_inside_its_project_goes_through(method: str, pa
     assert len(session.writes) == 1
 
 
-@pytest.mark.parametrize("method,path,body", FOREIGN_BODIES + HOST_BODIES)
+# A body `target` object names a host the daemon sends to, which no key may (core/key_pull_sources.py).
+_TARGETED = [case for case in FOREIGN_BODIES + HOST_BODIES if isinstance(case[2].get("target"), dict)]
+
+
+@pytest.mark.parametrize("method,path,body", [c for c in FOREIGN_BODIES + HOST_BODIES if c not in _TARGETED])
 async def test_a_wildcard_key_body_is_untouched(method: str, path: str, body: Dict[str, Any]) -> None:
     outcome, session = await call_raw_proxy(WILDCARD, method, path, body=body)
     assert outcome.status_code == 200
     assert len(session.calls) == 1
+
+
+@pytest.mark.parametrize("method,path,body", _TARGETED)
+async def test_a_wildcard_key_naming_a_target_is_refused_like_any_key(method: str, path: str, body: Dict[str, Any]) -> None:
+    outcome, session = await call_raw_proxy(WILDCARD, method, path, body=body)
+    assert outcome.status_code == 403 and outcome.detail["error"] == "pull_source_not_allowed"
+    assert session.calls == []
 
 
 # The value table the rule is judged by (441213a): a switch is refused only when it is not off,

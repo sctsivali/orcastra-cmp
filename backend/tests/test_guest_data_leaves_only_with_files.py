@@ -83,7 +83,7 @@ ORCAHUB_BODIES: Dict[Tuple[str, str], List[Dict[str, Any]]] = {
     ("POST", "/1.0/images"): [
         {
             "source": {"type": "image", "mode": "pull", "protocol": "simplestreams",
-                       "server": "https://images.example.test", "alias": "ubuntu/24.04", "image_type": "container"},
+                       "server": "https://images.lxd.canonical.com", "alias": "ubuntu/24.04", "image_type": "container"},
             "aliases": [{"name": "ubuntu/24.04"}], "public": False, "auto_update": True,
         },
         {
@@ -171,8 +171,12 @@ def _project(api_key: Dict[str, Any]) -> Optional[str]:
     return None if "*" in projects else projects[0]
 
 
+# A body target makes the daemon push to a host the caller names; no key may (key_pull_sources.py).
+PUSHED = [case for case in PRICED if isinstance(case[2], dict) and "target" in case[2]]
+
+
 @pytest.mark.usefixtures("fence_calls")
-@pytest.mark.parametrize("method,path,body", PRICED[:9] + PRICED[11:14])
+@pytest.mark.parametrize("method,path,body", [case for case in PRICED[:9] + PRICED[11:14] if case not in PUSHED])
 async def test_a_key_granted_files_sends_it_as_asked(
     method: str, path: str, body: Any, audits: List[Dict[str, Any]]
 ) -> None:
@@ -184,6 +188,20 @@ async def test_a_key_granted_files_sends_it_as_asked(
     assert verb == method
     assert url.startswith(ENDPOINT)
     assert kwargs.get("json") == body
+
+
+@pytest.mark.usefixtures("fence_calls")
+@pytest.mark.parametrize("method,path,body", PUSHED)
+async def test_a_key_granted_files_still_cannot_push_to_a_host_it_names(
+    method: str, path: str, body: Any, audits: List[Dict[str, Any]]
+) -> None:
+    """Security review 2026-11-08: instance.files priced the push but let it through, so a key
+    holding it made the daemon dial any operation URL it named."""
+    outcome, session = await call_raw_proxy(WITH_FILES, method, path, body=body)
+
+    assert getattr(outcome, "status_code", None) == 403, outcome
+    assert outcome.detail["error"] == "pull_source_not_allowed"
+    assert session.calls == []
 
 
 async def test_a_legacy_key_never_inherits_it(audits: List[Dict[str, Any]]) -> None:

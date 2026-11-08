@@ -67,6 +67,7 @@ from app.services.lxd.limited_write_reach import (
     proxy_write_reach,
     refuse_what_a_limited_write_applies,
 )
+from app.core.key_pull_sources import assert_key_create_params_allowed, assert_key_pull_source_allowed
 from app.services.lxd.cloud_init_reach import cloud_init_changes, proxy_cloud_init_owed, refuse_changed_cloud_init
 from app.services.lxd.operation_metadata import redact_operation_response
 from app.core.tenant_visibility import used_by_in_projects
@@ -5055,6 +5056,14 @@ async def raw_proxy(
         except HTTPException as refusal:
             _audit_raw_refusal(api_key, request, method, project, refusal, "capability_not_granted")
             raise
+        # important: a create whose source the daemon fetches itself (an image server, a URL, a
+        # migration) made the hypervisor reach any address and accept data the dashboard never saw
+        # (core/key_pull_sources.py). Recorded when refused: no correct caller sends one.
+        try:
+            assert_key_pull_source_allowed(method, request.body)
+        except HTTPException as refusal:
+            _audit_raw_refusal(api_key, request, method, project, refusal, "pull_source_not_allowed")
+            raise
         # important: LXD addresses an object by the name its create or rename body gave it, and several of its
         # name checks allow `.` and `..`, which no key door can address afterwards (core/lxd_body_names.py).
         assert_body_names_addressable(request.path, method, request.body)
@@ -5668,6 +5677,23 @@ async def proxy_operation(
                 error_message=str(refusal.detail),
             )
             raise
+        if operation == "create_instance":
+            # The first-class create sends params as the body, so it reads the raw door's rule.
+            try:
+                assert_key_create_params_allowed(request.params or {})
+            except HTTPException as refusal:
+                _audit_key_action(
+                    api_key,
+                    action=_guest_audit_action(operation),
+                    target_id=str((request.params or {}).get("name") or operation)[:512],
+                    cluster_id=request.cluster_id,
+                    project=request.project,
+                    result="failure",
+                    details={"operation": operation, "refused": "pull_source_not_allowed"},
+                    external_user_email=request.external_user_email,
+                    error_message=str(refusal.detail),
+                )
+                raise
 
         # important: `default` on a cluster another party holds is view only for a key a partner
         # created, as it is in the browser: no change, and no session or file inside a guest.
