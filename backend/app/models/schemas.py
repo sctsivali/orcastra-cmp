@@ -1525,6 +1525,9 @@ class CertificateInfo(BaseModel):
     superseded: List[SupersededTrust] = Field(
         default_factory=list, description="Trust entries of certificates this dashboard replaced"
     )
+    cluster_type: Optional[str] = Field(
+        None, description="Registered hypervisor type (LXD, MicroCloud, Incus); null until the first trusted read"
+    )
 
 
 class CertificateListResponse(BaseModel):

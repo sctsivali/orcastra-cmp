@@ -36,6 +36,14 @@ async def test_each_row_names_the_active_pending_and_superseded_certificates():
     assert entry.fingerprint == old and entry.state == "pending"
     assert entry.manual_command == f"incus config trust remove {old}"
     assert response.total == 1
+    # The renew dialog names the CLI the host has from this, and hides LXD-only fields on Incus.
+    assert row.cluster_type == "Incus"
+
+
+async def test_a_row_names_a_lowercase_registry_type_in_its_display_form():
+    manager = _ScopedManager(cluster_type="incus")
+    [row] = (await router.list_certificates(cert_manager=manager, db=SessionMaker().db, user=None)).certificates
+    assert row.cluster_type == "Incus"
 
 
 async def test_a_cluster_waiting_for_trust_has_no_row_and_an_unreadable_one_is_unknown():

@@ -11,7 +11,7 @@ import { clusterStatusMeta } from "@/lib/cluster-status";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { GRID_PAGE_SIZE, GRID_PAGE_SIZES } from "@/lib/pagination";
-import { formatBytes, plural } from "@/lib/utils";
+import { formatBytes, formatHypervisorType, plural } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Collapsible,
@@ -213,7 +213,7 @@ function RegionCard({
                       </Badge>
                       {node.node_type && (
                         <Badge variant="secondary" className="text-xs">
-                          {node.node_type}
+                          {formatHypervisorType(node.node_type)}
                         </Badge>
                       )}
                     </div>

@@ -25,7 +25,7 @@ import { GRID_PAGE_SIZE, GRID_PAGE_SIZES } from "@/lib/pagination";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
-import { plural, singular } from "@/lib/utils";
+import { formatHypervisorType, plural, singular } from "@/lib/utils";
 
 // important: the certificate keys stay excluded. They were filtered out of the inline list on
 // purpose, and moving the data into a dialog must not quietly widen what the page discloses.
@@ -211,7 +211,7 @@ export default function ServerPage() {
                 <div className="space-y-2">
                   <div className="flex justify-between">
                     <span className="text-sm">API Version:</span>
-                    <Badge variant="outline">{server.node_type} {server.api_version}</Badge>
+                    <Badge variant="outline">{formatHypervisorType(server.node_type)} {server.api_version}</Badge>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-sm">Authentication:</span>

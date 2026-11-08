@@ -12,6 +12,7 @@ from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 
 from app.core.cert_fingerprint import lxd_fingerprint
+from app.core.type_utils import normalize_cluster_type
 from app.models.schemas import CertificateInfo, CertificateStatus
 
 logger = logging.getLogger(__name__)
@@ -131,6 +132,7 @@ def read_certificate_row(cert_manager: Any, cluster_id: str) -> Optional[Tuple[C
             has_pending_renewal=has_pending,
             serial_number=parsed.get("serial_number"),
             pending_fingerprint=pending_fp,
+            cluster_type=normalize_cluster_type(metadata["type"]) if metadata.get("type") else None,
         )
         return info, metadata.get("type")
     except VaultClientError as exc:

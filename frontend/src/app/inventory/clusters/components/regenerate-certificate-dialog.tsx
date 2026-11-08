@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "@/hooks/use-toast";
 import { useCancelPendingCert, useCheckClusterAuth, useVerifyCertRenewal } from "@/hooks/use-lxd";
-import { formatHypervisorType, trustPickupHint } from "@/lib/utils";
+import { formatHypervisorType, hypervisorCli, isIncusType, trustPickupHint } from "@/lib/utils";
 import type { ClusterInfo, ClusterRegisterResponse } from "@/types/api";
 
 import { FingerprintField, TRUST_LIST_CHARS } from "../certificates/components/certificate-fingerprint";
@@ -57,7 +57,7 @@ export function RegenerateCertificateDialog({
 
   const clusterId = cluster?.cluster_id ?? issued?.cluster_id ?? "";
   const pendingId = issued?.pending_cert_id ?? null;
-  const isIncus = issued?.cluster_type === "Incus";
+  const isIncus = isIncusType(issued?.cluster_type);
   const busy = verify.isPending || discard.isPending || checkAuth.isPending;
 
   const run = async (action: () => Promise<void>) => {
@@ -150,7 +150,7 @@ export function RegenerateCertificateDialog({
                 label="New certificate fingerprint"
                 value={issued.fingerprint}
                 copyLabel={`new certificate fingerprint for ${clusterId}`}
-                hint={`After running the command, lxc config trust list shows an entry starting with these ${TRUST_LIST_CHARS} characters.`}
+                hint={`After running the command, ${hypervisorCli(issued?.cluster_type)} config trust list shows an entry starting with these ${TRUST_LIST_CHARS} characters.`}
               />
 
               <div className="flex flex-wrap gap-3">

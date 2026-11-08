@@ -153,7 +153,7 @@ function CertificatesContent() {
           <CardTitle className="text-lg md:text-xl">Cluster Certificates</CardTitle>
           <CardDescription className="text-xs md:text-sm">
             View and manage certificates for all registered clusters. The fingerprint matches the
-            FINGERPRINT column of lxc config trust list.
+            FINGERPRINT column of lxc config trust list on LXD and incus config trust list on Incus.
           </CardDescription>
           <TableToolbar filters={filters} noun="certificates" />
         </CardHeader>

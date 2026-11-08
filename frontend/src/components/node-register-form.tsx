@@ -19,7 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { CodeBlock } from "@/components/ui/code-block";
 
 import { toast } from "@/hooks/use-toast";
-import { formatHypervisorType, generateIdentityName, trustPickupHint } from "@/lib/utils";
+import { formatHypervisorType, generateIdentityName, hypervisorCli, isIncusType, trustPickupHint } from "@/lib/utils";
 import { ClusterStatus, APIError } from "@/types/api";
 import { useRegisterCluster, useCheckClusterAuth, useFacilitySuggestions } from "@/hooks/use-lxd";
 import { loadRegionCatalog, resolveRegion, toGeoLocation } from "@/lib/regions/catalog";
@@ -209,7 +209,9 @@ export function NodeRegisterForm() {
         certificate_generated: response.certificate_generated,
         certificate: response.certificate,
         cluster_id: data.cluster_id,
-        cluster_type: undefined,  // Don't use pre-auth type; check-auth will detect the real type
+        // note: the pre-trust probe names Incus only (its dev_incus extensions are public) and
+        // answers null for the LXD family, so the lxc default below stays right until check-auth.
+        cluster_type: response.cluster_type ?? undefined,
       });
 
       if (response.success && response.certificate) {
@@ -303,8 +305,8 @@ export function NodeRegisterForm() {
                   
                   {/* Dynamic CLI Command based on detected type */}
                   {(() => {
-                    const isIncus = registrationResult.cluster_type === "Incus";
-                    const cliTool = isIncus ? "incus" : "lxc";
+                    const isIncus = isIncusType(registrationResult.cluster_type);
+                    const cliTool = hypervisorCli(registrationResult.cluster_type);
                     const trustSubCmd = isIncus ? "add-certificate" : "add";
                     const typeLabel = registrationResult.cluster_type ? formatHypervisorType(registrationResult.cluster_type) : null; // only show badge when type is detected
                     

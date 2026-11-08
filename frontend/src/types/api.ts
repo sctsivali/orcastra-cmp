@@ -2098,6 +2098,8 @@ export interface CertificateInfo {
   pending_fingerprint?: string | null;
   /** Trust entries of certificates this dashboard replaced on the cluster. */
   superseded?: SupersededTrust[];
+  /** Registered hypervisor type (LXD, MicroCloud, Incus); null until the first trusted read. */
+  cluster_type?: string | null;
 }
 
 export type SupersededTrustState = "pending" | "failed" | "removed" | "cancelled";

@@ -280,6 +280,16 @@ export function trustPickupHint(action: string): string {
   return `Once the command has run, press ${action}. On its own, the dashboard can take a minute or more to notice the new trust.`;
 }
 
+// Any casing: the registry stores "incus" while status reads say "Incus".
+export function isIncusType(type: string | null | undefined): boolean {
+  return (type ?? "").trim().toLowerCase() === "incus";
+}
+
+// The hypervisor CLI an operator runs on the host: incus on Incus, lxc on the LXD family.
+export function hypervisorCli(type: string | null | undefined): "incus" | "lxc" {
+  return isIncusType(type) ? "incus" : "lxc";
+}
+
 // standardize known hypervisor type display while preserving future providers
 export function formatHypervisorType(type: string | null | undefined): string {
   if (!type) return "Hypervisor";

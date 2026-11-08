@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/hooks/use-toast";
 import { useInitiateCertRenewal, usePendingCertificate, useVerifyCertRenewal } from "@/hooks/use-lxd";
+import { hypervisorCli, isIncusType } from "@/lib/utils";
 import {
   CertificateStatus,
   CertificateTTLOption,
@@ -55,6 +56,9 @@ const errorMessage = (error: unknown, fallback: string) =>
 export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCertificateDialogProps) {
   const open = !!certificate && !!mode;
   const clusterId = certificate?.cluster_id ?? "";
+  const cli = hypervisorCli(certificate?.cluster_type);
+  // Incus has no core.trust_password, so on Incus the only way back in is the CLI command.
+  const offersTrustPassword = !isIncusType(certificate?.cluster_type);
   const [ttl, setTtl] = React.useState<CertificateTTLOption>(CertificateTTLOption.SIX_MONTHS);
   const [trustPassword, setTrustPassword] = React.useState("");
   const [manual, setManual] = React.useState<ManualTrust | null>(null);
@@ -94,7 +98,7 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
       const result = await renewal.mutateAsync({
         cluster_id: certificate.cluster_id,
         ttl,
-        trust_password: trustPassword || undefined,
+        trust_password: (offersTrustPassword && trustPassword) || undefined,
       });
       if (result.auto_renewed) {
         toast({ title: "Certificate renewed", description: "The new certificate is active." });
@@ -175,8 +179,9 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
               <Alert variant="destructive">
                 <AlertTriangle className="h-4 w-4" />
                 <AlertDescription>
-                  This certificate is expired. You may need to provide a trust password
-                  or add trust manually via CLI.
+                  {offersTrustPassword
+                    ? "This certificate is expired. You may need to provide a trust password or add trust manually via CLI."
+                    : `This certificate is expired. Renewing it gives a ${cli} command to add trust on the host.`}
                 </AlertDescription>
               </Alert>
             )}
@@ -185,7 +190,7 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
               label="Current certificate fingerprint"
               value={certificate.fingerprint}
               copyLabel={`current certificate fingerprint for ${clusterId}`}
-              hint={`The first ${TRUST_LIST_CHARS} characters are what lxc config trust list shows for it.`}
+              hint={`The first ${TRUST_LIST_CHARS} characters are what ${cli} config trust list shows for it.`}
             />
 
             <div className="space-y-2">
@@ -208,8 +213,9 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
                 valid and still rejected by the cluster, which is what happens once its trust
                 entry is replaced or dropped on the LXD side. In that state the backend cannot
                 authenticate with the existing certificate, so the trust password is the only
-                way to re-add trust without shell access to the host. */}
-            <div className="space-y-2">
+                way to re-add trust without shell access to the host. Not on Incus, which has no
+                trust password. */}
+            {offersTrustPassword && <div className="space-y-2">
               <Label htmlFor="renew-trust-password">Trust Password (Optional)</Label>
               <Input
                 id="renew-trust-password"
@@ -222,7 +228,7 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
                 Used when the cluster no longer trusts the current certificate. If not
                 provided, you will need to add trust manually via CLI.
               </p>
-            </div>
+            </div>}
 
             <DialogFooter>
               <Button variant="outline" onClick={onClose}>
@@ -272,7 +278,7 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
                 label="New certificate fingerprint"
                 value={trust.fingerprint}
                 copyLabel={`new certificate fingerprint for ${clusterId}`}
-                hint={`After running the command, lxc config trust list shows an entry starting with these ${TRUST_LIST_CHARS} characters.`}
+                hint={`After running the command, ${cli} config trust list shows an entry starting with these ${TRUST_LIST_CHARS} characters.`}
               />
             )}
             {trust?.cli_command && (

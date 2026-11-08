@@ -13,10 +13,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { hypervisorCli } from "@/lib/utils";
 
 export interface LeftoverTrust {
   clusterId: string;
   commands: string[];
+  // The removed cluster's hypervisor type, so the fallback hint names the CLI it has.
+  clusterType?: string | null;
 }
 
 /**
@@ -56,7 +59,7 @@ export function LeftoverTrustDialog({
           // the entry. The trust list can: its entries are named after the cluster.
           <p className="text-sm text-muted-foreground">
             The dashboard could not confirm which of its certificates the cluster still trusts. On the
-            hypervisor, run <span className="font-mono">lxc config trust list</span> and look for entries
+            hypervisor, run <span className="font-mono">{hypervisorCli(leftover.clusterType)} config trust list</span> and look for entries
             named <span className="font-mono">orca-{leftover.clusterId}-</span> followed by a date. Another
             dashboard that manages this host under the same name creates entries of the same shape, so
             confirm an entry is this dashboard&apos;s before removing it.

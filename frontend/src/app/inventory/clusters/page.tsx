@@ -227,7 +227,11 @@ function ClustersContent() {
       setDeleteConfirmModal({ open: false, cluster: null });
       setDeleteConfirmText("");
       if (result?.manual_trust_commands?.length || result?.trust_cleanup_complete === false) {
-        setLeftoverTrust({ clusterId, commands: result.manual_trust_commands ?? [] });
+        setLeftoverTrust({
+          clusterId,
+          commands: result.manual_trust_commands ?? [],
+          clusterType: deleteConfirmModal.cluster.cluster_type,
+        });
       }
       // useDeleteCluster.onSuccess reconciles cluster.delete: this page's active queries
       // refetch now, and every other list it touched refetches when its page next mounts.

@@ -1,6 +1,6 @@
 "use client";
 
-import { formatInstanceType } from "@/lib/utils";
+import { formatHypervisorType, formatInstanceType } from "@/lib/utils";
 import { AlertTriangle, Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
@@ -71,7 +71,7 @@ export function MigrationSourceDestination({
       value: cluster.cluster_id,
       label: cluster.display_name || cluster.cluster_id,
       sublabel: clusterSublabel(cluster.cluster_id, cluster.display_name, cluster.endpoint),
-      badge: cluster.cluster_type ?? undefined,
+      badge: cluster.cluster_type ? formatHypervisorType(cluster.cluster_type) : undefined,
       status,
       disabled: !status.reachable,
       statusReason: cluster.error_message || `${status.label} clusters cannot accept a migration`,
