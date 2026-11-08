@@ -162,6 +162,10 @@ jobs:
       # unreachable-cluster banner, without either guard ever firing.
       - name: Table typography
         run: node scripts/checks/check-table-typography.mjs .
+      # A count, size, rate or duration in Geist Mono beside the same figures in the body face:
+      # the Sessions summary strip had three faces and sizes in one row.
+      - name: Number typography
+        run: node scripts/checks/check-number-typography.mjs .
       - name: Unreachable-cluster banners
         run: node scripts/checks/check-unreachable-banner.mjs .
       # A control that asks an operator to choose a cluster must say whether that cluster is
