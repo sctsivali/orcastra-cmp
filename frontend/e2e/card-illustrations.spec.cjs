@@ -7,6 +7,7 @@ const {
   expectNoHorizontalOverflow,
   installApiFixtures,
 } = require("./support/fixtures.cjs");
+const { installSettingsFixtures, expectCleanSettingsHarness } = require("./support/settings-fixtures.cjs");
 
 // Card illustrations (components/illustrations): decoration that names a card's subject. These
 // specs hold what a reader cannot see in review: a scene is hidden from assistive technology and
@@ -406,5 +407,46 @@ test("the sign-in error page names the situation with a scene, and the classic i
   await expect(page.getByText("Access Denied", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
   expect(await visibleScenes(page)).toBe(0);
   await expect(page.locator(`${FALLBACK} svg`)).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("partner: first-run empty states in Settings draw their scene above the text", async ({ page }, testInfo) => {
+  await authenticate(page.context(), "partner");
+  const api = await installSettingsFixtures(page, "partner");
+
+  for (const [path, title] of [
+    ["/settings/integrations", "No API keys"],
+    ["/settings/integrations?section=organizations", "No organizations are synced yet"],
+    ["/settings/user-groups?section=policies", "No access policies yet"],
+  ]) {
+    await page.goto(path);
+    const heading = page.getByText(title, { exact: true }).first();
+    await expect(heading).toBeVisible({ timeout: 20_000 });
+    const scene = page.locator(SCENE).filter({ visible: true });
+    await expect(scene, `${title} draws its scene`).toHaveCount(1);
+    const [s, h] = [await scene.boundingBox(), await heading.boundingBox()];
+    expect(s.y + s.height, `${title}: the scene sits above its heading`).toBeLessThanOrEqual(h.y + 1);
+    expect(s.width, `${title}: the empty-state scene is the large size`).toBeGreaterThanOrEqual(190);
+    await expectDecorative(page);
+    await expectFitted(page);
+    await expectNoHorizontalOverflow(page);
+    await capture(page, testInfo, `empty-${title.replace(/\W+/g, "-").toLowerCase()}`);
+  }
+  await expectCleanSettingsHarness(api);
+});
+
+test("an account with no role sees the access gate with its scene", async ({ page }, testInfo) => {
+  await authenticate(page.context(), "tenant", { groups: ["role_unmapped"] });
+  await installApiFixtures(page, "tenant");
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "No role assigned yet" })).toBeVisible({ timeout: 20_000 });
+  expect(await visibleScenes(page)).toBe(1);
+  await expectDecorative(page);
+  await expectFitted(page);
+  await expectNoHorizontalOverflow(page);
+  await capture(page, testInfo, "access-gate");
   expect(errors).toEqual([]);
 });
