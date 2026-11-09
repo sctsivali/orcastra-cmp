@@ -8,7 +8,7 @@ import { IsoBox, IsoLink, IsoShadow } from "../iso/primitives";
 /** A platform of app blocks with the next one arriving: a portfolio that grows. */
 export function PortfolioIllustration(props: IllustrationProps) {
   return (
-    <IllustrationFrame {...props} view={[23, 22, 121, 91]}>
+    <IllustrationFrame {...props} view={[11.5, 14.5, 137, 102.5]}>
       <IsoShadow box={[-26, -20, 52, 40]} />
       <IsoBox at={[-26, -20, 0]} size={[52, 40, 5]} material="paper" />
       <IsoBox at={[-20, -14, 5]} size={[13, 13, 13]} material="tint" />
@@ -24,7 +24,7 @@ export function PortfolioIllustration(props: IllustrationProps) {
 /** Providers joined into one network, with room for the next. */
 export function EcosystemIllustration(props: IllustrationProps) {
   return (
-    <IllustrationFrame {...props} view={[19.5, 8.5, 132.5, 99.5]}>
+    <IllustrationFrame {...props} view={[6, 3, 152.5, 114.5]}>
       <IsoShadow box={[-12, -22, 16, 16]} />
       <IsoShadow box={[-28, 6, 14, 14]} />
       <IsoShadow box={[12, -26, 14, 14]} />
@@ -41,7 +41,7 @@ export function EcosystemIllustration(props: IllustrationProps) {
 /** A module lowered into its socket beside the ones already installed. */
 export function ExtensionsIllustration(props: IllustrationProps) {
   return (
-    <IllustrationFrame {...props} view={[22, 19.5, 122.5, 92]}>
+    <IllustrationFrame {...props} view={[12.5, 14.5, 135, 101]}>
       <IsoShadow box={[-24, -20, 48, 40]} />
       <IsoBox at={[-24, -20, 0]} size={[48, 40, 5]} material="paper" />
       <IsoBox at={[-19, -15, 5]} size={[12, 12, 11]} material="paper" />
@@ -56,10 +56,11 @@ export function ExtensionsIllustration(props: IllustrationProps) {
 /** A key standing in its holder. */
 export function KeyVaultIllustration(props: IllustrationProps) {
   return (
-    <IllustrationFrame {...props} view={[17.5, 0.5, 131.5, 98.5]}>
-      <IsoShadow box={[-14, -10, 28, 20]} />
-      <IsoBox at={[-14, -10, 0]} size={[28, 20, 7]} material="tint" />
-      <Key origin={[-12, 0, 3]} />
+    <IllustrationFrame {...props} view={[8.5, 5.5, 143, 107]}>
+      <IsoShadow box={[-24, -14, 48, 28]} />
+      <IsoBox at={[-24, -14, 0]} size={[48, 28, 7]} material="tint" />
+      <IsoBox at={[-5, -1, 7]} size={[10, 8, 2]} material="paper" open />
+      <Key origin={[-9.6, 1, 5.8]} scale={0.8} />
     </IllustrationFrame>
   );
 }

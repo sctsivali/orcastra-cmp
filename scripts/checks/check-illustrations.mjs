@@ -15,8 +15,9 @@
  *   3. Flat: no gradient, filter, blur or SVG animation anywhere in the kit.
  *   4. One svg root. Only illustration-frame.tsx renders <svg>, and it is aria-hidden,
  *      not focusable and carries data-slot="card-illustration", which the hide rule targets.
- *      Every exported scene renders through IllustrationFrame with a measured `view` crop, so the
- *      object fills its frame instead of floating in an unused canvas.
+ *      Every exported scene renders through IllustrationFrame with a measured `view` crop, so its
+ *      silhouette covers the same share of the frame on the same ground line as every other
+ *      scene, instead of floating in an unused canvas.
  *   5. Hideable: the hide rule and the fallback rule exist, and the root layout renders
  *      data-illustrations from the first byte.
  *   6. Scenes are not icons: outside the kit, a scene is never the content of a Button, a
@@ -92,9 +93,8 @@ const darkTokens = declared(block(".dark"));
 if (lightTokens.size < 10) fail(rel(CSS), `only ${lightTokens.size} --illo-* tokens on :root; the palette is missing`);
 for (const token of lightTokens) if (!darkTokens.has(token)) fail(rel(CSS), `${token} has no dark value in .dark`);
 for (const token of darkTokens) if (!lightTokens.has(token)) fail(rel(CSS), `${token} is set for dark only`);
-// Set per element or per container rather than per theme: a face's fill and hairline, the stroke width
-// per size, and the floor and ceiling of a fit scene per kind of card.
-const LOCAL = new Set(["--illo-f", "--illo-e", "--illo-sw", "--illo-fit-min", "--illo-fit-max"]);
+// Set per element rather than per theme: a face's fill and hairline, and the stroke width per size.
+const LOCAL = new Set(["--illo-f", "--illo-e", "--illo-sw"]);
 for (const m of css.matchAll(/(?:^|[;{\s])(fill|stroke)\s*:\s*([^;}]+)/g)) {
   const value = m[2].trim();
   const ok = value === "none" || /^var\(--illo-(f|e)\)$/.test(value) || /^hsl\(var\(--illo-[a-z0-9-]+\)\)$/.test(value);

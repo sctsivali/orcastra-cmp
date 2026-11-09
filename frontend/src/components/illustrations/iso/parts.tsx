@@ -1,6 +1,6 @@
 import * as React from "react";
 import { IsoBall, IsoBox, IsoCylinder, IsoDisc, IsoExtrude, IsoInset, type Material } from "./primitives";
-import { circleOutline, type Pt, type Vec3 } from "./projection";
+import { circleOutline, scaleOutline, type Pt, type Vec3 } from "./projection";
 
 // Compound objects shared by several scenes. Keeping them here is what makes a server in the
 // Multi-Cluster scene the same server as the one in the empty state: one object, one drawing.
@@ -187,11 +187,11 @@ const KEY_OUTLINE: Pt[] = (() => {
   return [...arc, [9, 4], [15, 4], [15, 8], [20.5, 8], [20.5, 11.5], [15, 11.5], [15, 15], [19, 15], [19, 18.5], [15, 18.5]];
 })();
 
-export function Key({ origin, material = "ink" }: { origin: Vec3; material?: Material }) {
+export function Key({ origin, material = "ink", scale = 1 }: { origin: Vec3; material?: Material; scale?: number }) {
   return (
     <g>
-      <IsoExtrude plane="left" origin={origin} outline={KEY_OUTLINE} depth={4} material={material} />
-      <IsoDisc plane="left" origin={origin} centre={[12, 40]} radius={4.6} kind={material === "ink" ? "cut" : "panel"} />
+      <IsoExtrude plane="left" origin={origin} outline={scaleOutline(KEY_OUTLINE, scale)} depth={4} material={material} />
+      <IsoDisc plane="left" origin={origin} centre={[12 * scale, 40 * scale]} radius={4.6 * scale} kind={material === "ink" ? "cut" : "panel"} />
     </g>
   );
 }

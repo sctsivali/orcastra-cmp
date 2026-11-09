@@ -9,7 +9,7 @@ import { scaleOutline } from "../iso/projection";
 
 export function EmptyClustersIllustration(props: IllustrationProps) {
   return (
-    <IllustrationFrame {...props} view={[22, 14.5, 122.5, 92]}>
+    <IllustrationFrame {...props} view={[13, 10, 134, 100.5]}>
       <IsoShadow box={[-21, -15, 42, 30]} />
       <IsoBox at={[-21, -15, 0]} size={[42, 30, 3]} material="paper" />
       <ServerStack at={[-18, -12, 3]} units={3} w={36} d={24} h={8} material="ghost" />
@@ -20,7 +20,7 @@ export function EmptyClustersIllustration(props: IllustrationProps) {
 
 export function EmptyInstancesIllustration(props: IllustrationProps) {
   return (
-    <IllustrationFrame {...props} view={[22, 14.5, 122.5, 92]}>
+    <IllustrationFrame {...props} view={[13, 10, 134, 100.5]}>
       <IsoShadow box={[-20, -16, 40, 32]} />
       <IsoBox at={[-20, -16, 0]} size={[40, 32, 16]} material="paper" open />
       <IsoBox at={[-7, -5, 26]} size={[14, 14, 14]} material="ghost" />
@@ -31,7 +31,7 @@ export function EmptyInstancesIllustration(props: IllustrationProps) {
 /** Copies kept over time: plates stacked like layers, the newest on top. */
 export function SnapshotsIllustration(props: IllustrationProps) {
   return (
-    <IllustrationFrame {...props} view={[31.5, 24, 104, 78]}>
+    <IllustrationFrame {...props} view={[24, 20.5, 112, 84]}>
       <IsoShadow box={[-17, -12, 34, 24]} />
       <IsoLink path={[[17, 12, 3], [17, 12, 20]]} fine />
       <IsoLink path={[[-17, 12, 3], [-17, 12, 20]]} fine />
@@ -47,7 +47,7 @@ export function PoliciesIllustration(props: IllustrationProps) {
   const page = [-24, 0, 0] as const;
   const shield = [4, 12, 0] as const;
   return (
-    <IllustrationFrame {...props} view={[16.5, 12.5, 125, 94]}>
+    <IllustrationFrame {...props} view={[12.5, 9, 126.5, 95]}>
       <IsoShadow box={[-24, -3, 26, 3]} />
       <IsoShadow box={[4, 8, 20, 4]} />
       <IsoExtrude plane="left" origin={page} outline={DOCUMENT_OUTLINE} depth={3} material="paper" />
@@ -63,7 +63,7 @@ export function PoliciesIllustration(props: IllustrationProps) {
 
 export function UsersIllustration(props: IllustrationProps) {
   return (
-    <IllustrationFrame {...props} view={[37.5, 19, 104, 78]}>
+    <IllustrationFrame {...props} view={[38, 25.5, 97.5, 73]}>
       <IsoShadow circle={[-20, -2, 7]} />
       <IsoShadow circle={[8, -22, 7]} />
       <IsoShadow circle={[4, 8, 7]} />
@@ -77,13 +77,13 @@ export function UsersIllustration(props: IllustrationProps) {
 /** Two organizations kept in step. */
 export function OrganizationsIllustration(props: IllustrationProps) {
   return (
-    <IllustrationFrame {...props} view={[26, 3, 121, 91]}>
+    <IllustrationFrame {...props} view={[20, 2.5, 127, 95]}>
       <IsoShadow box={[10, -26, 16, 16]} />
       <IsoShadow box={[-28, 2, 16, 16]} />
-      <Building at={[10, -26, 0]} size={[16, 16, 32]} material="ink" />
+      <Building at={[10, -26, 0]} size={[16, 16, 32]} material="tint" />
       <IsoLink path={[[-20, 10, 24], [18, -18, 32]]} />
       <IsoMark at={[-1, -4, 28]} size={3} />
-      <Building at={[-28, 2, 0]} size={[16, 16, 24]} />
+      <Building at={[-28, 2, 0]} size={[16, 16, 24]} material="ink" />
     </IllustrationFrame>
   );
 }
@@ -91,7 +91,7 @@ export function OrganizationsIllustration(props: IllustrationProps) {
 /** A map tile with routes between sites and a pin on one of them. */
 export function RegionsIllustration(props: IllustrationProps) {
   return (
-    <IllustrationFrame {...props} view={[26, 27, 114.5, 86]}>
+    <IllustrationFrame {...props} view={[19, 24.5, 122.5, 91.5]}>
       <IsoShadow box={[-26, -20, 52, 40]} />
       <IsoBox at={[-26, -20, 0]} size={[52, 40, 4]} material="tint" />
       <IsoLink path={[[-16, -10, 4], [2, 8, 4], [16, -12, 4]]} />

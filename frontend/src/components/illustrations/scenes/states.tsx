@@ -8,7 +8,7 @@ import { IsoBox, IsoLink, IsoShadow } from "../iso/primitives";
 
 export function AccessGateIllustration(props: IllustrationProps) {
   return (
-    <IllustrationFrame {...props} view={[31.5, 18.5, 104, 78]}>
+    <IllustrationFrame {...props} view={[26, 18, 107.5, 80.5]}>
       <IsoShadow box={[-14, -6, 28, 12]} />
       <Padlock at={[-14, -6, 0]} />
     </IllustrationFrame>
@@ -18,7 +18,7 @@ export function AccessGateIllustration(props: IllustrationProps) {
 export function DisconnectedIllustration(props: IllustrationProps) {
   const unit = { units: 2, w: 16, d: 16, h: 8, gap: 2 } as const;
   return (
-    <IllustrationFrame {...props} view={[27, 26, 109.5, 82]}>
+    <IllustrationFrame {...props} view={[19.5, 22.5, 117.5, 88]}>
       <IsoShadow box={[-30, -8, 16, 16]} />
       <IsoShadow box={[14, -8, 16, 16]} />
       <ServerStack at={[-30, -8, 0]} {...unit} />

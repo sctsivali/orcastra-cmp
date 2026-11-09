@@ -2,27 +2,25 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 import { CANVAS } from "./iso/projection";
 
-/**
- * fit follows the width of the card holding it (`illo-kpi` or `illo-card`, illustrations.css); the
- * others are fixed 4:3 boxes.
- */
-export type IllustrationSize = "fit" | "md" | "lg" | "xl";
+/** sm sits in the corner of a KPI tile or beside a data card's title; md and up hold a card's side. */
+export type IllustrationSize = "sm" | "md" | "lg" | "xl";
 
 // Fixed boxes at the canvas's 4:3 ratio, so the card reserves the same room before and after
-// hydration and a scene never shifts the text beside it. fit is sized by its card's container query,
-// which the stylesheet also resolves before first paint.
+// hydration and a scene never shifts the text beside it. A card kind may step a size down by its own
+// width (illustrations.css), which the stylesheet also resolves before first paint.
 const SIZE: Record<IllustrationSize, string> = {
-  fit: "",
+  sm: "h-[66px] w-[88px]",
   md: "h-[126px] w-[168px]",
   lg: "h-36 w-48",
   xl: "h-[174px] w-[232px]",
 };
 
 /**
- * A crop of the canvas, [x, y, width, height] in canvas units. Every scene passes one measured from
- * its own drawn bounds: padded 4 units, widened to 4:3, bottom aligned, and never narrower than 104
- * units, so a single object fills its frame like a wide composition without zooming past ~1.5x and
- * all scenes keep one apparent scale. Re-measure after moving geometry.
+ * A crop of the canvas, [x, y, width, height] in canvas units, measured per scene in Chromium from
+ * the rendered silhouette. Every scene's silhouette covers the same share of its frame (30%), is
+ * centred, and stands on one ground line 12% above the frame's bottom, so scenes side by side in a
+ * row read at one weight and one baseline whatever their shape. A scene too tall or too wide for that
+ * share is fitted inside an 8% margin instead. Re-measure after moving geometry.
  */
 export type IllustrationView = readonly [number, number, number, number];
 
