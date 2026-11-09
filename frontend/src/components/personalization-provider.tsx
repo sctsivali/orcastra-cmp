@@ -7,7 +7,7 @@ import { hasMappedRole } from "@/types/rbac";
 import { hexToHSL } from "@/lib/color";
 import { PERSONALIZATION_COOKIE, parsePersonalizationHint, toPersonalizationHint } from "@/lib/personalization-cookie";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
-import { usePersonalizationSync, type PreferenceOrigin } from "./personalization/use-personalization-sync";
+import { usePersonalizationSync, type ThemeOrigin } from "./personalization/use-personalization-sync";
 import { usePersonalizationMutations } from "./personalization/use-personalization-mutations";
 
 // The two sidebar text pairs autoTextColor picks between, and the alpha tiers that go with
@@ -71,11 +71,9 @@ export function PersonalizationProvider({ children, initialSettings }: {
   const [isLoading, setIsLoading] = React.useState(true);
   const personalRowRef = React.useRef<PersonalizationSettings | null>(null);
   const lastLocalEditRef = React.useRef(0);
-  const [origin, setOrigin] = React.useState<PreferenceOrigin>({
+  const [themeOrigin, setThemeOrigin] = React.useState<ThemeOrigin>({
     personal: false,
     organizationTheme: DEFAULT_PERSONALIZATION.theme,
-    illustrationsPersonal: false,
-    organizationIllustrations: DEFAULT_PERSONALIZATION.illustrations,
   });
   const actor = {
     userId: session?.user?.id ?? null,
@@ -85,26 +83,24 @@ export function PersonalizationProvider({ children, initialSettings }: {
   // A caller with no role sees only the access notice and the backend refuses its reads, so
   // there is nothing to fetch and every attempt would be a 403 (issue #17).
   const mayRead = !Array.isArray(session?.user?.groups) || hasMappedRole(session.user.groups);
-  // Only an account whose preferences are read owns the illustrations choice on screen. Signed
-  // out, or without a role, the server already rendered the deployment's choice (app/layout.tsx)
-  // and the defaults held here would overwrite it.
+  // The illustrations choice on screen is the organization's, and only an account whose branding is
+  // read carries it. Signed out, or without a role, the server already rendered the deployment's
+  // choice (app/layout.tsx) and the defaults held here would overwrite it.
   const ownsIllustrations = isAuthenticated && mayRead;
   const { refreshSettings } = usePersonalizationSync({
     ...actor,
     authenticated: isAuthenticated && mayRead,
     sessionLoading: status === "loading" && !session,
-    personalRowRef, lastLocalEditRef, setSettings, setIsLoading, setOrigin,
+    personalRowRef, lastLocalEditRef, setSettings, setIsLoading, setThemeOrigin,
   });
   const mutations = usePersonalizationMutations({
-    ...actor, setSettings, origin, setOrigin, lastLocalEditRef,
+    ...actor, setSettings, themeOrigin, setThemeOrigin, lastLocalEditRef,
   });
   const value: PersonalizationContextType = {
     settings,
     ...mutations,
-    themeIsPersonal: origin.personal,
-    organizationTheme: origin.organizationTheme,
-    illustrationsArePersonal: origin.illustrationsPersonal,
-    organizationIllustrations: origin.organizationIllustrations,
+    themeIsPersonal: themeOrigin.personal,
+    organizationTheme: themeOrigin.organizationTheme,
     refreshSettings,
     isLoading,
   };
@@ -158,7 +154,7 @@ export function PersonalizationProvider({ children, initialSettings }: {
   }, [settings.colors]);
 
   // The root layout renders data-illustrations from the hint cookie, so the first byte of HTML is
-  // already right; this keeps the attribute in step with a choice made or loaded since.
+  // already right; this keeps the attribute in step when the organization's choice loads or changes.
   React.useEffect(() => {
     if (typeof document === "undefined" || !ownsIllustrations) return;
     document.documentElement.dataset.illustrations = settings.illustrations;

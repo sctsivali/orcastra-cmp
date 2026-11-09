@@ -6,9 +6,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { isIllustrationPreference, type IllustrationPreference } from "@/types/personalization";
 
 /**
- * The organization's (or the deployment's) default for card illustrations, beside Default Theme in
- * the branding editor. Each account can still choose for itself from the sidebar's theme menu, the
- * same way it overrides the theme.
+ * Whether cards show their illustration, for everyone this branding applies to, beside Default Theme
+ * in the branding editor. It is the only place the choice is made (owner decision 2026-11-09): there
+ * is no per-account override, so a tenant sees what its organization chose.
  */
 export function IllustrationsDefaultField({
   value,
@@ -30,8 +30,7 @@ export function IllustrationsDefaultField({
         </SelectContent>
       </Select>
       <p className="text-xs text-muted-foreground">
-        Whether cards show their illustration for everyone this branding applies to. Each person can still
-        choose for themselves from the sidebar.
+        Whether cards show their illustration for everyone this branding applies to.
       </p>
     </div>
   );

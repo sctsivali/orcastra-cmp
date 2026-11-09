@@ -180,14 +180,6 @@ export interface PersonalizationContextType {
   themeIsPersonal: boolean;
   /** The theme the organization (or deployment) sets, which applies when the account chose none. */
   organizationTheme: ThemePreference;
-  /** Persist this account's own choice to show or hide card illustrations. */
-  updateIllustrations: (choice: IllustrationPreference) => void;
-  /** Drop the account's own choice so the organization's default applies. */
-  clearIllustrations: () => void;
-  /** Whether `settings.illustrations` is the account's own choice rather than its organization's. */
-  illustrationsArePersonal: boolean;
-  /** What the organization (or deployment) sets, which applies when the account chose nothing. */
-  organizationIllustrations: IllustrationPreference;
   /** Show branding at once (the editor's preview of the organization the sidebar renders). */
   applySettingsOptimistically: (settings: PersonalizationSettings) => void;
   refreshSettings: () => Promise<void>;
@@ -204,7 +196,7 @@ export interface BrandingEditorContextType {
   updateColors: (colors: Partial<ColorSettings>) => void;
   /** The default theme for everyone this branding applies to; each account can still choose its own. */
   updateDefaultTheme: (theme: ThemePreference) => void;
-  /** Whether cards show their illustration for everyone this branding applies to. */
+  /** Whether cards show their illustration for everyone this branding applies to (no per-account choice). */
   updateDefaultIllustrations: (choice: IllustrationPreference) => void;
   resetToDefaults: () => void;
   /** What the reset button says: it removes this row, so it names what shows instead. */

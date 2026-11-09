@@ -1,11 +1,10 @@
-"""Card illustrations can be hidden, by an organization for its members and by each account for
-itself, with the same layering the theme already has.
+"""Card illustrations are shown or hidden by an organization for its members (or by the deployment
+for everyone it covers), and nowhere else.
 
-An organization's branding (or the deployment's) holds the default, checked like any other branding
-key (services/branding/validation.py) and filled layer by layer (services/branding/resolve.py). The
-sign-in page reads the deployment's choice before anyone signs in (routers/public_branding.py). An
-account's own row may hold a choice beside its theme (routers/user_preferences.py); it is stored
-apart from the theme's lastModified, so choosing one never marks the other as chosen.
+The choice is a branding key, checked like any other (services/branding/validation.py) and filled
+layer by layer like the theme (services/branding/resolve.py). The sign-in page reads the
+deployment's choice before anyone signs in (routers/public_branding.py). There is no per-account
+override (owner decision 2026-11-09): routers/user_preferences.py keeps the theme alone.
 """
 
 from __future__ import annotations
@@ -81,67 +80,21 @@ def test_the_sign_in_page_is_told_the_deployments_choice() -> None:
     assert _public({"theme": "dark"})["illustrations"] is None
 
 
-# An account's own choice
+# No per-account choice (owner decision 2026-11-09): the personal row stays the theme alone
 
 
-async def test_a_choice_is_stored_beside_the_theme_without_marking_a_theme_chosen() -> None:
+async def test_an_account_cannot_store_its_own_choice() -> None:
     db = _db()
-    answer = await routes.update_user_preferences({"illustrations": "hide"}, Response(), db=db, user=ME)
+    with pytest.raises(HTTPException) as refused:
+        await routes.update_user_preferences({"illustrations": "hide"}, Response(), db=db, user=ME)
 
-    assert (await _row(db)).settings == {"illustrations": "hide"}
-    assert answer["illustrations"] == "hide"
-    assert answer["lastModified"] is None, "the organization's theme still applies"
-
-
-async def test_setting_one_choice_keeps_the_other() -> None:
-    db = _db()
-    await routes.update_user_preferences({"theme": "dark"}, Response(), db=db, user=ME)
-    await routes.update_user_preferences({"illustrations": "hide"}, Response(), db=db, user=ME)
-    answer = await routes.update_user_preferences({"theme": "light"}, Response(), db=db, user=ME)
-
-    stored = (await _row(db)).settings
-    assert stored["theme"] == "light" and stored["illustrations"] == "hide"
-    assert answer["theme"] == "light" and answer["illustrations"] == "hide"
-
-
-async def test_null_clears_the_choice_and_an_empty_row_is_deleted() -> None:
-    db = _db()
-    await routes.update_user_preferences({"illustrations": "show"}, Response(), db=db, user=ME)
-    answer = await routes.update_user_preferences({"illustrations": None}, Response(), db=db, user=ME)
-
+    assert refused.value.status_code == 422, "only the theme is stored per user"
     assert await _row(db) is None
-    assert answer["illustrations"] is None, "no choice means the organization's default applies"
 
 
-async def test_both_can_be_sent_at_once() -> None:
+async def test_a_choice_sent_beside_the_theme_is_ignored() -> None:
     db = _db()
     answer = await routes.update_user_preferences({"theme": "dark", "illustrations": "hide"}, Response(), db=db, user=ME)
 
-    assert answer["theme"] == "dark" and answer["illustrations"] == "hide" and answer["lastModified"]
-
-
-async def test_an_account_that_never_chose_reads_null() -> None:
-    db = _db()
-    assert (await routes.get_user_preferences(Response(), db=db, user=ME))["illustrations"] is None
-
-    db.add(UserPreferences(user_id="sub-1", user_email="me@example.test", settings={"theme": "dark", "lastModified": "x"}))
-    await db.commit()
-    assert (await routes.get_user_preferences(Response(), db=db, user=ME))["illustrations"] is None
-
-
-async def test_a_stored_value_the_dashboard_does_not_know_reads_as_no_choice() -> None:
-    db = _db()
-    db.add(UserPreferences(user_id="sub-1", user_email="me@example.test", settings={"illustrations": "sometimes"}))
-    await db.commit()
-
-    assert (await routes.get_user_preferences(Response(), db=db, user=ME))["illustrations"] is None
-
-
-@pytest.mark.parametrize("body", [{"illustrations": "off"}, {"illustrations": False}, {"illustrations": "hide", "theme": "neon"}])
-async def test_an_unknown_choice_is_refused_and_nothing_is_stored(body) -> None:
-    db = _db()
-    with pytest.raises(HTTPException) as refused:
-        await routes.update_user_preferences(body, Response(), db=db, user=ME)
-
-    assert refused.value.status_code == 422
-    assert await _row(db) is None
+    assert set((await _row(db)).settings) == {"theme", "lastModified"}
+    assert "illustrations" not in answer, "the organization decides; a personal read never answers it"

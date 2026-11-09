@@ -3,18 +3,13 @@
 import * as React from "react";
 import { onAuthActorChanged } from "@/lib/api";
 import { captureActorMutationFence, isActorMutationFenceCurrent } from "@/lib/actor-mutation-fence";
-import { DEFAULT_PERSONALIZATION, type IllustrationPreference, type PersonalizationSettings, type ThemePreference } from "@/types/personalization";
+import { DEFAULT_PERSONALIZATION, type PersonalizationSettings, type ThemePreference } from "@/types/personalization";
 import { readOrgPreferences, readOrgVersion, readPersonalPreferences, sameOrgVersion, type OrgPreferencesVersion } from "./preferences";
 
 type SettingsRef = React.MutableRefObject<PersonalizationSettings | null>;
 
-/** Whose theme and illustrations choice are on screen: the account's own, or its organization's default. */
-export type PreferenceOrigin = {
-  personal: boolean;
-  organizationTheme: ThemePreference;
-  illustrationsPersonal: boolean;
-  organizationIllustrations: IllustrationPreference;
-};
+/** Whose theme is on screen: the account's own choice, or its organization's default. */
+export type ThemeOrigin = { personal: boolean; organizationTheme: ThemePreference };
 
 interface SyncOptions {
   userId: string | null;
@@ -26,7 +21,7 @@ interface SyncOptions {
   lastLocalEditRef: React.MutableRefObject<number>;
   setSettings: React.Dispatch<React.SetStateAction<PersonalizationSettings>>;
   setIsLoading: React.Dispatch<React.SetStateAction<boolean>>;
-  setOrigin: React.Dispatch<React.SetStateAction<PreferenceOrigin>>;
+  setThemeOrigin: React.Dispatch<React.SetStateAction<ThemeOrigin>>;
 }
 
 const ORG_PREF_POLL_INTERVAL_MS = 45_000;
@@ -36,7 +31,7 @@ const ORG_PREF_POLL_INTERVAL_MS = 45_000;
 // deployment default for it, and the personal row holds only the theme for everyone.
 export function usePersonalizationSync({
   userId, scopeKey, accessToken, authenticated, sessionLoading,
-  personalRowRef, lastLocalEditRef, setSettings, setIsLoading, setOrigin,
+  personalRowRef, lastLocalEditRef, setSettings, setIsLoading, setThemeOrigin,
 }: SyncOptions) {
   const appliedVersionRef = React.useRef<OrgPreferencesVersion | null>(null);
   const requestRevisionRef = React.useRef(0);
@@ -70,24 +65,14 @@ export function usePersonalizationSync({
     if (expectedVersion && !sameOrgVersion(expectedVersion, current.value)) return false;
     const base = organization.value.settings;
     const personalTheme = Boolean(personal.value.lastModified);
-    const personalIllustrations = personal.value.illustrationsChoice;
     personalRowRef.current = personal.value;
-    setSettings({
-      ...base,
-      theme: personalTheme ? personal.value.theme : base.theme,
-      illustrations: personalIllustrations ?? base.illustrations,
-    });
-    setOrigin({
-      personal: personalTheme,
-      organizationTheme: base.theme,
-      illustrationsPersonal: personalIllustrations !== null,
-      organizationIllustrations: base.illustrations,
-    });
+    setSettings({ ...base, theme: personalTheme ? personal.value.theme : base.theme });
+    setThemeOrigin({ personal: personalTheme, organizationTheme: base.theme });
     // The baseline is advanced only after a complete, fenced payload read has been applied.
     // A null updated_at is a valid baseline, so the organization's first save triggers refresh.
     appliedVersionRef.current = current.value;
     return true;
-  }, [userId, authenticated, scopeKey, lastLocalEditRef, personalRowRef, setSettings, setOrigin]);
+  }, [userId, authenticated, scopeKey, lastLocalEditRef, personalRowRef, setSettings, setThemeOrigin]);
 
   React.useEffect(() => onAuthActorChanged(() => {
     requestRevisionRef.current += 1;

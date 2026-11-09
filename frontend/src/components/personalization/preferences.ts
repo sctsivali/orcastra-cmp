@@ -1,9 +1,4 @@
-import {
-  DEFAULT_PERSONALIZATION,
-  isIllustrationPreference,
-  type IllustrationPreference,
-  type PersonalizationSettings,
-} from "@/types/personalization";
+import { DEFAULT_PERSONALIZATION, isIllustrationPreference, type PersonalizationSettings } from "@/types/personalization";
 import { safeImageSrc } from "@/lib/branding-images";
 
 // `version` is the server's token over every layer under the account (its organization, that
@@ -12,8 +7,6 @@ import { safeImageSrc } from "@/lib/branding-images";
 export type OrgPreferencesVersion = { organization_id: number; updated_at: string | null; version: string | null };
 export type OrgPreferences = OrgPreferencesVersion & { settings: PersonalizationSettings };
 export type PreferenceRead<T> = { ok: true; value: T } | { ok: false };
-/** The account's own row: its settings, plus the illustrations choice as stored (null when unchosen). */
-export type PersonalPreferences = PersonalizationSettings & { illustrationsChoice: IllustrationPreference | null };
 
 export function mergeWithDefaults(data: Partial<PersonalizationSettings>): PersonalizationSettings {
   const logo = { ...DEFAULT_PERSONALIZATION.logo, ...data.logo };
@@ -82,17 +75,11 @@ async function readPreferences(
 export async function readPersonalPreferences(
   accessToken: string | undefined,
   isCurrent: () => boolean,
-): Promise<PreferenceRead<PersonalPreferences>> {
+): Promise<PreferenceRead<PersonalizationSettings>> {
   const result = await readPreferences("user-preferences", accessToken, isCurrent);
-  if (!result.ok || !isRecord(result.value)) return { ok: false };
-  const choice = result.value.illustrations;
-  return {
-    ok: true,
-    value: {
-      ...mergeWithDefaults(result.value as Partial<PersonalizationSettings>),
-      illustrationsChoice: isIllustrationPreference(choice) ? choice : null,
-    },
-  };
+  return result.ok && isRecord(result.value)
+    ? { ok: true, value: mergeWithDefaults(result.value as Partial<PersonalizationSettings>) }
+    : { ok: false };
 }
 
 export async function readOrgPreferences(

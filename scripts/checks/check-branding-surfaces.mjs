@@ -19,20 +19,11 @@ const sync = code(read("components/personalization/use-personalization-sync.ts")
 assert.ok(!/orgBacked/.test(sync), "the loader still splits Administrators onto their personal row");
 assert.match(sync, /readOrgPreferences\(/, "the loader reads organizations/my-preferences for everyone");
 
-// 2. The personal row is the theme and the card illustrations choice, and never branding.
+// 2. The personal row is the theme and nothing else.
 const personalApi = read("lib/personalization-api.ts");
-assert.match(
-  personalApi,
-  /body: \{ theme\?: ThemePreference \| null; illustrations\?: IllustrationPreference \| null \}/,
-  "the personal write takes only the theme and the illustrations choice",
-);
+assert.match(personalApi, /body: \{ theme: ThemePreference \| null \}/, "the personal write takes only a theme");
 const mutations = code(read("components/personalization/use-personalization-mutations.ts"));
-assert.match(
-  mutations,
-  /type PersonalWrite = \{ theme\?: ThemePreference \| null; illustrations\?: IllustrationPreference \| null \};/,
-  "the provider writes only the theme and the illustrations choice",
-);
-assert.match(mutations, /personalizationAPI\.update\(body, accessToken\)/, "the provider writes through the typed personal body");
+assert.match(mutations, /personalizationAPI\.update\(\{ theme \}/, "the provider writes only the theme");
 for (const gone of ["updateLogo", "updateColors", "updateBranding", "updateBackground"]) {
   assert.ok(!mutations.includes(gone), `the app-wide provider still edits branding (${gone})`);
 }
@@ -74,4 +65,4 @@ assert.match(read("lib/sign-out.ts"), /clearPersonalizationHint\(\)/, "sign-out 
 // 7. Signed in, the tab follows the account's organization.
 assert.match(read("components/main-layout.tsx"), /<DocumentBranding \/>/, "the signed-in tab never shows the organization's branding");
 
-console.log("branding surfaces: one read path, personal rows hold theme and illustrations only, scoped preview, branded sign-in and tab");
+console.log("branding surfaces: one read path, theme-only personal rows, scoped preview, branded sign-in and tab");
