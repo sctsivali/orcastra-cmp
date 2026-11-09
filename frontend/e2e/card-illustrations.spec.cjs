@@ -619,6 +619,13 @@ test("partner: an inventory list draws its scene on a first run, never for a fil
   await expectDecorative(page);
   await expectFitted(page);
   await capture(page, testInfo, "networks-first-run");
+  if (!isMobile(testInfo)) {
+    // Beside the sidebar at 768px the table scrolls sideways; the row stays in the visible area.
+    await page.setViewportSize({ width: 768, height: 900 });
+    await expect.poll(async () => (await page.locator(SCENE).filter({ visible: true }).boundingBox())?.x ?? -1).toBeGreaterThan(0);
+    await expectFitted(page);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+  }
 
   await page.goto("/inventory/networks?q=no-such-network");
   await expect(page.getByText("No networks found", { exact: true })).toBeVisible({ timeout: 20_000 });
