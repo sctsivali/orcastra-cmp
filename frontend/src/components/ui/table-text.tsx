@@ -71,10 +71,10 @@ export function TableEmptyRow({
   return (
     <TableRow className="hover:bg-transparent">
       <TableCell colSpan={colSpan} className="p-0">
-        {/* note: on a phone the table scrolls sideways and this cell spans every column, so the
-            message used to centre across columns off screen. It sits in a box no wider than the
-            visible area, pinned to the scroller's left edge. */}
-        <div className="sticky left-0 max-w-[calc(100vw-3rem)]">
+        {/* note: when the table scrolls sideways this cell spans every column, so the message used
+            to centre across columns off screen. It sits in a box as wide as the visible area
+            (measured by the Table container), pinned to the scroller's left edge. */}
+        <div className="sticky left-0 max-w-[var(--table-visible-width,100%)]">
           <EmptyState
             icon={icon}
             iconClassName={iconClassName}

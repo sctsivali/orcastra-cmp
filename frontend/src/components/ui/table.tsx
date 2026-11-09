@@ -44,6 +44,9 @@ function useHorizontalScrollState(ref: React.RefObject<HTMLDivElement>): {
     // one bucket costs a read and nothing else. Only crossing an edge re-renders.
     const read = () => {
       setMeasured(true);
+      // The visible width, for a full-width empty row that must stay in view while the table
+      // scrolls sideways (TableEmptyRow in table-text.tsx). A style write, not state: no render.
+      el.style.setProperty("--table-visible-width", `${el.clientWidth}px`);
       const max = el.scrollWidth - el.clientWidth;
       if (max <= EDGE_SLACK) {
         setState("none");
