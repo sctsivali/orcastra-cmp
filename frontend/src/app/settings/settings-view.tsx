@@ -99,7 +99,7 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
             {/* Extensions pointer - the surface is a route, not a tab, because a refresh
                 inside a tab would destroy the one-time credential an install shows. */}
             {isPartner && (
-            <Card className="illo-host hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/extensions')}>
+            <Card className="illo-launch illo-host hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/extensions')}>
               <div className="flex items-center">
                 <div className="min-w-0 flex-1">
                   <CardHeader>
@@ -128,14 +128,14 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
                     </div>
                   </CardContent>
                 </div>
-                <ExtensionsIllustration size="xl" className="mr-4 hidden sm:block" />
+                <ExtensionsIllustration size="lg" className="mr-6" />
               </div>
             </Card>
             )}
 
             {/* My Keys Card - Admin + Partner only */}
             {isPartner && (
-            <Card className="illo-host hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/my-keys')}>
+            <Card className="illo-launch illo-host hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/my-keys')}>
               <div className="flex items-center">
                 <div className="min-w-0 flex-1">
                   <CardHeader>
@@ -166,7 +166,7 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
                     </div>
                   </CardContent>
                 </div>
-                <KeyVaultIllustration size="xl" className="mr-4 hidden sm:block" />
+                <KeyVaultIllustration size="lg" className="mr-6" />
               </div>
             </Card>
             )}

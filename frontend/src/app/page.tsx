@@ -170,8 +170,8 @@ export default function HomePage() {
       {/* note: two a row until xl. At md the sidebar leaves four tiles about 82px wide, which clipped
           "Instances" and "connected" before any scene was involved. */}
       <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
-        <Card className="illo-kpi overflow-hidden">
-          <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
+        <Card className="illo-kpi">
+          <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
             <div className="min-w-0 space-y-1.5">
               <CardDescription>Total Clusters</CardDescription>
               <CardTitle className="text-4xl">
@@ -181,12 +181,12 @@ export default function HomePage() {
                 {isStatsLoading ? <Skeleton className="h-4 w-24 inline-block" /> : nodesFailed ? UNREADABLE : `${connectedNodes} connected`}
               </p>
             </div>
-            <ClustersIllustration size="fit" className="-my-4 -mr-6" />
+            <ClustersIllustration size="sm" />
           </CardHeader>
         </Card>
 
-        <Card className="illo-kpi overflow-hidden">
-          <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
+        <Card className="illo-kpi">
+          <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
             <div className="min-w-0 space-y-1.5">
               <CardDescription>Total Instances</CardDescription>
               <CardTitle className="text-4xl">
@@ -196,12 +196,12 @@ export default function HomePage() {
                 {vmsFailed ? UNREADABLE : "Across all clusters"}
               </p>
             </div>
-            <InstancesIllustration size="fit" className="-my-4 -mr-6" />
+            <InstancesIllustration size="sm" />
           </CardHeader>
         </Card>
 
-        <Card className="illo-kpi overflow-hidden">
-          <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
+        <Card className="illo-kpi">
+          <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
             <div className="min-w-0 space-y-1.5">
               <CardDescription>Running</CardDescription>
               <CardTitle className="text-4xl">
@@ -211,12 +211,12 @@ export default function HomePage() {
                 {vmsFailed ? UNREADABLE : "Active instances"}
               </p>
             </div>
-            <RunningIllustration size="fit" className="-my-4 -mr-6" />
+            <RunningIllustration size="sm" />
           </CardHeader>
         </Card>
 
-        <Card className="illo-kpi overflow-hidden">
-          <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
+        <Card className="illo-kpi">
+          <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
             <div className="min-w-0 space-y-1.5">
               <CardDescription>Total Projects</CardDescription>
               <CardTitle className="text-4xl">
@@ -226,7 +226,7 @@ export default function HomePage() {
                 {projectsFailed ? UNREADABLE : "Configured projects"}
               </p>
             </div>
-            <ProjectsIllustration size="fit" className="-my-4 -mr-6" />
+            <ProjectsIllustration size="sm" />
           </CardHeader>
         </Card>
       </section>
@@ -240,26 +240,27 @@ export default function HomePage() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {/* note: launcher cards, text beside the scene (the owner's reference), two a row from xl. A
+            card narrower than 440px steps its scene down (illustrations.css, illo-launch). */}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
           {features.map((feature) => {
             const Icon = feature.icon;
             const Scene = feature.illustration;
+            // The card is a flex row so the inner row stretches to the tallest card in its grid row and
+            // the scenes centre on one line. The padding stays inside: the card's own width is what the
+            // scene's container query reads.
             return (
-              <Card key={feature.title} className="illo-card overflow-hidden hover:shadow-lg transition-shadow">
-                {/* The title shares the top row with the scene and the description takes the full
-                    width under both, so a long description does not fold into a narrow column. */}
-                <CardHeader className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-y-1.5 space-y-0">
-                  <div className="min-w-0">
+              <Card key={feature.title} className="illo-launch flex">
+                <div className="flex flex-1 items-center gap-6 p-6">
+                  <div className="min-w-0 flex-1 space-y-1.5">
                     <IllustrationFallback>
                       <Icon className="mb-3 h-9 w-9 text-foreground" aria-hidden="true" />
                     </IllustrationFallback>
-                    <CardTitle className="text-xl">{feature.title}</CardTitle>
+                    <CardTitle className="text-lg">{feature.title}</CardTitle>
+                    <CardDescription>{feature.description}</CardDescription>
                   </div>
-                  <Scene size="fit" className="-mb-2 -mr-6 -mt-6 ml-3" />
-                  <CardDescription className="col-span-full text-base">
-                    {feature.description}
-                  </CardDescription>
-                </CardHeader>
+                  <Scene size="md" />
+                </div>
               </Card>
             );
           })}
@@ -267,7 +268,7 @@ export default function HomePage() {
       </section>
 
       {/* CTA Section */}
-      <section className="text-center space-y-6 py-12 rounded-lg border-2 border-dashed border-muted-foreground/25 bg-muted/50">
+      <section className="text-center space-y-6 py-12 rounded-lg border bg-card">
         <GetStartedIllustration size="xl" className="mx-auto" />
         <div className="space-y-2">
           <h2 className="text-3xl font-bold">Ready to Get Started?</h2>

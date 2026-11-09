@@ -147,7 +147,7 @@ export default function ServiceProvidersPage() {
       </div>
 
       {/* Additional Info */}
-      <Card className="bg-muted/50 border-dashed">
+      <Card className="illo-launch bg-muted/50 border-dashed">
         <CardContent className="flex items-center gap-6 p-6">
           <div className="min-w-0 flex-1">
             <h3 className="text-lg font-semibold mb-2">Growing Ecosystem</h3>
@@ -155,7 +155,7 @@ export default function ServiceProvidersPage() {
               We are continuously expanding our network of service providers. Check back regularly to discover new partners joining the Orcastra platform, each bringing unique expertise and innovative solutions to help businesses thrive in the cloud.
             </p>
           </div>
-          <EcosystemIllustration size="lg" className="-my-2 hidden sm:block" />
+          <EcosystemIllustration size="md" />
         </CardContent>
       </Card>
     </div>

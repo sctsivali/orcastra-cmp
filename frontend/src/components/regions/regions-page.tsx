@@ -440,7 +440,7 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
                 {/* A scene only for the first-run state; a filter that matched nothing keeps the icon. */}
                 {data?.regions.length === 0 ? (
                   <>
-                    <RegionsIllustration size="lg" className="mx-auto mb-4" />
+                    <RegionsIllustration size="md" className="mx-auto mb-4" />
                     <IllustrationFallback>
                       <Globe className="h-12 w-12 mx-auto text-muted-foreground mb-4" aria-hidden="true" />
                     </IllustrationFallback>

@@ -46,7 +46,7 @@ export function TechnologySummaryCard({
 }: TechnologySummaryCardProps) {
   const Illustration = ILLUSTRATIONS[kind];
   return (
-    <Card className={cn("illo-card overflow-hidden", className)}>
+    <Card className={cn("illo-card", className)}>
       <button
         type="button"
         aria-haspopup="dialog"
@@ -58,7 +58,7 @@ export function TechnologySummaryCard({
         )}
       >
         <span className="block p-6 pb-4">
-          <span className="flex items-start gap-3">
+          <span className="flex items-start gap-4">
             <IllustrationFallback>
               <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-foreground text-background">
                 <Icon className="h-5 w-5" aria-hidden="true" />
@@ -68,7 +68,7 @@ export function TechnologySummaryCard({
               <span className="block text-lg font-semibold leading-tight">{title}</span>
               <span className="mt-1 block text-sm text-muted-foreground">{description}</span>
             </span>
-            <Illustration size="fit" className="-mb-2 -mr-6 -mt-6" />
+            <Illustration size="sm" className="-mt-1" />
           </span>
         </span>
 

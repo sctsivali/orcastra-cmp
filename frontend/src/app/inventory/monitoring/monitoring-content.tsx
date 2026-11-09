@@ -93,18 +93,16 @@ const MetricCard = memo(function MetricCard({
   illustration: Illustration,
 }: MetricCardProps) {
   return (
-    <Card className={cn("illo-kpi overflow-hidden", className)}>
+    <Card className={cn("illo-kpi", className)}>
       <CardContent className="p-6">
         <div className="space-y-2">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 space-y-2">
               <p className="text-sm font-medium text-muted-foreground">{title}</p>
               <p className="text-2xl sm:text-3xl font-bold tracking-tight tabular-nums">{value}</p>
               {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
             </div>
-            {/* note: a tile with a progress bar keeps the scene clear of it, so the scene bleeds only
-                into the top and right padding. */}
-            <Illustration size="fit" className={progress === undefined ? "-my-4 -mr-6" : "-mr-6 -mt-4"} />
+            <Illustration size="sm" />
           </div>
           {progress !== undefined && (
             <Progress value={progress} className="h-2 mt-2" />
