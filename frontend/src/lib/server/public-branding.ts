@@ -1,5 +1,6 @@
 import { safeImageSrc } from "@/lib/branding-images";
 import type { PublicBranding } from "@/types/branding";
+import { isIllustrationPreference } from "@/types/personalization";
 
 // note: server components only (the root layout's metadata and the auth layout). It reads the
 // Docker-internal backend address, which the browser has no route to.
@@ -36,6 +37,7 @@ export function parsePublicBranding(body: unknown): PublicBranding | null {
     footer_text: text(raw.footer_text),
     accent_color: typeof raw.accent_color === "string" && HEX.test(raw.accent_color) ? raw.accent_color : null,
     theme: raw.theme === "light" || raw.theme === "dark" || raw.theme === "system" ? raw.theme : null,
+    illustrations: isIllustrationPreference(raw.illustrations) ? raw.illustrations : null,
     logo_light: imageUrl(raw.logo_light),
     logo_dark: imageUrl(raw.logo_dark),
     favicon: imageUrl(raw.favicon),

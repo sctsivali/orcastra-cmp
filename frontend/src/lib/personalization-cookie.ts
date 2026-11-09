@@ -1,5 +1,6 @@
 import {
   DEFAULT_PERSONALIZATION,
+  isIllustrationPreference,
   type PersonalizationSettings,
 } from "@/types/personalization";
 
@@ -20,6 +21,8 @@ export interface PersonalizationHint {
   slc?: string;
   an?: string;
   th?: string;
+  /** Card illustrations, read by the root layout so the first byte of HTML already hides them. */
+  il?: string;
 }
 
 export function toPersonalizationHint(settings: PersonalizationSettings): PersonalizationHint {
@@ -34,6 +37,7 @@ export function toPersonalizationHint(settings: PersonalizationSettings): Person
     slc: settings.colors.sidebarLogoColor,
     an: settings.branding.appName,
     th: settings.theme,
+    il: settings.illustrations,
   };
 }
 
@@ -71,6 +75,7 @@ export function parsePersonalizationHint(
         appName: hint.an ?? DEFAULT_PERSONALIZATION.branding.appName,
       },
       theme: (hint.th as PersonalizationSettings["theme"]) ?? DEFAULT_PERSONALIZATION.theme,
+      illustrations: isIllustrationPreference(hint.il) ? hint.il : DEFAULT_PERSONALIZATION.illustrations,
     };
   } catch {
     return null;

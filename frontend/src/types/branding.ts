@@ -1,4 +1,4 @@
-import type { PersonalizationSettings } from "@/types/personalization";
+import type { IllustrationPreference, PersonalizationSettings } from "@/types/personalization";
 
 /** Which layer is on top of what an account sees (backend services/branding/resolve.py). */
 export type BrandingSource = "organization" | "provider" | "deployment" | "default";
@@ -56,6 +56,7 @@ export interface PublicBranding {
   footer_text: string | null;
   accent_color: string | null;
   theme: string | null;
+  illustrations: IllustrationPreference | null;
   logo_light: string | null;
   logo_dark: string | null;
   favicon: string | null;

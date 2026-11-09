@@ -107,6 +107,13 @@ export const SIDEBAR_BG_PRESETS: ColorPreset[] = [
 // Theme preference type
 export type ThemePreference = "dark" | "light" | "system";
 
+/** Whether cards show their illustration (components/illustrations). */
+export type IllustrationPreference = "show" | "hide";
+
+export function isIllustrationPreference(value: unknown): value is IllustrationPreference {
+  return value === "show" || value === "hide";
+}
+
 // Complete personalization settings
 export interface PersonalizationSettings {
   logo: LogoSettings;
@@ -114,6 +121,7 @@ export interface PersonalizationSettings {
   branding: BrandingSettings;
   colors: ColorSettings;
   theme: ThemePreference;          // User's theme preference (dark/light/system)
+  illustrations: IllustrationPreference;
   lastModified: string | null;   // ISO date string
 }
 
@@ -153,6 +161,7 @@ export const DEFAULT_PERSONALIZATION: PersonalizationSettings = {
     autoTextColor: true,          // Auto-calculate text color by default
   },
   theme: "system",               // Default: follow system preference
+  illustrations: "show",
   lastModified: null,
 };
 
@@ -171,6 +180,14 @@ export interface PersonalizationContextType {
   themeIsPersonal: boolean;
   /** The theme the organization (or deployment) sets, which applies when the account chose none. */
   organizationTheme: ThemePreference;
+  /** Persist this account's own choice to show or hide card illustrations. */
+  updateIllustrations: (choice: IllustrationPreference) => void;
+  /** Drop the account's own choice so the organization's default applies. */
+  clearIllustrations: () => void;
+  /** Whether `settings.illustrations` is the account's own choice rather than its organization's. */
+  illustrationsArePersonal: boolean;
+  /** What the organization (or deployment) sets, which applies when the account chose nothing. */
+  organizationIllustrations: IllustrationPreference;
   /** Show branding at once (the editor's preview of the organization the sidebar renders). */
   applySettingsOptimistically: (settings: PersonalizationSettings) => void;
   refreshSettings: () => Promise<void>;
@@ -187,6 +204,8 @@ export interface BrandingEditorContextType {
   updateColors: (colors: Partial<ColorSettings>) => void;
   /** The default theme for everyone this branding applies to; each account can still choose its own. */
   updateDefaultTheme: (theme: ThemePreference) => void;
+  /** Whether cards show their illustration for everyone this branding applies to. */
+  updateDefaultIllustrations: (choice: IllustrationPreference) => void;
   resetToDefaults: () => void;
   /** What the reset button says: it removes this row, so it names what shows instead. */
   resetLabel: string;

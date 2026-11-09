@@ -12,6 +12,7 @@ import {
   PERSONALIZATION_COOKIE,
   parsePersonalizationHint,
 } from "@/lib/personalization-cookie";
+import { DEFAULT_PERSONALIZATION } from "@/types/personalization";
 import { DOCK_COOKIE, parseDockCookie } from "@/lib/dock-cookie";
 import { readHydratableSession } from "@/auth-session";
 import { getPublicBranding } from "@/lib/server/public-branding";
@@ -158,9 +159,20 @@ export default async function RootLayout({
   const initialPersonalization = parsePersonalizationHint(
     cookieStore.get(PERSONALIZATION_COOKIE)?.value,
   );
+  // Card illustrations from the first byte: the account's hint when there is one, otherwise the
+  // deployment's choice, which the sign-in pages show before anyone signs in. getPublicBranding
+  // is the same memoised read generateMetadata made, so this adds no request.
+  const illustrations =
+    initialPersonalization?.illustrations ??
+    (await getPublicBranding())?.illustrations ??
+    DEFAULT_PERSONALIZATION.illustrations;
 
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html
+      lang="en"
+      data-illustrations={illustrations}
+      suppressHydrationWarning
+    >
       <head>
         {/* Prevent theme flash: apply theme before paint via cookie hint */}
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />

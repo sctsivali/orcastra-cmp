@@ -34,7 +34,8 @@ export function Sidebar({ className }: SidebarProps) {
     setSidebarOpen,
   } = useLayout();
   const { theme, setTheme } = useTheme();
-  const { settings, themeIsPersonal, clearTheme } = usePersonalization();
+  const { settings, themeIsPersonal, clearTheme, illustrationsArePersonal, updateIllustrations, clearIllustrations } =
+    usePersonalization();
   const currentLogo = useCurrentLogo(theme);
   const { isAdmin, isPartner, isTenant } = usePermissions();
   const pathname = usePathname();
@@ -198,6 +199,10 @@ export function Sidebar({ className }: SidebarProps) {
             setTheme={setTheme}
             themeIsPersonal={themeIsPersonal}
             onDefaultTheme={clearTheme}
+            illustrations={settings.illustrations}
+            setIllustrations={updateIllustrations}
+            illustrationsArePersonal={illustrationsArePersonal}
+            onDefaultIllustrations={clearIllustrations}
             ctx={ctx}
           />
         </div>

@@ -1,5 +1,5 @@
 import { fetchAPI } from "@/lib/api";
-import type { PersonalizationSettings, ThemePreference } from "@/types/personalization";
+import type { IllustrationPreference, PersonalizationSettings, ThemePreference } from "@/types/personalization";
 
 export const personalizationAPI = {
   /** Read-only command endpoint used to fetch a CORS-restricted image through the guarded backend. */
@@ -10,9 +10,10 @@ export const personalizationAPI = {
       ...(accessToken ? { headers: { Authorization: `Bearer ${accessToken}` } } : {}),
     }),
 
-  /** The account's own theme; null clears it so the organization's default applies. */
+  /** The account's own theme and illustrations choice. Send either; null clears that one so the
+   *  organization's default applies, and a key left out is kept as it is. */
   update: (
-    body: { theme: ThemePreference | null },
+    body: { theme?: ThemePreference | null; illustrations?: IllustrationPreference | null },
     accessToken?: string,
   ): Promise<PersonalizationSettings> =>
     fetchAPI<PersonalizationSettings>("/user-preferences", {

@@ -3,6 +3,7 @@
 import * as React from "react";
 import Image from "next/image";
 import { useBrandingEditor } from "./branding/branding-editor-context";
+import { IllustrationsDefaultField } from "./personalization/illustrations-default-field";
 import { useTheme } from "./theme-provider";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -228,7 +229,7 @@ function ImageUploader({
           onClick={() => { setShowUrlInput(true); setError(null); }}
           className="h-7 text-xs"
         >
-          <svg className="h-3 w-3 mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg className="h-3 w-3 mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
             <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
             <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
           </svg>
@@ -483,7 +484,7 @@ function PreviewDialog({ children }: { children: React.ReactNode }) {
 
 // Main PersonalizationSettings component
 export function PersonalizationSettings() {
-  const { settings, updateLogo, updateBackground, updateBranding, updateColors, updateDefaultTheme, resetToDefaults, resetLabel, undoSettings, redoSettings, canUndo, canRedo, isLoading } = useBrandingEditor();
+  const { settings, updateLogo, updateBackground, updateBranding, updateColors, updateDefaultTheme, updateDefaultIllustrations, resetToDefaults, resetLabel, undoSettings, redoSettings, canUndo, canRedo, isLoading } = useBrandingEditor();
   const { theme } = useTheme();
   const [resetConfirm, setResetConfirm] = React.useState(false);
 
@@ -747,6 +748,8 @@ export function PersonalizationSettings() {
                 The theme for everyone this branding applies to. Each person can still pick their own from the sidebar.
               </p>
             </div>
+
+            <IllustrationsDefaultField value={settings.illustrations} onChange={updateDefaultIllustrations} />
           </CardContent>
         </Card>
 

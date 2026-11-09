@@ -7,7 +7,7 @@ import { hasMappedRole } from "@/types/rbac";
 import { hexToHSL } from "@/lib/color";
 import { PERSONALIZATION_COOKIE, parsePersonalizationHint, toPersonalizationHint } from "@/lib/personalization-cookie";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
-import { usePersonalizationSync, type ThemeOrigin } from "./personalization/use-personalization-sync";
+import { usePersonalizationSync, type PreferenceOrigin } from "./personalization/use-personalization-sync";
 import { usePersonalizationMutations } from "./personalization/use-personalization-mutations";
 
 // The two sidebar text pairs autoTextColor picks between, and the alpha tiers that go with
@@ -32,10 +32,14 @@ export const PersonalizationContext = React.createContext<PersonalizationContext
  * Persist visual personalization hint in cookie for instant load (365 days).
  * Only stores CSS-relevant values - NOT images/logos (too large for cookies).
  */
-function setPersonalizationCookie(settings: PersonalizationSettings) {
+function setPersonalizationCookie(settings: PersonalizationSettings, withIllustrations: boolean) {
   if (typeof document === "undefined") return;
   try {
-    const encoded = encodeURIComponent(JSON.stringify(toPersonalizationHint(settings)));
+    const hint = toPersonalizationHint(settings);
+    // Signed out, the choice is the deployment's, which the root layout reads on every request;
+    // writing the built-in default here would mask it on the next one.
+    if (!withIllustrations) delete hint.il;
+    const encoded = encodeURIComponent(JSON.stringify(hint));
     document.cookie = `${PERSONALIZATION_COOKIE}=${encoded};path=/;max-age=${365 * 24 * 60 * 60};SameSite=Lax`;
   } catch {
     // cookie write failed - degrade gracefully
@@ -67,9 +71,11 @@ export function PersonalizationProvider({ children, initialSettings }: {
   const [isLoading, setIsLoading] = React.useState(true);
   const personalRowRef = React.useRef<PersonalizationSettings | null>(null);
   const lastLocalEditRef = React.useRef(0);
-  const [themeOrigin, setThemeOrigin] = React.useState<ThemeOrigin>({
+  const [origin, setOrigin] = React.useState<PreferenceOrigin>({
     personal: false,
     organizationTheme: DEFAULT_PERSONALIZATION.theme,
+    illustrationsPersonal: false,
+    organizationIllustrations: DEFAULT_PERSONALIZATION.illustrations,
   });
   const actor = {
     userId: session?.user?.id ?? null,
@@ -79,20 +85,26 @@ export function PersonalizationProvider({ children, initialSettings }: {
   // A caller with no role sees only the access notice and the backend refuses its reads, so
   // there is nothing to fetch and every attempt would be a 403 (issue #17).
   const mayRead = !Array.isArray(session?.user?.groups) || hasMappedRole(session.user.groups);
+  // Only an account whose preferences are read owns the illustrations choice on screen. Signed
+  // out, or without a role, the server already rendered the deployment's choice (app/layout.tsx)
+  // and the defaults held here would overwrite it.
+  const ownsIllustrations = isAuthenticated && mayRead;
   const { refreshSettings } = usePersonalizationSync({
     ...actor,
     authenticated: isAuthenticated && mayRead,
     sessionLoading: status === "loading" && !session,
-    personalRowRef, lastLocalEditRef, setSettings, setIsLoading, setThemeOrigin,
+    personalRowRef, lastLocalEditRef, setSettings, setIsLoading, setOrigin,
   });
   const mutations = usePersonalizationMutations({
-    ...actor, setSettings, themeOrigin, setThemeOrigin, lastLocalEditRef,
+    ...actor, setSettings, origin, setOrigin, lastLocalEditRef,
   });
   const value: PersonalizationContextType = {
     settings,
     ...mutations,
-    themeIsPersonal: themeOrigin.personal,
-    organizationTheme: themeOrigin.organizationTheme,
+    themeIsPersonal: origin.personal,
+    organizationTheme: origin.organizationTheme,
+    illustrationsArePersonal: origin.illustrationsPersonal,
+    organizationIllustrations: origin.organizationIllustrations,
     refreshSettings,
     isLoading,
   };
@@ -145,10 +157,17 @@ export function PersonalizationProvider({ children, initialSettings }: {
     }
   }, [settings.colors]);
 
+  // The root layout renders data-illustrations from the hint cookie, so the first byte of HTML is
+  // already right; this keeps the attribute in step with a choice made or loaded since.
+  React.useEffect(() => {
+    if (typeof document === "undefined" || !ownsIllustrations) return;
+    document.documentElement.dataset.illustrations = settings.illustrations;
+  }, [settings.illustrations, ownsIllustrations]);
+
   // Persist visual hint cookie whenever visual settings change (for FOUC prevention on next load)
   React.useEffect(() => {
-    setPersonalizationCookie(settings);
-  }, [settings.colors, settings.branding.appName, settings.theme]);
+    setPersonalizationCookie(settings, ownsIllustrations);
+  }, [settings.colors, settings.branding.appName, settings.theme, settings.illustrations, ownsIllustrations]);
 
   return (
     <PersonalizationContext.Provider value={value}>

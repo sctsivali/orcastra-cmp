@@ -8,6 +8,8 @@ import {
   Monitor,
   Building2,
   Bug,
+  Image as ImageIcon,
+  ImageOff,
   MessagesSquare,
   ExternalLink,
   type LucideIcon,
@@ -18,9 +20,11 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type { IllustrationPreference } from "@/types/personalization";
 import { cn } from "@/lib/utils";
 import { NavItemSpinner, NavRailIcon } from "./nav-link-status";
 import { linkIntentProps } from "@/components/navigation/route-intent";
@@ -36,6 +40,11 @@ interface SidebarFooterProps {
   /** Whether `theme` is this account's own choice rather than its organization's default. */
   themeIsPersonal: boolean;
   onDefaultTheme: () => void;
+  illustrations: IllustrationPreference;
+  setIllustrations: (choice: IllustrationPreference) => void;
+  /** Whether `illustrations` is this account's own choice rather than its organization's default. */
+  illustrationsArePersonal: boolean;
+  onDefaultIllustrations: () => void;
   ctx: NavRenderContext;
 }
 interface SupportLink {
@@ -101,6 +110,10 @@ export function SidebarFooter({
   setTheme,
   themeIsPersonal,
   onDefaultTheme,
+  illustrations,
+  setIllustrations,
+  illustrationsArePersonal,
+  onDefaultIllustrations,
   ctx,
 }: SidebarFooterProps) {
   const { setSidebarOpen } = useLayout();
@@ -131,6 +144,7 @@ export function SidebarFooter({
   // A check marks the account's own choice; "Default Theme" is checked while the organization's
   // (or the deployment's) default applies, so picking the same theme there is a real change.
   const chosen = (value: Theme) => themeIsPersonal && theme === value;
+  const shown = (value: IllustrationPreference) => illustrationsArePersonal && illustrations === value;
   const themeMenu = (
     <DropdownMenuContent align="start" side="top" className="w-52">
       <DropdownMenuItem onClick={() => setTheme("light")}>
@@ -153,6 +167,24 @@ export function SidebarFooter({
         <Building2 className="mr-2 h-4 w-4" />
         Default Theme
         {!themeIsPersonal && <span className="ml-auto">✓</span>}
+      </DropdownMenuItem>
+      {/* The same three-way shape as the theme: an own choice, or the organization's default. */}
+      <DropdownMenuSeparator />
+      <DropdownMenuLabel className="text-xs font-medium text-muted-foreground">Card Illustrations</DropdownMenuLabel>
+      <DropdownMenuItem onClick={() => setIllustrations("show")}>
+        <ImageIcon className="mr-2 h-4 w-4" />
+        Show
+        {shown("show") && <span className="ml-auto">✓</span>}
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => setIllustrations("hide")}>
+        <ImageOff className="mr-2 h-4 w-4" />
+        Hide
+        {shown("hide") && <span className="ml-auto">✓</span>}
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={onDefaultIllustrations}>
+        <Building2 className="mr-2 h-4 w-4" />
+        Default Setting
+        {!illustrationsArePersonal && <span className="ml-auto">✓</span>}
       </DropdownMenuItem>
     </DropdownMenuContent>
   );

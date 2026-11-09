@@ -9,6 +9,7 @@ import {
   type BrandingEditorContextType,
   type BrandingSettings,
   type ColorSettings,
+  type IllustrationPreference,
   type LogoSettings,
   type PersonalizationSettings,
   type ThemePreference,
@@ -115,6 +116,8 @@ export function useBrandingEditorState({
     void save({ ...settings, colors: { ...settings.colors, ...colors } }), [settings, save]);
   const updateDefaultTheme = React.useCallback((theme: ThemePreference) =>
     void save({ ...settings, theme }, { immediate: true }), [settings, save]);
+  const updateDefaultIllustrations = React.useCallback((illustrations: IllustrationPreference) =>
+    void save({ ...settings, illustrations }, { immediate: true }), [settings, save]);
 
   const resetToDefaults = React.useCallback(async () => {
     if (!targetKey) return;
@@ -150,7 +153,7 @@ export function useBrandingEditorState({
 
   return {
     settings: settings ?? DEFAULT_PERSONALIZATION,
-    updateLogo, updateBackground, updateBranding, updateColors, updateDefaultTheme,
+    updateLogo, updateBackground, updateBranding, updateColors, updateDefaultTheme, updateDefaultIllustrations,
     resetToDefaults, resetLabel,
     undoSettings: () => step(undoStackRef, redoStackRef),
     redoSettings: () => step(redoStackRef, undoStackRef),
