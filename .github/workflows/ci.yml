@@ -259,6 +259,11 @@ jobs:
       # the dashboard had 22 such buttons on one screen and the shared pagination 4 more.
       - name: Icon button names
         run: node scripts/checks/check-icon-button-names.mjs .
+      # Card illustrations are decoration in one palette: colour only in their stylesheet, flat,
+      # one aria-hidden svg root, hideable from the first byte, and never used as an icon.
+      # check-semantic-colour.mjs does not read SVG fill or stroke attributes.
+      - name: Card illustrations
+        run: node scripts/checks/check-illustrations.mjs .
       # An attribute that lands below its own opening `>` is a text child, and JSX renders it
       # verbatim. Every project card on /inventory drew "aria-label=Project actions for <name>"
       # across its title for three days, from the very commit meant to name that button. tsc,

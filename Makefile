@@ -342,6 +342,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-node-link.mjs
 	@echo "$(COLOR_GREEN)Checking icon button names...$(COLOR_RESET)"
 	@node scripts/checks/check-icon-button-names.mjs
+	@echo "$(COLOR_GREEN)Checking card illustrations...$(COLOR_RESET)"
+	@node scripts/checks/check-illustrations.mjs
 	@echo "$(COLOR_GREEN)Checking stray JSX attributes...$(COLOR_RESET)"
 	@node scripts/checks/check-jsx-stray-attrs.mjs
 	@echo "$(COLOR_GREEN)Checking truncation reveal...$(COLOR_RESET)"
