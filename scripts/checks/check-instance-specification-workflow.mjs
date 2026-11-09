@@ -291,6 +291,10 @@ const instancesPagePath = "frontend/src/app/inventory/instances/page.tsx";
 const instancesPage = read(instancesPagePath);
 requireText(instancesPagePath, instancesPage, [
   '(!p.jobId || p.jobStatus === "success")',
+  // The header's New Instance is the one create control on the page, so it carries the
+  // read-only gate.
+  "disabled={!!writeDisabledReason}",
+  'title={writeDisabledReason ?? "Create a new instance"}',
 ]);
 
 const pendingRowsPath = "frontend/src/app/inventory/instances/components/pending-create-rows.tsx";
@@ -304,12 +308,11 @@ requireText(pendingRowsPath, pendingRows, [
   'p.jobStatus === "unknown"',
 ]);
 
+// The empty row carries no second create button (owner decision 2026-11-09); one that came back
+// would need the read-only gate again.
 const tablePath = "frontend/src/app/inventory/instances/components/instances-table.tsx";
 const table = read(tablePath);
-requireText(tablePath, table, [
-  "disabled={!!props.writeDisabledReason}",
-  'title={props.writeDisabledReason ?? "Create a new instance"}',
-]);
+if (table.includes("Create Instance")) failures.push(`${tablePath} renders a second create button; the header's New Instance is the one`);
 
 const rowActionsPath = "frontend/src/components/ui/row-actions.tsx";
 const rowActions = read(rowActionsPath);
@@ -340,7 +343,7 @@ requireText(accessE2EPath, accessE2E, [
   "Partner safe policy",
   "Admin full policy",
   "cached full policy cannot authorize advanced create after a refetch error",
-  "read-only mode disables direct and empty-state create actions",
+  "read-only mode disables the create action, and the empty state offers no second one",
   "direct create stays disabled while global write availability is loading",
   "specification edit stays disabled when global write availability cannot be verified",
   "Tenant direct create is redirected",
