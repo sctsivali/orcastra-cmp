@@ -36,6 +36,7 @@ class PublicBranding(BaseModel):
     footer_text: Optional[str] = None
     accent_color: Optional[str] = None
     theme: Optional[str] = None
+    illustrations: Optional[str] = None
     logo_light: Optional[str] = None
     logo_dark: Optional[str] = None
     favicon: Optional[str] = None
@@ -68,6 +69,7 @@ async def get_public_branding(request: Request, response: Response, db: AsyncSes
         footer_text=branding.get("footerText"),
         accent_color=colors.get("accentColor"),
         theme=settings.get("theme"),
+        illustrations=settings.get("illustrations"),
         logo_light=_asset_url("logo-light", logo.get("lightModeLogo"), resolved.version),
         logo_dark=_asset_url("logo-dark", logo.get("darkModeLogo"), resolved.version),
         favicon=_asset_url("favicon", logo.get("favicon"), resolved.version),

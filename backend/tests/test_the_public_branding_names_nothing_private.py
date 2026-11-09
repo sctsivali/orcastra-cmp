@@ -52,7 +52,8 @@ def test_only_display_fields_are_answered_and_images_become_asset_links() -> Non
     body = response.json()
 
     assert set(body) == {
-        "app_name", "tagline", "footer_text", "accent_color", "theme", "logo_light", "logo_dark", "favicon", "version",
+        "app_name", "tagline", "footer_text", "accent_color", "theme", "illustrations", "logo_light", "logo_dark", "favicon",
+        "version",
     }
     assert "admin@secret.test" not in response.text
     assert "base64" not in response.text, "an image is linked, never inlined"

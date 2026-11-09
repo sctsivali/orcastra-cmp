@@ -20,6 +20,7 @@ from app.core.database import get_db
 from app.core.safe_http import SafeHTTPError, fetch_guarded
 from app.core.dependencies import check_read_only_mode, require_authenticated, AuthenticatedUser
 from app.models.db_models import UserPreferences
+from app.services.branding.validation import ILLUSTRATIONS
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +142,8 @@ def get_default_settings() -> Dict[str, Any]:
         },
         "theme": "system",
         "lastModified": None,
+        # null: the account has not chosen, so its organization's choice (or show) applies.
+        "illustrations": None,
     }
 
 
@@ -148,12 +151,15 @@ THEMES = ("light", "dark", "system")
 
 
 def _personal_view(user_prefs: UserPreferences) -> Dict[str, Any]:
-    """The defaults with this user's theme laid over them. lastModified marks that a theme was chosen."""
+    """The defaults with this user's choices laid over them. lastModified marks that a theme was
+    chosen; illustrations is its own value, null when unchosen, so neither marks the other."""
     settings = get_default_settings()
     saved = user_prefs.settings or {}
     if saved.get("theme") in THEMES:
         settings["theme"] = saved["theme"]
         settings["lastModified"] = saved.get("lastModified") or user_prefs.updated_at.isoformat()
+    if saved.get("illustrations") in ILLUSTRATIONS:
+        settings["illustrations"] = saved["illustrations"]
     return settings
 
 
@@ -225,8 +231,11 @@ async def get_user_preferences(
 @router.put(
     "",
     response_model=Dict[str, Any],
-    summary="Set or clear the user's theme",
-    description="Stores the authenticated user's theme (light, dark or system); null clears it. Branding is per organization.",
+    summary="Set or clear the user's theme and illustrations choice",
+    description=(
+        "Stores the authenticated user's theme (light, dark or system) and whether cards show their "
+        "illustration (show or hide). Send either or both; null clears one. Branding is per organization."
+    ),
 )
 async def update_user_preferences(
     settings: Dict[str, Any],
@@ -237,16 +246,23 @@ async def update_user_preferences(
 ) -> Dict[str, Any]:
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, private"
     x_user_id, x_user_email = current_identity(user)
-    # important: only the theme is kept. Branding belongs to an organization or to the deployment
-    # (services/branding/); a personal row used to hold a full copy of it, which the fallback then
-    # handed to everyone in the owner's organization. `theme: null` clears the choice, so the
-    # organization's default theme applies again. Other keys a client sends are ignored, and keys
-    # an older build stored are left in place for a rollback to read.
-    if "theme" not in settings:
-        raise HTTPException(status_code=422, detail="Only the theme is stored per user; send {\"theme\": ...}.")
+    # important: only the theme and the illustrations choice are kept. Branding belongs to an
+    # organization or to the deployment (services/branding/); a personal row used to hold a full
+    # copy of it, which the fallback then handed to everyone in the owner's organization. A key
+    # sent as null clears that choice, so the organization's default applies again; a key not sent
+    # is left as it is. Other keys a client sends are ignored, and keys an older build stored are
+    # left in place for a rollback to read. Both values are checked before anything is written.
+    if "theme" not in settings and "illustrations" not in settings:
+        raise HTTPException(
+            status_code=422,
+            detail="Only the theme and the illustrations choice are stored per user; send {\"theme\": ...} or {\"illustrations\": ...}.",
+        )
     theme = settings.get("theme")
     if theme is not None and theme not in THEMES:
         raise HTTPException(status_code=422, detail=f"theme must be one of {', '.join(THEMES)}, or null")
+    illustrations = settings.get("illustrations")
+    if illustrations is not None and illustrations not in ILLUSTRATIONS:
+        raise HTTPException(status_code=422, detail=f"illustrations must be one of {', '.join(ILLUSTRATIONS)}, or null")
 
     try:
         result = await db.execute(
@@ -254,12 +270,18 @@ async def update_user_preferences(
         )
         user_prefs = result.scalar_one_or_none()
         stored = dict(user_prefs.settings or {}) if user_prefs else {}
-        if theme is None:
-            stored.pop("theme", None)
-            stored.pop("lastModified", None)
-        else:
-            stored["theme"] = theme
-            stored["lastModified"] = datetime.now(timezone.utc).isoformat()
+        if "theme" in settings:
+            if theme is None:
+                stored.pop("theme", None)
+                stored.pop("lastModified", None)
+            else:
+                stored["theme"] = theme
+                stored["lastModified"] = datetime.now(timezone.utc).isoformat()
+        if "illustrations" in settings:
+            if illustrations is None:
+                stored.pop("illustrations", None)
+            else:
+                stored["illustrations"] = illustrations
 
         if user_prefs and not stored:
             await db.delete(user_prefs)

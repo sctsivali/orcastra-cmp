@@ -5,7 +5,8 @@ organization (one hop, never its provider's provider), and the organization's ow
 layer fills or replaces what an earlier one set, key by key, so a buyer that only changed its
 colours keeps its seller's logo. An empty value (None or "") never replaces anything. The
 built-in look under all of them is the frontend's DEFAULT_PERSONALIZATION, and an account's own
-theme choice is laid over the top by the frontend (user-preferences), so neither is here.
+theme and illustrations choices are laid over the top by the frontend (user-preferences), so
+neither is here.
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, Optional, Tuple
 
 SECTIONS = ("logo", "background", "branding", "colors")
+# Single values that a later layer replaces whole, as long as it sets them.
+CHOICES = ("theme", "illustrations")
 
 
 @dataclass(frozen=True)
@@ -51,8 +54,9 @@ def merge(layers: Iterable[Layer]) -> Dict[str, Any]:
                 filled = {key: value for key, value in values.items() if _filled(value)}
                 if filled:
                     out[section] = {**out.get(section, {}), **filled}
-        if _filled(settings.get("theme")):
-            out["theme"] = settings["theme"]
+        for key in CHOICES:
+            if _filled(settings.get(key)):
+                out[key] = settings[key]
     return out
 
 

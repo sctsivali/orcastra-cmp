@@ -30,6 +30,8 @@ BACKGROUND_BYTES = 2 * 1024 * 1024
 LOGO_TYPES = ("image/png", "image/jpeg", "image/webp", "image/svg+xml")
 FAVICON_TYPES = ("image/png", "image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon")
 THEMES = ("light", "dark", "system")
+# Whether cards show their illustration (frontend components/illustrations). Absent means show.
+ILLUSTRATIONS = ("show", "hide")
 LOGO_COLORS = ("auto", "black", "white")
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 _DATA_URI = re.compile(r"^data:(?P<type>[a-z0-9.+/-]+)(?:;charset=[a-z0-9-]+)?;base64,(?P<data>[A-Za-z0-9+/=\s]+)$", re.I)
@@ -171,6 +173,10 @@ def validate_branding(settings: Mapping[str, Any]) -> Dict[str, Any]:
         if settings["theme"] not in THEMES:
             raise BrandingInvalid(f"theme must be one of {', '.join(THEMES)}")
         out["theme"] = settings["theme"]
+    if "illustrations" in settings:
+        if settings["illustrations"] not in ILLUSTRATIONS:
+            raise BrandingInvalid(f"illustrations must be one of {', '.join(ILLUSTRATIONS)}")
+        out["illustrations"] = settings["illustrations"]
     if isinstance(settings.get("lastModified"), str):
         out["lastModified"] = settings["lastModified"][:64]
     if not out:
