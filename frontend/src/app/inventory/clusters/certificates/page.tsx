@@ -120,7 +120,9 @@ function CertificatesContent() {
     <div className="p-4 md:p-8 space-y-4 md:space-y-6">
       {isReadOnly && <ReadOnlyBanner />}
 
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      {/* The heading and the refresh control share a row only from lg: at md the sidebar leaves the
+          header 448px and the row ran 450px past the page. */}
+      <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4">
           <BackLink href="/inventory/clusters" label="Clusters" />
           <div className="min-w-0">

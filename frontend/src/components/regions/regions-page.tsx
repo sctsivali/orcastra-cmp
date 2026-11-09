@@ -405,7 +405,9 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
 
       {/* Global stats */}
       {data && fleet && (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        // note: six a row only from 2xl. Beside the sidebar at lg a tile was 93px wide and clipped
+        // "616.06 GB"; two a row until lg and three until 2xl keep every figure whole.
+        <div className="grid grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-4">
           <StatTile icon={Globe} illustration={RegionsIllustration} label="Regions" value={data.regions.length} />
           <StatTile icon={Server} illustration={ClustersIllustration} label="Clusters" value={data.total_nodes} />
           <StatTile icon={Cpu} illustration={CpuIllustration} label="CPU Threads" value={nothingRead ? NOT_READ : fleet.cpu} />
@@ -421,7 +423,7 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
         </div>
       )}
       {data && !fleet && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <StatTile icon={Globe} illustration={RegionsIllustration} label="Regions" value={data.regions.length} />
           <StatTile icon={Server} illustration={ClustersIllustration} label="Clusters" value={data.total_nodes} />
           <StatTile icon={Box} illustration={InstancesIllustration} label="Instances" value={data.total_instances} />
