@@ -11,16 +11,17 @@ const { installSettingsFixtures, expectCleanSettingsHarness } = require("./suppo
 
 // Card illustrations (components/illustrations): decoration that names a card's subject. These
 // specs hold what a reader cannot see in review: a scene is hidden from assistive technology and
-// takes no focus, fills its slot without ever covering text, stays inside its card, paints its
-// theme's tokens, does not move after it lands, and disappears from the first byte of HTML when the
-// organization hides it, with the card's classic icon back and no gap. The choice lives only in
-// Settings > Personalization (owner decision 2026-11-09); the theme menu offers none.
+// takes no focus, sits in its own slot inside the card's padding without ever covering text, lines
+// up with the scenes beside it at one weight, paints its theme's tokens, does not move after it
+// lands, and disappears from the first byte of HTML when the organization hides it, with the card's
+// classic icon back and no gap. The choice lives only in Settings > Personalization (owner decision
+// 2026-11-09); the theme menu offers none.
 
 const SCENE = '[data-slot="card-illustration"]';
 const FALLBACK = '[data-slot="illustration-fallback"]';
 const HINT = "orcastra-personalization";
-// The hero face, read from illustrations.css: #3A2482 on light, #BBABFF on dark.
-const HERO_FACE = { light: "rgb(58, 36, 130)", dark: "rgb(187, 171, 255)" };
+// The hero face, read from illustrations.css: #46309A on light, #B7A6FF on dark.
+const HERO_FACE = { light: "rgb(70, 48, 154)", dark: "rgb(183, 166, 255)" };
 
 const themeOf = (testInfo) => (testInfo.project.name.includes("dark") ? "dark" : "light");
 const isMobile = (testInfo) => testInfo.project.name.startsWith("mobile");
@@ -122,8 +123,9 @@ async function expectDecorative(page) {
 }
 
 /**
- * Every visible scene stays inside its card and covers no text in it: each text run's box (a Range
- * over the text node, so a long label is measured where it actually wraps) against the scene's box.
+ * Every visible scene sits in its own slot at least 12px inside its card (no bleed into the edge) and
+ * covers no text in it: each text run's box (a Range over the text node, so a long label is measured
+ * where it actually wraps) against the scene's box.
  */
 async function expectFitted(page) {
   const problems = await page.locator(SCENE).evaluateAll((nodes) => nodes
@@ -134,9 +136,8 @@ async function expectFitted(page) {
       const s = node.getBoundingClientRect();
       const c = card.getBoundingClientRect();
       const out = [];
-      if (s.left < c.left - 1 || s.right > c.right + 1 || s.top < c.top - 1 || s.bottom > c.bottom + 1) {
-        out.push(`a ${Math.round(s.width)}px scene leaves its card`);
-      }
+      const inset = Math.min(s.left - c.left, c.right - s.right, s.top - c.top, c.bottom - s.bottom);
+      if (inset < 12) out.push(`a ${Math.round(s.width)}px scene is ${Math.round(inset)}px from its card's edge`);
       const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT);
       for (let text = walker.nextNode(); text; text = walker.nextNode()) {
         if (!text.textContent.trim() || node.contains(text)) continue;
@@ -152,43 +153,133 @@ async function expectFitted(page) {
   expect(problems).toEqual([]);
 }
 
-/** KPI tiles: shown exactly while the tile is at least 220px, then at least 35% of the tile, numbers unclipped. */
+/**
+ * Cards of one kind in one row hold their scenes alike: the slot at the same offset from the card's
+ * top and right edge, the objects standing on one ground line, and every silhouette at a similar
+ * weight. The weight is the share of the slot the objects paint (contact shadows left out), read by
+ * drawing the scene with its computed paint onto a canvas.
+ */
+async function expectRows(page, kind) {
+  const cards = await page.locator(kind).evaluateAll(async (nodes) => {
+    const paint = async (svg) => {
+      const clone = svg.cloneNode(true);
+      const from = svg.querySelectorAll("*");
+      clone.querySelectorAll("*").forEach((el, i) => {
+        const cs = getComputedStyle(from[i]);
+        el.setAttribute("style", `display:${cs.display};fill:${cs.fill};stroke:${cs.stroke};stroke-width:${cs.strokeWidth};stroke-dasharray:${cs.strokeDasharray};vector-effect:non-scaling-stroke`);
+      });
+      clone.querySelectorAll(".illo-shadow").forEach((el) => el.remove());
+      const r = svg.getBoundingClientRect();
+      const [w, h] = [Math.round(r.width), Math.round(r.height)];
+      clone.removeAttribute("class");
+      clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      clone.setAttribute("width", String(w));
+      clone.setAttribute("height", String(h));
+      const img = new Image();
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+        img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(clone))}`;
+      });
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      const data = ctx.getImageData(0, 0, w, h).data;
+      let painted = 0;
+      for (let i = 3; i < data.length; i += 4) if (data[i] > 40) painted += 1;
+      return painted / (w * h);
+    };
+    const out = [];
+    for (const card of nodes) {
+      const svg = card.querySelector('[data-slot="card-illustration"]');
+      if (!svg || getComputedStyle(svg).display === "none") continue;
+      const c = card.getBoundingClientRect();
+      const s = svg.getBoundingClientRect();
+      let ground = -Infinity;
+      for (const shape of svg.querySelectorAll("polygon, polyline, path, ellipse, circle")) {
+        if (shape.closest(".illo-shadow") || getComputedStyle(shape).display === "none") continue;
+        ground = Math.max(ground, shape.getBoundingClientRect().bottom);
+      }
+      out.push({ top: Math.round(c.top), slotTop: s.top - c.top, gutter: c.right - s.right, ground: ground - c.top, weight: await paint(svg) });
+    }
+    return out;
+  });
+  const rows = new Map();
+  for (const card of cards) rows.set(card.top, [...(rows.get(card.top) ?? []), card]);
+  for (const row of [...rows.values()].filter((r) => r.length > 1)) {
+    const [first] = row;
+    const weights = row.map((card) => card.weight).sort((a, b) => a - b);
+    const median = weights[Math.floor(weights.length / 2)];
+    for (const card of row) {
+      expect(Math.abs(card.slotTop - first.slotTop), `${kind}: slots share a top line`).toBeLessThanOrEqual(1);
+      expect(Math.abs(card.gutter - first.gutter), `${kind}: slots share a right gutter`).toBeLessThanOrEqual(1);
+      expect(Math.abs(card.ground - first.ground), `${kind}: objects stand on one ground line`).toBeLessThanOrEqual(2);
+      expect(card.weight / median, `${kind}: a silhouette weighs about as much as its neighbours`).toBeGreaterThanOrEqual(0.65);
+      expect(card.weight / median, `${kind}: a silhouette weighs about as much as its neighbours`).toBeLessThanOrEqual(1.35);
+    }
+  }
+  return cards;
+}
+
+/**
+ * KPI tiles: the small scene in the top right corner, 88px wide, 72px below a 300px tile and gone
+ * below 220px; never taller than the figures beside it.
+ */
 async function expectKpiTiles(page) {
   const tiles = await page.locator(".illo-kpi").evaluateAll((nodes) => nodes.map((tile) => {
     const scene = tile.querySelector('[data-slot="card-illustration"]');
     const width = tile.getBoundingClientRect().width;
     const shown = getComputedStyle(scene).display !== "none";
+    const s = scene.getBoundingClientRect();
+    const text = scene.previousElementSibling.getBoundingClientRect();
     const clipped = [...tile.querySelectorAll("h3, p")].some((el) => el.scrollWidth > el.clientWidth + 1);
-    return { width: Math.round(width), shown, share: shown ? scene.getBoundingClientRect().width / width : 0, clipped };
+    return { width: Math.round(width), shown, size: [Math.round(s.width), Math.round(s.height)], taller: shown && s.height > text.height + 1, topGap: Math.round(s.top - text.top), clipped };
   }));
   expect(tiles.length, "the page has KPI tiles").toBeGreaterThan(0);
   for (const tile of tiles) {
     expect(tile.shown, `a ${tile.width}px tile`).toBe(tile.width >= 220);
-    if (tile.shown) expect(tile.share, `a ${tile.width}px tile's scene fills its slot`).toBeGreaterThanOrEqual(0.35);
+    if (tile.shown) {
+      expect(tile.size, `a ${tile.width}px tile's scene size`).toEqual(tile.width >= 300 ? [88, 66] : [72, 54]);
+      expect(tile.taller, `a ${tile.width}px tile keeps its height`).toBe(false);
+      expect(tile.topGap, `a ${tile.width}px tile's scene starts on the label's line`).toBe(0);
+    }
     expect(tile.clipped, `a ${tile.width}px tile clips no number or label`).toBe(false);
   }
+  await expectRows(page, ".illo-kpi");
   return tiles;
 }
 
-/** Feature and summary cards: the scene shows while the card is at least 260px, otherwise the classic icon returns. */
-async function expectFitCards(page) {
-  const cards = await page.locator(".illo-card").evaluateAll((nodes) => nodes.map((card) => {
+/**
+ * Launcher cards (Home features, Settings, footers): the 168px scene beside the text, 96px below a
+ * 440px card, and the classic icon in its place below 300px. Data cards (Technologies): the small
+ * scene beside the title down to 260px, then the icon tile.
+ */
+async function expectSideScenes(page, kind) {
+  const cards = await page.locator(kind).evaluateAll((nodes) => nodes.map((card) => {
     const scene = card.querySelector('[data-slot="card-illustration"]');
     const fallback = card.querySelector('[data-slot="illustration-fallback"]');
-    const width = card.getBoundingClientRect().width;
+    const s = scene.getBoundingClientRect();
     return {
-      width: Math.round(width),
+      width: Math.round(card.getBoundingClientRect().width),
       shown: getComputedStyle(scene).display !== "none",
       icon: fallback ? getComputedStyle(fallback).display !== "none" : null,
-      share: scene.getBoundingClientRect().width / width,
+      sceneWidth: Math.round(s.width),
+      size: scene.dataset.size,
     };
   }));
-  expect(cards.length, "the page has feature or summary cards").toBeGreaterThan(0);
+  expect(cards.length, `the page has ${kind} cards`).toBeGreaterThan(0);
+  const launcher = kind === ".illo-launch";
   for (const card of cards) {
-    expect(card.shown, `a ${card.width}px card`).toBe(card.width >= 260);
+    expect(card.shown, `a ${card.width}px card`).toBe(card.width >= (launcher ? 300 : 260));
     if (card.icon !== null) expect(card.icon, `a ${card.width}px card shows its icon in the scene's place`).toBe(!card.shown);
-    if (card.shown) expect(card.share, `a ${card.width}px card's scene fills its corner`).toBeGreaterThanOrEqual(0.3);
+    if (card.shown && launcher && card.width < 440) expect(card.sceneWidth, `a ${card.width}px card steps its scene down`).toBe(96);
+    if (card.shown && launcher && card.width >= 440) expect(card.sceneWidth).toBe({ md: 168, lg: 192 }[card.size]);
+    if (card.shown && !launcher) expect(card.sceneWidth).toBe(88);
   }
+  await expectRows(page, kind);
+  return cards;
 }
 
 async function heroFill(page) {
@@ -216,7 +307,7 @@ test("admin: Home fills each feature card, the call to action and the totals wit
   await expectDecorative(page);
   await expectFitted(page);
   await expectKpiTiles(page);
-  await expectFitCards(page);
+  await expectSideScenes(page, ".illo-launch");
   expect(await heroFill(page), "the hero face paints the theme's token").toBe(HERO_FACE[themeOf(testInfo)]);
   const fallbacks = await page.locator(FALLBACK).evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node).display));
   expect(fallbacks, "the classic icons wait behind the scenes").toEqual(Array(6).fill("none"));
@@ -244,7 +335,10 @@ test("admin: across laptop and tablet widths a scene never covers text and a KPI
     await openHome(page);
     await expectFitted(page);
     await expectKpiTiles(page);
-    await expectFitCards(page);
+    await expectSideScenes(page, ".illo-launch");
+    // Launchers two a row only from xl, where the sidebar still leaves each card room for its text.
+    const lefts = await page.locator(".illo-launch").evaluateAll((nodes) => new Set(nodes.map((n) => Math.round(n.getBoundingClientRect().left))).size);
+    expect(lefts, `${width}px: feature columns`).toBe(width >= 1280 ? 2 : 1);
     await expectNoHorizontalOverflow(page);
     await capture(page, testInfo, `home-${width}`);
   }
@@ -378,7 +472,14 @@ test("admin: a clickable card nudges its scene, and reduced motion keeps it stil
   const card = page.getByRole("button", { name: "View CPU Resources details" });
   await expect(card).toBeVisible({ timeout: 20_000 });
   await expectFitted(page);
-  await expectFitCards(page);
+  await expectSideScenes(page, ".illo-card");
+  // The header is as tall as its text or the small scene, so the figures follow without a band.
+  const bands = await page.locator(".illo-card").evaluateAll((nodes) => nodes.map((node) => {
+    const description = node.querySelector("button > span > span > span.min-w-0 > span:last-child").getBoundingClientRect();
+    const firstRow = node.querySelector("button > span:nth-child(2) > span").getBoundingClientRect();
+    return Math.round(firstRow.top - description.bottom);
+  }));
+  for (const band of bands) expect(band, "description to the first figure").toBeLessThanOrEqual(40);
   const scene = card.locator(`${SCENE} .illo-scene`);
   await card.hover();
   await expect.poll(() => scene.evaluate((node) => getComputedStyle(node).transform)).toBe("matrix(1, 0, 0, 1, 0, -2)");
@@ -426,7 +527,7 @@ test("partner: first-run empty states in Settings draw their scene above the tex
     await expect(scene, `${title} draws its scene`).toHaveCount(1);
     const [s, h] = [await scene.boundingBox(), await heading.boundingBox()];
     expect(s.y + s.height, `${title}: the scene sits above its heading`).toBeLessThanOrEqual(h.y + 1);
-    expect(s.width, `${title}: the empty-state scene is the large size`).toBeGreaterThanOrEqual(190);
+    expect(s.width, `${title}: the empty-state scene is the medium size`).toBe(168);
     await expectDecorative(page);
     await expectFitted(page);
     await expectNoHorizontalOverflow(page);
