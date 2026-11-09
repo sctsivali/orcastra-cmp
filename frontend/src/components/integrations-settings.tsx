@@ -71,6 +71,8 @@ import type {
 } from "@/types";
 import { isVaultUnavailable, retryUnlessUnavailable } from "@/lib/read-error";
 import { ReadErrorState } from "@/components/ui/read-error-state";
+import { IllustrationFallback } from "@/components/illustrations/illustration-frame";
+import { KeyVaultIllustration } from "@/components/illustrations/scenes/catalog";
 
 // Main Integrations Settings Component (for embedding in Settings page)
 /**
@@ -491,7 +493,10 @@ function IntegrationsSettingsContent() {
         <Card>
           <CardContent className="py-12">
             <div className="text-center space-y-4">
-              <Key className="h-12 w-12 mx-auto text-muted-foreground" />
+              <KeyVaultIllustration size="md" className="mx-auto" />
+              <IllustrationFallback>
+                <Key className="h-12 w-12 mx-auto text-muted-foreground" aria-hidden="true" />
+              </IllustrationFallback>
               <div>
                 <h3 className="text-lg font-medium">No API keys</h3>
                 <p className="text-muted-foreground">

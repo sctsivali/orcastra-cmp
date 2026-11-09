@@ -40,7 +40,9 @@ import { BasemapConfig } from "@/lib/map-basemap";
 import { RegionsMapCard } from "./regions-map-card";
 import { REGIONS } from "./regions-table-config";
 import { RegionSummary, RegionsOverviewResponse } from "@/types/api";
+import { RegionsIllustration } from "@/components/illustrations/scenes/onboarding";
 import { isWholeCountry, placeDetail } from "@/lib/regions/place";
+import { IllustrationFallback } from "@/components/illustrations/illustration-frame";
 
 function InstanceCounts({ region }: { region: RegionSummary }) {
   return (
@@ -435,7 +437,17 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
           ) : filteredRegions.length === 0 ? (
             <Card>
               <CardContent className="pt-6 text-center">
-                <Globe className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+                {/* A scene only for the first-run state; a filter that matched nothing keeps the icon. */}
+                {data?.regions.length === 0 ? (
+                  <>
+                    <RegionsIllustration size="md" className="mx-auto mb-4" />
+                    <IllustrationFallback>
+                      <Globe className="h-12 w-12 mx-auto text-muted-foreground mb-4" aria-hidden="true" />
+                    </IllustrationFallback>
+                  </>
+                ) : (
+                  <Globe className="h-12 w-12 mx-auto text-muted-foreground mb-4" aria-hidden="true" />
+                )}
                 <p className="text-muted-foreground">
                   {data?.regions.length === 0
                     ? "No clusters with location data are registered yet."

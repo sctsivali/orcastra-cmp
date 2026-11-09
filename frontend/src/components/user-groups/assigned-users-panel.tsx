@@ -43,6 +43,7 @@ import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import type {
   IntegrationOrganization, UserGroupEntry, UserGroupOrganization, UserGroupRole,
 } from "@/types";
+import { UsersIllustration } from "@/components/illustrations/scenes/onboarding";
 
 /**
  * Every assigned user across every organization the caller runs lands in this one list, so an
@@ -275,6 +276,7 @@ function AssignedUsersPanelContent() {
         ) : userRows.length === 0 ? (
           <EmptyState
             icon={Users}
+            illustration={UsersIllustration}
             title="No users assigned yet"
             description={'Click "Assign User" to add a user with a role'}
           />

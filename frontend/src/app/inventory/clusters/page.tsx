@@ -61,6 +61,7 @@ import { defineTable, fromSort } from "@/lib/table-filter";
 import { Role } from "@/types/rbac";
 import { clusterStatusMeta } from "@/lib/cluster-status";
 import { inventoryLinks } from "@/lib/inventory-links";
+import { EmptyClustersIllustration } from "@/components/illustrations/scenes/onboarding";
 import { PageReadError } from "@/components/ui/read-error-state";
 
 
@@ -319,6 +320,7 @@ function ClustersContent() {
           {clusters.length === 0 ? (
             <EmptyState
               icon={Server}
+              illustration={EmptyClustersIllustration}
               title="No clusters registered"
               description="Get started by registering your first hypervisor cluster"
               action={

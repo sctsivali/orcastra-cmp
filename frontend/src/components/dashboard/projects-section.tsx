@@ -18,6 +18,7 @@ import { VMInfo, ProjectListResponse, ProjectInfo } from "@/types";
 import { useRowFocus } from "@/hooks/use-row-focus";
 import { projectRowKey } from "@/lib/row-focus";
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
+import { ProjectsIllustration } from "@/components/illustrations/scenes/platform";
 import { INSTANCE_PAGE_SIZE, ProjectCard } from "./project-card";
 
 interface ProjectsSectionProps {
@@ -486,6 +487,7 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
                   ) : (
                     <EmptyState
                       icon={FolderKanban}
+                      illustration={ProjectsIllustration}
                       title="No projects yet"
                       description="Projects appear here once a cluster reports one."
                     />

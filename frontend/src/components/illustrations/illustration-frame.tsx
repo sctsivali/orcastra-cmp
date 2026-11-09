@@ -41,3 +41,11 @@ export function IllustrationFrame({
     </svg>
   );
 }
+
+/**
+ * Wraps what a surface showed before it had a scene; illustrations.css shows it only when scenes
+ * are hidden. A span, so it is valid inside a button or a heading as well as a block.
+ */
+export function IllustrationFallback({ children }: { children: React.ReactNode }) {
+  return <span data-slot="illustration-fallback">{children}</span>;
+}

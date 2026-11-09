@@ -1,6 +1,6 @@
 import * as React from "react";
 import { IllustrationFrame, type IllustrationProps } from "../illustration-frame";
-import { Building, Calendar, DOCUMENT_OUTLINE, Pawn, ServerStack, SHIELD_OUTLINE } from "../iso/parts";
+import { Building, DOCUMENT_OUTLINE, Pawn, ServerStack, SHIELD_OUTLINE } from "../iso/parts";
 import { IsoBall, IsoBox, IsoExtrude, IsoGlyph, IsoGround, IsoInset, IsoLink, IsoMark } from "../iso/primitives";
 import { scaleOutline } from "../iso/projection";
 
@@ -80,15 +80,6 @@ export function OrganizationsIllustration(props: IllustrationProps) {
       <IsoLink path={[[-20, 10, 24], [18, -18, 32]]} />
       <IsoMark at={[-1, -4, 28]} size={3} />
       <Building at={[-28, 2, 0]} size={[16, 16, 24]} />
-    </IllustrationFrame>
-  );
-}
-
-export function SchedulesIllustration(props: IllustrationProps) {
-  return (
-    <IllustrationFrame {...props}>
-      <IsoGround />
-      <Calendar at={[-19, -3, 0]} />
     </IllustrationFrame>
   );
 }

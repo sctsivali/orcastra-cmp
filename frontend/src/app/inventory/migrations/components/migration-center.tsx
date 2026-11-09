@@ -6,6 +6,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { AccessGateIllustration } from "@/components/illustrations/scenes/states";
 import { LoadingLottieMedium, LoadingLottiePage } from "@/components/loading-lottie";
 import { PageReadError, ReadErrorState } from "@/components/ui/read-error-state";
 import { RefreshButton } from "@/components/ui/refresh-button";
@@ -206,6 +207,7 @@ function MigrationCenterContent() {
           <CardContent>
             <EmptyState
               icon={LockKeyhole}
+              illustration={AccessGateIllustration}
               title="Partner access required"
               description="Tenant accounts cannot plan, inspect, or control infrastructure migrations."
             />
@@ -231,6 +233,7 @@ function MigrationCenterContent() {
           <CardContent>
             <EmptyState
               icon={LockKeyhole}
+              illustration={AccessGateIllustration}
               title="Migration Center is not enabled"
               description="This deployment has not enabled the migration rollout. Existing infrastructure is unchanged."
             />

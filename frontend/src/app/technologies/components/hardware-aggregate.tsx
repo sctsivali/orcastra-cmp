@@ -243,6 +243,7 @@ export function HardwareAggregate({
           {categories.map((category) => (
             <TechnologySummaryCard
               key={category.id}
+              kind={category.id}
               icon={category.icon}
               title={category.title}
               description={category.description}

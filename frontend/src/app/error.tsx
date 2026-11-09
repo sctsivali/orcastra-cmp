@@ -5,6 +5,8 @@ import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, RefreshCw, Home } from "lucide-react";
 import { ChunkLoadFallback } from "@/components/chunk-load-fallback";
+import { IllustrationFallback } from "@/components/illustrations/illustration-frame";
+import { DisconnectedIllustration } from "@/components/illustrations/scenes/states";
 import { isChunkLoadError, reloadOnceForChunkError } from "@/lib/chunk-reload";
 
 export default function GlobalError({
@@ -40,7 +42,10 @@ export default function GlobalError({
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 p-8">
-      <AlertTriangle className="h-12 w-12 text-destructive" />
+      <DisconnectedIllustration size="md" />
+      <IllustrationFallback>
+        <AlertTriangle className="h-12 w-12 text-destructive" aria-hidden="true" />
+      </IllustrationFallback>
       <h2 className="text-xl font-semibold">Something went wrong</h2>
       <p className="text-muted-foreground text-center max-w-md">
         {error.message || "An unexpected error occurred. Try again."}

@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { AlertTriangle, RefreshCw, ArrowLeft } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { ChunkLoadFallback } from "@/components/chunk-load-fallback";
+import { IllustrationFallback } from "@/components/illustrations/illustration-frame";
+import { DisconnectedIllustration } from "@/components/illustrations/scenes/states";
 import { isChunkLoadError, reloadOnceForChunkError } from "@/lib/chunk-reload";
 
 export default function InventoryError({
@@ -40,7 +42,10 @@ export default function InventoryError({
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 p-8">
-      <AlertTriangle className="h-12 w-12 text-status-pending" />
+      <DisconnectedIllustration size="md" />
+      <IllustrationFallback>
+        <AlertTriangle className="h-12 w-12 text-status-pending" aria-hidden="true" />
+      </IllustrationFallback>
       <h2 className="text-xl font-semibold">Failed to load page</h2>
       <p className="text-muted-foreground text-center max-w-md">
         {error.message || "Could not load the requested resource. The server may be unavailable."}

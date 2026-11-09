@@ -34,6 +34,7 @@ import { defineTable, fromSort } from "@/lib/table-filter";
 import { retryUnlessUnavailable } from "@/lib/read-error";
 import type { IntegrationOrganization } from "@/types/api";
 import { plural } from "@/lib/utils";
+import { OrganizationsIllustration } from "@/components/illustrations/scenes/onboarding";
 
 /** Organization, Slug, Owner Key, Owner State, and Actions for an administrator. */
 const columnCount = (withActions: boolean) => (withActions ? 5 : 4);
@@ -165,6 +166,7 @@ function SyncedOrganizationsContent() {
     body = (
       <EmptyState
         icon={Building2}
+        illustration={OrganizationsIllustration}
         title="No organizations are synced yet"
         description="An OrcaHub connection's first sync creates them, owned by the key it used."
       />

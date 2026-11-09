@@ -11,6 +11,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { ExternalLink, Check } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { PortfolioIllustration } from "@/components/illustrations/scenes/catalog";
 import { Button } from "@/components/ui/button";
 
 interface Solution {
@@ -172,11 +173,14 @@ export default function SolutionsPage() {
 
       {/* Additional Info */}
       <Card className="bg-muted/50 border-dashed">
-        <CardContent className="p-6">
-          <h3 className="text-lg font-semibold mb-2">Expanding Solution Portfolio</h3>
-          <p className="text-muted-foreground">
-            We are continuously evaluating and integrating cutting-edge solutions to enhance the Orcastra platform. Stay tuned for new solutions that will empower your organization with advanced capabilities in data management, automation, and digital transformation.
-          </p>
+        <CardContent className="flex items-center gap-6 p-6">
+          <div className="min-w-0 flex-1">
+            <h3 className="text-lg font-semibold mb-2">Expanding Solution Portfolio</h3>
+            <p className="text-muted-foreground">
+              We are continuously evaluating and integrating cutting-edge solutions to enhance the Orcastra platform. Stay tuned for new solutions that will empower your organization with advanced capabilities in data management, automation, and digital transformation.
+            </p>
+          </div>
+          <PortfolioIllustration size="md" className="hidden sm:block" />
         </CardContent>
       </Card>
     </div>

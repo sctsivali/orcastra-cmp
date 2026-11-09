@@ -25,6 +25,7 @@ import {
   ClusterGridToolbar,
   type ClusterSortField,
 } from "./node-status/cluster-grid-toolbar";
+import { EmptyClustersIllustration } from "@/components/illustrations/scenes/onboarding";
 import { collectedAtMs } from "@/lib/utils";
 
 const nodeId = (node: NodeStatus) => node.name;
@@ -241,6 +242,7 @@ function NodeStatusCardsContent({ onRefresh }: NodeStatusCardsProps) {
         ) : registeredCount === 0 ? (
           <EmptyState
             icon={Server}
+            illustration={EmptyClustersIllustration}
             title="No clusters yet"
             description="Clusters appear here once one is registered and authenticated."
             action={

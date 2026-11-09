@@ -167,6 +167,15 @@
 html[data-illustrations="hide"] [data-slot="card-illustration"] {
   display: none !important;
 }
+/* What a surface showed before it had a scene (its icon) comes back when scenes are hidden, so
+   hiding them restores the classic card instead of leaving a bare one. Both are in the first
+   byte of HTML and the attribute picks one, so nothing shifts on hydration. */
+[data-slot="illustration-fallback"] {
+  display: none;
+}
+html[data-illustrations="hide"] [data-slot="illustration-fallback"] {
+  display: contents;
+}
 
 /* The one motion: a clickable card nudges its scene up 2px. Feedback for a pointer or focus on a
    control, never on a live-data surface, and absent under reduced motion. */
@@ -178,5 +187,17 @@ html[data-illustrations="hide"] [data-slot="card-illustration"] {
   .illo-host:hover .illo-scene,
   .illo-host:focus-visible .illo-scene {
     transform: translateY(-2px);
+  }
+}
+
+/* A KPI tile holds a small scene beside its number only while there is room: below 240px the
+   number keeps the whole tile. The tile is the query container, so the rule follows the tile's
+   own width at every breakpoint and in every grid. */
+.illo-kpi {
+  container-type: inline-size;
+}
+@container (max-width: 239px) {
+  .illo-kpi [data-slot="card-illustration"] {
+    display: none;
   }
 }

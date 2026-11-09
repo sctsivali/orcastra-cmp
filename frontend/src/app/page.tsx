@@ -13,6 +13,18 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { cssImageUrl } from "@/lib/branding-images";
 import { useAllProjects, useInstances, useNodeAvailability } from "@/hooks/use-lxd";
 import { EMPTY_VALUE } from "@/components/ui/table-text";
+import { IllustrationFallback } from "@/components/illustrations/illustration-frame";
+import { ClustersIllustration, InstancesIllustration, RunningIllustration } from "@/components/illustrations/scenes/kpi";
+import {
+  GetStartedIllustration,
+  MonitoringIllustration,
+  MultiClusterIllustration,
+  PerformanceIllustration,
+  ProjectsIllustration,
+  ScaleIllustration,
+  SecurityIllustration,
+  WorkloadsIllustration,
+} from "@/components/illustrations/scenes/platform";
 
 const UNREADABLE = "Could not be read";
 
@@ -50,31 +62,37 @@ export default function HomePage() {
   const features = [
     {
       icon: Server,
+      illustration: MultiClusterIllustration,
       title: "Multi-Cluster Management",
       description: "Operate clusters across regions from one dashboard",
     },
     {
       icon: Cloud,
+      illustration: WorkloadsIllustration,
       title: "Virtual Machines & Containers",
       description: "Provision, inspect, and operate system containers and virtual machines with project-scoped access.",
     },
     {
       icon: Database,
+      illustration: MonitoringIllustration,
       title: "Resource Monitoring",
       description: "Track CPU, memory, storage, GPU, and network health from live cluster telemetry.",
     },
     {
       icon: Zap,
+      illustration: PerformanceIllustration,
       title: "High Performance",
       description: "Use host-native virtualization, snapshots, and storage backends designed for production workloads.",
     },
     {
       icon: Shield,
+      illustration: SecurityIllustration,
       title: "Secure by Design",
       description: "Protect operations with TLS-backed cluster access, scoped API keys, and tenant access policies.",
     },
     {
       icon: TrendingUp,
+      illustration: ScaleIllustration,
       title: "Scalable Architecture",
       description: "Organize capacity by clusters, regions, organizations, and projects as your environment grows.",
     },
@@ -150,12 +168,15 @@ export default function HomePage() {
 
       {/* Stats Overview */}
       <section className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <Card>
-          <CardHeader className="pb-3">
-            <CardDescription>Total Clusters</CardDescription>
-            <CardTitle className="text-4xl">
-              {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : nodesFailed ? EMPTY_VALUE : animatedTotalNodes}
-            </CardTitle>
+        <Card className="illo-kpi">
+          <CardHeader className="flex-row items-start justify-between gap-3 space-y-0 pb-3">
+            <div className="min-w-0 space-y-1.5">
+              <CardDescription>Total Clusters</CardDescription>
+              <CardTitle className="text-4xl">
+                {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : nodesFailed ? EMPTY_VALUE : animatedTotalNodes}
+              </CardTitle>
+            </div>
+            <ClustersIllustration size="sm" className="-mr-1" />
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
@@ -164,12 +185,15 @@ export default function HomePage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="pb-3">
-            <CardDescription>Total Instances</CardDescription>
-            <CardTitle className="text-4xl">
-              {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : vmsFailed ? EMPTY_VALUE : animatedTotalVMs}
-            </CardTitle>
+        <Card className="illo-kpi">
+          <CardHeader className="flex-row items-start justify-between gap-3 space-y-0 pb-3">
+            <div className="min-w-0 space-y-1.5">
+              <CardDescription>Total Instances</CardDescription>
+              <CardTitle className="text-4xl">
+                {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : vmsFailed ? EMPTY_VALUE : animatedTotalVMs}
+              </CardTitle>
+            </div>
+            <InstancesIllustration size="sm" className="-mr-1" />
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
@@ -178,12 +202,15 @@ export default function HomePage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="pb-3">
-            <CardDescription>Running</CardDescription>
-            <CardTitle className="text-4xl">
-              {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : vmsFailed ? EMPTY_VALUE : animatedRunningVMs}
-            </CardTitle>
+        <Card className="illo-kpi">
+          <CardHeader className="flex-row items-start justify-between gap-3 space-y-0 pb-3">
+            <div className="min-w-0 space-y-1.5">
+              <CardDescription>Running</CardDescription>
+              <CardTitle className="text-4xl">
+                {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : vmsFailed ? EMPTY_VALUE : animatedRunningVMs}
+              </CardTitle>
+            </div>
+            <RunningIllustration size="sm" className="-mr-1" />
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
@@ -192,12 +219,15 @@ export default function HomePage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="pb-3">
-            <CardDescription>Total Projects</CardDescription>
-            <CardTitle className="text-4xl">
-              {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : projectsFailed ? EMPTY_VALUE : animatedTotalProjects}
-            </CardTitle>
+        <Card className="illo-kpi">
+          <CardHeader className="flex-row items-start justify-between gap-3 space-y-0 pb-3">
+            <div className="min-w-0 space-y-1.5">
+              <CardDescription>Total Projects</CardDescription>
+              <CardTitle className="text-4xl">
+                {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : projectsFailed ? EMPTY_VALUE : animatedTotalProjects}
+              </CardTitle>
+            </div>
+            <ProjectsIllustration size="sm" className="-mr-1" />
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
@@ -219,12 +249,20 @@ export default function HomePage() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {features.map((feature) => {
             const Icon = feature.icon;
+            const Scene = feature.illustration;
             return (
               <Card key={feature.title} className="hover:shadow-lg transition-shadow">
-                <CardHeader>
-                  <Icon className="mb-3 h-9 w-9 text-foreground" />
-                  <CardTitle className="text-xl">{feature.title}</CardTitle>
-                  <CardDescription className="text-base">
+                {/* The title shares the top row with the scene and the description takes the full
+                    width under both, so a long description does not fold into a narrow column. */}
+                <CardHeader className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-y-1.5 space-y-0">
+                  <div className="min-w-0">
+                    <IllustrationFallback>
+                      <Icon className="mb-3 h-9 w-9 text-foreground" aria-hidden="true" />
+                    </IllustrationFallback>
+                    <CardTitle className="text-xl">{feature.title}</CardTitle>
+                  </div>
+                  <Scene size="md" className="-my-2 -mr-2 ml-3" />
+                  <CardDescription className="col-span-full text-base">
                     {feature.description}
                   </CardDescription>
                 </CardHeader>
@@ -236,6 +274,7 @@ export default function HomePage() {
 
       {/* CTA Section */}
       <section className="text-center space-y-6 py-12 rounded-lg border-2 border-dashed border-muted-foreground/25 bg-muted/50">
+        <GetStartedIllustration size="lg" className="mx-auto" />
         <div className="space-y-2">
           <h2 className="text-3xl font-bold">Ready to Get Started?</h2>
           <p className="text-muted-foreground mx-auto text-lg max-w-none px-8">

@@ -29,6 +29,7 @@ import { formatLabel, plural } from "@/lib/utils";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import type { ExtensionInstall } from "@/types/api";
 import { NodeLink } from "@/components/ui/node-link";
+import { ExtensionsIllustration } from "@/components/illustrations/scenes/catalog";
 
 const COLUMN_COUNT = 6;
 
@@ -180,6 +181,7 @@ function InstalledTableContent({
     return (
       <EmptyState
         icon={Puzzle}
+        illustration={ExtensionsIllustration}
         title="Nothing is installed yet"
         description="Installing an add-on issues it a credential scoped to one organization."
       />

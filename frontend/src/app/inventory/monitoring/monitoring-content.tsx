@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback, memo, useTransition, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback, memo, useTransition, useRef, type ComponentType } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 
@@ -31,6 +31,8 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { useClusterLabel } from "@/hooks/use-node-picker-options";
 import { cn, formatBytes, formatNetworkRate, plural } from "@/lib/utils";
+import type { IllustrationProps } from "@/components/illustrations/illustration-frame";
+import { ClustersIllustration, InstancesIllustration, RunningIllustration, WarningsIllustration } from "@/components/illustrations/scenes/kpi";
 import type { InstanceMonitoringSummary, VMInfo, VMListResponse } from "@/types";
 import type {
   MetricsHistoryPoint,
@@ -76,6 +78,8 @@ interface MetricCardProps {
   subtitle?: string;
   progress?: number;
   className?: string;
+  /** The tile's subject; it drops out when the tile is too narrow (illustrations.css, .illo-kpi). */
+  illustration: ComponentType<IllustrationProps>;
 }
 
 // note: no trend arrow. It rendered only with a trendValue no caller ever passed, and painted a
@@ -85,14 +89,20 @@ const MetricCard = memo(function MetricCard({
   value, 
   subtitle, 
   progress,
-  className 
+  className,
+  illustration: Illustration,
 }: MetricCardProps) {
   return (
-    <Card className={className}>
+    <Card className={cn("illo-kpi", className)}>
       <CardContent className="p-6">
         <div className="space-y-2">
-          <p className="text-sm font-medium text-muted-foreground">{title}</p>
-          <p className="text-2xl sm:text-3xl font-bold tracking-tight tabular-nums">{value}</p>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 space-y-2">
+              <p className="text-sm font-medium text-muted-foreground">{title}</p>
+              <p className="text-2xl sm:text-3xl font-bold tracking-tight tabular-nums">{value}</p>
+            </div>
+            <Illustration size="sm" className="-mr-1" />
+          </div>
           {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
           {progress !== undefined && (
             <Progress value={progress} className="h-2 mt-2" />
@@ -1311,23 +1321,27 @@ export default function MonitoringContent() {
       <div className={`grid grid-cols-2 gap-4 ${isPartner ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
         <MetricCard
           title="Total Instances"
+          illustration={InstancesIllustration}
           value={filteredStats.total_instances}
           subtitle={selectedNode === "all" ? `${plural(filteredStats.container_count, "container")} · ${plural(filteredStats.vm_count, "VM")}` : `on ${labelOf(selectedNode)}`}
         />
         <MetricCard
           title="Running"
+          illustration={RunningIllustration}
           value={filteredStats.running_instances}
           subtitle={`${filteredStats.stopped_instances} stopped`}
           progress={(filteredStats.running_instances / Math.max(filteredStats.total_instances, 1)) * 100}
         />
         <MetricCard
           title="Clusters Online"
+          illustration={ClustersIllustration}
           value={`${filteredStats.online_nodes} / ${filteredStats.total_nodes}`}
           subtitle={filteredStats.inactive_nodes > 0 ? `${filteredStats.inactive_nodes} offline` : "All clusters healthy"}
         />
         {isPartner && (
           <MetricCard
             title="Warnings"
+            illustration={WarningsIllustration}
             value={filteredStats.warnings?.total || 0}
             subtitle={filteredStats.warnings?.critical ? `${filteredStats.warnings.critical} critical` : "No critical issues"}
           />

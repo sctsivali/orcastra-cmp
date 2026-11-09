@@ -43,6 +43,7 @@ import {
 } from "@/app/inventory/snapshots/components/snapshot-schedule-vocabulary";
 import { CreateSnapshotDialog } from "./create-snapshot-dialog";
 import { ScheduleSnapshotsDialog } from "./schedule-snapshots-dialog";
+import { SnapshotsIllustration } from "@/components/illustrations/scenes/onboarding";
 
 interface InstanceSnapshotsTabProps {
   instance: VMInfo;
@@ -248,6 +249,7 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
       {snapshots.length === 0 ? (
         <EmptyState
           icon={History}
+          illustration={SnapshotsIllustration}
           title="No snapshots yet"
           description="Take one before a risky change so this instance can be rolled back."
         />

@@ -39,6 +39,7 @@ import type { PolicyCluster } from "@/components/access-policies/rule-editor";
 import type {
   AccessPolicy, PolicyCreateRequest, PolicyUpdateRequest, IntegrationOrganization,
 } from "@/types";
+import { PoliciesIllustration } from "@/components/illustrations/scenes/onboarding";
 import { plural } from "@/lib/utils";
 
 // ============================================
@@ -337,6 +338,7 @@ function PolicyManagementSectionContent() {
             ) : policies.length === 0 ? (
               <EmptyState
                 icon={ShieldCheck}
+                illustration={PoliciesIllustration}
                 title="No access policies yet"
                 description="Access policies define what clusters, projects, and instances tenant users can access. Create your first policy to start managing tenant permissions."
                 action={

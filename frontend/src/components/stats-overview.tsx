@@ -1,6 +1,9 @@
 "use client";
 
+import type * as React from "react";
 import { Card, CardContent } from "@/components/ui/card";
+import type { IllustrationProps } from "@/components/illustrations/illustration-frame";
+import { ClustersIllustration, InstancesIllustration, RunningIllustration, StoppedIllustration } from "@/components/illustrations/scenes/kpi";
 import { Skeleton } from "@/components/ui/skeleton";
 import { VMListResponse, ClusterListResponse, ClusterStatus } from "@/types";
 import { plural } from "@/lib/utils";
@@ -18,6 +21,8 @@ interface StatCardProps {
   value: string | number | null;
   subtext?: string;
   delay: number;
+  /** The tile's subject; it drops out when the tile is too narrow (illustrations.css, .illo-kpi). */
+  illustration: React.ComponentType<IllustrationProps>;
 }
 
 function StatCard({
@@ -25,14 +30,15 @@ function StatCard({
   value,
   subtext,
   delay,
+  illustration: Illustration,
 }: StatCardProps) {
   return (
     <Card
-      className="animate-fade-in overflow-hidden"
+      className="illo-kpi animate-fade-in overflow-hidden"
       style={{ animationDelay: `${delay}ms` }}
     >
-      <CardContent className="p-6">
-        <div className="space-y-1">
+      <CardContent className="flex items-start justify-between gap-3 p-6">
+        <div className="min-w-0 space-y-1">
           <p className="text-sm font-medium text-muted-foreground">{label}</p>
           {value === null ? (
             <>
@@ -50,6 +56,7 @@ function StatCard({
             </>
           )}
         </div>
+        <Illustration size="sm" className="-mr-1" />
       </CardContent>
     </Card>
   );
@@ -77,24 +84,28 @@ export function StatsOverview({ data, clustersData, isLoading, clustersLoading }
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
       <StatCard
         label="Total Instances"
+        illustration={InstancesIllustration}
         value={instances === null ? null : totalVMs}
         subtext={`${plural(virtualMachines, "VM")}, ${plural(containers, "container")}`}
         delay={0}
       />
       <StatCard
         label="Running"
+        illustration={RunningIllustration}
         value={instances === null ? null : runningVMs}
         subtext={`${Math.round((runningVMs / Math.max(totalVMs, 1)) * 100)}% of total`}
         delay={50}
       />
       <StatCard
         label="Stopped"
+        illustration={StoppedIllustration}
         value={instances === null ? null : stoppedVMs}
         subtext="Available to start"
         delay={100}
       />
       <StatCard
         label="Registered Clusters"
+        illustration={ClustersIllustration}
         value={clusters === null ? null : totalClusters}
         subtext={totalClusters > 0 ? `${onlineClusters} online, ${offlineClusters} offline` : "No clusters"}
         delay={150}

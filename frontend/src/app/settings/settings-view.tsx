@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ExtensionsIllustration, KeyVaultIllustration } from "@/components/illustrations/scenes/catalog";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChevronRight, Activity, Settings2, Palette, Shield, Users } from "lucide-react";
@@ -98,65 +99,75 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
             {/* Extensions pointer - the surface is a route, not a tab, because a refresh
                 inside a tab would destroy the one-time credential an install shows. */}
             {isPartner && (
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/extensions')}>
-              <CardHeader>
-                <CardTitle>Extensions</CardTitle>
-                <CardDescription>
-                  Install add-ons built against the Orcastra API
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <p className="text-sm text-muted-foreground">
-                    An add-on is an external application that runs on its author&apos;s own
-                    infrastructure and reaches Orcastra with a credential scoped to one
-                    organization. No add-on code runs inside this dashboard.
-                  </p>
-                  <Button
-                    variant="default"
-                    className="gap-2 mt-2"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      navigate('/extensions');
-                    }}
-                  >
-                    Manage Extensions
-                  </Button>
+            <Card className="illo-host hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/extensions')}>
+              <div className="flex items-center">
+                <div className="min-w-0 flex-1">
+                  <CardHeader>
+                    <CardTitle>Extensions</CardTitle>
+                    <CardDescription>
+                      Install add-ons built against the Orcastra API
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="space-y-2">
+                      <p className="text-sm text-muted-foreground">
+                        An add-on is an external application that runs on its author&apos;s own
+                        infrastructure and reaches Orcastra with a credential scoped to one
+                        organization. No add-on code runs inside this dashboard.
+                      </p>
+                      <Button
+                        variant="default"
+                        className="gap-2 mt-2"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate('/extensions');
+                        }}
+                      >
+                        Manage Extensions
+                      </Button>
+                    </div>
+                  </CardContent>
                 </div>
-              </CardContent>
+                <ExtensionsIllustration size="lg" className="mr-6 hidden sm:block" />
+              </div>
             </Card>
             )}
 
             {/* My Keys Card - Admin + Partner only */}
             {isPartner && (
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/my-keys')}>
-              <CardHeader>
-                <CardTitle>
-                  My Keys
-                </CardTitle>
-                <CardDescription>
-                  Manage TLS identity keys for accessing hypervisor resources
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <p className="text-sm text-muted-foreground">
-                    Generate and manage TLS certificates for secure access to your clusters and projects.
-                    Generate keys with custom permissions and expiration dates.
-                  </p>
-                  <Button
-                    variant="default"
-                    className="gap-2 mt-2"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      navigate('/my-keys');
-                    }}
-                  >
-                    Manage Keys
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
+            <Card className="illo-host hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/my-keys')}>
+              <div className="flex items-center">
+                <div className="min-w-0 flex-1">
+                  <CardHeader>
+                    <CardTitle>
+                      My Keys
+                    </CardTitle>
+                    <CardDescription>
+                      Manage TLS identity keys for accessing hypervisor resources
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="space-y-2">
+                      <p className="text-sm text-muted-foreground">
+                        Generate and manage TLS certificates for secure access to your clusters and projects.
+                        Generate keys with custom permissions and expiration dates.
+                      </p>
+                      <Button
+                        variant="default"
+                        className="gap-2 mt-2"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate('/my-keys');
+                        }}
+                      >
+                        Manage Keys
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </CardContent>
                 </div>
-              </CardContent>
+                <KeyVaultIllustration size="lg" className="mr-6 hidden sm:block" />
+              </div>
             </Card>
             )}
 

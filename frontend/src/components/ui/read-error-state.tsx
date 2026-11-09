@@ -1,7 +1,10 @@
+import type * as React from "react";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import type { IllustrationProps } from "@/components/illustrations/illustration-frame";
+import { DisconnectedIllustration } from "@/components/illustrations/scenes/states";
 import { describeReadError } from "@/lib/read-error";
 
 // A list read that failed, told apart from a list that is empty.
@@ -18,13 +21,16 @@ interface ReadErrorStateProps {
   noun: string;
   error: unknown;
   onRetry: () => void;
+  /** Only where the failure is the whole page; inside a table or a panel the icon is enough. */
+  illustration?: React.ComponentType<IllustrationProps>;
 }
 
-export function ReadErrorState({ noun, error, onRetry }: ReadErrorStateProps) {
+export function ReadErrorState({ noun, error, onRetry, illustration }: ReadErrorStateProps) {
   const { reason } = describeReadError(error);
   return (
     <EmptyState
       icon={AlertTriangle}
+      illustration={illustration}
       title={`Could not load ${noun}`}
       description={`The ${noun} could not be read: ${reason}. This says nothing about whether they exist.`}
       action={
@@ -57,7 +63,7 @@ export function PageReadError({ title, description, actions, ...state }: PageRea
       </div>
       <Card>
         <CardContent className="pt-6">
-          <ReadErrorState {...state} />
+          <ReadErrorState {...state} illustration={DisconnectedIllustration} />
         </CardContent>
       </Card>
     </div>

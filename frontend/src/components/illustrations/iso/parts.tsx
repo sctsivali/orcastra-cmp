@@ -237,24 +237,3 @@ export const DOCUMENT_OUTLINE: Pt[] = [
   [19, 34],
   [0, 34],
 ];
-
-/** A desk calendar: the board, a header band, a day grid and two binding rings. */
-export function Calendar({ at }: { at: Vec3 }) {
-  const [x, y, z] = at;
-  const [w, d, h] = [38, 6, 32];
-  const face: Vec3 = [x, y + d, z];
-  return (
-    <g>
-      <IsoBox at={at} size={[w, d, h]} material="paper" />
-      <IsoInset plane="left" origin={face} rect={[0, h - 8, w, 8]} kind="panel" />
-      {[0, 1, 2].map((r) =>
-        [0, 1, 2, 3].map((c) => (
-          <IsoInset key={`${r}-${c}`} plane="left" origin={face} rect={[4 + c * 8.2, h - 15 - r * 7, 5, 4]} kind={r === 1 && c === 2 ? "panel" : "detail"} fine={!(r === 1 && c === 2)} />
-        )),
-      )}
-      {[10, 28].map((u) => (
-        <IsoCylinder key={u} at={[x + u, y + d / 2, z + h]} radius={1.8} height={4} material="ink" />
-      ))}
-    </g>
-  );
-}

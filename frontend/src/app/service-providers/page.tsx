@@ -12,6 +12,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { ExternalLink, Check } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { EcosystemIllustration } from "@/components/illustrations/scenes/catalog";
 import { Button } from "@/components/ui/button";
 
 interface ServiceProvider {
@@ -147,11 +148,14 @@ export default function ServiceProvidersPage() {
 
       {/* Additional Info */}
       <Card className="bg-muted/50 border-dashed">
-        <CardContent className="p-6">
-          <h3 className="text-lg font-semibold mb-2">Growing Ecosystem</h3>
-          <p className="text-muted-foreground">
-            We are continuously expanding our network of service providers. Check back regularly to discover new partners joining the Orcastra platform, each bringing unique expertise and innovative solutions to help businesses thrive in the cloud.
-          </p>
+        <CardContent className="flex items-center gap-6 p-6">
+          <div className="min-w-0 flex-1">
+            <h3 className="text-lg font-semibold mb-2">Growing Ecosystem</h3>
+            <p className="text-muted-foreground">
+              We are continuously expanding our network of service providers. Check back regularly to discover new partners joining the Orcastra platform, each bringing unique expertise and innovative solutions to help businesses thrive in the cloud.
+            </p>
+          </div>
+          <EcosystemIllustration size="md" className="hidden sm:block" />
         </CardContent>
       </Card>
     </div>

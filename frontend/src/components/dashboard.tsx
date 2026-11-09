@@ -24,6 +24,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import type { ProjectListResponse, VMListResponse } from "@/types/api";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { collectedAtMs } from "@/lib/utils";
+import { EmptyInstancesIllustration } from "@/components/illustrations/scenes/onboarding";
 
 export function Dashboard() {
   const { data: vmsData, isLoading: vmsLoading, refetch, refreshNow: refreshInstances, dataUpdatedAt, isError: vmsFailed, error: vmsError } = useInstances();
@@ -141,6 +142,7 @@ export function Dashboard() {
       {!isPartner && tenantReachesNothing(projectsData, vmsData) ? (
         <EmptyState
           icon={KeyRound}
+          illustration={EmptyInstancesIllustration}
           title="Nothing to show yet"
           description="Your access does not reach any instance right now. If your subscription ended, contact your provider to renew it."
         />

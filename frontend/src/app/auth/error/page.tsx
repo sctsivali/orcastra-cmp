@@ -20,6 +20,8 @@ import { AlertTriangle, ArrowLeft, LogIn, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { recallReturnPath } from "@/lib/auth-return";
 import { AuthBrandMark } from "@/components/branding/auth-brand-mark";
+import { IllustrationFallback } from "@/components/illustrations/illustration-frame";
+import { AccessGateIllustration } from "@/components/illustrations/scenes/states";
 
 // Error details mapping
 const errorDetails: Record<string, { title: string; description: string }> = {
@@ -86,10 +88,13 @@ function ErrorContent() {
       <AuthBrandMark withoutLogo="nothing" />
       <Card className="w-full max-w-md shadow-xl border-border/50">
         <CardHeader className="text-center space-y-4">
-          {/* Error Icon */}
-          <div className="mx-auto w-16 h-16 bg-destructive/10 rounded-2xl flex items-center justify-center">
-            <AlertTriangle className="w-8 h-8 text-destructive" />
-          </div>
+          {/* The scene names the situation; the icon comes back when illustrations are hidden. */}
+          <AccessGateIllustration size="md" className="mx-auto" />
+          <IllustrationFallback>
+            <span className="mx-auto w-16 h-16 bg-destructive/10 rounded-2xl flex items-center justify-center">
+              <AlertTriangle className="w-8 h-8 text-destructive" aria-hidden="true" />
+            </span>
+          </IllustrationFallback>
 
           <div>
             <CardTitle className="text-2xl font-bold">{title}</CardTitle>

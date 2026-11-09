@@ -5,6 +5,8 @@ import { signIn } from "next-auth/react";
 import { KeyRound, Loader2, LogIn, LogOut, RefreshCw, UserX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { IllustrationFallback } from "@/components/illustrations/illustration-frame";
+import { AccessGateIllustration } from "@/components/illustrations/scenes/states";
 import type { AccessGateState, AccessRecheck } from "@/hooks/use-access-gate";
 import { federatedSignOut } from "@/lib/sign-out";
 import { formatDateTime } from "@/lib/utils";
@@ -70,7 +72,10 @@ export function AccessBlockedNotice({ state, email, endedAt, rechecking, onCheck
       <Card className="w-full max-w-md">
         <CardContent className="space-y-6 p-6 sm:p-8">
           <div className="space-y-3 text-center">
-            <Icon className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden="true" />
+            <AccessGateIllustration size="md" className="mx-auto" />
+            <IllustrationFallback>
+              <Icon className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden="true" />
+            </IllustrationFallback>
             <h1 className="text-xl font-semibold">{title}</h1>
             <p className="text-sm text-muted-foreground">{body}</p>
             {state === "no_tenant_access" && endedAt && (
