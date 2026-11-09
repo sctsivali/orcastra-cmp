@@ -1,5 +1,5 @@
 import * as React from "react";
-import { IsoBall, IsoBox, IsoCylinder, IsoDisc, IsoExtrude, IsoInset, type Material } from "./primitives";
+import { IsoBall, IsoBox, IsoCylinder, IsoDisc, IsoExtrude, IsoFlat, IsoGlyph, IsoInset, type Material } from "./primitives";
 import { circleOutline, scaleOutline, type Pt, type Vec3 } from "./projection";
 
 // Compound objects shared by several scenes. Keeping them here is what makes a server in the
@@ -237,3 +237,75 @@ export const DOCUMENT_OUTLINE: Pt[] = [
   [19, 34],
   [0, 34],
 ];
+
+// The brand hexagon standing on a flat side, with a status drawn on it.
+const TOKEN: Pt[] = [[4.6, 0], [13.8, 0], [18.4, 8], [13.8, 16], [4.6, 16], [0, 8]];
+const CLOCK_RING: Pt[] = [...circleOutline(9.2, 8, 4.6, 20), [13.8, 8]];
+
+export type TokenGlyph = "check" | "clock" | "cross";
+
+/** A status token standing upright in front of what it is about: valid, about to lapse, or ended. */
+export function StatusToken({ origin, glyph }: { origin: Vec3; glyph: TokenGlyph }) {
+  return (
+    <g>
+      <IsoExtrude plane="left" origin={origin} outline={TOKEN} depth={3} material="ink" />
+      {glyph === "check" && <IsoGlyph plane="left" origin={origin} path={[[5.4, 8.2], [8.2, 5.2], [13.2, 11]]} onInk />}
+      {glyph === "cross" && (
+        <>
+          <IsoGlyph plane="left" origin={origin} path={[[6.2, 4.6], [12.2, 11.4]]} onInk />
+          <IsoGlyph plane="left" origin={origin} path={[[12.2, 4.6], [6.2, 11.4]]} onInk />
+        </>
+      )}
+      {glyph === "clock" && (
+        <>
+          <IsoGlyph plane="left" origin={origin} path={CLOCK_RING} onInk />
+          <IsoGlyph plane="left" origin={origin} path={[[9.2, 11], [9.2, 8], [11.6, 8]]} onInk />
+        </>
+      )}
+    </g>
+  );
+}
+
+/** A certificate standing upright: a page with its lines of text and a seal. */
+export function Certificate({ origin, material = "paper" }: { origin: Vec3; material?: Material }) {
+  return (
+    <g>
+      <IsoExtrude plane="left" origin={origin} outline={DOCUMENT_OUTLINE} depth={3} material={material} />
+      <IsoInset plane="left" origin={origin} rect={[4, 25, 12, 2]} kind="detail" />
+      <IsoInset plane="left" origin={origin} rect={[4, 20, 18, 1.6]} kind="detail" fine />
+      <IsoInset plane="left" origin={origin} rect={[4, 16, 15, 1.6]} kind="detail" fine />
+      <IsoDisc plane="left" origin={origin} centre={[18.5, 7.5]} radius={4.2} kind="panel" />
+    </g>
+  );
+}
+
+// A command prompt (a chevron and a cursor bar) and a mouse pointer, drawn on a screen.
+const CHEVRON: Pt[] = [[8, 18], [15, 14], [8, 10], [8, 12.2], [11.4, 14], [8, 15.8]];
+const POINTER: Pt[] = [[15, 21], [15, 8], [18, 11], [20.4, 6.2], [22.2, 7], [19.8, 11.8], [24, 12]];
+
+/** A monitor on its stand, showing a prompt (a session) or a pointer (desktop control). */
+export function Monitor({ at, mark }: { at: Vec3; mark: "prompt" | "pointer" }) {
+  const [x, y, z] = at;
+  const [w, d, h] = [40, 4, 28];
+  const face: Vec3 = [x, y + d, z + 6];
+  return (
+    <g>
+      <IsoBox at={[x + 14, y - 6, z]} size={[12, 12, 2]} material="paper" />
+      <IsoBox at={[x + 18, y - 1, z + 2]} size={[4, 3, 5]} material="paper" />
+      <IsoBox at={[x, y, z + 6]} size={[w, d, h]} material="tint" />
+      <IsoInset plane="left" origin={face} rect={[3, 3, w - 6, h - 6]} kind="panel" />
+      {mark === "prompt" ? (
+        <>
+          <IsoFlat plane="left" origin={face} outline={CHEVRON} kind="screen" />
+          <IsoInset plane="left" origin={face} rect={[17, 9.5, 9, 2]} kind="screen" />
+        </>
+      ) : (
+        <IsoFlat plane="left" origin={face} outline={POINTER} kind="screen" />
+      )}
+    </g>
+  );
+}
+
+/** Arrows standing upright for data moving out of or into a tray. */
+export const ARROW_DOWN: Pt[] = [[6, 30], [6, 14], [0, 14], [10, 2], [20, 14], [14, 14], [14, 30]];
+export const ARROW_UP: Pt[] = [[6, 0], [6, 16], [0, 16], [10, 28], [20, 16], [14, 16], [14, 0]];

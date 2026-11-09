@@ -203,11 +203,29 @@ html[data-illustrations="hide"] [data-slot="illustration-fallback"] {
    card's classic icon returns.
    illo-kpi: a KPI tile with the scene in its top right corner. Below 300px it steps down to 72px wide
    so the figures keep at least about 85px; below 220px the number keeps the tile.
-   illo-card: a data card with the scene beside its title; below 260px the icon tile returns. */
+   illo-card: a data card with the scene beside its title; below 260px the icon tile returns.
+   illo-stat: a counter in the house stat style (Regions, Sessions) whose value can run to about
+   135px (`999.9 MB/s`), so its scene shows only from a 300px tile, at 72px, and below that the
+   label's icon returns.
+   Where a tile had an icon before it had a scene, the icon is its fallback and comes back wherever
+   the scene steps aside. */
 .illo-launch,
 .illo-kpi,
-.illo-card {
+.illo-card,
+.illo-stat {
   container-type: inline-size;
+}
+.illo-stat [data-slot="card-illustration"] {
+  width: 72px;
+  height: 54px;
+}
+@container (max-width: 299px) {
+  .illo-stat [data-slot="card-illustration"] {
+    display: none;
+  }
+  .illo-stat [data-slot="illustration-fallback"] {
+    display: contents;
+  }
 }
 @container (max-width: 439px) {
   .illo-launch [data-slot="card-illustration"] {
@@ -232,6 +250,9 @@ html[data-illustrations="hide"] [data-slot="illustration-fallback"] {
 @container (max-width: 219px) {
   .illo-kpi [data-slot="card-illustration"] {
     display: none;
+  }
+  .illo-kpi [data-slot="illustration-fallback"] {
+    display: contents;
   }
 }
 @container (max-width: 259px) {

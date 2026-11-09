@@ -1,7 +1,8 @@
 import * as React from "react";
 import { IllustrationFrame, type IllustrationProps } from "../illustration-frame";
-import { Building, Key } from "../iso/parts";
-import { IsoBox, IsoLink, IsoShadow } from "../iso/primitives";
+import { Building, DiskStack, Key, Monitor } from "../iso/parts";
+import { IsoBox, IsoExtrude, IsoLink, IsoShadow } from "../iso/primitives";
+import { type Pt } from "../iso/projection";
 
 // Catalog and pointer cards: solutions, providers, add-ons and keys.
 
@@ -61,6 +62,31 @@ export function KeyVaultIllustration(props: IllustrationProps) {
       <IsoBox at={[-24, -14, 0]} size={[48, 28, 7]} material="tint" />
       <IsoBox at={[-5, -1, 7]} size={[10, 8, 2]} material="paper" open />
       <Key origin={[-9.6, 1, 5.8]} scale={0.8} />
+    </IllustrationFrame>
+  );
+}
+
+// A lightning bolt standing upright, the sign for data served fast from a copy.
+const BOLT: Pt[] = [[10, 34], [2, 15], [9, 15], [5, 0], [18, 20], [11, 20], [16, 34]];
+
+/** Data kept close for fast reads: platters with a bolt in front of them. */
+export function CacheIllustration(props: IllustrationProps) {
+  return (
+    <IllustrationFrame {...props} view={[26.5, 19, 106.5, 80]}>
+      <IsoShadow circle={[-6, -6, 16]} />
+      <IsoShadow box={[4, 8, 18, 4]} />
+      <DiskStack at={[-6, -6, 0]} radius={16} height={6} count={3} gap={2.5} heroTop={false} />
+      <IsoExtrude plane="left" origin={[4, 12, 0]} outline={BOLT} depth={4} material="ink" />
+    </IllustrationFrame>
+  );
+}
+
+/** A desktop on its screen, with the pointer someone else may move. */
+export function DesktopIllustration(props: IllustrationProps) {
+  return (
+    <IllustrationFrame {...props} view={[27.5, 13, 105, 79]}>
+      <IsoShadow box={[-6, -8, 12, 12]} />
+      <Monitor at={[-20, -2, 0]} mark="pointer" />
     </IllustrationFrame>
   );
 }
