@@ -14,8 +14,9 @@ const { installSettingsFixtures, expectCleanSettingsHarness } = require("./suppo
 // takes no focus, sits in its own slot inside the card's padding without ever covering text, lines
 // up with the scenes beside it at one weight, paints its theme's tokens, does not move after it
 // lands, and disappears from the first byte of HTML when the organization hides it, with the card's
-// classic icon back and no gap. The choice lives only in Settings > Personalization (owner decision
-// 2026-11-09); the theme menu offers none.
+// classic icon back and no gap. The choice lives only in Settings > Personalization and is off until
+// an organization or the deployment turns it on (owner decisions 2026-11-09); the theme menu offers
+// none.
 
 const SCENE = '[data-slot="card-illustration"]';
 const FALLBACK = '[data-slot="illustration-fallback"]';
@@ -25,6 +26,8 @@ const HERO_FACE = { light: "rgb(70, 48, 154)", dark: "rgb(183, 166, 255)" };
 
 const themeOf = (testInfo) => (testInfo.project.name.includes("dark") ? "dark" : "light");
 const isMobile = (testInfo) => testInfo.project.name.startsWith("mobile");
+// Scenes are off by default, so a spec that looks at them has the organization turn them on.
+const SHOWN = { organization: { illustrations: "show" } };
 
 /**
  * The preference reads, and the organization's branding row with its write, answered from state the
@@ -233,9 +236,13 @@ async function expectKpiTiles(page) {
     const width = tile.getBoundingClientRect().width;
     const shown = getComputedStyle(scene).display !== "none";
     const s = scene.getBoundingClientRect();
-    const text = scene.previousElementSibling.getBoundingClientRect();
+    // The figures' column, past the icon that waits in the scene's place.
+    let column = scene.previousElementSibling;
+    while (column && column.matches('[data-slot="illustration-fallback"]')) column = column.previousElementSibling;
+    const text = column.getBoundingClientRect();
     const clipped = [...tile.querySelectorAll("h3, p")].some((el) => el.scrollWidth > el.clientWidth + 1);
-    return { width: Math.round(width), shown, size: [Math.round(s.width), Math.round(s.height)], taller: shown && s.height > text.height + 1, topGap: Math.round(s.top - text.top), clipped };
+    // A two-line counter may let the scene run 12px past its figures; a taller one would set the tile's height.
+    return { width: Math.round(width), shown, size: [Math.round(s.width), Math.round(s.height)], taller: shown && s.height > text.height + 12, topGap: Math.round(s.top - text.top), clipped };
   }));
   expect(tiles.length, "the page has KPI tiles").toBeGreaterThan(0);
   for (const tile of tiles) {
@@ -299,7 +306,7 @@ test("admin: Home fills each feature card, the call to action and the totals wit
   await authenticate(page.context(), "admin");
   const api = await installApiFixtures(page, "admin", HOME);
   await answerProjects(page);
-  const branding = await installBranding(page, "admin");
+  const branding = await installBranding(page, "admin", SHOWN);
 
   await openHome(page);
   // Six features, the call to action and the four totals.
@@ -328,7 +335,7 @@ test("admin: across laptop and tablet widths a scene never covers text and a KPI
   await authenticate(page.context(), "admin");
   const api = await installApiFixtures(page, "admin", HOME);
   await answerProjects(page);
-  await installBranding(page, "admin");
+  await installBranding(page, "admin", SHOWN);
 
   for (const width of [1280, 1024, 768]) {
     await page.setViewportSize({ width, height: 900 });
@@ -393,7 +400,7 @@ test("tenant: the theme menu offers no illustrations choice; the organization de
   await expectCleanHarness(api);
 });
 
-test("partner: Personalization sets the organization's choice, and the page follows it without a reload", async ({ page }, testInfo) => {
+test("partner: Personalization turns the organization's scenes on, and the page follows it without a reload", async ({ page }, testInfo) => {
   await authenticate(page.context(), "partner");
   const api = await installApiFixtures(page, "partner", HOME);
   await answerProjects(page);
@@ -402,26 +409,26 @@ test("partner: Personalization sets the organization's choice, and the page foll
   await page.goto("/settings/personalization");
   const field = page.getByRole("combobox", { name: "Card Illustrations" });
   await expect(field).toBeVisible({ timeout: 20_000 });
-  await expect(field).toHaveText("Show");
-  await expect(page.getByText("Each person can still choose")).toHaveCount(0);
+  await expect(field, "nothing set anywhere reads as the default, off").toHaveText("Hide");
+  await expect(page.getByText("Off by default.", { exact: false })).toBeVisible();
 
-  await field.click();
-  await page.getByRole("option", { name: "Hide" }).click();
-  await expect.poll(() => branding.writes.length).toBe(1);
-  expect(branding.writes[0].settings.illustrations, "the editor writes the organization's row").toBe("hide");
-  await expect(page.locator("html"), "the operator's own organization previews at once").toHaveAttribute("data-illustrations", "hide");
-  await capture(page, testInfo, "personalization-hide");
-
-  await openHome(page);
-  expect(await visibleScenes(page), "the next page reads the stored choice").toBe(0);
-
-  await page.goto("/settings/personalization");
-  await expect(field).toHaveText("Hide", { timeout: 20_000 });
   await field.click();
   await page.getByRole("option", { name: "Show" }).click();
+  await expect.poll(() => branding.writes.length).toBe(1);
+  expect(branding.writes[0].settings.illustrations, "the editor writes the organization's row").toBe("show");
+  await expect(page.locator("html"), "the operator's own organization previews at once").toHaveAttribute("data-illustrations", "show");
+  await capture(page, testInfo, "personalization-show");
+
+  await openHome(page);
+  expect(await visibleScenes(page), "the next page reads the stored choice").toBe(11);
+
+  await page.goto("/settings/personalization");
+  await expect(field).toHaveText("Show", { timeout: 20_000 });
+  await field.click();
+  await page.getByRole("option", { name: "Hide" }).click();
   await expect.poll(() => branding.writes.length).toBe(2);
-  expect(branding.writes[1].settings.illustrations).toBe("show");
-  await expect(page.locator("html")).toHaveAttribute("data-illustrations", "show");
+  expect(branding.writes[1].settings.illustrations).toBe("hide");
+  await expect(page.locator("html")).toHaveAttribute("data-illustrations", "hide");
   expect(branding.foreignActor).toEqual([]);
   await expectCleanHarness(api);
 });
@@ -430,7 +437,7 @@ test("partner: across laptop and tablet widths the Monitoring tiles keep every n
   test.skip(isMobile(testInfo), "the phone width runs in the mobile projects");
   await authenticate(page.context(), "partner");
   const api = await installApiFixtures(page, "partner", { monitoringInstanceList: true });
-  await installBranding(page, "partner");
+  await installBranding(page, "partner", SHOWN);
 
   for (const width of [1280, 1024, 768]) {
     await page.setViewportSize({ width, height: 900 });
@@ -448,7 +455,7 @@ test("partner: across laptop and tablet widths the Monitoring tiles keep every n
 test("partner: Monitoring KPI tiles fill their slot while there is room and keep every number readable", async ({ page }, testInfo) => {
   await authenticate(page.context(), "partner");
   const api = await installApiFixtures(page, "partner", { monitoringInstanceList: true });
-  await installBranding(page, "partner");
+  await installBranding(page, "partner", SHOWN);
 
   await page.goto("/inventory/monitoring");
   await expect(page.locator(".illo-kpi")).toHaveCount(4, { timeout: 20_000 });
@@ -466,7 +473,7 @@ test("admin: a clickable card nudges its scene, and reduced motion keeps it stil
   test.skip(isMobile(testInfo), "hover is a pointer affordance");
   await authenticate(page.context(), "admin");
   const api = await installApiFixtures(page, "admin");
-  await installBranding(page, "admin");
+  await installBranding(page, "admin", SHOWN);
 
   await page.goto("/technologies");
   const card = page.getByRole("button", { name: "View CPU Resources details" });
@@ -493,27 +500,45 @@ test("admin: a clickable card nudges its scene, and reduced motion keeps it stil
   await expectCleanHarness(api);
 });
 
-test("the sign-in error page names the situation with a scene, and the classic icon when hidden", async ({ page, context }, testInfo) => {
+test("the sign-in error page keeps its classic icon by default, and names the situation with a scene once shown", async ({ page, context }, testInfo) => {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/auth/error?error=AccessDenied");
+  await expect(page.getByText("Access Denied", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+  expect(await visibleScenes(page), "nothing chosen anywhere: off").toBe(0);
+  await expect(page.locator(`${FALLBACK} svg`)).toBeVisible();
+
+  await hint(context, "show");
+  await page.reload();
   await expect(page.getByText("Access Denied", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
   expect(await visibleScenes(page)).toBe(1);
   await expectDecorative(page);
   await expectFitted(page);
   await capture(page, testInfo, "auth-error-scene");
-
-  await hint(context, "hide");
-  await page.reload();
-  await expect(page.getByText("Access Denied", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
-  expect(await visibleScenes(page)).toBe(0);
-  await expect(page.locator(`${FALLBACK} svg`)).toBeVisible();
   expect(errors).toEqual([]);
+});
+
+test("with nothing chosen anywhere the cards stay classic from the first byte", async ({ page }, testInfo) => {
+  await authenticate(page.context(), "admin");
+  const api = await installApiFixtures(page, "admin", HOME);
+  await answerProjects(page);
+  await installBranding(page, "admin");
+
+  const firstByte = await (await page.request.get("/")).text();
+  expect(firstByte, "the server renders the default before any script runs").toContain('data-illustrations="hide"');
+  await openHome(page);
+  await expect(page.locator("html")).toHaveAttribute("data-illustrations", "hide");
+  expect(await visibleScenes(page)).toBe(0);
+  await expect(page.locator(`${FALLBACK} svg`)).toHaveCount(6);
+  await expectNoHorizontalOverflow(page);
+  await capture(page, testInfo, "home-default");
+  await expectCleanHarness(api);
 });
 
 test("partner: first-run empty states in Settings draw their scene above the text", async ({ page }, testInfo) => {
   await authenticate(page.context(), "partner");
   const api = await installSettingsFixtures(page, "partner");
+  api.organization.settings = { illustrations: "show" };
 
   for (const [path, title] of [
     ["/settings/integrations", "No API keys"],
@@ -523,7 +548,7 @@ test("partner: first-run empty states in Settings draw their scene above the tex
     await page.goto(path);
     const heading = page.getByText(title, { exact: true }).first();
     await expect(heading).toBeVisible({ timeout: 20_000 });
-    const scene = page.locator(SCENE).filter({ visible: true });
+    const scene = page.locator("div.text-center").filter({ has: page.getByText(title, { exact: true }) }).locator(SCENE);
     await expect(scene, `${title} draws its scene`).toHaveCount(1);
     const [s, h] = [await scene.boundingBox(), await heading.boundingBox()];
     expect(s.y + s.height, `${title}: the scene sits above its heading`).toBeLessThanOrEqual(h.y + 1);
@@ -538,6 +563,9 @@ test("partner: first-run empty states in Settings draw their scene above the tex
 
 test("an account with no role sees the access gate with its scene", async ({ page }, testInfo) => {
   await authenticate(page.context(), "tenant", { groups: ["role_unmapped"] });
+  // A roleless account reads no branding, so the page keeps what the server rendered: here a
+  // hint carrying a deployment that turned scenes on.
+  await hint(page.context(), "show");
   await installApiFixtures(page, "tenant");
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -550,4 +578,51 @@ test("an account with no role sees the access gate with its scene", async ({ pag
   await expectNoHorizontalOverflow(page);
   await capture(page, testInfo, "access-gate");
   expect(errors).toEqual([]);
+});
+
+test("partner: the API key counters carry their scenes, and their icons where a tile is too narrow", async ({ page }, testInfo) => {
+  test.skip(isMobile(testInfo), "the phone width runs one tile a row; the narrow case is the 768px pass");
+  await authenticate(page.context(), "partner");
+  const api = await installSettingsFixtures(page, "partner");
+  api.organization.settings = { illustrations: "show" };
+
+  for (const width of [1440, 1024, 768]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/settings/integrations");
+    await expect(page.getByText("Revoked Keys", { exact: true })).toBeVisible({ timeout: 20_000 });
+    const tiles = await expectKpiTiles(page);
+    const icons = await page.locator(".illo-kpi").evaluateAll((nodes) => nodes.map((tile) => {
+      const icon = tile.querySelector('[data-slot="illustration-fallback"]');
+      return icon ? getComputedStyle(icon).display !== "none" : null;
+    }));
+    tiles.forEach((tile, i) => {
+      if (icons[i] !== null) expect(icons[i], `${width}px: a ${tile.width}px tile shows its icon only without a scene`).toBe(!tile.shown);
+    });
+    await expectFitted(page);
+    await expectNoHorizontalOverflow(page);
+    await capture(page, testInfo, `api-key-counters-${width}`);
+  }
+  await expectCleanSettingsHarness(api);
+});
+
+test("partner: an inventory list draws its scene on a first run, never for a filter that matched nothing", async ({ page }, testInfo) => {
+  await authenticate(page.context(), "partner");
+  const api = await installApiFixtures(page, "partner");
+  await installBranding(page, "partner", SHOWN);
+  await page.route(/\/api\/v1\/networks(\?.*)?$/, (route) => route.request().method() === "GET"
+    ? route.fulfill({ json: { total: 0, networks: [], nodes: ["cluster-a"], unreachable_nodes: [] } })
+    : route.fallback());
+
+  await page.goto("/inventory/networks");
+  await expect(page.getByText("No networks yet", { exact: true })).toBeVisible({ timeout: 20_000 });
+  expect(await visibleScenes(page), "the first run names what will be here").toBe(1);
+  await expectDecorative(page);
+  await expectFitted(page);
+  await capture(page, testInfo, "networks-first-run");
+
+  await page.goto("/inventory/networks?q=no-such-network");
+  await expect(page.getByText("No networks found", { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("No network matches the current filters.")).toBeVisible();
+  expect(await visibleScenes(page), "a filter that matched nothing keeps the icon").toBe(0);
+  await expectCleanHarness(api);
 });
