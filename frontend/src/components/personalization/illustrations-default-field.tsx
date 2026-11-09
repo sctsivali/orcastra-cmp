@@ -30,7 +30,7 @@ export function IllustrationsDefaultField({
         </SelectContent>
       </Select>
       <p className="text-xs text-muted-foreground">
-        Whether cards show their illustration for everyone this branding applies to.
+        Off by default. Show adds an illustration to cards for everyone this branding applies to.
       </p>
     </div>
   );

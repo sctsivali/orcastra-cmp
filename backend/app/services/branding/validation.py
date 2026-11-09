@@ -30,7 +30,8 @@ BACKGROUND_BYTES = 2 * 1024 * 1024
 LOGO_TYPES = ("image/png", "image/jpeg", "image/webp", "image/svg+xml")
 FAVICON_TYPES = ("image/png", "image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon")
 THEMES = ("light", "dark", "system")
-# Whether cards show their illustration (frontend components/illustrations). Absent means show.
+# Whether cards show their illustration (frontend components/illustrations). Absent means the
+# frontend default, hide (owner decision 2026-11-09): shown only once someone chooses show.
 ILLUSTRATIONS = ("show", "hide")
 LOGO_COLORS = ("auto", "black", "white")
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")

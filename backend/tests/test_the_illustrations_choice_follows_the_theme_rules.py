@@ -58,7 +58,7 @@ def test_the_choice_fills_layer_by_layer_like_the_theme() -> None:
 
     assert merge([deployment, own])["illustrations"] == "show"
     assert merge([deployment, silent])["illustrations"] == "hide", "an organization that says nothing follows the default"
-    assert "illustrations" not in merge([silent]), "nothing set anywhere means the built-in default (show)"
+    assert "illustrations" not in merge([silent]), "nothing set anywhere means the frontend default (hide)"
 
 
 def _public(settings: dict) -> dict:

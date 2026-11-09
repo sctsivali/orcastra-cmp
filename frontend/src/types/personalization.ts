@@ -161,7 +161,9 @@ export const DEFAULT_PERSONALIZATION: PersonalizationSettings = {
     autoTextColor: true,          // Auto-calculate text color by default
   },
   theme: "system",               // Default: follow system preference
-  illustrations: "show",
+  // Off until an organization or the deployment turns them on in Personalization (owner
+  // decision 2026-11-09); this is also what the first byte renders when nothing is set.
+  illustrations: "hide",
   lastModified: null,
 };
 
