@@ -273,12 +273,14 @@ export default function HomePage() {
         <div className="space-y-2">
           <h2 className="text-3xl font-bold">Ready to Get Started?</h2>
           <p className="text-muted-foreground mx-auto text-lg max-w-none px-8">
-            Explore your infrastructure, create new projects, or dive into the technologies powering {settings.branding.appName || "Orcastra"}
+            Watch the health of your fleet, or dive into the technologies powering {settings.branding.appName || "Orcastra"}
           </p>
         </div>
+        {/* note: the hero above already opens the inventory, so these two lead elsewhere (owner
+            decision 2026-11-09). */}
         <div className="flex flex-wrap items-center justify-center gap-4">
           <Button asChild size="lg" variant="default">
-            <Link href="/inventory">View Full Inventory</Link>
+            <Link href="/inventory/monitoring">Open Monitoring</Link>
           </Button>
           <Button asChild size="lg" variant="outline">
             <Link href="/technologies">Explore Technologies</Link>
