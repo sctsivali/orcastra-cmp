@@ -14,6 +14,7 @@ import {
   TableRow } from "@/components/ui/table";
 import { TableLink } from "@/components/ui/table-link";
 import { TableEmptyRow, TableEmptyValue, TableSubText } from "@/components/ui/table-text";
+import { IpamIllustration } from "@/components/illustrations/scenes/onboarding";
 import { formatLabel } from "@/lib/utils";
 import { useIPAM } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -204,7 +205,11 @@ function IPAMContent() {
             </TableHeader>
             <TableBody>
               {paginatedAllocations.length === 0 ? (
-                <TableEmptyRow colSpan={9} title="No IP allocations found" />
+                filters.activeFilterCount > 0 ? (
+                  <TableEmptyRow colSpan={9} title="No IP allocations found" description="No allocation matches the current filters." />
+                ) : (
+                  <TableEmptyRow colSpan={9} illustration={IpamIllustration} title="No IP allocations yet" description="Addresses appear here once a network or an instance holds one." />
+                )
               ) : (
                 paginatedAllocations.map((alloc, idx: number) => (
                   <TableRow key={`${alloc.node}-${alloc.project}-${alloc.address}-${idx}`}>

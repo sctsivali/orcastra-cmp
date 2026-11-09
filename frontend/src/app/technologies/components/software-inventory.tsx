@@ -4,6 +4,7 @@ import * as React from "react";
 import { Server } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { EmptyClustersIllustration } from "@/components/illustrations/scenes/onboarding";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { GRID_PAGE_SIZE, GRID_PAGE_SIZES } from "@/lib/pagination";
@@ -91,6 +92,7 @@ export function SoftwareInventory({ nodes }: { nodes: NodeStatus[] }) {
           <CardContent className="pt-6">
             <EmptyState
               icon={Server}
+              illustration={EmptyClustersIllustration}
               title="No cluster reports a software inventory yet"
               description="Versions appear here once a cluster is connected and answering."
             />

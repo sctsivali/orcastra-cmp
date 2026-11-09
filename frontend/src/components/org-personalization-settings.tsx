@@ -21,6 +21,8 @@ import { DEFAULT_PERSONALIZATION, type PersonalizationSettings as Settings } fro
 import type { MyBranding, OrgBranding } from "@/types/branding";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { OrganizationsIllustration } from "@/components/illustrations/scenes/onboarding";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { usePersonalization } from "./personalization-provider";
 import { mergeWithDefaults } from "./personalization/preferences";
@@ -182,15 +184,14 @@ export function OrgPersonalizationSettings() {
   if (noOrg) {
     return (
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <AlertCircle className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
-            No organization
-          </CardTitle>
-          <CardDescription>
-            You are not a member of any organization. Create or join one first to manage organization branding.
-          </CardDescription>
-        </CardHeader>
+        <CardContent className="pt-6">
+          <EmptyState
+            icon={AlertCircle}
+            illustration={OrganizationsIllustration}
+            title="No organization"
+            description="You are not a member of any organization. Create or join one first to manage organization branding."
+          />
+        </CardContent>
       </Card>
     );
   }

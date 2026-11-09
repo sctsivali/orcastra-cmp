@@ -48,6 +48,7 @@ import { requestRowFocus } from "@/lib/row-focus";
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 import { NodeLink } from "@/components/ui/node-link";
 import { plural } from "@/lib/utils";
+import { ProfilesIllustration } from "@/components/illustrations/scenes/onboarding";
 
 /** One key for a row and for the dialog's report of what it wrote. */
 const profileRowKey = (p: { node?: string | null; project?: string | null; name: string }) =>
@@ -310,7 +311,8 @@ function ProfilesContent() {
                 <TableEmptyRow
                   colSpan={columnCount}
                   icon={Layers}
-                  title="No profiles found"
+                  illustration={filters.activeFilterCount > 0 ? undefined : ProfilesIllustration}
+                  title={filters.activeFilterCount > 0 ? "No profiles found" : "No profiles yet"}
                   description={
                     filters.activeFilterCount > 0
                       ? "No profile matches the current filters."

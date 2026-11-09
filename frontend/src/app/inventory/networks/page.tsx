@@ -45,6 +45,7 @@ import { requestRowFocus } from "@/lib/row-focus";
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 import { NodeLink } from "@/components/ui/node-link";
 import { networkStatusDisplay } from "@/lib/resource-status";
+import { NetworksIllustration } from "@/components/illustrations/scenes/onboarding";
 
 /** One key for a row and for the create dialog's report of what it made. */
 const networkRowKey = (n: { node?: string | null; project?: string | null; name: string }) =>
@@ -289,7 +290,8 @@ function NetworksContent() {
                 <TableEmptyRow
                   colSpan={columnCount}
                   icon={NetworkIcon}
-                  title="No networks found"
+                  illustration={filters.activeFilterCount > 0 ? undefined : NetworksIllustration}
+                  title={filters.activeFilterCount > 0 ? "No networks found" : "No networks yet"}
                   description={
                     filters.activeFilterCount > 0
                       ? "No network matches the current filters."

@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { BackLink } from "@/components/ui/back-link";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { DisconnectedIllustration } from "@/components/illustrations/scenes/states";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { NodeLink } from "@/components/ui/node-link";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -145,6 +146,7 @@ function InstallDetail() {
       <div className="container mx-auto p-6">
         <EmptyState
           icon={RotateCcw}
+          illustration={DisconnectedIllustration}
           title="Could not load this installation"
           description={(install.error as Error).message}
           action={

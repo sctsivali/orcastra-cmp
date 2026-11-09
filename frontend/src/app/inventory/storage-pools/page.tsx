@@ -24,6 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { TableEmptyRow } from "@/components/ui/table-text";
+import { EmptyPoolsIllustration } from "@/components/illustrations/scenes/onboarding";
 import { formatLabel } from "@/lib/utils";
 import { Database } from "lucide-react";
 import { TableToolbar } from "@/components/ui/table-toolbar";
@@ -282,7 +283,8 @@ function StoragePoolsContent() {
                 <TableEmptyRow
                   colSpan={(nodes.length > 0 ? 7 : 6) - (isPartner ? 0 : 3)}
                   icon={Database}
-                  title="No storage pools found"
+                  illustration={filters.activeFilterCount > 0 ? undefined : EmptyPoolsIllustration}
+                  title={filters.activeFilterCount > 0 ? "No storage pools found" : "No storage pools yet"}
                   description={
                     filters.activeFilterCount > 0
                       ? "No storage pool matches the current filters."

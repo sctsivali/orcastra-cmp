@@ -5,6 +5,7 @@ import { Server, WifiOff } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { EmptyClustersIllustration } from "@/components/illustrations/scenes/onboarding";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -70,6 +71,7 @@ export function TenantClusterStatusCards() {
       ) : !data || data.clusters.length === 0 ? (
         <EmptyState
           icon={Server}
+          illustration={EmptyClustersIllustration}
           title="No clusters available"
           description="Clusters appear here when your organization has active workload access."
         />

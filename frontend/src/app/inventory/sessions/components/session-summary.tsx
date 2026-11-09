@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -10,6 +10,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { IllustrationFallback, type IllustrationProps } from "@/components/illustrations/illustration-frame";
+import { DownloadIllustration, DurationIllustration, SessionsActiveIllustration, UploadIllustration } from "@/components/illustrations/scenes/kpi";
 import { EMPTY_VALUE, formatBytes, formatCount, formatElapsed, formatNetworkRate } from "@/lib/utils";
 
 /**
@@ -26,15 +28,32 @@ import { EMPTY_VALUE, formatBytes, formatCount, formatElapsed, formatNetworkRate
  * the room a rate like `999.9 MB/s` needs, and at 768 px the value ran under the icon. Label and
  * value stay sibling paragraphs: the live Sessions spec reads the count as the label's next `p`.
  */
-function SummaryTile({ label, value, icon: Icon }: { label: string; value: ReactNode; icon: LucideIcon }) {
+function SummaryTile({
+  label,
+  value,
+  icon: Icon,
+  illustration: Scene,
+}: {
+  label: string;
+  value: ReactNode;
+  icon: LucideIcon;
+  illustration: ComponentType<IllustrationProps>;
+}) {
+  // note: the scene shows only from a 300px tile (illustrations.css, illo-stat), where the value
+  // still keeps the 135 px a rate needs beside it; below that the label's icon returns.
   return (
-    <Card>
-      <CardContent className="pt-4">
-        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-          {label}
-        </p>
-        <p className="mt-1 text-2xl font-bold tabular-nums">{value}</p>
+    <Card className="illo-stat">
+      <CardContent className="flex items-start justify-between gap-4 pt-4">
+        <div className="min-w-0">
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <IllustrationFallback>
+              <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+            </IllustrationFallback>
+            {label}
+          </p>
+          <p className="mt-1 text-2xl font-bold tabular-nums">{value}</p>
+        </div>
+        <Scene size="sm" />
       </CardContent>
     </Card>
   );
@@ -64,9 +83,9 @@ export function ActiveSummary({
   const shown = (text: string) => (countUnknown ? EMPTY_VALUE : text);
   return (
     <div className={ACTIVE_STRIP}>
-      <SummaryTile label="Active" value={shown(formatCount(count))} icon={Wifi} />
-      <SummaryTile label="Download" value={shown(formatNetworkRate(downloadRate, 1))} icon={ArrowDownToLine} />
-      <SummaryTile label="Upload" value={shown(formatNetworkRate(uploadRate, 1))} icon={ArrowUpFromLine} />
+      <SummaryTile label="Active" value={shown(formatCount(count))} icon={Wifi} illustration={SessionsActiveIllustration} />
+      <SummaryTile label="Download" value={shown(formatNetworkRate(downloadRate, 1))} icon={ArrowDownToLine} illustration={DownloadIllustration} />
+      <SummaryTile label="Upload" value={shown(formatNetworkRate(uploadRate, 1))} icon={ArrowUpFromLine} illustration={UploadIllustration} />
     </div>
   );
 }
@@ -91,10 +110,10 @@ export function HistorySummary({
   const shown = (text: string) => (countUnknown ? EMPTY_VALUE : text);
   return (
     <div className={HISTORY_STRIP}>
-      <SummaryTile label="Past Sessions" value={shown(formatCount(sessions))} icon={History} />
-      <SummaryTile label="Total Time" value={shown(formatElapsed(durationSeconds))} icon={Clock} />
-      <SummaryTile label="Downloaded" value={shown(formatBytes(downloadBytes))} icon={ArrowDownToLine} />
-      <SummaryTile label="Uploaded" value={shown(formatBytes(uploadBytes))} icon={ArrowUpFromLine} />
+      <SummaryTile label="Past Sessions" value={shown(formatCount(sessions))} icon={History} illustration={SessionsActiveIllustration} />
+      <SummaryTile label="Total Time" value={shown(formatElapsed(durationSeconds))} icon={Clock} illustration={DurationIllustration} />
+      <SummaryTile label="Downloaded" value={shown(formatBytes(downloadBytes))} icon={ArrowDownToLine} illustration={DownloadIllustration} />
+      <SummaryTile label="Uploaded" value={shown(formatBytes(uploadBytes))} icon={ArrowUpFromLine} illustration={UploadIllustration} />
     </div>
   );
 }

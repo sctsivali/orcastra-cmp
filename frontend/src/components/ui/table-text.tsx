@@ -2,6 +2,7 @@ import * as React from "react";
 import { type LucideIcon } from "lucide-react";
 import { cn, EMPTY_VALUE } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/empty-state";
+import type { IllustrationProps } from "@/components/illustrations/illustration-frame";
 import { TableCell, TableRow } from "@/components/ui/table";
 
 // The single placeholder for a value the API did not return. Six spellings existed before
@@ -52,12 +53,15 @@ export function TableEmptyRow({
   colSpan,
   icon,
   iconClassName,
+  illustration,
   title,
   description,
   action,
 }: {
   colSpan: number;
   icon?: LucideIcon;
+  /** A first-run row only ("No X yet"), never a filter that matched nothing; see EmptyState. */
+  illustration?: React.ComponentType<IllustrationProps>;
   /** ex; "animate-spin" to reuse the same row shape for a loading placeholder. */
   iconClassName?: string;
   title: string;
@@ -67,13 +71,19 @@ export function TableEmptyRow({
   return (
     <TableRow className="hover:bg-transparent">
       <TableCell colSpan={colSpan} className="p-0">
-        <EmptyState
-          icon={icon}
-          iconClassName={iconClassName}
-          title={title}
-          description={description}
-          action={action}
-        />
+        {/* note: on a phone the table scrolls sideways and this cell spans every column, so the
+            message used to centre across columns off screen. It sits in a box no wider than the
+            visible area, pinned to the scroller's left edge. */}
+        <div className="sticky left-0 max-w-[calc(100vw-3rem)]">
+          <EmptyState
+            icon={icon}
+            iconClassName={iconClassName}
+            illustration={illustration}
+            title={title}
+            description={description}
+            action={action}
+          />
+        </div>
       </TableCell>
     </TableRow>
   );

@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
+import { EmptyClustersIllustration } from "@/components/illustrations/scenes/onboarding";
 import { PageReadError } from "@/components/ui/read-error-state";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { TableToolbar } from "@/components/ui/table-toolbar";
@@ -159,7 +160,7 @@ function CertificatesContent() {
         </CardHeader>
         <CardContent className="p-0 md:p-6 md:pt-0">
           {certificates.length === 0 ? (
-            <EmptyState title="No certificates found" description="Register a cluster first." />
+            <EmptyState illustration={EmptyClustersIllustration} title="No certificates found" description="Register a cluster first." />
           ) : (
             <>
             <CertificatesTable

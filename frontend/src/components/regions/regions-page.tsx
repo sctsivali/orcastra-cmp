@@ -28,6 +28,7 @@ import {
   ChevronDown,
   ChevronUp,
   RefreshCw,
+  AlertTriangle,
   MapPin,
   Activity,
   Box,
@@ -41,8 +42,12 @@ import { RegionsMapCard } from "./regions-map-card";
 import { REGIONS } from "./regions-table-config";
 import { RegionSummary, RegionsOverviewResponse } from "@/types/api";
 import { RegionsIllustration } from "@/components/illustrations/scenes/onboarding";
+import { DisconnectedIllustration } from "@/components/illustrations/scenes/states";
+import { EmptyState } from "@/components/ui/empty-state";
 import { isWholeCountry, placeDetail } from "@/lib/regions/place";
-import { IllustrationFallback } from "@/components/illustrations/illustration-frame";
+import { IllustrationFallback, type IllustrationProps } from "@/components/illustrations/illustration-frame";
+import { ClustersIllustration, InstancesIllustration, RunningIllustration } from "@/components/illustrations/scenes/kpi";
+import { CpuIllustration, GpuIllustration, MemoryIllustration, StorageIllustration } from "@/components/illustrations/scenes/hardware";
 
 function InstanceCounts({ region }: { region: RegionSummary }) {
   return (
@@ -61,23 +66,31 @@ function InstanceCounts({ region }: { region: RegionSummary }) {
 
 function StatTile({
   icon: Icon,
+  illustration: Scene,
   label,
   value,
   note }: {
   icon: LucideIcon;
+  /** The counter's subject; the label's icon comes back wherever the scene steps aside. */
+  illustration: React.ComponentType<IllustrationProps>;
   label: string;
   value: React.ReactNode;
   note?: React.ReactNode;
 }) {
   return (
-    <Card>
-      <CardContent className="pt-4">
-        <div className="flex items-center gap-2">
-          <Icon className="h-4 w-4 text-muted-foreground" aria-hidden />
-          <span className="text-sm text-muted-foreground">{label}</span>
+    <Card className="illo-stat">
+      <CardContent className="flex items-start justify-between gap-4 pt-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <IllustrationFallback>
+              <Icon className="h-4 w-4 text-muted-foreground" aria-hidden />
+            </IllustrationFallback>
+            <span className="text-sm text-muted-foreground">{label}</span>
+          </div>
+          <p className="text-2xl font-bold mt-1">{value}</p>
+          {note && <p className="text-xs text-muted-foreground mt-0.5">{note}</p>}
         </div>
-        <p className="text-2xl font-bold mt-1">{value}</p>
-        {note && <p className="text-xs text-muted-foreground mt-0.5">{note}</p>}
+        <Scene size="sm" />
       </CardContent>
     </Card>
   );
@@ -353,13 +366,20 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
   if (error) {
     return (
       <div className="container py-8">
-        <Card className="border-destructive">
+        <Card>
           <CardContent className="pt-6">
-            <p className="text-destructive">Failed to load regions: {error instanceof Error ? error.message : String(error)}</p>
-            <Button onClick={() => refetch()} className="mt-4">
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Retry
-            </Button>
+            <EmptyState
+              icon={AlertTriangle}
+              illustration={DisconnectedIllustration}
+              title="Failed to load regions"
+              description={error instanceof Error ? error.message : String(error)}
+              action={
+                <Button variant="outline" size="sm" onClick={() => refetch()}>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Retry
+                </Button>
+              }
+            />
           </CardContent>
         </Card>
       </div>
@@ -386,13 +406,14 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
       {/* Global stats */}
       {data && fleet && (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-          <StatTile icon={Globe} label="Regions" value={data.regions.length} />
-          <StatTile icon={Server} label="Clusters" value={data.total_nodes} />
-          <StatTile icon={Cpu} label="CPU Threads" value={nothingRead ? NOT_READ : fleet.cpu} />
-          <StatTile icon={MemoryStick} label="Memory" value={nothingRead ? NOT_READ : formatBytes(fleet.memory)} />
-          <StatTile icon={HardDrive} label="Storage" value={nothingRead ? NOT_READ : formatBytes(fleet.storage)} />
+          <StatTile icon={Globe} illustration={RegionsIllustration} label="Regions" value={data.regions.length} />
+          <StatTile icon={Server} illustration={ClustersIllustration} label="Clusters" value={data.total_nodes} />
+          <StatTile icon={Cpu} illustration={CpuIllustration} label="CPU Threads" value={nothingRead ? NOT_READ : fleet.cpu} />
+          <StatTile icon={MemoryStick} illustration={MemoryIllustration} label="Memory" value={nothingRead ? NOT_READ : formatBytes(fleet.memory)} />
+          <StatTile icon={HardDrive} illustration={StorageIllustration} label="Storage" value={nothingRead ? NOT_READ : formatBytes(fleet.storage)} />
           <StatTile
             icon={Sparkles}
+            illustration={GpuIllustration}
             label="Compute GPUs"
             value={nothingRead ? NOT_READ : fleet.gpu}
             note={!nothingRead && fleet.gpuCards > fleet.gpu ? `${plural(fleet.gpuCards, "card")} detected` : undefined}
@@ -401,10 +422,10 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
       )}
       {data && !fleet && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatTile icon={Globe} label="Regions" value={data.regions.length} />
-          <StatTile icon={Server} label="Clusters" value={data.total_nodes} />
-          <StatTile icon={Box} label="Instances" value={data.total_instances} />
-          <StatTile icon={Activity} label="Running" value={runningInstances} />
+          <StatTile icon={Globe} illustration={RegionsIllustration} label="Regions" value={data.regions.length} />
+          <StatTile icon={Server} illustration={ClustersIllustration} label="Clusters" value={data.total_nodes} />
+          <StatTile icon={Box} illustration={InstancesIllustration} label="Instances" value={data.total_instances} />
+          <StatTile icon={Activity} illustration={RunningIllustration} label="Running" value={runningInstances} />
         </div>
       )}
 

@@ -20,6 +20,7 @@ import {
   TableRow } from "@/components/ui/table";
 import { TableEmptyRow } from "@/components/ui/table-text";
 import { EmptyState } from "@/components/ui/empty-state";
+import { UsersIllustration } from "@/components/illustrations/scenes/onboarding";
 import { TableLink } from "@/components/ui/table-link";
 import {
   GroupDetailDialog,
@@ -284,6 +285,7 @@ function GroupsContent() {
           {groups.length === 0 ? (
             <EmptyState
               icon={Users}
+              illustration={UsersIllustration}
               title="No groups found"
               description="Create your first group to manage permissions and identities"
               action={

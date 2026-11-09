@@ -34,6 +34,7 @@ import {
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { TableLink } from "@/components/ui/table-link";
 import { EmptyState } from "@/components/ui/empty-state";
+import { EmptyClustersIllustration } from "@/components/illustrations/scenes/onboarding";
 import { Button } from "@/components/ui/button";
 import { IntentLink } from "@/components/navigation/route-intent";
 import type { ClusterInfo } from "@/types/api";
@@ -315,6 +316,7 @@ function ClusterMembersContent() {
             clusters.length === 0 ? (
               <EmptyState
                 icon={ShieldAlert}
+                illustration={EmptyClustersIllustration}
                 title="No clusters with members"
                 description="Only a cluster running in clustered mode has members. A standalone server has none, and a cluster still waiting on its trust handshake has not reported its mode yet."
                 action={

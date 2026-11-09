@@ -14,6 +14,7 @@ import {
   TableRow } from "@/components/ui/table";
 import { TableEmptyValue } from "@/components/ui/table-text";
 import { EmptyState } from "@/components/ui/empty-state";
+import { KeyVaultIllustration } from "@/components/illustrations/scenes/catalog";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { OverflowCell } from "@/components/ui/overflow-cell";
 import { formatLabel } from "@/lib/utils";
@@ -195,7 +196,7 @@ function IdentitiesContent() {
         </CardHeader>
         <CardContent>
           {identities.length === 0 ? (
-            <EmptyState title="No identities found" />
+            <EmptyState illustration={KeyVaultIllustration} title="No identities found" />
           ) : sortedIdentities.length === 0 ? (
             <EmptyState title="No identities match your search criteria" />
           ) : (

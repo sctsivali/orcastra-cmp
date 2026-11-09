@@ -34,6 +34,7 @@ import { projectsFromUsedBy } from "@/lib/used-by";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { PageReadError } from "@/components/ui/read-error-state";
 import { NodeLink } from "@/components/ui/node-link";
+import { EmptyVolumesIllustration } from "@/components/illustrations/scenes/onboarding";
 
 interface VolumeInfo {
   name: string;
@@ -263,7 +264,8 @@ function StorageVolumesContent() {
                 <TableEmptyRow
                   colSpan={columnCount}
                   icon={HardDrive}
-                  title="No storage volumes found"
+                  illustration={filters.activeFilterCount > 0 ? undefined : EmptyVolumesIllustration}
+                  title={filters.activeFilterCount > 0 ? "No storage volumes found" : "No storage volumes yet"}
                   description={
                     filters.activeFilterCount > 0
                       ? "No volume matches the current filters."

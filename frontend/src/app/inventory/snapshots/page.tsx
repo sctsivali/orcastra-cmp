@@ -22,6 +22,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { EmptyState } from "@/components/ui/empty-state";
+import { DisconnectedIllustration } from "@/components/illustrations/scenes/states";
+import { SnapshotsIllustration } from "@/components/illustrations/scenes/onboarding";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
@@ -247,6 +249,7 @@ function SnapshotsContent() {
               title: "No snapshots here",
               description:
                 "Use Take Snapshot above, or open an instance's Snapshots tab, before risky maintenance.",
+              illustration: SnapshotsIllustration,
             };
 
   // Never claimed before data exists: a note about sizes while loading states a measurement
@@ -359,6 +362,7 @@ function SnapshotsContent() {
           <CardContent className="pt-6">
             <EmptyState
               icon={AlertTriangle}
+              illustration={DisconnectedIllustration}
               title="Could not read snapshots"
               description={
                 error instanceof Error

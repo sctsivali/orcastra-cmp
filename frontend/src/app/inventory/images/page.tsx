@@ -13,6 +13,7 @@ import {
   TableHeader,
   TableRow } from "@/components/ui/table";
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
+import { ImagesIllustration } from "@/components/illustrations/scenes/onboarding";
 import { OverflowCell } from "@/components/ui/overflow-cell";
 import { formatBytes, formatInstanceType, formatLabel, plural } from "@/lib/utils";
 import { OverflowText } from "@/components/ui/overflow-text";
@@ -335,7 +336,8 @@ function ImagesContent() {
                   // from an empty scope. The actions column moves with the role.
                   colSpan={columnCount}
                   icon={ImageIcon}
-                  title="No images found"
+                  illustration={filters.activeFilterCount > 0 ? undefined : ImagesIllustration}
+                  title={filters.activeFilterCount > 0 ? "No images found" : "No images yet"}
                   description={
                     filters.activeFilterCount > 0
                       ? `No image matches the current filters. ${plural(filters.activeFilterCount, "filter")} active.`

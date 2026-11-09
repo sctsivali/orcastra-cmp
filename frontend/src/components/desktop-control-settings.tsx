@@ -55,6 +55,7 @@ import { Switch } from "@/components/ui/switch";
 import { ReadErrorState } from "@/components/ui/read-error-state";
 import { ShieldAlert } from "lucide-react";
 import type { DesktopControlPolicy } from "@/types/api";
+import { DesktopIllustration } from "@/components/illustrations/scenes/catalog";
 
 type Draft = {
   enabled: boolean;
@@ -218,7 +219,7 @@ export function DesktopControlSettings() {
   };
 
   return (
-    <Card>
+    <Card className="illo-card">
       <CardHeader>
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1">
@@ -230,13 +231,16 @@ export function DesktopControlSettings() {
           </div>
           {/* The stored answer, and nothing until it has been read: "Not allowed" over a read
               still in flight claimed a state nobody had seen. */}
-          {saved ? (
-            saved.enabled ? (
-              <Badge variant="secondary">Allowed</Badge>
-            ) : (
-              <Badge variant="outline">Not allowed</Badge>
-            )
-          ) : null}
+          <div className="flex shrink-0 items-start gap-3">
+            {saved ? (
+              saved.enabled ? (
+                <Badge variant="secondary">Allowed</Badge>
+              ) : (
+                <Badge variant="outline">Not allowed</Badge>
+              )
+            ) : null}
+            <DesktopIllustration size="sm" className="-mt-1" />
+          </div>
         </div>
       </CardHeader>
 

@@ -56,6 +56,7 @@ import { requestRowFocus } from "@/lib/row-focus";
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 import { NodeLink } from "@/components/ui/node-link";
 import { plural } from "@/lib/utils";
+import { PoliciesIllustration } from "@/components/illustrations/scenes/onboarding";
 
 // note: no local ACLInfo. It duplicated NetworkACLInfo and drifted from it, which is how a
 // field the API had started sending stayed invisible to this page.
@@ -272,7 +273,8 @@ function NetworkACLsContent() {
                 <TableEmptyRow
                   colSpan={(nodes.length > 0 ? 8 : 7) + (canManageACL ? 1 : 0)}
                   icon={ShieldCheck}
-                  title="No network ACLs found"
+                  illustration={filters.activeFilterCount > 0 ? undefined : PoliciesIllustration}
+                  title={filters.activeFilterCount > 0 ? "No network ACLs found" : "No network ACLs yet"}
                   description={
                     filters.activeFilterCount > 0
                       ? "No network ACL matches the current filters."

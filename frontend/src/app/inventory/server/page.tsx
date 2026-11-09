@@ -6,6 +6,7 @@ import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { UnreachableNodesBanner, reachabilityOf } from "@/components/ui/unreachable-nodes-banner";
 import { EmptyState } from "@/components/ui/empty-state";
+import { DisconnectedIllustration } from "@/components/illustrations/scenes/states";
 import { Server } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -172,6 +173,7 @@ export default function ServerPage() {
           <CardContent>
             <EmptyState
               icon={Server}
+              illustration={DisconnectedIllustration}
               title="Could not load server details"
               description={error instanceof Error ? error.message : "The request failed. Use Refresh to try again."}
             />

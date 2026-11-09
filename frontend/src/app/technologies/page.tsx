@@ -5,6 +5,8 @@ import { AlertTriangle, Server } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { AccessGateIllustration, DisconnectedIllustration } from "@/components/illustrations/scenes/states";
+import { EmptyClustersIllustration } from "@/components/illustrations/scenes/onboarding";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { LoadingLottiePageEnhanced } from "@/components/loading-lottie";
@@ -67,6 +69,7 @@ function PlatformTechnologies() {
           <CardContent className="pt-6">
             <EmptyState
               icon={AlertTriangle}
+              illustration={DisconnectedIllustration}
               title="Could not load cluster data"
               description="The dashboard did not get an answer for this page. This says nothing about whether your clusters are running."
               action={
@@ -115,6 +118,7 @@ function PlatformTechnologies() {
               <CardContent className="pt-6">
                 <EmptyState
                   icon={Server}
+                  illustration={EmptyClustersIllustration}
                   title="No cluster data yet"
                   description="Hardware figures appear here once a cluster is connected and reporting its resources."
                 />
@@ -152,6 +156,7 @@ function TenantTechnologies() {
           <CardContent className="pt-6">
             <EmptyState
               icon={AlertTriangle}
+              illustration={denied ? AccessGateIllustration : DisconnectedIllustration}
               title={denied ? "Instance specifications are not available" : "Could not load instance specifications"}
               description={
                 denied

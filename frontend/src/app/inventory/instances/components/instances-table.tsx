@@ -21,6 +21,7 @@ import { PendingCreateRows } from "./pending-create-rows";
 import { InstanceTableRow } from "./instance-table-row";
 import type { InstanceAction } from "./use-instance-actions";
 import { instanceStatusDisplay } from "@/lib/instance-status";
+import { EmptyInstancesIllustration } from "@/components/illustrations/scenes/onboarding";
 
 
 // note: the facet fields are named `host` and `project` deliberately, matching both the
@@ -149,6 +150,7 @@ export function InstancesTable(props: InstancesTableProps) {
             <TableEmptyRow
               colSpan={10}
               icon={Box}
+              illustration={activeFilterCount > 0 ? undefined : EmptyInstancesIllustration}
               title={
                 activeFilterCount > 0
                   ? "No instances found"

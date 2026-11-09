@@ -21,6 +21,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RowActions, type RowAction } from "@/components/ui/row-actions";
 import { TableEmptyValue } from "@/components/ui/table-text";
 import { EmptyState } from "@/components/ui/empty-state";
+import { KeyVaultIllustration } from "@/components/illustrations/scenes/catalog";
 import { useToast } from "@/hooks/use-toast";
 import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
 import { useAllProjects } from "@/hooks/use-lxd";
@@ -390,17 +391,24 @@ function MyKeysContent() {
               `keys.length` rendered a headers-only table with no message at all. The copy keys
               off the full set, so it stays right whichever of the three did the emptying. */}
           {sortedKeys.length === 0 ? (
-            <EmptyState
-              icon={Key}
-              title="No keys found"
-              description={
-                filters.activeFilterCount > 0
-                  ? "Try adjusting your search or filters"
-                  : keys.length > 0
-                    ? "No key on this tab. The other tabs may still have some."
-                    : "Generate your first key to get started"
-              }
-            />
+            filters.activeFilterCount === 0 && keys.length === 0 ? (
+              <EmptyState
+                icon={Key}
+                illustration={KeyVaultIllustration}
+                title="No keys yet"
+                description="Generate your first key to get started"
+              />
+            ) : (
+              <EmptyState
+                icon={Key}
+                title="No keys found"
+                description={
+                  filters.activeFilterCount > 0
+                    ? "Try adjusting your search or filters"
+                    : "No key on this tab. The other tabs may still have some."
+                }
+              />
+            )
           ) : (
             <>
             <Table>

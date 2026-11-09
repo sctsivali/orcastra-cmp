@@ -73,6 +73,7 @@ import { isVaultUnavailable, retryUnlessUnavailable } from "@/lib/read-error";
 import { ReadErrorState } from "@/components/ui/read-error-state";
 import { IllustrationFallback } from "@/components/illustrations/illustration-frame";
 import { KeyVaultIllustration } from "@/components/illustrations/scenes/catalog";
+import { KeysActiveIllustration, KeysExpiredIllustration, KeysRevokedIllustration } from "@/components/illustrations/scenes/kpi";
 
 // Main Integrations Settings Component (for embedding in Settings page)
 /**
@@ -440,49 +441,61 @@ function IntegrationsSettingsContent() {
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <Card>
+        <Card className="illo-kpi">
           <CardContent className="pt-6">
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0 space-y-1">
                 <p className="text-sm text-muted-foreground">Total Keys</p>
                 <p className="text-2xl font-bold">{totalKeys}</p>
               </div>
-              <Key className="h-8 w-8 text-muted-foreground" />
+              <IllustrationFallback>
+                <Key className="h-8 w-8 self-center text-muted-foreground" aria-hidden="true" />
+              </IllustrationFallback>
+              <KeyVaultIllustration size="sm" />
             </div>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="illo-kpi">
           <CardContent className="pt-6">
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0 space-y-1">
                 <p className="text-sm text-muted-foreground">Active Keys</p>
                 <p className="text-2xl font-bold text-muted-foreground">{activeKeys}</p>
               </div>
-              <CheckCircle2 className="h-8 w-8 text-muted-foreground" />
+              <IllustrationFallback>
+                <CheckCircle2 className="h-8 w-8 self-center text-muted-foreground" aria-hidden="true" />
+              </IllustrationFallback>
+              <KeysActiveIllustration size="sm" />
             </div>
           </CardContent>
         </Card>
         {/* An expired key is no longer counted as active, so without this tile the figures stop
             adding up and the drop reads as keys having been deleted. */}
-        <Card>
+        <Card className="illo-kpi">
           <CardContent className="pt-6">
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0 space-y-1">
                 <p className="text-sm text-muted-foreground">Expired Keys</p>
                 <p className="text-2xl font-bold text-muted-foreground">{expiredKeys}</p>
               </div>
-              <CalendarClock className="h-8 w-8 text-muted-foreground" />
+              <IllustrationFallback>
+                <CalendarClock className="h-8 w-8 self-center text-muted-foreground" aria-hidden="true" />
+              </IllustrationFallback>
+              <KeysExpiredIllustration size="sm" />
             </div>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="illo-kpi">
           <CardContent className="pt-6">
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0 space-y-1">
                 <p className="text-sm text-muted-foreground">Revoked Keys</p>
                 <p className="text-2xl font-bold text-muted-foreground">{revokedKeys}</p>
               </div>
-              <XCircle className="h-8 w-8 text-muted-foreground" />
+              <IllustrationFallback>
+                <XCircle className="h-8 w-8 self-center text-muted-foreground" aria-hidden="true" />
+              </IllustrationFallback>
+              <KeysRevokedIllustration size="sm" />
             </div>
           </CardContent>
         </Card>

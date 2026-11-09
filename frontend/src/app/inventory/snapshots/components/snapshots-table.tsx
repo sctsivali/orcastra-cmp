@@ -1,5 +1,7 @@
 "use client";
 
+import type * as React from "react";
+
 import type { SnapshotInfo } from "@/types/api";
 
 import { History, Loader2 } from "lucide-react";
@@ -21,6 +23,7 @@ import { formatBytes } from "@/lib/utils";
 import { SnapshotRowActions } from "./snapshot-row-actions";
 import { createdCell, expiryCell, snapshotScope } from "./snapshot-format";
 import { ORIGIN_LABEL, ORIGIN_ORDER, ORIGIN_RANK, snapshotOrigin } from "./snapshot-origin";
+import type { IllustrationProps } from "@/components/illustrations/illustration-frame";
 
 /**
  * The table definition lives beside the rows it renders.
@@ -143,7 +146,7 @@ interface SnapshotsTableProps {
   sortDirection: "asc" | "desc";
   onSort: (field: SnapshotField) => void;
   /** Rendered in the empty row. Ordered by the page, which knows why the list is short. */
-  empty: { title: string; description: string };
+  empty: { title: string; description: string; illustration?: React.ComponentType<IllustrationProps> };
   /** A refetch is in flight over rows already on screen. */
   refreshing: boolean;
 }
@@ -184,6 +187,7 @@ export function SnapshotsTable({
             colSpan={SNAPSHOT_COLUMN_COUNT}
             icon={refreshing ? Loader2 : History}
             iconClassName={refreshing ? "animate-spin" : undefined}
+            illustration={refreshing ? undefined : empty.illustration}
             title={refreshing ? "Loading snapshots" : empty.title}
             description={refreshing ? undefined : empty.description}
           />

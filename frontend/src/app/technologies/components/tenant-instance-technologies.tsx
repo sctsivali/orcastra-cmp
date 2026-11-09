@@ -24,6 +24,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
+import { EmptyInstancesIllustration } from "@/components/illustrations/scenes/onboarding";
 import { LiveTimestamp } from "@/components/ui/live-timestamp";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
@@ -448,6 +449,7 @@ export function TenantInstanceTechnologies({
           <div className="rounded-xl border bg-card px-6">
             <EmptyState
               icon={Server}
+              illustration={EmptyInstancesIllustration}
               title="No instances assigned"
               description={
                 response.unreachable_nodes.length > 0

@@ -47,6 +47,7 @@ import { useRowFocus } from "@/hooks/use-row-focus";
 import { requestRowFocus } from "@/lib/row-focus";
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 import { NodeLink } from "@/components/ui/node-link";
+import { IsoImagesIllustration } from "@/components/illustrations/scenes/onboarding";
 
 /** One key for a row and for the upload dialog's report of what it wrote. */
 const isoRowKey = (v: { node?: string | null; project?: string | null; pool?: string | null; name: string }) =>
@@ -369,12 +370,18 @@ function IsoImagesContent() {
             </TableHeader>
             <TableBody>
               {paginated.length === 0 ? (
-                <TableEmptyRow
-                  colSpan={columnCount}
-                  icon={Disc}
-                  title="No ISO images yet"
-                  description={canUpload ? 'Use "Upload ISO" to add one.' : undefined}
-                />
+                // note: the filtered list empties too, and "yet" with a scene would read as a first run.
+                filters.activeFilterCount > 0 ? (
+                  <TableEmptyRow colSpan={columnCount} icon={Disc} title="No ISO images match the filters" />
+                ) : (
+                  <TableEmptyRow
+                    colSpan={columnCount}
+                    icon={Disc}
+                    illustration={IsoImagesIllustration}
+                    title="No ISO images yet"
+                    description={canUpload ? 'Use "Upload ISO" to add one.' : undefined}
+                  />
+                )
               ) : (
                 paginated.map((v: any) => (
                   <TableRow key={isoRowKey(v)} {...focus.rowProps(isoRowKey(v))}>

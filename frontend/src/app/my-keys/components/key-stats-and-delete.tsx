@@ -10,31 +10,39 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardTitle } from "@/components/ui/card";
+import { IllustrationFallback } from "@/components/illustrations/illustration-frame";
+import { KeysActiveIllustration, KeysExpiredIllustration } from "@/components/illustrations/scenes/kpi";
 
 /** The two counters above the key table, from the full list so a tab cannot disagree with them. */
 export function KeyStats({ activeCount, expiredCount }: { activeCount: number; expiredCount: number }) {
   return (
     <div className="grid gap-4 md:grid-cols-2">
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-sm font-medium">Active Keys</CardTitle>
-          <CheckCircle className="h-4 w-4 text-muted-foreground" />
-        </CardHeader>
-        <CardContent>
-          <div className="text-2xl font-bold">{activeCount}</div>
-          <p className="text-xs text-muted-foreground">Valid and usable keys</p>
-        </CardContent>
+      <Card className="illo-kpi">
+        <div className="flex items-start justify-between gap-4 p-6">
+          <div className="min-w-0 space-y-2">
+            <CardTitle className="text-sm font-medium">Active Keys</CardTitle>
+            <div className="text-2xl font-bold">{activeCount}</div>
+            <p className="text-xs text-muted-foreground">Valid and usable keys</p>
+          </div>
+          <IllustrationFallback>
+            <CheckCircle className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+          </IllustrationFallback>
+          <KeysActiveIllustration size="sm" />
+        </div>
       </Card>
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-sm font-medium">Expired Keys</CardTitle>
-          <AlertCircle className="h-4 w-4 text-muted-foreground" />
-        </CardHeader>
-        <CardContent>
-          <div className="text-2xl font-bold">{expiredCount}</div>
-          <p className="text-xs text-muted-foreground">Keys past expiration</p>
-        </CardContent>
+      <Card className="illo-kpi">
+        <div className="flex items-start justify-between gap-4 p-6">
+          <div className="min-w-0 space-y-2">
+            <CardTitle className="text-sm font-medium">Expired Keys</CardTitle>
+            <div className="text-2xl font-bold">{expiredCount}</div>
+            <p className="text-xs text-muted-foreground">Keys past expiration</p>
+          </div>
+          <IllustrationFallback>
+            <AlertCircle className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+          </IllustrationFallback>
+          <KeysExpiredIllustration size="sm" />
+        </div>
       </Card>
     </div>
   );

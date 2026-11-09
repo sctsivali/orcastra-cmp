@@ -33,6 +33,7 @@ import { useClusterLabel } from "@/hooks/use-node-picker-options";
 import { cn, formatBytes, formatNetworkRate, plural } from "@/lib/utils";
 import type { IllustrationProps } from "@/components/illustrations/illustration-frame";
 import { ClustersIllustration, InstancesIllustration, RunningIllustration, WarningsIllustration } from "@/components/illustrations/scenes/kpi";
+import { DisconnectedIllustration } from "@/components/illustrations/scenes/states";
 import type { InstanceMonitoringSummary, VMInfo, VMListResponse } from "@/types";
 import type {
   MetricsHistoryPoint,
@@ -1246,17 +1247,20 @@ export default function MonitoringContent() {
   if (dashboardError) {
     return (
       <div className="p-6">
-        <Card className="border-destructive">
-          <CardContent className="p-6 text-center">
-            <AlertTriangle className="h-12 w-12 mx-auto text-destructive mb-4" />
-            <h3 className="text-lg font-semibold">Failed to load monitoring data</h3>
-            <p className="text-muted-foreground mt-2">
-              {dashboardError instanceof Error ? dashboardError.message : "Unknown error"}
-            </p>
-            <Button onClick={() => void refreshMonitoring()} className="mt-4">
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Retry
-            </Button>
+        <Card>
+          <CardContent className="pt-6">
+            <EmptyState
+              icon={AlertTriangle}
+              illustration={DisconnectedIllustration}
+              title="Failed to load monitoring data"
+              description={dashboardError instanceof Error ? dashboardError.message : "Unknown error"}
+              action={
+                <Button variant="outline" size="sm" onClick={() => void refreshMonitoring()}>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Retry
+                </Button>
+              }
+            />
           </CardContent>
         </Card>
       </div>

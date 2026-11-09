@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { EmptyState } from "@/components/ui/empty-state";
+import { ExtensionsIllustration } from "@/components/illustrations/scenes/catalog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SortSelect } from "@/components/ui/sort-select";
 import { TableToolbar } from "@/components/ui/table-toolbar";
@@ -141,6 +142,7 @@ function AvailableAddonsContent({
     return (
       <EmptyState
         icon={Puzzle}
+        illustration={ExtensionsIllustration}
         title="No add-ons are published yet"
         description="An add-on is an external application built against the Orcastra API. Publishing one makes it installable here."
         action={

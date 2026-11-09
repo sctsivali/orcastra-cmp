@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { CacheIllustration } from "@/components/illustrations/scenes/catalog";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { captureActorMutationFence, isActorMutationFenceCurrent } from "@/lib/actor-mutation-fence";
 import { api } from "@/lib/api";
@@ -64,38 +65,43 @@ export function CacheSettings({ isAdmin }: { isAdmin: boolean }) {
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Cache Management</CardTitle>
-        <CardDescription>Refresh cached application data</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        <div className="space-y-3">
-          <h3 className="text-sm font-semibold">Browser Cache</h3>
-          <p className="text-sm text-muted-foreground">
-            Clear inventory and monitoring data in this browser. Your sign-in, preferences, and active operations stay available.
-          </p>
-          <Button disabled={busy !== null} onClick={() => void clear("browser")}>
-            {busy === "browser" ? "Clearing Browser Cache…" : "Clear Browser Cache"}
-          </Button>
+    <Card className="illo-launch">
+      <div className="flex items-center">
+        <div className="min-w-0 flex-1">
+          <CardHeader>
+            <CardTitle>Cache Management</CardTitle>
+            <CardDescription>Refresh cached application data</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold">Browser Cache</h3>
+              <p className="text-sm text-muted-foreground">
+                Clear inventory and monitoring data in this browser. Your sign-in, preferences, and active operations stay available.
+              </p>
+              <Button disabled={busy !== null} onClick={() => void clear("browser")}>
+                {busy === "browser" ? "Clearing Browser Cache…" : "Clear Browser Cache"}
+              </Button>
+            </div>
+            {isAdmin && (
+              <div className="space-y-3 border-t pt-6">
+                <h3 className="text-sm font-semibold">Shared Backend Cache</h3>
+                <p className="text-sm text-muted-foreground">
+                  Clear shared caches for all organizations. Active application views refresh after the backend confirms completion.
+                </p>
+                <Button variant="destructive" disabled={busy !== null} onClick={() => void clear("shared")}>
+                  {busy === "shared" ? "Clearing Shared Cache…" : "Clear Shared Backend Cache"}
+                </Button>
+              </div>
+            )}
+            {result && (
+              <Alert variant={result.kind === "error" ? "destructive" : "default"} role={result.kind === "error" ? "alert" : "status"}>
+                <AlertDescription>{result.message}</AlertDescription>
+              </Alert>
+            )}
+          </CardContent>
         </div>
-        {isAdmin && (
-          <div className="space-y-3 border-t pt-6">
-            <h3 className="text-sm font-semibold">Shared Backend Cache</h3>
-            <p className="text-sm text-muted-foreground">
-              Clear shared caches for all organizations. Active application views refresh after the backend confirms completion.
-            </p>
-            <Button variant="destructive" disabled={busy !== null} onClick={() => void clear("shared")}>
-              {busy === "shared" ? "Clearing Shared Cache…" : "Clear Shared Backend Cache"}
-            </Button>
-          </div>
-        )}
-        {result && (
-          <Alert variant={result.kind === "error" ? "destructive" : "default"} role={result.kind === "error" ? "alert" : "status"}>
-            <AlertDescription>{result.message}</AlertDescription>
-          </Alert>
-        )}
-      </CardContent>
+      <CacheIllustration size="lg" className="mr-6" />
+      </div>
     </Card>
   );
 }
