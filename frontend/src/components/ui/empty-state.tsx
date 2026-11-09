@@ -32,7 +32,7 @@ export function EmptyState({ icon: Icon, illustration: Illustration, title, desc
     <div className={cn("text-center py-12", className)}>
       {Illustration ? (
         <>
-          <Illustration size="md" className="mx-auto mb-4" />
+          <Illustration size="lg" className="mx-auto mb-4" />
           {icon && <IllustrationFallback>{icon}</IllustrationFallback>}
         </>
       ) : (

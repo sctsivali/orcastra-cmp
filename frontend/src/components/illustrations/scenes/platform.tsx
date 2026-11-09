@@ -1,7 +1,7 @@
 import * as React from "react";
 import { IllustrationFrame, type IllustrationProps } from "../illustration-frame";
 import { Folder, ServerStack, SHIELD_OUTLINE } from "../iso/parts";
-import { IsoBox, IsoExtrude, IsoGlyph, IsoGround, IsoInset, IsoLink, IsoMark, IsoDisc } from "../iso/primitives";
+import { IsoBox, IsoExtrude, IsoGlyph, IsoInset, IsoLink, IsoMark, IsoDisc, IsoShadow } from "../iso/primitives";
 import { circleOutline, scaleOutline, type Pt } from "../iso/projection";
 
 // The platform's own capabilities, for the Home feature cards and the get-started call to action.
@@ -10,8 +10,11 @@ import { circleOutline, scaleOutline, type Pt } from "../iso/projection";
 export function MultiClusterIllustration(props: IllustrationProps) {
   const small = { units: 2, w: 16, d: 12, h: 5, gap: 1.5 } as const;
   return (
-    <IllustrationFrame {...props}>
-      <IsoGround />
+    <IllustrationFrame {...props} view={[14.5, 15.5, 139.5, 104.5]}>
+      <IsoShadow box={[14, -28, 16, 12]} />
+      <IsoShadow box={[-12, -8, 24, 16]} />
+      <IsoShadow box={[-28, 14, 16, 12]} />
+      <IsoShadow box={[14, 16, 16, 12]} />
       <IsoLink path={[[0, 0, 0], [22, -22, 0]]} />
       <IsoLink path={[[0, 0, 0], [-20, 20, 0]]} />
       <IsoLink path={[[0, 0, 0], [22, 22, 0]]} />
@@ -28,8 +31,10 @@ export function WorkloadsIllustration(props: IllustrationProps) {
   const vm = { at: [-28, -2, 0] as const, size: [26, 20, 24] as const };
   const face = [vm.at[0], vm.at[1] + vm.size[1], 0] as const;
   return (
-    <IllustrationFrame {...props}>
-      <IsoGround />
+    <IllustrationFrame {...props} view={[26, 3, 121, 91]}>
+      <IsoShadow box={[6, -24, 22, 11]} />
+      <IsoShadow box={[6, -13, 11, 11]} />
+      <IsoShadow box={[-28, -2, 26, 20]} />
       <IsoBox at={[6, -24, 0]} size={[11, 11, 11]} material="paper" />
       <IsoBox at={[17, -24, 0]} size={[11, 11, 11]} material="tint" />
       <IsoBox at={[6, -13, 0]} size={[11, 11, 11]} material="paper" />
@@ -47,8 +52,8 @@ export function WorkloadsIllustration(props: IllustrationProps) {
 export function MonitoringIllustration(props: IllustrationProps) {
   const bars = [11, 20, 15, 28];
   return (
-    <IllustrationFrame {...props}>
-      <IsoGround />
+    <IllustrationFrame {...props} view={[31.5, 30.5, 104, 78]}>
+      <IsoShadow box={[-26, -17, 50, 32]} />
       <IsoBox at={[-26, -17, 0]} size={[50, 32, 4]} material="paper" />
       {bars.map((h, i) => (
         <IsoBox key={i} at={[-21 + i * 11.5, -7, 4]} size={[8, 8, h]} material={i === bars.length - 1 ? "ink" : i === 1 ? "tint" : "paper"} />
@@ -66,8 +71,8 @@ export function PerformanceIllustration(props: IllustrationProps) {
   const ticks = [30, 60, 90, 120, 150].map((deg) => (deg * Math.PI) / 180);
   const needle = (52 * Math.PI) / 180;
   return (
-    <IllustrationFrame {...props}>
-      <IsoGround />
+    <IllustrationFrame {...props} view={[32.5, 25, 104, 78]}>
+      <IsoShadow box={[-21, -11, 42, 20]} />
       <IsoBox at={[-21, -11, 0]} size={[42, 20, 6]} material="ink" />
       <IsoExtrude plane="left" origin={face} outline={DIAL} depth={6} material="paper" />
       {ticks.map((t, i) => (
@@ -83,8 +88,8 @@ export function PerformanceIllustration(props: IllustrationProps) {
 export function SecurityIllustration(props: IllustrationProps) {
   const face = [-15, 3, 6] as const;
   return (
-    <IllustrationFrame {...props}>
-      <IsoGround />
+    <IllustrationFrame {...props} view={[29.5, 18.5, 110.5, 83]}>
+      <IsoShadow box={[-18, -12, 36, 22]} />
       <IsoBox at={[-18, -12, 0]} size={[36, 22, 6]} material="paper" />
       <IsoExtrude plane="left" origin={face} outline={scaleOutline(SHIELD_OUTLINE, 0.94)} depth={5} material="ink" />
       <IsoGlyph plane="left" origin={face} path={[[8.5, 17], [13.2, 11.8], [22, 22.5]]} onInk />
@@ -96,8 +101,10 @@ export function SecurityIllustration(props: IllustrationProps) {
 export function ScaleIllustration(props: IllustrationProps) {
   const unit = { w: 20, d: 14, h: 6, gap: 2 } as const;
   return (
-    <IllustrationFrame {...props}>
-      <IsoGround />
+    <IllustrationFrame {...props} view={[19.5, -2.5, 132, 99]}>
+      <IsoShadow box={[-28, 10, 20, 14]} />
+      <IsoShadow box={[-8, -6, 20, 14]} />
+      <IsoShadow box={[10, -26, 20, 14]} />
       <IsoLink path={[[-18, 17, 0], [2, 1, 0], [20, -19, 0]]} fine />
       <ServerStack at={[-28, 10, 0]} units={1} {...unit} />
       <ServerStack at={[-8, -6, 0]} units={2} {...unit} />
@@ -110,8 +117,9 @@ export function ScaleIllustration(props: IllustrationProps) {
 export function GetStartedIllustration(props: IllustrationProps) {
   const unit = { units: 2, w: 24, d: 16, h: 7, gap: 2 } as const;
   return (
-    <IllustrationFrame {...props}>
-      <IsoGround />
+    <IllustrationFrame {...props} view={[26, 9.5, 114, 85.5]}>
+      <IsoShadow box={[6, -22, 24, 16]} dashed />
+      <IsoShadow box={[-28, 2, 24, 16]} />
       <IsoLink path={[[-16, 10, 0], [18, -14, 0]]} />
       <ServerStack at={[6, -22, 0]} material="ghost" {...unit} />
       <IsoMark at={[18, -14, 26]} />
@@ -123,8 +131,8 @@ export function GetStartedIllustration(props: IllustrationProps) {
 /** Folders stacked, the working one on top. */
 export function ProjectsIllustration(props: IllustrationProps) {
   return (
-    <IllustrationFrame {...props}>
-      <IsoGround />
+    <IllustrationFrame {...props} view={[29, 24.5, 108.5, 81.5]}>
+      <IsoShadow box={[-20, -15, 40, 30]} />
       <Folder at={[-20, -15, 0]} />
       <Folder at={[-20, -15, 8]} material="tint" />
       <Folder at={[-20, -15, 16]} material="ink" />

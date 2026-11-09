@@ -42,7 +42,7 @@ export default function InventoryError({
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 p-8">
-      <DisconnectedIllustration size="md" />
+      <DisconnectedIllustration size="lg" />
       <IllustrationFallback>
         <AlertTriangle className="h-12 w-12 text-status-pending" aria-hidden="true" />
       </IllustrationFallback>

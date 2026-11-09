@@ -167,73 +167,67 @@ export default function HomePage() {
       </section>
 
       {/* Stats Overview */}
-      <section className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <Card className="illo-kpi">
-          <CardHeader className="flex-row items-start justify-between gap-3 space-y-0 pb-3">
+      {/* note: two a row until xl. At md the sidebar leaves four tiles about 82px wide, which clipped
+          "Instances" and "connected" before any scene was involved. */}
+      <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
+        <Card className="illo-kpi overflow-hidden">
+          <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
             <div className="min-w-0 space-y-1.5">
               <CardDescription>Total Clusters</CardDescription>
               <CardTitle className="text-4xl">
                 {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : nodesFailed ? EMPTY_VALUE : animatedTotalNodes}
               </CardTitle>
+              <p className="pt-1.5 text-sm text-muted-foreground">
+                {isStatsLoading ? <Skeleton className="h-4 w-24 inline-block" /> : nodesFailed ? UNREADABLE : `${connectedNodes} connected`}
+              </p>
             </div>
-            <ClustersIllustration size="sm" className="-mr-1" />
+            <ClustersIllustration size="fit" className="-my-4 -mr-6" />
           </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              {isStatsLoading ? <Skeleton className="h-4 w-24 inline-block" /> : nodesFailed ? UNREADABLE : `${connectedNodes} connected`}
-            </p>
-          </CardContent>
         </Card>
 
-        <Card className="illo-kpi">
-          <CardHeader className="flex-row items-start justify-between gap-3 space-y-0 pb-3">
+        <Card className="illo-kpi overflow-hidden">
+          <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
             <div className="min-w-0 space-y-1.5">
               <CardDescription>Total Instances</CardDescription>
               <CardTitle className="text-4xl">
                 {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : vmsFailed ? EMPTY_VALUE : animatedTotalVMs}
               </CardTitle>
+              <p className="pt-1.5 text-sm text-muted-foreground">
+                {vmsFailed ? UNREADABLE : "Across all clusters"}
+              </p>
             </div>
-            <InstancesIllustration size="sm" className="-mr-1" />
+            <InstancesIllustration size="fit" className="-my-4 -mr-6" />
           </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              {vmsFailed ? UNREADABLE : "Across all clusters"}
-            </p>
-          </CardContent>
         </Card>
 
-        <Card className="illo-kpi">
-          <CardHeader className="flex-row items-start justify-between gap-3 space-y-0 pb-3">
+        <Card className="illo-kpi overflow-hidden">
+          <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
             <div className="min-w-0 space-y-1.5">
               <CardDescription>Running</CardDescription>
               <CardTitle className="text-4xl">
                 {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : vmsFailed ? EMPTY_VALUE : animatedRunningVMs}
               </CardTitle>
+              <p className="pt-1.5 text-sm text-muted-foreground">
+                {vmsFailed ? UNREADABLE : "Active instances"}
+              </p>
             </div>
-            <RunningIllustration size="sm" className="-mr-1" />
+            <RunningIllustration size="fit" className="-my-4 -mr-6" />
           </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              {vmsFailed ? UNREADABLE : "Active instances"}
-            </p>
-          </CardContent>
         </Card>
 
-        <Card className="illo-kpi">
-          <CardHeader className="flex-row items-start justify-between gap-3 space-y-0 pb-3">
+        <Card className="illo-kpi overflow-hidden">
+          <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
             <div className="min-w-0 space-y-1.5">
               <CardDescription>Total Projects</CardDescription>
               <CardTitle className="text-4xl">
                 {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : projectsFailed ? EMPTY_VALUE : animatedTotalProjects}
               </CardTitle>
+              <p className="pt-1.5 text-sm text-muted-foreground">
+                {projectsFailed ? UNREADABLE : "Configured projects"}
+              </p>
             </div>
-            <ProjectsIllustration size="sm" className="-mr-1" />
+            <ProjectsIllustration size="fit" className="-my-4 -mr-6" />
           </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              {projectsFailed ? UNREADABLE : "Configured projects"}
-            </p>
-          </CardContent>
         </Card>
       </section>
 
@@ -251,7 +245,7 @@ export default function HomePage() {
             const Icon = feature.icon;
             const Scene = feature.illustration;
             return (
-              <Card key={feature.title} className="hover:shadow-lg transition-shadow">
+              <Card key={feature.title} className="illo-card overflow-hidden hover:shadow-lg transition-shadow">
                 {/* The title shares the top row with the scene and the description takes the full
                     width under both, so a long description does not fold into a narrow column. */}
                 <CardHeader className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-y-1.5 space-y-0">
@@ -261,7 +255,7 @@ export default function HomePage() {
                     </IllustrationFallback>
                     <CardTitle className="text-xl">{feature.title}</CardTitle>
                   </div>
-                  <Scene size="md" className="-my-2 -mr-2 ml-3" />
+                  <Scene size="fit" className="-mb-2 -mr-6 -mt-6 ml-3" />
                   <CardDescription className="col-span-full text-base">
                     {feature.description}
                   </CardDescription>
@@ -274,7 +268,7 @@ export default function HomePage() {
 
       {/* CTA Section */}
       <section className="text-center space-y-6 py-12 rounded-lg border-2 border-dashed border-muted-foreground/25 bg-muted/50">
-        <GetStartedIllustration size="lg" className="mx-auto" />
+        <GetStartedIllustration size="xl" className="mx-auto" />
         <div className="space-y-2">
           <h2 className="text-3xl font-bold">Ready to Get Started?</h2>
           <p className="text-muted-foreground mx-auto text-lg max-w-none px-8">

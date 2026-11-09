@@ -155,7 +155,7 @@ export default function ServiceProvidersPage() {
               We are continuously expanding our network of service providers. Check back regularly to discover new partners joining the Orcastra platform, each bringing unique expertise and innovative solutions to help businesses thrive in the cloud.
             </p>
           </div>
-          <EcosystemIllustration size="md" className="hidden sm:block" />
+          <EcosystemIllustration size="lg" className="-my-2 hidden sm:block" />
         </CardContent>
       </Card>
     </div>

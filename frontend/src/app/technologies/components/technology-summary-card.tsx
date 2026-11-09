@@ -46,7 +46,7 @@ export function TechnologySummaryCard({
 }: TechnologySummaryCardProps) {
   const Illustration = ILLUSTRATIONS[kind];
   return (
-    <Card className={cn("overflow-hidden", className)}>
+    <Card className={cn("illo-card overflow-hidden", className)}>
       <button
         type="button"
         aria-haspopup="dialog"
@@ -68,7 +68,7 @@ export function TechnologySummaryCard({
               <span className="block text-lg font-semibold leading-tight">{title}</span>
               <span className="mt-1 block text-sm text-muted-foreground">{description}</span>
             </span>
-            <Illustration size="md" className="-my-3 -mr-2" />
+            <Illustration size="fit" className="-mb-2 -mr-6 -mt-6" />
           </span>
         </span>
 

@@ -93,17 +93,19 @@ const MetricCard = memo(function MetricCard({
   illustration: Illustration,
 }: MetricCardProps) {
   return (
-    <Card className={cn("illo-kpi", className)}>
+    <Card className={cn("illo-kpi overflow-hidden", className)}>
       <CardContent className="p-6">
         <div className="space-y-2">
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center justify-between gap-2">
             <div className="min-w-0 space-y-2">
               <p className="text-sm font-medium text-muted-foreground">{title}</p>
               <p className="text-2xl sm:text-3xl font-bold tracking-tight tabular-nums">{value}</p>
+              {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
             </div>
-            <Illustration size="sm" className="-mr-1" />
+            {/* note: a tile with a progress bar keeps the scene clear of it, so the scene bleeds only
+                into the top and right padding. */}
+            <Illustration size="fit" className={progress === undefined ? "-my-4 -mr-6" : "-mr-6 -mt-4"} />
           </div>
-          {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
           {progress !== undefined && (
             <Progress value={progress} className="h-2 mt-2" />
           )}
@@ -1317,8 +1319,10 @@ export default function MonitoringContent() {
       </div>
 
       {/* Overview Stats - use filteredStats for node-filtered view */}
+      {/* note: two a row until there is room for all of them. At md the sidebar left four tiles about
+          92px wide, which clipped "Instances" before any scene was involved. */}
       {filteredStats && (
-      <div className={`grid grid-cols-2 gap-4 ${isPartner ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
+      <div className={`grid grid-cols-2 gap-4 ${isPartner ? "xl:grid-cols-4" : "lg:grid-cols-3"}`}>
         <MetricCard
           title="Total Instances"
           illustration={InstancesIllustration}

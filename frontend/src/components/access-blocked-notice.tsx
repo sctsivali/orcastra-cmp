@@ -72,7 +72,7 @@ export function AccessBlockedNotice({ state, email, endedAt, rechecking, onCheck
       <Card className="w-full max-w-md">
         <CardContent className="space-y-6 p-6 sm:p-8">
           <div className="space-y-3 text-center">
-            <AccessGateIllustration size="md" className="mx-auto" />
+            <AccessGateIllustration size="lg" className="mx-auto" />
             <IllustrationFallback>
               <Icon className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden="true" />
             </IllustrationFallback>

@@ -37,7 +37,7 @@ function StatCard({
       className="illo-kpi animate-fade-in overflow-hidden"
       style={{ animationDelay: `${delay}ms` }}
     >
-      <CardContent className="flex items-start justify-between gap-3 p-6">
+      <CardContent className="flex items-center justify-between gap-2 p-6">
         <div className="min-w-0 space-y-1">
           <p className="text-sm font-medium text-muted-foreground">{label}</p>
           {value === null ? (
@@ -56,7 +56,7 @@ function StatCard({
             </>
           )}
         </div>
-        <Illustration size="sm" className="-mr-1" />
+        <Illustration size="fit" className="-my-4 -mr-6" />
       </CardContent>
     </Card>
   );

@@ -89,7 +89,7 @@ function ErrorContent() {
       <Card className="w-full max-w-md shadow-xl border-border/50">
         <CardHeader className="text-center space-y-4">
           {/* The scene names the situation; the icon comes back when illustrations are hidden. */}
-          <AccessGateIllustration size="md" className="mx-auto" />
+          <AccessGateIllustration size="lg" className="mx-auto" />
           <IllustrationFallback>
             <span className="mx-auto w-16 h-16 bg-destructive/10 rounded-2xl flex items-center justify-center">
               <AlertTriangle className="w-8 h-8 text-destructive" aria-hidden="true" />

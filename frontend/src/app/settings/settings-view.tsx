@@ -128,7 +128,7 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
                     </div>
                   </CardContent>
                 </div>
-                <ExtensionsIllustration size="lg" className="mr-6 hidden sm:block" />
+                <ExtensionsIllustration size="xl" className="mr-4 hidden sm:block" />
               </div>
             </Card>
             )}
@@ -166,7 +166,7 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
                     </div>
                   </CardContent>
                 </div>
-                <KeyVaultIllustration size="lg" className="mr-6 hidden sm:block" />
+                <KeyVaultIllustration size="xl" className="mr-4 hidden sm:block" />
               </div>
             </Card>
             )}

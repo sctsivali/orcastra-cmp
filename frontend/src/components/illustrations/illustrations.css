@@ -36,7 +36,7 @@
   --illo-cut: 254.1 63% 84.1%; /* #C9BDF0 */
   --illo-ghost: 254.1 16.3% 59.2%; /* #8E86A8 */
   --illo-link: 252.6 41% 72.7%; /* #A99DD6 */
-  --illo-ground: 257.1 22.6% 93.9%; /* #EEECF3 */
+  --illo-shadow: 256.4 28.2% 92.4%; /* #E9E6F1 */
 }
 
 /* Dark: every face sits above --card (#1c1825) so an object reads as a solid, the hairline is a
@@ -61,17 +61,20 @@
   --illo-cut: 253.8 25.5% 20%; /* #2C2640 */
   --illo-ghost: 253.5 12.7% 52%; /* #7C7594 */
   --illo-link: 252.5 20% 47.1%; /* #6A6090 */
-  --illo-ground: 258.5 27.7% 9.2%; /* #15111E */
+  --illo-shadow: 266.7 22% 8%; /* #141019 */
 }
 
 [data-slot="card-illustration"] {
   --illo-sw: 1px;
 }
-[data-slot="card-illustration"][data-size="sm"] {
-  --illo-sw: 0.75px;
+[data-slot="card-illustration"][data-size="fit"] {
+  --illo-sw: 0.9px;
 }
 [data-slot="card-illustration"][data-size="lg"] {
   --illo-sw: 1.1px;
+}
+[data-slot="card-illustration"][data-size="xl"] {
+  --illo-sw: 1.2px;
 }
 /* Strokes keep their pixel width at every size, so a 64px scene is not drawn in hairlines and a
    160px one not in marker pen. Set here once rather than on every shape. */
@@ -119,14 +122,15 @@
   stroke-dasharray: 3 3;
   stroke-linejoin: round;
 }
-.illo-ground {
-  fill: hsl(var(--illo-ground));
+/* A contact shadow under each standing object; there is no plate under the scene. */
+.illo-shadow {
+  fill: hsl(var(--illo-shadow));
 }
-.illo-ground.illo-dashed {
+.illo-shadow.illo-dashed {
   fill: none;
   stroke: hsl(var(--illo-ghost));
   stroke-width: var(--illo-sw);
-  stroke-dasharray: 4 4;
+  stroke-dasharray: 3 3;
 }
 .illo-link {
   fill: none;
@@ -158,9 +162,6 @@
 .illo-glyph.illo-on-ink {
   stroke: hsl(var(--illo-cut));
 }
-[data-size="sm"] .illo-fine {
-  display: none;
-}
 
 /* The account's or the organization's choice, set on <html> before first paint (app/layout.tsx).
    Hidden means not drawn at all; the layouts that hold a scene collapse around it. */
@@ -190,14 +191,52 @@ html[data-illustrations="hide"] [data-slot="illustration-fallback"] {
   }
 }
 
-/* A KPI tile holds a small scene beside its number only while there is room: below 240px the
-   number keeps the whole tile. The tile is the query container, so the rule follows the tile's
-   own width at every breakpoint and in every grid. */
-.illo-kpi {
+/* A card that changes width with its grid sizes its scene from its own width: about 40% of the card,
+   so the object reads at card height the way the owner's reference does, between a floor and a
+   ceiling set per kind of card. The card is the query container, so the size follows it at every
+   breakpoint and in every grid, and resolves before first paint.
+
+   A KPI tile (illo-kpi) holds 88px to 148px; below 220px the number keeps the whole tile and below
+   300px the fine marks drop out. A feature or summary card (illo-card) holds 104px to 168px; below
+   260px the scene would squeeze the title, so it steps aside and the card's classic icon returns.
+   Outside such a card a fit scene falls back to 112px. */
+[data-slot="card-illustration"][data-size="fit"] {
+  width: 112px;
+  height: 84px;
+}
+.illo-kpi,
+.illo-card {
   container-type: inline-size;
 }
-@container (max-width: 239px) {
+.illo-kpi {
+  --illo-fit-min: 88px;
+  --illo-fit-max: 148px;
+}
+.illo-card {
+  --illo-fit-min: 104px;
+  --illo-fit-max: 168px;
+}
+:is(.illo-kpi, .illo-card) [data-slot="card-illustration"][data-size="fit"] {
+  width: clamp(var(--illo-fit-min), 40cqw, var(--illo-fit-max));
+  height: auto;
+  aspect-ratio: 4 / 3;
+}
+@container (max-width: 299px) {
+  .illo-kpi .illo-fine {
+    display: none;
+  }
+}
+@container (max-width: 219px) {
   .illo-kpi [data-slot="card-illustration"] {
     display: none;
   }
 }
+@container (max-width: 259px) {
+  .illo-card [data-slot="card-illustration"] {
+    display: none;
+  }
+  .illo-card [data-slot="illustration-fallback"] {
+    display: contents;
+  }
+}
+

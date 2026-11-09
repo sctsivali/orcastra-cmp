@@ -44,15 +44,44 @@ function Line({ from, to, className }: { from: Vec3; to: Vec3; className: string
   return <line x1={fmt(a[0])} y1={fmt(a[1])} x2={fmt(b[0])} y2={fmt(b[1])} className={className} />;
 }
 
-/** The floor every scene stands on: one size everywhere, so objects share a scale. */
-export function IsoGround({ half = 30, dashed = false }: { half?: number; dashed?: boolean }) {
+// Light comes from the top left, so a contact shadow falls toward the viewer's lower right: +x in
+// world units. Small and flat, so an object reads as standing without a plate under the scene.
+const SHADOW_SHIFT = 3.5;
+const SHADOW_SPREAD = 1.5;
+
+/**
+ * The contact shadow of one object standing on the ground: a footprint `box` [x, y, w, d] or a round
+ * `circle` [cx, cy, r]. Drawn before any object so it never paints over one. `dashed` marks the
+ * footprint of something still to come (a ghost).
+ */
+export function IsoShadow({
+  box,
+  circle,
+  dashed = false,
+}: {
+  box?: readonly [number, number, number, number];
+  circle?: readonly [number, number, number];
+  dashed?: boolean;
+}) {
+  const className = `illo-shadow${dashed ? " illo-dashed" : ""}`;
+  if (circle) {
+    const [cx, cy, r] = circle;
+    const shift = dashed ? 0 : SHADOW_SHIFT;
+    const [sx, sy] = toScreen([cx + shift, cy, 0]);
+    const { rx, ry } = ellipseAxes(r + SHADOW_SPREAD);
+    return <ellipse cx={fmt(sx)} cy={fmt(sy)} rx={fmt(rx)} ry={fmt(ry)} className={className} />;
+  }
+  if (!box) return null;
+  const [x, y, w, d] = box;
+  const shift = dashed ? 0 : SHADOW_SHIFT;
+  const s = dashed ? 0 : SHADOW_SPREAD;
   const corners: Vec3[] = [
-    [-half, -half, 0],
-    [half, -half, 0],
-    [half, half, 0],
-    [-half, half, 0],
+    [x - s + shift, y - s, 0],
+    [x + w + s + shift, y - s, 0],
+    [x + w + s + shift, y + d + s, 0],
+    [x - s + shift, y + d + s, 0],
   ];
-  return <Polygon points={corners} className={`illo-ground${dashed ? " illo-dashed" : ""}`} />;
+  return <Polygon points={corners} className={className} />;
 }
 
 /** An axis-aligned block. `at` is its back-bottom corner (smallest x, y, z). */

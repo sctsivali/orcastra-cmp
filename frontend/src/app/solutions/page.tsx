@@ -180,7 +180,7 @@ export default function SolutionsPage() {
               We are continuously evaluating and integrating cutting-edge solutions to enhance the Orcastra platform. Stay tuned for new solutions that will empower your organization with advanced capabilities in data management, automation, and digital transformation.
             </p>
           </div>
-          <PortfolioIllustration size="md" className="hidden sm:block" />
+          <PortfolioIllustration size="lg" className="-my-2 hidden sm:block" />
         </CardContent>
       </Card>
     </div>

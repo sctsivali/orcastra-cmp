@@ -493,7 +493,7 @@ function IntegrationsSettingsContent() {
         <Card>
           <CardContent className="py-12">
             <div className="text-center space-y-4">
-              <KeyVaultIllustration size="md" className="mx-auto" />
+              <KeyVaultIllustration size="lg" className="mx-auto" />
               <IllustrationFallback>
                 <Key className="h-12 w-12 mx-auto text-muted-foreground" aria-hidden="true" />
               </IllustrationFallback>

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { IllustrationFrame, type IllustrationProps } from "../illustration-frame";
 import { Building, DOCUMENT_OUTLINE, Pawn, ServerStack, SHIELD_OUTLINE } from "../iso/parts";
-import { IsoBall, IsoBox, IsoExtrude, IsoGlyph, IsoGround, IsoInset, IsoLink, IsoMark } from "../iso/primitives";
+import { IsoBall, IsoBox, IsoExtrude, IsoGlyph, IsoInset, IsoLink, IsoMark, IsoShadow } from "../iso/primitives";
 import { scaleOutline } from "../iso/projection";
 
 // First-run empty states: what will be here once the first one exists. A ghost outline marks the
@@ -9,8 +9,8 @@ import { scaleOutline } from "../iso/projection";
 
 export function EmptyClustersIllustration(props: IllustrationProps) {
   return (
-    <IllustrationFrame {...props}>
-      <IsoGround dashed />
+    <IllustrationFrame {...props} view={[22, 14.5, 122.5, 92]}>
+      <IsoShadow box={[-21, -15, 42, 30]} />
       <IsoBox at={[-21, -15, 0]} size={[42, 30, 3]} material="paper" />
       <ServerStack at={[-18, -12, 3]} units={3} w={36} d={24} h={8} material="ghost" />
       <IsoMark at={[0, 0, 41]} />
@@ -20,8 +20,8 @@ export function EmptyClustersIllustration(props: IllustrationProps) {
 
 export function EmptyInstancesIllustration(props: IllustrationProps) {
   return (
-    <IllustrationFrame {...props}>
-      <IsoGround />
+    <IllustrationFrame {...props} view={[22, 14.5, 122.5, 92]}>
+      <IsoShadow box={[-20, -16, 40, 32]} />
       <IsoBox at={[-20, -16, 0]} size={[40, 32, 16]} material="paper" open />
       <IsoBox at={[-7, -5, 26]} size={[14, 14, 14]} material="ghost" />
     </IllustrationFrame>
@@ -31,8 +31,8 @@ export function EmptyInstancesIllustration(props: IllustrationProps) {
 /** Copies kept over time: plates stacked like layers, the newest on top. */
 export function SnapshotsIllustration(props: IllustrationProps) {
   return (
-    <IllustrationFrame {...props}>
-      <IsoGround />
+    <IllustrationFrame {...props} view={[31.5, 24, 104, 78]}>
+      <IsoShadow box={[-17, -12, 34, 24]} />
       <IsoLink path={[[17, 12, 3], [17, 12, 20]]} fine />
       <IsoLink path={[[-17, 12, 3], [-17, 12, 20]]} fine />
       <IsoBox at={[-17, -12, 0]} size={[34, 24, 3]} material="paper" />
@@ -47,8 +47,9 @@ export function PoliciesIllustration(props: IllustrationProps) {
   const page = [-24, 0, 0] as const;
   const shield = [4, 12, 0] as const;
   return (
-    <IllustrationFrame {...props}>
-      <IsoGround />
+    <IllustrationFrame {...props} view={[16.5, 12.5, 125, 94]}>
+      <IsoShadow box={[-24, -3, 26, 3]} />
+      <IsoShadow box={[4, 8, 20, 4]} />
       <IsoExtrude plane="left" origin={page} outline={DOCUMENT_OUTLINE} depth={3} material="paper" />
       <IsoInset plane="left" origin={page} rect={[4, 24, 12, 2]} kind="detail" />
       <IsoInset plane="left" origin={page} rect={[4, 18.5, 18, 2]} kind="detail" fine />
@@ -62,8 +63,10 @@ export function PoliciesIllustration(props: IllustrationProps) {
 
 export function UsersIllustration(props: IllustrationProps) {
   return (
-    <IllustrationFrame {...props}>
-      <IsoGround />
+    <IllustrationFrame {...props} view={[37.5, 19, 104, 78]}>
+      <IsoShadow circle={[-20, -2, 7]} />
+      <IsoShadow circle={[8, -22, 7]} />
+      <IsoShadow circle={[4, 8, 7]} />
       <Pawn at={[-20, -2, 0]} />
       <Pawn at={[8, -22, 0]} material="tint" />
       <Pawn at={[4, 8, 0]} material="ink" />
@@ -74,8 +77,9 @@ export function UsersIllustration(props: IllustrationProps) {
 /** Two organizations kept in step. */
 export function OrganizationsIllustration(props: IllustrationProps) {
   return (
-    <IllustrationFrame {...props}>
-      <IsoGround />
+    <IllustrationFrame {...props} view={[26, 3, 121, 91]}>
+      <IsoShadow box={[10, -26, 16, 16]} />
+      <IsoShadow box={[-28, 2, 16, 16]} />
       <Building at={[10, -26, 0]} size={[16, 16, 32]} material="ink" />
       <IsoLink path={[[-20, 10, 24], [18, -18, 32]]} />
       <IsoMark at={[-1, -4, 28]} size={3} />
@@ -87,8 +91,8 @@ export function OrganizationsIllustration(props: IllustrationProps) {
 /** A map tile with routes between sites and a pin on one of them. */
 export function RegionsIllustration(props: IllustrationProps) {
   return (
-    <IllustrationFrame {...props}>
-      <IsoGround />
+    <IllustrationFrame {...props} view={[26, 27, 114.5, 86]}>
+      <IsoShadow box={[-26, -20, 52, 40]} />
       <IsoBox at={[-26, -20, 0]} size={[52, 40, 4]} material="tint" />
       <IsoLink path={[[-16, -10, 4], [2, 8, 4], [16, -12, 4]]} />
       <IsoMark at={[-16, -10, 4]} size={3.5} />
