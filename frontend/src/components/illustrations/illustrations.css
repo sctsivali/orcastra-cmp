@@ -1,0 +1,182 @@
+/* Card illustrations.
+
+   The palette is orcastra.io's own, read from the live site on 2026-11-08: indigo #321D71
+   (--orca-indigo), its lavender accent #B7A6FF used on dark panels, and the lavender tints between
+   them. It is fixed on purpose and does not follow the personalization accent: an illustration is
+   brand artwork, and the accent picker has no contrast clamp.
+
+   The look is shaded (owner decision 2026-11-09): each object has three tonal faces lit from the
+   top left (top lightest, left middle, right darkest) and a hairline one step past its darkest
+   face, in its own hue. The hairline is what keeps a near-white top face from dissolving into a
+   #fafafa card, and a dark object from reading as a hole in a #1c1825 one. Measured against the
+   card: the paper hairline separates at 2.37:1 in light and 3.06:1 in dark, and neighbouring faces
+   stay at least 1.19:1 apart, so the volume reads at 64px.
+
+   Primitives in iso/primitives.tsx emit class names, never colours, so every value lives here, per
+   theme. A face picks its fill through --illo-f and its hairline through --illo-e, so a wall can
+   paint its seam in its own fill colour. Values are HSL triplets like the rest of the token set;
+   the hex each came from is beside it. */
+
+:root {
+  --illo-paper-top: 256.4 64.7% 96.7%; /* #F4F1FC */
+  --illo-paper-left: 255 52.2% 91%; /* #E2DCF4 */
+  --illo-paper-right: 254.2 45.2% 83.5%; /* #CBC2E8 */
+  --illo-paper-edge: 252.6 41% 72.7%; /* #A99DD6 */
+  --illo-tint-top: 253.8 64.9% 85.5%; /* #CDC2F2 */
+  --illo-tint-left: 252.4 52.3% 74.5%; /* #AA9CE0 */
+  --illo-tint-right: 252.3 41.9% 63.5%; /* #8B7BC9 */
+  --illo-tint-edge: 252.4 36.7% 53.5%; /* #6F5DB4 */
+  --illo-ink-top: 252.5 44.7% 48.2%; /* #5B44B2 */
+  --illo-ink-left: 254 56.6% 32.5%; /* #3A2482 */
+  --illo-ink-right: 253.7 63.6% 21.6%; /* #24145A */
+  --illo-ink-edge: 253.7 63.6% 21.6%; /* #24145A */
+  --illo-detail: 254 56.6% 32.5%; /* #3A2482 */
+  --illo-panel: 254 56.6% 32.5%; /* #3A2482 */
+  --illo-screen: 254.1 63% 84.1%; /* #C9BDF0 */
+  --illo-cut: 254.1 63% 84.1%; /* #C9BDF0 */
+  --illo-ghost: 254.1 16.3% 59.2%; /* #8E86A8 */
+  --illo-link: 252.6 41% 72.7%; /* #A99DD6 */
+  --illo-ground: 257.1 22.6% 93.9%; /* #EEECF3 */
+}
+
+/* Dark: every face sits above --card (#1c1825) so an object reads as a solid, the hairline is a
+   step lighter than the face instead of darker, and the hero turns lavender, the colour
+   orcastra.io itself uses for emphasis on dark panels. A mark cut into that lavender turns dark. */
+.dark {
+  --illo-paper-top: 253.3 20.7% 34.1%; /* #4D4569 */
+  --illo-paper-left: 252.4 24.6% 27.1%; /* #3B3456 */
+  --illo-paper-right: 252.4 26.1% 21.8%; /* #2F2946 */
+  --illo-paper-edge: 252.5 20% 47.1%; /* #6A6090 */
+  --illo-tint-top: 250.4 46.9% 61.6%; /* #7F6FCB */
+  --illo-tint-left: 250.8 35.5% 50.8%; /* #6555AE */
+  --illo-tint-right: 249.9 37.8% 41%; /* #4E4190 */
+  --illo-tint-edge: 250.4 56.6% 72%; /* #9D8FE0 */
+  --illo-ink-top: 253 100% 92.7%; /* #E2DAFF */
+  --illo-ink-left: 251.4 100% 83.5%; /* #BBABFF */
+  --illo-ink-right: 250.3 66.4% 70.8%; /* #9483E6 */
+  --illo-ink-edge: 253.3 100% 96.5%; /* #F1EDFF */
+  --illo-detail: 251.5 100% 82.5%; /* #B7A6FF */
+  --illo-panel: 256.4 33.3% 6.5%; /* #0E0B16 */
+  --illo-screen: 251.5 100% 82.5%; /* #B7A6FF */
+  --illo-cut: 253.8 25.5% 20%; /* #2C2640 */
+  --illo-ghost: 253.5 12.7% 52%; /* #7C7594 */
+  --illo-link: 252.5 20% 47.1%; /* #6A6090 */
+  --illo-ground: 258.5 27.7% 9.2%; /* #15111E */
+}
+
+[data-slot="card-illustration"] {
+  --illo-sw: 1px;
+}
+[data-slot="card-illustration"][data-size="sm"] {
+  --illo-sw: 0.75px;
+}
+[data-slot="card-illustration"][data-size="lg"] {
+  --illo-sw: 1.1px;
+}
+/* Strokes keep their pixel width at every size, so a 64px scene is not drawn in hairlines and a
+   160px one not in marker pen. Set here once rather than on every shape. */
+[data-slot="card-illustration"] * {
+  vector-effect: non-scaling-stroke;
+}
+
+.illo-paper { --illo-e: hsl(var(--illo-paper-edge)); }
+.illo-tint { --illo-e: hsl(var(--illo-tint-edge)); }
+.illo-ink { --illo-e: hsl(var(--illo-ink-edge)); }
+.illo-paper.illo-top { --illo-f: hsl(var(--illo-paper-top)); }
+.illo-paper.illo-left { --illo-f: hsl(var(--illo-paper-left)); }
+.illo-paper.illo-right { --illo-f: hsl(var(--illo-paper-right)); }
+.illo-tint.illo-top { --illo-f: hsl(var(--illo-tint-top)); }
+.illo-tint.illo-left { --illo-f: hsl(var(--illo-tint-left)); }
+.illo-tint.illo-right { --illo-f: hsl(var(--illo-tint-right)); }
+.illo-ink.illo-top { --illo-f: hsl(var(--illo-ink-top)); }
+.illo-ink.illo-left { --illo-f: hsl(var(--illo-ink-left)); }
+.illo-ink.illo-right { --illo-f: hsl(var(--illo-ink-right)); }
+
+.illo-face {
+  fill: var(--illo-f);
+  stroke: var(--illo-e);
+  stroke-width: var(--illo-sw);
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+/* A seam stroke in the face's own colour closes the anti-aliasing gap between adjacent walls. */
+.illo-wall {
+  fill: var(--illo-f);
+  stroke: var(--illo-f);
+  stroke-width: 0.5px;
+  stroke-linejoin: round;
+}
+.illo-edge {
+  fill: none;
+  stroke: var(--illo-e);
+  stroke-width: var(--illo-sw);
+  stroke-linecap: round;
+}
+.illo-ghost {
+  fill: none;
+  stroke: hsl(var(--illo-ghost));
+  stroke-width: var(--illo-sw);
+  stroke-dasharray: 3 3;
+  stroke-linejoin: round;
+}
+.illo-ground {
+  fill: hsl(var(--illo-ground));
+}
+.illo-ground.illo-dashed {
+  fill: none;
+  stroke: hsl(var(--illo-ghost));
+  stroke-width: var(--illo-sw);
+  stroke-dasharray: 4 4;
+}
+.illo-link {
+  fill: none;
+  stroke: hsl(var(--illo-link));
+  stroke-width: var(--illo-sw);
+  stroke-dasharray: 2 3;
+  stroke-linecap: round;
+}
+.illo-detail,
+.illo-mark {
+  fill: hsl(var(--illo-detail));
+}
+.illo-panel {
+  fill: hsl(var(--illo-panel));
+}
+.illo-screen {
+  fill: hsl(var(--illo-screen));
+}
+.illo-cut {
+  fill: hsl(var(--illo-cut));
+}
+.illo-glyph {
+  fill: none;
+  stroke: hsl(var(--illo-detail));
+  stroke-width: calc(var(--illo-sw) * 2);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.illo-glyph.illo-on-ink {
+  stroke: hsl(var(--illo-cut));
+}
+[data-size="sm"] .illo-fine {
+  display: none;
+}
+
+/* The account's or the organization's choice, set on <html> before first paint (app/layout.tsx).
+   Hidden means not drawn at all; the layouts that hold a scene collapse around it. */
+html[data-illustrations="hide"] [data-slot="card-illustration"] {
+  display: none !important;
+}
+
+/* The one motion: a clickable card nudges its scene up 2px. Feedback for a pointer or focus on a
+   control, never on a live-data surface, and absent under reduced motion. */
+.illo-host .illo-scene {
+  transform-box: fill-box;
+  transition: transform 200ms ease-out;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .illo-host:hover .illo-scene,
+  .illo-host:focus-visible .illo-scene {
+    transform: translateY(-2px);
+  }
+}

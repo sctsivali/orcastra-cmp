@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import "./globals.css";
+import "@/components/illustrations/illustrations.css";
 import { Providers } from "@/components/providers";
 import { LayoutProvider } from "@/components/layout-provider";
 import { MainLayout } from "@/components/main-layout";
