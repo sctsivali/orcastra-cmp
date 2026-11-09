@@ -287,13 +287,7 @@ function GroupsContent() {
               icon={Users}
               illustration={UsersIllustration}
               title="No groups found"
-              description="Create your first group to manage permissions and identities"
-              action={
-                <Button onClick={() => setCreateDialogOpen(true)}>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Create Group
-                </Button>
-              }
+              description='Use "Create Group" above to manage permissions and identities.'
             />
           ) : (
             <>

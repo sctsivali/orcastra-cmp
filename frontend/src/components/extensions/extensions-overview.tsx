@@ -289,7 +289,6 @@ function ExtensionsOverviewContent() {
           organizationId={organizationId}
           onInstall={(slug) => beginInstall.mutate(slug)}
           installPending={beginInstall.isPending}
-          onPublish={() => setPublishOpen(true)}
         />
       </section>
 

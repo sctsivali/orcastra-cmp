@@ -512,19 +512,12 @@ function IntegrationsSettingsContent() {
               </IllustrationFallback>
               <div>
                 <h3 className="text-lg font-medium">No API keys</h3>
+                {/* note: no second Create button here; the header's sits right above (owner
+                    decision 2026-11-09). */}
                 <p className="text-muted-foreground">
-                  Create an API key to allow external applications to connect.
+                  Use &quot;Create API Key&quot; above to let an external application connect.
                 </p>
               </div>
-              <CreateAPIKeyDialog
-                clusters={clusters}
-                clustersChecking={clustersFetching}
-                onOpen={refreshAccessLists}
-                capabilities={capabilityData?.capabilities ?? []}
-                applicationTypes={capabilityData?.application_types ?? []}
-                onSubmit={(data) => createMutation.mutateAsync(data)}
-                isSubmitting={createMutation.isPending}
-              />
             </div>
           </CardContent>
         </Card>

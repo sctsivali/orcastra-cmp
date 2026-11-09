@@ -213,7 +213,7 @@ test("Partner create preflight keeps long effective identifiers inside a mobile 
   await expectCleanHarness(api);
 });
 
-test("read-only mode disables direct and empty-state create actions", async ({ page }) => {
+test("read-only mode disables the create action, and the empty state offers no second one", async ({ page }) => {
   await authenticate(page.context(), "partner");
   const empty = emptyInventory();
   const api = await installApiFixtures(page, "partner", {
@@ -228,7 +228,9 @@ test("read-only mode disables direct and empty-state create actions", async ({ p
   await page.goto("/inventory/instances");
   await expect(page.getByRole("button", { name: "New Instance" })).toBeDisabled();
   await expect.poll(() => api.snapshotReadCounts.instancePage).toBeGreaterThanOrEqual(2);
-  await expect(page.getByRole("button", { name: "Create Instance" })).toBeDisabled();
+  // The header's New Instance is the one create control; the empty row only says why it is empty.
+  await expect(page.getByText("No instances yet", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Create Instance" })).toHaveCount(0);
 
   await page.goto("/inventory/instances/create?node=cluster-a&type=container&project=tenant-a");
   await expect(page.getByText("Creating instances is disabled while the system is in read-only mode.")).toBeVisible();

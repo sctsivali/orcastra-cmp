@@ -77,7 +77,6 @@ interface AvailableAddonsProps {
   organizationId: string;
   onInstall: (slug: string) => void;
   installPending: boolean;
-  onPublish: () => void;
 }
 
 function AvailableAddonsContent({
@@ -89,7 +88,6 @@ function AvailableAddonsContent({
   organizationId,
   onInstall,
   installPending,
-  onPublish,
 }: AvailableAddonsProps) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(PAGE_SIZES[0]);
@@ -144,13 +142,7 @@ function AvailableAddonsContent({
         icon={Puzzle}
         illustration={ExtensionsIllustration}
         title="No add-ons are published yet"
-        description="An add-on is an external application built against the Orcastra API. Publishing one makes it installable here."
-        action={
-          <Button size="sm" onClick={onPublish}>
-            <Plus className="mr-2 h-4 w-4" aria-hidden="true" />
-            Publish Add-on
-          </Button>
-        }
+        description='An add-on is an external application built against the Orcastra API. Use "Publish Add-on" above to make one installable here.'
       />
     );
   }

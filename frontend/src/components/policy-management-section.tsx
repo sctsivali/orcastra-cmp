@@ -340,18 +340,7 @@ function PolicyManagementSectionContent() {
                 icon={ShieldCheck}
                 illustration={PoliciesIllustration}
                 title="No access policies yet"
-                description="Access policies define what clusters, projects, and instances tenant users can access. Create your first policy to start managing tenant permissions."
-                action={
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="text-xs"
-                    onClick={() => setCreateOpen(true)}
-                  >
-                    <Plus className="h-3.5 w-3.5 mr-1" />
-                    Create Your First Policy
-                  </Button>
-                }
+                description='Access policies define what clusters, projects, and instances tenant users can access. Use "Create Policy" above to start managing tenant permissions.'
               />
             ) : (
               <>

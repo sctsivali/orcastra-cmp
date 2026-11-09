@@ -322,15 +322,7 @@ function ClustersContent() {
               icon={Server}
               illustration={EmptyClustersIllustration}
               title="No clusters registered"
-              description="Get started by registering your first hypervisor cluster"
-              action={
-                <Button asChild className="gap-2">
-                  <IntentLink href="/register-node">
-                    <Plus className="h-4 w-4" />
-                    Register Cluster
-                  </IntentLink>
-                </Button>
-              }
+              description='Use "Register Cluster" above to add your first hypervisor cluster.'
             />
           ) : (
             <Table>

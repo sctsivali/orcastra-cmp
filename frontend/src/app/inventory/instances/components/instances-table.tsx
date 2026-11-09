@@ -84,8 +84,6 @@ interface InstancesTableProps {
   sortDirection: "asc" | "desc";
   onSort: (field: InstanceField) => void;
   activeFilterCount: number;
-  canCreateInstance: boolean;
-  onCreate: () => void;
   onViewPendingInstance: (pending: PendingCreate) => void;
   onRefreshPending: () => Promise<unknown>;
   rowProps: RowFocusState["rowProps"];
@@ -116,8 +114,6 @@ export function InstancesTable(props: InstancesTableProps) {
     sortDirection,
     onSort: handleSort,
     activeFilterCount,
-    canCreateInstance,
-    onCreate,
   } = props;
   return (
     <Table>
@@ -163,18 +159,6 @@ export function InstancesTable(props: InstancesTableProps) {
                 activeFilterCount > 0
                   ? "No instance matches the current filters."
                   : "Instances appear here once a cluster reports one."
-              }
-              action={
-                activeFilterCount === 0 && canCreateInstance ? (
-                  <Button
-                    size="sm"
-                    onClick={onCreate}
-                    disabled={!!props.writeDisabledReason}
-                    title={props.writeDisabledReason ?? "Create a new instance"}
-                  >
-                    Create Instance
-                  </Button>
-                ) : undefined
               }
             />
           ) : null

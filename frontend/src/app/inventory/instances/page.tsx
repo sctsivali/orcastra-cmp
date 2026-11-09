@@ -385,8 +385,6 @@ function InstancesContent() {
             sortDirection={sortDirection}
             onSort={handleSort}
             activeFilterCount={filters.activeFilterCount}
-            canCreateInstance={canCreateInstance}
-            onCreate={() => navigate("/inventory/instances/create")}
             onViewPendingInstance={handleViewPendingInstance}
             onRefreshPending={refreshNow}
             rowProps={focus.rowProps}
