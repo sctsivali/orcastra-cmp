@@ -9,8 +9,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-// The LXD device-type glyphs, extracted from ui/clickable-badge.tsx so the profiles dialog and
-// the instance devices tab share one map instead of drifting apart.
+// LXD device-type glyphs, shared by every view that lists devices.
 const ICONS: Record<string, LucideIcon> = {
   disk: HardDrive,
   nic: Network,

@@ -49,12 +49,11 @@ export interface InstanceTableRowProps {
 }
 
 /**
- * Whether any NIC on this instance pins its own IPv4 rather than taking one from DHCP.
+ * Whether any NIC on this instance pins its own IPv4 instead of taking one from DHCP.
  *
  * Reads the instance's own devices and its expanded set, because the NIC usually comes from a
- * profile and only appears in the expanded view. The case that matters: an operator
- * reconciling against a corporate IPAM catalogue needs to see which addresses are planned and
- * which are merely current.
+ * profile and only appears in the expanded view. An operator reconciling against an IPAM
+ * catalogue needs to see which addresses are planned and which are only current.
  */
 function hasFixedAddress(instance: Pick<VMInfo, "devices" | "expanded_devices">): boolean {
   const sets = [instance.expanded_devices, instance.devices];
@@ -66,11 +65,10 @@ function hasFixedAddress(instance: Pick<VMInfo, "devices" | "expanded_devices">)
   return false;
 }
 
-// The root disk an instance actually runs on, after profile expansion: the size, or the pool
-// default when none is set, over the name of the pool it lives in. Whether the size came from
-// the instance or a profile is the Devices tab's question (instance-devices-tab.tsx), which
-// shows both groups. Two short tiers, the pool as a bare identifier: "Pool <name>" wrapped
-// onto two lines in every row once the table sat at its container's width.
+// The root disk an instance runs on, after profile expansion: the size, or the pool default
+// when none is set, over the name of the pool it lives in. Whether the size came from the
+// instance or a profile is the Devices tab's question (instance-devices-tab.tsx). The pool is a
+// bare identifier because "Pool <name>" wraps onto two lines at the table's container width.
 function rootDiskLabel(
   instance: Pick<VMInfo, "devices" | "expanded_devices">,
 ): { value: string; pool?: string } | null {
@@ -189,8 +187,8 @@ export function InstanceTableRow({
       </TableCell>
       <TableCell className="whitespace-nowrap">{project}</TableCell>
       <TableCell>
-        {/* Wraps at the separators: two addresses on two lines rather than one address
-            setting a 240 px column, which is what pushed the actions off the visible edge. */}
+        {/* Wraps at the separators: two addresses on two lines instead of one address
+            setting a 240 px column that pushes the actions off the visible edge. */}
         <OverflowCell
           items={instance.ip_addresses}
           preview={2}
@@ -200,12 +198,10 @@ export function InstanceTableRow({
           itemLabel="IP address"
           wrap="words"
         />
-        {/* The allocation label operators asked for. It must not be
-            gated on a live address: ip_addresses is populated only for a running
-            instance, so gating on it hid the label in exactly the case the label
-            exists for, a stopped instance whose address is pinned and which an
-            operator is reconciling against an IPAM catalogue. A pinned address is
-            a property of the device, not of the instance being up. */}
+        {/* The allocation label. Static must not be gated on a live address:
+            ip_addresses is populated only for a running instance, and a pinned
+            address is a property of the device, so a stopped instance with a
+            pinned address still reads Static. */}
         {hasFixedAddress(instance) ? (
           <TableSubText>Static</TableSubText>
         ) : instance.ip_addresses?.length ? (
@@ -226,8 +222,8 @@ export function InstanceTableRow({
         {rootDisk ? (
           <>
             <span className="whitespace-nowrap">{rootDisk.value}</span>
-            {/* Proportional, not mono: the mono glyphs cost the ten pixels that put the table
-                back over its container at the content cap. */}
+            {/* Proportional, not mono: the mono glyphs cost the ten pixels that would put the
+                table back over its container at the content cap. */}
             {rootDisk.pool && <TableSubText>{rootDisk.pool}</TableSubText>}
           </>
         ) : (

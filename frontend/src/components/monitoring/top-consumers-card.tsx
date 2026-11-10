@@ -24,8 +24,8 @@ function consumerKey(instance: InstanceMonitoringSummary): string {
 /**
  * Every instance the dashboard named as a leader of any resource.
  *
- * note: an older backend sends only its top CPU and top memory lists; their union is the best
- * pool it offers, so a mixed deploy still renders.
+ * An older backend sends only its top CPU and top memory lists; their union is the best pool
+ * it offers, so a mixed deploy still renders.
  */
 export function consumerPool(
   data: Pick<MonitoringDashboardResponse, "consumers" | "top_cpu_consumers" | "top_memory_consumers">,

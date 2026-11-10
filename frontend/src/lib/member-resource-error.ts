@@ -14,19 +14,13 @@ import { APIError } from "@/types/api";
 /**
  * Why a cluster member's resources could not be read, in words an operator can act on.
  *
- * The modal used to render one hand-rolled block, "No resource data / Unable to fetch resource
- * information for this member", for every one of these. A cluster that is down, a cluster that
- * is merely slow, a member that no longer exists and an account that may not see the cluster
- * all produced the same sentence, so the only way to tell an outage from a permission problem
- * was to open the network tab.
+ * A cluster that is down, a slow cluster, a member that is gone and a missing permission each
+ * get their own message. There is no "member reported nothing" case: the endpoint answers a
+ * fully populated body or an error.
  *
- * There is no genuine "this member reported nothing" case to model. The endpoint always
- * answers a fully populated body or raises, so every empty render was an error being
- * mislabelled.
- *
- * note: titles are literals rather than templates. They stay greppable, and the static heading
- * guard reads `title` as a JSX prop rather than as an object key, so the browser pass is what
- * covers them. Names belong in the description, where they are not part of the vocabulary.
+ * Titles are literals rather than templates, so they stay greppable; names belong in the
+ * description. The static heading guard reads `title` only as a JSX prop, so it does not check
+ * these object keys.
  */
 export interface MemberResourceFailure {
   icon: LucideIcon;
@@ -34,7 +28,7 @@ export interface MemberResourceFailure {
   description: string;
   /** Whether asking again could plausibly change the answer. */
   retryable: boolean;
-  /** The member is not there to read, so the useful action is to close, not to retry. */
+  /** The member is not there to read, so closing is the useful action. */
   gone: boolean;
 }
 
@@ -47,9 +41,8 @@ export function memberResourceFailure(
   const status = error instanceof APIError ? error.status : null;
 
   // The cluster's own verdict on the member ("Member 'mc3' is Offline: No heartbeat for 27s")
-  // arrives as a 503 too, but it is not the cluster being down: the cluster answered, at once,
-  // and said the member will not. A generic line here sent the operator looking for a dashboard
-  // fault when the member was simply powered off.
+  // also arrives as a 503, but the cluster did answer: only the member is down, so the
+  // cluster's own words are shown.
   const detail = error instanceof APIError && typeof error.detail === "string" ? error.detail : "";
   if (status === 503 && /^Member '.+' is \S+/.test(detail)) {
     return {

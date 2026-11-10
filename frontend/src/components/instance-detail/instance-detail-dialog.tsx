@@ -33,9 +33,7 @@ export interface InstanceDetailDialogProps {
   onEditSpecification?: () => void;
 }
 
-// Replaces instance-monitoring-modal, which showed live metrics and nothing else while the row
-// it was opened from already carried config, devices, expanded_devices, profiles, tags,
-// description, architecture and both timestamps.
+// Everything about one instance: overview, live metrics, config, devices, snapshots and files.
 export function InstanceDetailDialog({
   instance,
   isOpen,
@@ -48,7 +46,7 @@ export function InstanceDetailDialog({
   onEditSpecification,
 }: InstanceDetailDialogProps) {
   const [tab, setTab] = React.useState<string>(defaultTab);
-  // note: set during render, not in an effect, so the first frame of a new opening already
+  // Set during render rather than in an effect, so the first frame of a new opening already
   // knows that an older cached reading must not decide the runtime state.
   const [opening, setOpening] = React.useState(() => ({ open: isOpen, at: Date.now() }));
   if (opening.open !== isOpen) setOpening({ open: isOpen, at: Date.now() });
@@ -81,11 +79,10 @@ export function InstanceDetailDialog({
   const effectiveProject = record?.project || project || "default";
   const filesUnavailableReason = useFilesUnavailableReason(record?.host ?? "", effectiveProject, record?.name ?? "");
 
-  // important: gated on the tab and the page, not on the row's status. The modal this replaces
-  // polled from the moment it opened; the row-status gate that followed froze the panel on
-  // "not running" for an instance started while the dialog was open, because the row was the one
-  // captured at click time. The metrics response carries the runtime state itself, and the
-  // polling policy keeps a slow check going while the instance is not running.
+  // important: gated on the tab and the page, never on the row's status. The row is the one
+  // captured at click time, so a status gate would freeze the panel on "not running" for an
+  // instance started while the dialog is open. The metrics response carries the runtime state
+  // itself, and the polling policy keeps a slow check going while the instance is not running.
   const {
     data: metrics,
     dataUpdatedAt: metricsUpdatedAt,
@@ -125,7 +122,7 @@ export function InstanceDetailDialog({
 
   if (!detail) return null;
 
-  // note: the browser's own receive time, so the age label never compares a server clock with a
+  // The browser's own receive time, so the age label never compares a server clock with a
   // browser clock that disagrees with it.
   const updatedAt = metricsUpdatedAt || null;
   const statusDisplay = instanceStatusDisplay(detail.status);

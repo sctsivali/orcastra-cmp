@@ -44,12 +44,6 @@ import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 import { NodeLink } from "@/components/ui/node-link";
 
 
-// important: typed, not `any`. The `any` is what let this file read i.properties?.description,
-// i.cached and i.auto_update for as long as it has: none of the three existed on ImageInfo or
-// on the backend model, so the Flags facet could only ever offer "Public" and searchExtra
-// pushed a permanent undefined. The backend now sends cached and auto_update; description has
-// always been sent under its own name.
-
 /**
  * One key for a row and for the upload dialog's report of what landed. The store is part of
  * it: a project with its own image store can hold the same fingerprint the host's default
@@ -74,8 +68,8 @@ const IMAGES = defineTable<ImageInfo>()({
       label: "Architecture",
       sort: (i) => i.architecture,
       facet: (i) => i.architecture,
-      // note: architecture arrives as x86_64 and must never go through formatLabel, which
-      // renders it as "X86 64". It is excluded by name everywhere it is displayed.
+      // Architecture arrives as x86_64 and must never go through formatLabel, which renders it
+      // as "X86 64". It is excluded by name everywhere it is displayed.
       facetSpec: { primary: true } },
     {
       field: "type",
@@ -111,13 +105,13 @@ const IMAGES = defineTable<ImageInfo>()({
 function ImagesContent() {
   const { data: imagesByHost = [], isLoading, refetch, refreshNow, dataUpdatedAt, isError, error } = useImages();
   const [detailImage, setDetailImage] = useState<any>(null);
-  // One request for the page, not one per row. The instances list is tenant-filtered server
-  // side, which is why the dialog's heading says "your instances" rather than implying a total.
+  // One request for the page instead of one per row. The instances list is tenant-filtered
+  // server side, which is why the dialog's heading says "your instances" instead of a total.
   const { data: instanceData } = useInstances();
   const instancesByImage = useMemo(() => {
     const byFingerprint = new Map<string, VMInfo[]>();
     for (const vm of ((instanceData as any)?.vms ?? []) as VMInfo[]) {
-      // The same key the backend filters on at routers/images.py:189.
+      // The backend's first key (routers/images.py, _allowed_image_fingerprints_by_host).
       const fingerprint = vm.config?.["volatile.base_image"];
       if (!fingerprint) continue;
       const bucket = byFingerprint.get(fingerprint);
@@ -128,7 +122,7 @@ function ImagesContent() {
   }, [instanceData]);
 
   // A host that did not answer is returned with an empty image list, so without this it
-  // is indistinguishable from a host that genuinely has no images.
+  // is indistinguishable from a host that has no images.
   const unreachableNodes = useMemo(
     () =>
       (imagesByHost as ImageListResponse[])
@@ -178,8 +172,8 @@ function ImagesContent() {
   }, [imagesByHost]);
 
   const nodes = useMemo(() => {
-    // note: an unreachable host is excluded. Offering it as a filter that can only ever
-    // yield an empty table reads as "this host has no images".
+    // An unreachable host is excluded. Offering it as a filter that can only ever yield an
+    // empty table reads as "this host has no images".
     const nodeSet = new Set(
       (imagesByHost as ImageListResponse[])
         .filter((h) => h.reachable !== false)
@@ -223,16 +217,16 @@ function ImagesContent() {
   });
 
   const totalPages = Math.ceil(sortedImages.length / pageSize);
-  // note: the cast restores what allImages already guarantees. Every row is built there with
+  // The cast restores what allImages already guarantees. Every row is built there with
   // `node: host.host`, but the filter and sort pipeline is generic over ImageInfo, whose own
-  // `node` is optional, so the narrowing is lost in transit rather than being unproven.
+  // `node` is optional, so the narrowing is lost in transit.
   const paginatedImages = sortedImages.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize
   ) as ImageRow[];
 
   // Header, cells and the empty row's span move together. Deriving all three from one number
-  // is what keeps zz-colspan-parity green when a column appears or disappears.
+  // keeps the span equal to the header when a column appears or disappears.
   const columnCount = 7 + (nodes.length > 0 ? 1 : 0) + (canManage ? 1 : 0);
 
   const actionsFor = (image: ImageRow) =>
@@ -316,7 +310,7 @@ function ImagesContent() {
                 <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Flags" field="flags" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 {/* Not sortable and not a value, so it carries its name for a screen reader
-                    rather than a visible label that would read as a sixth column of data. */}
+                    instead of a visible label that would read as another column of data. */}
                 {canManage && (
                   <TableHead pinned="end" className="w-12 text-right">
                     <span className="sr-only">Actions</span>
@@ -326,14 +320,14 @@ function ImagesContent() {
             </TableHeader>
             <TableBody>
               {paginatedImages.length === 0 ? (
-                // note: the outage case is not repeated here. UnreachableNodesBanner above
-                // already names which nodes are missing and why; saying it twice, in two
-                // treatments, reads as two separate problems.
+                // The outage case is not repeated here. UnreachableNodesBanner above already
+                // names which nodes are missing and why; saying it twice, in two treatments,
+                // reads as two separate problems.
                 <TableEmptyRow
-                  // Derived from the header's own conditions rather than hardcoded. note:
-                  // unlike the sibling pages, `nodes` here excludes a host flagged
-                  // unreachable, so that column can vanish from a populated table, not only
-                  // from an empty scope. The actions column moves with the role.
+                  // Derived from the header's own conditions instead of hardcoded. Unlike the
+                  // sibling pages, `nodes` here excludes a host flagged unreachable, so that
+                  // column can vanish from a populated table, not only from an empty scope.
+                  // The actions column moves with the role.
                   colSpan={columnCount}
                   icon={ImageIcon}
                   illustration={filters.activeFilterCount > 0 ? undefined : ImagesIllustration}
@@ -354,10 +348,9 @@ function ImagesContent() {
               ) : (
                 paginatedImages.map((image: ImageRow) => (
                   <TableRow key={imageRowKey(image)} {...focus.rowProps(imageRowKey(image))}>
-                    {/* important: the row names itself by whatever a human or a registry wrote,
-                        and only falls back to the fingerprint when an image carries neither. It
-                        used to name itself with a 12 character slice of the fingerprint, so the
-                        aliases control announced "Show all 3 aliases on 1a4eed830630…". */}
+                    {/* The row names itself (imageLabel) by whatever a human or a registry
+                        wrote, and falls back to the whole fingerprint only when an image
+                        carries neither, never to a slice of it. */}
                     <TableCell className="max-w-[18rem] font-mono">
                       <OverflowText
                         value={image.fingerprint}
@@ -447,7 +440,7 @@ function ImagesContent() {
         }}
       />
 
-      {/* important: gated, not only its trigger. The dialog's picker reads /nodes/names, which
+      {/* The dialog is gated as well as its trigger: its picker reads /nodes/names, which
           refuses a Tenant. */}
       {canUpload && (
         <ImageUploadDialog

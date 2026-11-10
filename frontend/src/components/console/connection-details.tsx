@@ -52,7 +52,7 @@ export function ConnectionDetails({ status, stats, mouseMode, agentConnected, re
     <Popover>
       <PopoverTrigger asChild>
         <Button variant="ghost" size="sm" className="h-8 gap-1.5 px-2 text-xs tabular-nums" aria-label={`Connection details: ${verdict}`}>
-          {/* Bars only once there is a round trip to grade; an empty meter read as a stray dot. */}
+          {/* Bars only once there is a round trip to grade; an empty meter looks like a dot. */}
           {rtt !== null && <Icon className={cn("h-4 w-4", className)} aria-hidden="true" />}
           {chip}
         </Button>

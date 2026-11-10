@@ -1,7 +1,4 @@
-/**
- * Instance Operations - Start/Stop/Restart buttons for terminal.
- * Controls the LXD instance lifecycle from within the terminal window.
- */
+/** Start, stop and restart controls for the instance behind a terminal window. */
 
 "use client";
 
@@ -77,11 +74,9 @@ export function InstanceOperations({
     description: "",
   });
 
-  // Execute instance operation
   const executeOperation = useCallback(async (operation: OperationType) => {
     setLoading(operation);
     
-    // Update to transitional state
     const transitionStatus: Record<OperationType, LXDInstanceStatus> = {
       start: 'Starting',
       stop: 'Stopping',
@@ -98,11 +93,9 @@ export function InstanceOperations({
         timeout: 30,
       });
       
-      // Update instance status based on operation result
-      // Backend returns new_status as string like "Running", "Stopped", etc.
+      // new_status may arrive lowercase or capitalised, ex; "running" or "Running".
       let newStatus: LXDInstanceStatus;
       if (result.new_status) {
-        // Map backend status string to our LXDInstanceStatus type
         const statusMap: Record<string, LXDInstanceStatus> = {
           'running': 'Running',
           'stopped': 'Stopped',
@@ -115,7 +108,7 @@ export function InstanceOperations({
         };
         newStatus = statusMap[result.new_status] || 'Unknown';
       } else {
-        // Fallback based on operation
+        // No new_status in the response: infer it from the operation.
         newStatus = operation === 'start' ? 'Running' :
                    operation === 'stop' ? 'Stopped' :
                    'Running'; // restart ends in Running
@@ -123,7 +116,7 @@ export function InstanceOperations({
       
       updateInstanceStatus(terminalId, newStatus);
       
-      // If stopped, update terminal connection status
+      // A stopped instance ends the terminal connection.
       if (operation === 'stop') {
         updateTerminalStatus(terminalId, 'disconnected');
       }
@@ -147,10 +140,9 @@ export function InstanceOperations({
     }
   }, [executePowerAction, host, instanceName, project, terminalId, updateInstanceStatus, updateTerminalStatus]);
 
-  // Show confirmation dialog for destructive operations
+  // Stop and restart ask for confirmation first.
   const requestOperation = useCallback((operation: OperationType) => {
     if (operation === 'start') {
-      // Start doesn't need confirmation
       executeOperation(operation);
       return;
     }
@@ -174,7 +166,6 @@ export function InstanceOperations({
     });
   }, [instanceName, executeOperation]);
 
-  // Handle confirm dialog action
   const handleConfirm = useCallback(() => {
     if (confirmDialog.operation) {
       executeOperation(confirmDialog.operation);
@@ -182,18 +173,15 @@ export function InstanceOperations({
     setConfirmDialog(prev => ({ ...prev, open: false }));
   }, [confirmDialog.operation, executeOperation]);
 
-  // Determine which buttons to show based on instance status
   const isRunning = instanceStatus === 'Running';
   const isStopped = instanceStatus === 'Stopped';
   const isTransitioning = ['Starting', 'Stopping', 'Restarting'].includes(instanceStatus);
   const isUnknownOrError = ['Unknown', 'Error'].includes(instanceStatus);
   
-  // Show Start if stopped or unknown/error
+  // Unknown or Error shows every control, because the real state is uncertain.
   const showStart = isStopped || isUnknownOrError;
-  // Show Restart/Stop if running or unknown/error
   const showRestartStop = isRunning || isUnknownOrError;
   
-  // Disable all operations during transition
   const isDisabled = isTransitioning || loading !== null;
 
   return (
@@ -206,7 +194,6 @@ export function InstanceOperations({
         onTouchEnd={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}
       >
-        {/* Start button - show when stopped or unknown/error */}
         {showStart && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -232,7 +219,6 @@ export function InstanceOperations({
           </Tooltip>
         )}
 
-        {/* Restart button - show when running or unknown/error */}
         {showRestartStop && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -258,7 +244,6 @@ export function InstanceOperations({
           </Tooltip>
         )}
 
-        {/* Stop button - show when running or unknown/error */}
         {showRestartStop && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -284,7 +269,6 @@ export function InstanceOperations({
           </Tooltip>
         )}
 
-        {/* Transitioning indicator */}
         {isTransitioning && !loading && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -297,7 +281,6 @@ export function InstanceOperations({
         )}
       </div>
 
-      {/* Confirmation Dialog */}
       <AlertDialog open={confirmDialog.open} onOpenChange={(open) => setConfirmDialog(prev => ({ ...prev, open }))}>
         <AlertDialogContent className="bg-terminal border-terminal-border">
           <AlertDialogHeader>

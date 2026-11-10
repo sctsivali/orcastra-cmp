@@ -30,22 +30,18 @@ interface DataTablePaginationDefaultProps extends PageNavProps {
 interface DataTablePaginationCompactProps extends PageNavProps {
   variant: "compact";
   /**
-   * Noun phrase naming what is being paged, ex; "cluster access for Production Orcahub".
+   * Noun phrase naming what is being paged, ex; "cluster access for Acme".
    *
-   * important: required, because compact exists for a repeated context. One pager per card means
-   * the same button names several times on one screen, and check-icon-button-names.mjs counts
-   * buttons with no name rather than buttons whose name is ambiguous, so nothing catches that.
+   * important: required, because compact pagers repeat, one per card, and without it the same
+   * button names appear several times on one screen. check-icon-button-names.mjs only catches a
+   * missing name; an ambiguous one passes.
    */
   label: string;
 }
 
-// A discriminated union rather than optional props, so handing a page-size handler to a variant
-// that has no page-size control is a compile error. Same device as table-link.tsx, and for the
-// same reason: the risk here is a prop that silently does nothing.
-//
-// note: the three page-size properties are absent from compact instead of optional. Optional on
-// one shared interface would let a DEFAULT pager be built with no page-size handler, which is a
-// real bug rather than merely dead code.
+// A discriminated union, as in table-link.tsx: a page-size handler passed to the compact variant,
+// which has no page-size control, is a compile error, and a default pager cannot be built without
+// one.
 export type DataTablePaginationProps =
   | DataTablePaginationDefaultProps
   | DataTablePaginationCompactProps;
@@ -80,18 +76,16 @@ export function DataTablePagination(props: DataTablePaginationProps) {
   const compactInputRef = React.useRef<HTMLInputElement>(null);
 
   // important: an empty result gives Math.ceil(0 / pageSize) === 0 while currentPage stays
-  // 1, so `currentPage === totalPages` was 1 === 0, which is false, and Next and Last stayed
-  // live over nothing with an <Input min={1} max={0}>. Filtering to zero is exactly when an
-  // operator reaches for these.
+  // 1. Unclamped, `currentPage === totalPages` is false, and Next and Last stay live over
+  // nothing with an <Input min={1} max={0}>.
   const totalPages = Math.max(1, props.totalPages);
 
   if (props.variant === "compact") {
     const { label } = props;
 
-    // important: a button that disables itself under the pointer drops focus to <body>. On a
-    // screen holding one of these per card that means being dropped many cards away, so the
-    // caret moves to the page field instead. Deliberately not applied to the default variant,
-    // where it would change the behaviour of thirteen existing pages in an unrelated commit.
+    // important: a button that disables itself under the pointer drops focus to <body>, which
+    // on a screen with one pager per card lands many cards away, so focus moves to the page
+    // field instead. The default variant keeps the plain behaviour.
     const goto = (page: number) => {
       onPageChange(page);
       if (page <= 1 || page >= totalPages) compactInputRef.current?.focus();
@@ -144,14 +138,13 @@ export function DataTablePagination(props: DataTablePaginationProps) {
 
   return (
     <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 px-2 py-4">
-      {/* Left section - Rows per page and info */}
       <div className="flex flex-wrap items-center gap-2">
         <p className="text-xs sm:text-sm font-medium whitespace-nowrap">Rows per page</p>
         <Select
           value={pageSize.toString()}
           onValueChange={(value) => {
             onPageSizeChange(Number(value));
-            onPageChange(1); // Reset to first page when changing page size
+            onPageChange(1);
           }}
         >
           <SelectTrigger aria-label="Rows per page" className="h-8 w-[60px] sm:w-[70px]">
@@ -170,7 +163,6 @@ export function DataTablePagination(props: DataTablePaginationProps) {
         </p>
       </div>
 
-      {/* Right section - Navigation buttons */}
       <div className="flex items-center gap-1 sm:gap-2 shrink-0">
         <NavButton
           onClick={() => onPageChange(1)}

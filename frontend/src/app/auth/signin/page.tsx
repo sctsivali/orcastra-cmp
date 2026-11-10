@@ -1,14 +1,6 @@
 "use client";
 
-/**
- * Sign In Page
- *
- * Custom sign-in page that redirects to Authentik for authentication.
- * Features:
- * - Clean, branded UI
- * - Automatic redirect to Authentik
- * - Error handling for failed authentication
- */
+/** Sign-in page: hands off to Authentik automatically and explains a failed attempt. */
 
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
@@ -28,7 +20,6 @@ import { usePublicBranding } from "@/components/branding/public-branding-context
 import { safeCallbackPath } from "@/lib/auth-redirect";
 import { forgetReturnPath, recallReturnPath, rememberReturnPath } from "@/lib/auth-return";
 
-// Error messages mapping
 const errorMessages: Record<string, string> = {
   OAuthSignin: "Error starting OAuth sign-in flow. Try again.",
   OAuthCallback: "Error during OAuth callback. Try again.",
@@ -73,7 +64,7 @@ function SignInContent() {
   const searchParams = useSearchParams();
   const error = searchParams.get("error");
   const requested = searchParams.get("callbackUrl");
-  // note: read once, on the client. TokenSync renders nothing on the server, so this page's first
+  // Read once, on the client. TokenSync renders nothing on the server, so this page's first
   // render is always in the browser.
   const [bounced] = useState(() => !error && autoSignInBounced());
   const [isLoading, setIsLoading] = useState(!error && !bounced);
@@ -90,9 +81,8 @@ function SignInContent() {
   const resolveCallbackUrl = () =>
     safeCallbackPath(requested, window.location.origin) ?? (error ? recallReturnPath() : null) ?? "/";
 
-  // Hand off to Authentik straight away. It used to wait a fixed 1.5 s first, which every sign-in
-  // and every return after an expired session paid, for no recorded reason. The ref keeps React's
-  // development double effect from starting a second attempt.
+  // Hand off to Authentik straight away, with no delay. The ref keeps React's development double
+  // effect from starting a second attempt.
   useEffect(() => {
     if (error || !autoRedirect || autoStartedRef.current) return;
     autoStartedRef.current = true;
@@ -130,7 +120,6 @@ function SignInContent() {
         </CardHeader>
 
         <CardContent className="space-y-6">
-          {/* Error Alert */}
           {errorMessage && (
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
@@ -138,7 +127,6 @@ function SignInContent() {
             </Alert>
           )}
 
-          {/* Loading State */}
           {isLoading && !error && (
             <div className="flex flex-col items-center gap-4 py-8">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -154,7 +142,6 @@ function SignInContent() {
             </p>
           )}
 
-          {/* Sign In Button */}
           {(!isLoading || error) && (
             <Button
               onClick={handleSignIn}
@@ -176,7 +163,6 @@ function SignInContent() {
             </Button>
           )}
 
-          {/* Footer */}
           <div className="space-y-1 text-center text-xs text-muted-foreground">
             <p>
               Contact your administrator if you need access

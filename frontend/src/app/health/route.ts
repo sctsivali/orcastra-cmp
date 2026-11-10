@@ -1,6 +1,4 @@
-/**
- * Health check proxy. Forwards /health to the backend.
- */
+/** Readiness proxy: forwards /health to the backend. */
 import { NextResponse } from "next/server";
 
 const BACKEND_URL =
@@ -8,7 +6,7 @@ const BACKEND_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   "http://localhost:4050";
 
-// note: the backend's own healthcheck uses a 3s timeout, so waiting longer than that here
+// The backend's own healthcheck uses a 3s timeout, so waiting longer than that here
 // would only turn a wedged backend into a wedged probe.
 const HEALTH_TIMEOUT_MS = 3_000;
 

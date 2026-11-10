@@ -1,7 +1,7 @@
 import { Skeleton } from "@/components/ui/skeleton";
 
-// Generic route-loading shape for the non-table console pages. Deliberately plain: a title,
-// a subtitle and one content card, which is the shape every remaining page shares.
+// Generic route-loading shape for the non-table console pages: a title, a subtitle and one
+// content card, the shape every remaining page shares.
 export function ConsolePageSkeleton() {
   return (
     <div className="space-y-6 animate-in fade-in duration-300">

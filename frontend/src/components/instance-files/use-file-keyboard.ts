@@ -22,8 +22,8 @@ interface KeyboardOptions {
 function isForTheList(event: React.KeyboardEvent): boolean {
   const target = event.target as HTMLElement | null;
   // important: React events bubble through portals, so a key pressed in a dialog or a menu arrives
-  // here too. Enter on Cancel used to open the row behind it, which moved the folder a waiting
-  // delete was aimed at.
+  // here too. Without this check, Enter on Cancel would open the row behind it and move the folder
+  // a waiting delete is aimed at.
   if (!target?.closest || !event.currentTarget.contains(target)) return false;
   if (target.closest("input, textarea, select, [contenteditable=true], .cm-editor")) return false;
   // A button or a box answers Enter and Space itself. Alt+Enter is still Properties.

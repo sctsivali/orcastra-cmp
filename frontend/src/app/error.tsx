@@ -23,7 +23,7 @@ export default function GlobalError({
     // A missing chunk is the console having been updated or restarted under this page: one
     // reload fetches the current build. The helper allows a single automatic reload per path.
     if (chunkFailed && reloadOnceForChunkError(pathname)) return;
-    // log only the message - avoid leaking stack traces, URLs, or tokens to browser console
+    // Log only the message, so no stack trace, URL or token reaches the browser console.
     console.error("Unhandled error:", error.message || "Unknown error");
   }, [error, chunkFailed, pathname]);
 

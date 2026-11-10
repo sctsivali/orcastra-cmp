@@ -18,9 +18,7 @@ import { formatLabel, plural } from "@/lib/utils";
 import { Shield } from "lucide-react";
 import type { AclRule } from "../types";
 
-// The richest payload in the app that nothing rendered. The ACLs table showed "N rules" as
-// plain text, so every field below arrived on the wire and was dropped: action, source,
-// destination, protocol, ports, state and the rule's own description.
+// A rule tagged with its direction and its index in that direction's list, which keys the row.
 type DirectedRule = AclRule & { direction: "Ingress" | "Egress"; index: number };
 
 const RULES = defineTable<DirectedRule>()({
@@ -100,8 +98,8 @@ function AclRulesPanelContent({ ingress, egress }: { ingress?: AclRule[]; egress
   // Filter, then sort, then slice, so an ordering covers every rule the filters kept and not
   // only the page on screen.
   const sortedRules = React.useMemo(() => sortItems(filters.filteredRows), [filters.filteredRows, sortItems]);
-  // note: clamped on read rather than corrected in an effect. An effect paints one wrong frame
-  // first and then moves the panel while it is being read.
+  // Clamped on read rather than corrected in an effect, which would paint one wrong frame first
+  // and then move the panel while it is being read.
   const totalPages = Math.max(1, Math.ceil(sortedRules.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pagedRules = sortedRules.slice((currentPage - 1) * pageSize, currentPage * pageSize);
@@ -174,11 +172,9 @@ function AclRulesPanelContent({ ingress, egress }: { ingress?: AclRule[]; egress
   );
 }
 
-// important: its own boundary, not the host page's. useTableFilters reads the query string
-// even with syncUrl false, which opts the subtree out of prerendering, and Next then fails
-// `next build` for any route that renders it without a Suspense above. A panel is a leaf that
-// can be dropped into any dialog on any page, so it carries the boundary itself rather than
-// relying on every future host to remember.
+// important: the panel carries its own Suspense boundary. useTableFilters reads the query string
+// even with syncUrl false, which opts the subtree out of prerendering, and `next build` fails for
+// any route that renders it without a Suspense above. A panel can land in any dialog on any page.
 export function AclRulesPanel(props: React.ComponentProps<typeof AclRulesPanelContent>) {
   return (
     <Suspense fallback={<Skeleton className="h-64 w-full" />}>

@@ -75,14 +75,12 @@ import { IllustrationFallback } from "@/components/illustrations/illustration-fr
 import { KeyVaultIllustration } from "@/components/illustrations/scenes/catalog";
 import { KeysActiveIllustration, KeysExpiredIllustration, KeysRevokedIllustration } from "@/components/illustrations/scenes/kpi";
 
-// Main Integrations Settings Component (for embedding in Settings page)
 /**
- * A credential list is a security surface, so the questions it has to answer are narrow ones:
- * which keys are lapsed, which still reach a cluster, which predate capabilities. Sorting alone
- * answered none of them, and nineteen full-height cards in one scroll answered them badly.
+ * Filters for the API key list: which keys are lapsed, which still reach a cluster, which predate
+ * capabilities.
  *
- * important: an id. The settings screen carries more than one filtered list, and without a
- * namespace they would share `q` and narrow each other on every keystroke.
+ * important: keep the `id`. The settings screen carries more than one filtered list, and without
+ * a namespace they would share `q` and narrow each other on every keystroke.
  */
 const API_KEYS = defineTable<APIKeyInfo>()({
   id: "apikeys",
@@ -114,7 +112,7 @@ const API_KEYS = defineTable<APIKeyInfo>()({
       label: "Status",
       sort: (key) => getAPIKeyStatus(key),
       facet: (key) => getAPIKeyStatus(key),
-      // Working first, then the two ways a key stops working, rather than by today's counts.
+      // Working first, then the ways a key stops working, instead of ordering by count.
       facetSpec: { primary: true, order: API_KEY_STATUS_ORDER },
     },
     {
@@ -137,9 +135,9 @@ const API_KEYS = defineTable<APIKeyInfo>()({
       facet: (key) => summarizeClusterAccessLevel(getClusterAccessDisplay(key.cluster_permissions)),
     },
     {
-      // note: null capabilities and an empty list are opposites here. A key predating
-      // capabilities keeps unrestricted access to the external router, so it gets its own
-      // dimension rather than being read off a count of zero.
+      // Null capabilities and an empty list are opposites here. A key predating capabilities
+      // keeps unrestricted access to the external router, so it gets its own dimension instead
+      // of being read off a count of zero.
       field: "scope",
       label: "Capability Scope",
       facet: (key) => (isLegacyUnscopedKey(key.capabilities) ? "Unscoped legacy" : "Scoped"),
@@ -174,14 +172,13 @@ function IntegrationsSettingsContent() {
   const { isAdmin } = usePermissions();
   const [mounted, setMounted] = useState(false);
   const [createdKey, setCreatedKey] = useState<APIKeyCreateResponse | null>(null);
-  // note: a queue, so two rotations that overlap each show their own secret once
+  // A queue, so two overlapping rotations each show their own secret once.
   const [rotatedKeys, setRotatedKeys] = useState<APIKeyCreateResponse[]>([]);
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // Fetch API keys
   const {
     data: apiKeysData,
     isLoading: keysLoading,
@@ -195,14 +192,13 @@ function IntegrationsSettingsContent() {
     enabled: mounted,
     staleTime: 30000,
     // A 503 (Vault not configured, or the identity provider unreachable) does not clear within a
-    // retry, and the page says which one it is.
+    // retry, so it is not retried and the page says which one it is.
     retry: retryUnlessUnavailable,
   });
 
   // Vault-not-configured, told apart from every other 503 (an identity-provider outage too).
   const vaultUnavailable = isVaultUnavailable(keysError);
 
-  // Fetch available clusters
   const { data: clustersData, isFetching: clustersFetching } = useQuery({
     queryKey: ["integrations", "available-clusters"],
     queryFn: () => api.integrations.getAvailableClusters(),
@@ -210,17 +206,16 @@ function IntegrationsSettingsContent() {
     staleTime: 60000,
   });
 
-  // Opening a key dialog reads both lists again. A cluster registered since this page loaded
-  // (through the API, by another admin, in another tab) is then offered by name, and a grant
-  // that has just come back is no longer shown as paused. Unforced: neither answer is cached in
-  // a way that would hide a registration.
+  // Opening a key dialog reads both lists again, so a cluster registered since this page loaded
+  // is offered by name and a grant that has just come back is not shown as paused. A plain
+  // invalidation is enough: neither answer is cached in a way that would hide a registration.
   const refreshAccessLists = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["integrations", "available-clusters"] });
     void queryClient.invalidateQueries({ queryKey: ["integrations", "api-keys"] });
   }, [queryClient]);
 
-  // Fetch the capability vocabulary. Served rather than hardcoded so the picker always matches
-  // what the external router enforces. It only changes on deploy, so it is cached for an hour.
+  // The capability vocabulary, served instead of hardcoded so the picker matches what the
+  // external router enforces. It changes only on deploy, so it is cached for an hour.
   const { data: capabilityData } = useQuery({
     queryKey: ["integrations", "capabilities"],
     queryFn: () => api.integrations.getCapabilities(),
@@ -228,7 +223,6 @@ function IntegrationsSettingsContent() {
     staleTime: 3600000,
   });
 
-  // Create mutation
   const createMutation = useMutation({
     mutationFn: (request: APIKeyCreateRequest) => api.integrations.createAPIKey(request),
     onSuccess: (response) => {
@@ -250,8 +244,7 @@ function IntegrationsSettingsContent() {
     },
   });
 
-  // Permissions update. Narrowing an over-broad grant used to mean revoking the credential and
-  // asking the integrator for a new one, because this endpoint had no caller.
+  // Narrows or widens a key's cluster grants in place, without issuing a new credential.
   const updatePermissionsMutation = useMutation({
     mutationFn: ({
       keyId,
@@ -291,7 +284,6 @@ function IntegrationsSettingsContent() {
     },
   });
 
-  // Revoke mutation
   const revokeMutation = useMutation({
     mutationFn: (keyId: string) => api.integrations.revokeAPIKey(keyId),
     onSuccess: () => {
@@ -308,7 +300,6 @@ function IntegrationsSettingsContent() {
     },
   });
 
-  // Delete mutation
   const deleteMutation = useMutation({
     mutationFn: (keyId: string) => api.integrations.deleteAPIKey(keyId),
     onSuccess: () => {
@@ -323,8 +314,8 @@ function IntegrationsSettingsContent() {
     },
   });
 
-  // important: derived above the loading return, not below it. The filter, sort and page hooks
-  // read these, and a hook below a conditional return is a hook that does not always run.
+  // important: derived above the loading return. The filter, sort and page hooks read these, and
+  // a hook below a conditional return does not always run.
   const apiKeys: APIKeyInfo[] = useMemo(
     () => (Array.isArray(apiKeysData?.keys) ? apiKeysData.keys : []),
     [apiKeysData],
@@ -344,8 +335,8 @@ function IntegrationsSettingsContent() {
 
   const filters = useTableFilters(API_KEYS, apiKeys, {
     onFilterChange: resetPage,
-    // A settings tab, not a route of its own: leaving these keys in the address bar would
-    // filter a list the operator has already navigated away from.
+    // A settings tab without a route of its own: filter keys left in the address bar would apply
+    // to a list the operator has already navigated away from.
     syncUrl: false,
   });
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
@@ -355,18 +346,16 @@ function IntegrationsSettingsContent() {
     resetPage,
   );
 
-  // Filter, then sort, then slice. Sorting covers the whole filtered set, not the page shown.
+  // Filter, then sort, then slice, so sorting covers the whole filtered set.
   const sortedKeys = useMemo(
     () => sortItems(filters.filteredRows),
     [sortItems, filters.filteredRows],
   );
-  // Clamped on read rather than corrected in an effect, which would snap the operator back a
-  // page mid-task and paint one wrong frame on the way.
+  // Clamped on read instead of corrected in an effect, which would paint one wrong frame first.
   const totalPages = Math.max(1, Math.ceil(sortedKeys.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pagedKeys = sortedKeys.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
-  // Show loading skeleton
   if (!mounted || keysLoading) {
     return (
       <div className="space-y-4">
@@ -381,7 +370,6 @@ function IntegrationsSettingsContent() {
     );
   }
 
-  // Vault not configured, so show an informative banner instead of the full UI
   if (vaultUnavailable) {
     return (
       <div className="space-y-6">
@@ -396,7 +384,7 @@ function IntegrationsSettingsContent() {
     );
   }
 
-  // Any other failed read says so, rather than rendering zero totals over an empty table.
+  // Any other failed read says so, instead of rendering zero totals over an empty table.
   if (keysError && !apiKeysData) {
     return (
       <div className="space-y-6">
@@ -413,7 +401,6 @@ function IntegrationsSettingsContent() {
 
   return (
     <div className="space-y-6">
-      {/* Header with actions */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h3 className="text-lg font-semibold">API Keys</h3>
@@ -439,7 +426,6 @@ function IntegrationsSettingsContent() {
         </div>
       </div>
 
-      {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <Card className="illo-kpi">
           <CardContent className="pt-6">
@@ -469,8 +455,7 @@ function IntegrationsSettingsContent() {
             </div>
           </CardContent>
         </Card>
-        {/* An expired key is no longer counted as active, so without this tile the figures stop
-            adding up and the drop reads as keys having been deleted. */}
+        {/* An expired key is not counted as active; this tile keeps the figures adding up. */}
         <Card className="illo-kpi">
           <CardContent className="pt-6">
             <div className="flex items-start justify-between gap-4">
@@ -501,7 +486,6 @@ function IntegrationsSettingsContent() {
         </Card>
       </div>
 
-      {/* API Keys List */}
       {apiKeys.length === 0 ? (
         <Card>
           <CardContent className="py-12">
@@ -512,8 +496,7 @@ function IntegrationsSettingsContent() {
               </IllustrationFallback>
               <div>
                 <h3 className="text-lg font-medium">No API keys</h3>
-                {/* note: no second Create button here; the header's sits right above (owner
-                    decision 2026-11-09). */}
+                {/* No second Create button here; the header's sits right above. */}
                 <p className="text-muted-foreground">
                   Use &quot;Create API Key&quot; above to let an external application connect.
                 </p>
@@ -560,26 +543,22 @@ function IntegrationsSettingsContent() {
             const expiryLabel = apiKey.expires_at
               ? formatDate(apiKey.expires_at)
               : "Never";
-            // note: the state is computed on the server, from the same helper the authentication
-            // path uses, so the badge and the refusal cannot disagree. Deriving it here would
-            // mean parsing the stored string in the browser, where an offsetless value is read
-            // as local time and lands a day out either side of midnight.
+            // The state is computed on the server by the same helper the authentication path
+            // uses, so the badge and the refusal cannot disagree. The browser would read an
+            // offsetless stored value as local time and land a day out around midnight.
             const expiryState = apiKey.expiry_state ?? (apiKey.expires_at ? "active" : "never");
             const keyStatus = getAPIKeyStatus(apiKey);
-            // An owner key is not revoked or deleted by the server, so its dialogs explain why and
-            // offer the way forward instead of a destructive action that would only be refused.
-            // note: only the organizations no other key co-owns stop the end; the server re-checks
-            // that the co-owner can still sync them.
+            // The server refuses to revoke or delete an owner key, so its dialogs explain why and
+            // offer the way forward. Only organizations no other key co-owns block it; the server
+            // re-checks that the co-owner can still sync them.
             const ownsOrganizations = (apiKey.sole_owned_organization_count ?? apiKey.owned_organization_count ?? 0) > 0;
             
             return (
               <Card key={apiKey.id}>
                 <CardHeader className="pb-3">
                   {/* important: min-w-0 on the text block and shrink-0 on the badge. The key id
-                      is a 34 character unbreakable token, so without these the description set
-                      the card's width and pushed the status badge 127px outside its own card at
-                      the two-column breakpoint. The id itself reveals rather than clipping
-                      silently, because it is the one string that identifies the credential. */}
+                      is a 34-character unbreakable token; without these it sets the card's width
+                      and pushes the status badge outside the card at the two-column breakpoint. */}
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 space-y-1">
                       <CardTitle className="text-lg">
@@ -587,11 +566,9 @@ function IntegrationsSettingsContent() {
                       </CardTitle>
                       <CardDescription className="flex items-center gap-2">
                         <span className="min-w-0 font-mono text-xs bg-muted px-2 py-0.5 rounded">
-                          {/* note: auto, not always. The "always" preset is for a value whose
-                              answer is known, ex; a 64 character fingerprint that never fits.
-                              A key id is 34 characters and fits or does not depending on the
-                              card width, so measuring is the honest answer and a chevron on a
-                              value that is fully visible is noise. */}
+                          {/* The default measuring mode: a key id fits or not depending on the
+                              card width. The "always" preset is for a value that never fits,
+                              ex; a 64-character fingerprint. */}
                           <OverflowText value={String(apiKey.id)} label="API key id" />
                         </span>
                         <span>•</span>
@@ -604,19 +581,12 @@ function IntegrationsSettingsContent() {
                       </CardDescription>
                     </div>
                     <div className="shrink-0">
-                      {/* Six keys on this deployment read a green "Active" while lapsed, which
-                          is the distinction that was actually missing.
+                      {/* Expired shares the red family with Revoked: both mean the key does not
+                          work, and the word carries the cause. The tones are the solid
+                          --status-* ones whose contrast ui/badge.tsx records for both themes.
 
-                          note: Expired shares the red family with Revoked deliberately. Both
-                          mean the key does not work, and giving the same outcome two colours
-                          would be decoration; the word carries the cause, which is the part
-                          that differs. The tones are the solid --status-* ones whose ratios
-                          ui/badge.tsx records for both themes, not the translucent tints it
-                          measures at 2.73:1 on --card in light mode.
-
-                          important: the word comes from getAPIKeyStatus, the same helper the
-                          Status filter reads. Deciding it twice is how a chip and the facet
-                          beside it end up disagreeing about the same key. */}
+                          important: the word comes from getAPIKeyStatus, the helper the Status
+                          filter reads, so the chip and the facet cannot disagree. */}
                       <Badge variant={API_KEY_STATUS_VARIANTS[keyStatus]}>{keyStatus}</Badge>
                     </div>
                   </div>
@@ -643,10 +613,9 @@ function IntegrationsSettingsContent() {
                     </div>
                   </div>
 
-                  {/* What the key may DO, as opposed to which clusters it may reach. A legacy key
+                  {/* What the key may do, as opposed to which clusters it may reach. A legacy key
                       carries no capability field and still reaches every external endpoint, so it
-                      is called out rather than rendered as an empty list, which would read as the
-                      safe case while being the broad one. */}
+                      is called out instead of shown as an empty list, which would look safe. */}
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge variant="outline">{formatApplicationType(apiKey.app_type)}</Badge>
                     {isLegacyUnscopedKey(apiKey.capabilities) ? (
@@ -769,10 +738,8 @@ function IntegrationsSettingsContent() {
           </div>
           )}
 
-          {/* note: 12, 24, 48 and 96 rather than the table set. The grid is one or two columns
-              wide and every one of these divides by both, so a full page never ends in a lone
-              card on its own row.
-              Absent rather than disabled when everything fits. */}
+          {/* Grid page sizes (12, 24, 48, 96) divide by one and two columns, so a full page never
+              ends in a lone card. Absent instead of disabled when everything fits. */}
           {totalPages > 1 && (
             <DataTablePagination
               currentPage={currentPage}
@@ -790,7 +757,6 @@ function IntegrationsSettingsContent() {
         </div>
       )}
 
-      {/* Secret Dialog */}
       <APIKeySecretDialog
         open={createdKey !== null}
         onClose={() => setCreatedKey(null)}

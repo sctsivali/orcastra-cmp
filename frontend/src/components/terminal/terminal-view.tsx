@@ -47,7 +47,7 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(fu
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<TerminalSessionStatus>("connecting");
   const [detail, setDetail] = useState("");
-  // The session behind the page ended: the way forward is signing in, not reconnecting.
+  // The session behind the page ended, so the action is Sign In Again instead of Reconnect.
   const [signIn, setSignIn] = useState(false);
   const session = useTerminalSession({
     containerRef,
@@ -71,7 +71,7 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(fu
 
   return (
     <div className={cn("relative flex h-full w-full flex-col bg-terminal", className)}>
-      {/* note: the padding is outside the fit container; FitAddon measures the container's parent. */}
+      {/* The padding is outside the fit container; FitAddon measures the container's parent. */}
       <div className="min-h-0 flex-1 p-1">
         <div
           ref={containerRef}

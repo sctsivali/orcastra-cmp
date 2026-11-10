@@ -1,7 +1,7 @@
 // What the credentials panel says about the values and refusals the API returns.
 //
-// note: the server writes the refusal messages (services/guest_credentials/errors.py and flows.py)
-// and they are shown as written. This file adds words only where a code carries more than its
+// The server writes the refusal messages (services/guest_credentials/errors.py and flows.py) and
+// they are shown as written. This file adds words only where a code carries more than its
 // message: the key parser's reason, a missing tool's name, a wait, and an unconfirmed change.
 
 import { APIError } from "@/types/api";

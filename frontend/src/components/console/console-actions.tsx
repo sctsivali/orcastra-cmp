@@ -2,12 +2,12 @@
 
 /**
  * The graphical console's guest actions, shared by the console window's toolbar and the full-page
- * console: send a key combination the browser would otherwise keep for itself, take a screenshot,
- * go full screen with the keyboard captured, and fit the display to the window.
+ * console: key combinations the browser would otherwise keep, a screenshot, full screen with the
+ * keyboard captured, and fit to window.
  *
- * Every combination goes through lib/spice/input.ts as scancodes, and every toolbar action is
- * recorded in the audit trail (lib/console-actions-api.ts). A caller without the console
- * permission sees the controls disabled with the reason.
+ * Combinations go through lib/spice/input.ts as scancodes, and every action is recorded in the
+ * audit trail (lib/console-actions-api.ts). Without the console permission the controls are
+ * disabled with the reason.
  */
 
 import * as React from "react";

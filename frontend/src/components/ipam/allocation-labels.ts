@@ -3,9 +3,9 @@ import type { IPAMAllocation, IPAMAllocationKind } from "@/types/api";
 /**
  * The words the IPAM page uses for how an address came to be held.
  *
- * "Static" and "DHCP" are the pair the instances list already prints under an address, so a
- * reconciliation against an IPAM catalogue reads the same word on both pages. The rest name
- * the network's own rows. "Unknown" is what an unread instance list answers, never a guess.
+ * "Static" and "DHCP" match what the instances list prints under an address, so both
+ * pages use the same word. The rest name the network's own rows. "Unknown" means the
+ * instance list was not read; it is never a guess.
  */
 export const ALLOCATION_LABEL: Record<IPAMAllocationKind, string> = {
   static: "Static",
@@ -26,7 +26,7 @@ export const ALLOCATION_ORDER: readonly string[] = [
   "unknown",
 ];
 
-/** Tolerates a body cached by a build that had no allocation field. */
+/** Tolerates a cached body from an older build without an allocation field. */
 export function allocationLabel(kind: string | undefined): string {
   return ALLOCATION_LABEL[(kind ?? "unknown") as IPAMAllocationKind] ?? ALLOCATION_LABEL.unknown;
 }

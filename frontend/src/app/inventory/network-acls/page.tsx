@@ -58,8 +58,7 @@ import { NodeLink } from "@/components/ui/node-link";
 import { plural } from "@/lib/utils";
 import { PoliciesIllustration } from "@/components/illustrations/scenes/onboarding";
 
-// note: no local ACLInfo. It duplicated NetworkACLInfo and drifted from it, which is how a
-// field the API had started sending stayed invisible to this page.
+// Rows are the shared NetworkACLInfo type; a local copy would drift from what the API sends.
 /** One key for a row and for the dialog's report of what it wrote. */
 const aclRowKey = (a: { node?: string | null; project?: string | null; name: string }) =>
   `${a.node ?? ""}/${a.project || "default"}/${a.name}`;
@@ -94,12 +93,11 @@ const ACLS = defineTable<NetworkACLInfo>()({
     },
     {
       // filter-coverage: this is not the project dimension. It answers which projects
-      // CONSUME the record, derived from used_by, while the "project" column above answers
-      // which one holds it, and that is the column carrying the project role.
+      // CONSUME the record, derived from used_by; the "project" column above answers which
+      // one holds it and carries the project role.
       field: "projects",
       label: "Used By Projects",
-      // Was a copy of the used_by accessor, so the header sorted by resource count while the
-      // cell displayed a project count. It now sorts by what it displays.
+      // Sorts by the project count the cell displays rather than the used_by resource count.
       sort: (a) => projectsFromUsedBy(a.used_by).length,
       facet: (a) => projectsFromUsedBy(a.used_by),
       facetSpec: { primary: true, emptyLabel: "(no project)" } },
@@ -121,15 +119,15 @@ function NetworkACLsContent() {
   const [pageSize, setPageSize] = useState(25);
   const resetPage = () => setCurrentPage(1);
 
-  // note: derived from the rows, not from the fleet. It is empty exactly when the scope
-  // returns nothing, which is the state that used to leave the empty row one column too wide.
+  // Derived from the rows, so it is empty exactly when the scope returns nothing and the empty
+  // row's colSpan drops the Cluster column with it.
   const nodes = useMemo(() => {
     const nodeSet = new Set(acls.map((a: any) => a.node).filter((n: any): n is string => Boolean(n)));
     return Array.from(nodeSet).sort();
   }, [acls]);
 
   // The column appears once any node is known, the facet once there are two to choose
-  // between. The thresholds differ on purpose: one option filters nothing.
+  // between, since a single option filters nothing.
   const availableFields = useMemo(
     () => (nodes.length > 0 ? ACLS.facetFields : ACLS.facetFields.filter((f) => f !== "node")),
     [nodes.length],
@@ -390,7 +388,7 @@ function NetworkACLsContent() {
           existing={editing}
           onSaved={(saved) => {
             if (saved.created) requestRowFocus("network-acls", aclRowKey(saved), saved.name);
-            // the write already succeeded; a refresh that fails is the list's own error state
+            // The write already succeeded; a failed refresh shows as the list's own error state.
             void Promise.resolve(refreshNow()).catch(() => undefined);
           }}
         />
@@ -456,9 +454,7 @@ export default function NetworkACLsPage() {
   );
 }
 
-// note: the ingress and egress arrays are the richest payload in the app that nothing rendered.
-// The table showed "N rules" as plain text, so action, source, destination, protocol, ports,
-// state and each rule's own description all arrived on the wire and were dropped.
+// The Rules panel lists every ingress and egress rule the row payload already carries.
 function aclSubject(acl: NetworkACLInfo): UsedBySubject {
   const config = acl.config ?? {};
   const ingress = acl.ingress ?? [];
@@ -481,8 +477,7 @@ function aclSubject(acl: NetworkACLInfo): UsedBySubject {
   };
 }
 
-// A rule count with the rules already in the row payload. Plain text here was the same dead end
-// as the ISO "N instances" cell: a number the operator could see and never open.
+// A rule count that opens the rules, which are already in the row payload.
 function RuleCountCell({
   count,
   direction,

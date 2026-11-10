@@ -4,7 +4,7 @@ import { Download, KeyRound, Server, ShieldAlert, Trash2, type LucideIcon } from
 import { formatDateTime } from "@/lib/utils";
 import type { KeyActivityEntry } from "@/types/my-keys";
 
-// note: `text`, not `label`: these are event descriptions read in a table cell, written as sentences.
+// `text` rather than `label`: these are sentence-case event descriptions, not titles.
 const DASHBOARD: Record<string, { text: string; icon: LucideIcon }> = {
   "user.ssh_key.create": { text: "Key created", icon: KeyRound },
   "user.ssh_key.download": { text: "Private key downloaded", icon: Download },

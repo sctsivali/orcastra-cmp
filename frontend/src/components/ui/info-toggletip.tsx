@@ -20,7 +20,7 @@ interface InfoToggletipProps {
 }
 
 /**
- * An (i) button that explains the value beside it: a toggletip, not a tooltip.
+ * An (i) button that explains the value beside it: a toggletip, which opens on demand.
  *
  * important: a Radix Tooltip never opens on a tap, so an explanation behind one cannot be read on
  * a phone or tablet. This opens on click, tap, Enter and Space, and on mouse hover as a preview;

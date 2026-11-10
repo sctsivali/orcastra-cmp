@@ -18,14 +18,13 @@ export interface SectionSwitcherItem<S extends string> {
 /**
  * The sections of one settings tab, as links under the tab bar.
  *
- * important: links with aria-current, not a second tablist. Each section has its own URL
- * (?section=), opens in a new tab on a modifier click and is walked by Back, which is navigation;
- * and a nested role="tab" set inside the Settings tabpanel is what the harness counts as a tab.
+ * Links with aria-current rather than a second tablist: each section has its own URL
+ * (?section=), opens in a new tab on a modifier click and is walked by Back, so it is navigation,
+ * and a role="tab" set nested in the Settings tabpanel would read as more Settings tabs.
  * Underlined rather than pilled, so it reads as a level below the Settings tabs above it.
  *
- * important: the links wrap rather than scroll. A horizontal scroller hid the third section
- * entirely at 390px, with nothing on screen to say it existed, which is the problem the switcher
- * exists to solve. The shared rule under the row starts at sm, where one row holds every link.
+ * The links wrap rather than scroll, because a horizontal scroller can hide a section entirely on
+ * a narrow screen. The shared rule under the row starts at sm, where one row holds every link.
  */
 export function SectionSwitcher<S extends string>({
   label,
@@ -106,8 +105,8 @@ export function SectionSwitcher<S extends string>({
 export function useVisitedSections<S extends string>(active: S): ReadonlySet<S> {
   const [visited, setVisited] = React.useState<ReadonlySet<S>>(() => new Set([active]));
   if (!visited.has(active)) {
-    // note: derived during render, React's documented pattern for state that follows a prop;
-    // an effect would paint the new section blank for one frame first.
+    // Derived during render, React's documented pattern for state that follows a prop; an
+    // effect would paint the new section blank for one frame first.
     const next = new Set(visited);
     next.add(active);
     setVisited(next);
@@ -116,13 +115,12 @@ export function useVisitedSections<S extends string>(active: S): ReadonlySet<S> 
 }
 
 /**
- * Keep keyboard and overlay state honest when Back or Forward changes the section under them.
+ * Keep keyboard and overlay state consistent when Back or Forward changes the section under them.
  *
- * A click on the switcher cannot happen with a dialog open (the dialog is modal), but Back can.
- * Radix renders dialogs and menus into a portal on body, so hiding the section that opened one
- * would leave it floating over the next section. Escape is what closes a Radix layer, so it is
- * sent while one is open; then focus moves to the active section link if it was inside a section
- * that is now hidden, and the switcher is brought into view if the page had scrolled past it.
+ * Back can change the section while a modal is open. Radix portals dialogs and menus onto body, so
+ * an open layer would float over the next section; Escape is sent to close it. Focus then moves to
+ * the active section link if it was inside a now-hidden section, and the switcher scrolls into
+ * view if the page had scrolled past it.
  */
 export function useSectionChangeEffects(active: string, navRef: React.RefObject<HTMLElement | null>) {
   const previous = React.useRef(active);

@@ -85,7 +85,7 @@ export function CertificateSummaryCards({
     [CertificateStatus.EXPIRED]: expired,
   };
   return (
-    // note: four a row only from xl; at md beside the sidebar each card was 88px and clipped its title.
+    // Four a row only from xl; at md beside the sidebar each card would be 88px and clip its title.
     <div className="grid grid-cols-2 xl:grid-cols-4 gap-2 md:gap-4">
       {/* Total is neither a bucket nor the sum of the three beside it: the status enum
           carries five states and the cards show three. It clears the status filter. */}

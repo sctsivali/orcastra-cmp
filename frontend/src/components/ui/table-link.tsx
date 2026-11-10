@@ -7,21 +7,17 @@ import { cn } from "@/lib/utils";
 
 // Clickable text inside a table cell.
 //
-// important: the affordance is present at rest, not on hover. Table cells are dense, and a
-// hover-only hint forces the operator to sweep the pointer across every cell to discover
-// what is clickable. Dotted is the platform's own "there is more behind this" convention:
-// the Tailwind preflight applies `underline dotted` to abbr[title]. It reads differently
-// from a spellcheck squiggle, which is wavy, red, and tight to the baseline.
+// The affordance shows at rest, not only on hover, so an operator does not have to sweep the
+// pointer across dense cells to find what is clickable. Dotted follows the platform's "more
+// behind this" convention: the Tailwind preflight applies `underline dotted` to abbr[title].
 //
-// important: always a real <button> or <a>, so Tab reaches it and Enter or Space activates
-// it. The pattern this replaces was <TableCell onClick>, which is mouse-only: a td is not
-// focusable, gets no focus ring, and is invisible to keyboard and switch users.
+// Always a real <button> or <a>, so Tab reaches it and Enter or Space activates it. A
+// <TableCell onClick> is mouse-only: a td is not focusable and gets no focus ring.
 //
-// note: hover deliberately does not go to text-primary. globals.css rebinds --primary to
-// the user-configurable personalization accent, which at the shipped default measures
-// about 4.06:1 against --card in light mode, below AA for 14px text, with no clamp on the
-// picker. The decoration carries the state change instead, so the text stays at full
-// contrast in every state.
+// Hover does not switch to text-primary. globals.css binds --primary to the user-configurable
+// personalization accent, which at the default is about 4.06:1 against --card in light mode,
+// below AA for 14px text. The decoration carries the state change so the text keeps full
+// contrast.
 const tableLinkClass =
   "inline-flex max-w-full items-center gap-1 rounded-sm text-left align-baseline " +
   "underline decoration-dotted decoration-1 underline-offset-4 decoration-muted-foreground " +
@@ -39,11 +35,9 @@ type CommonProps = {
   /**
    * Stop clipping the text and let it wrap instead.
    *
-   * important: the clip below is not decoration, it is what stops a 64 character fingerprint
-   * from setting the width of a whole column, so it stays the default. But it also means the
-   * link is a second, invisible clip inside anything that reveals a long value, and a reveal
-   * whose own content is still truncated is the defect this codebase has shipped more than once.
-   * A caller that owns a reveal control passes the revealed state straight through here.
+   * The clip stays the default because it stops a 64 character fingerprint from setting the
+   * width of a whole column. A caller that owns a reveal control passes the revealed state
+   * through here, so the revealed value is not still clipped inside the link.
    *
    * `true` breaks anywhere, for one long token such as a fingerprint. `"words"` breaks only at
    * spaces, for a short list whose items must stay whole, such as addresses.
@@ -65,8 +59,7 @@ type NavProps = CommonProps & {
   disabled?: never;
 };
 
-// Discriminated union: passing both href and onClick is a compile error, which is most of
-// the risk when converting ~14 hand-rolled call sites.
+// Discriminated union: passing both href and onClick is a compile error.
 export type TableLinkProps = ActionProps | NavProps;
 
 export function TableLink(props: TableLinkProps) {
@@ -94,10 +87,8 @@ export function TableLink(props: TableLinkProps) {
         </a>
       );
     }
-    // important: IntentLink, not a plain Link. A table row is rendered once per record, so a
-    // link on the default prefetch fires one full RSC request per visible row: the networks
-    // table alone issued 26. Warming on hover instead costs one request for the row the
-    // operator is actually reading.
+    // IntentLink rather than a plain Link: on the default prefetch every visible row would fire
+    // its own RSC request. IntentLink warms on hover, one request for the row being read.
     return (
       <IntentLink href={props.href} title={title} aria-label={ariaLabel} className={classes}>
         <span className={textClass}>{children}</span>

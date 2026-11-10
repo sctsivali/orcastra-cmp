@@ -21,15 +21,12 @@ import { ConsentScopeBlock } from "@/components/extensions/consent-scope-block";
 import type { ExtensionInstallPreview } from "@/types/api";
 
 /**
- * The screen where an operator hands a third party access to their infrastructure.
- *
- * Six things are shown before the confirm enables, and the order is the argument: who wrote it,
- * what it may call, where it may reach, what it will be told, what it can never do, and that the
+ * The dialog where an operator grants a third party access to their infrastructure. It shows, in
+ * order: who wrote it, what it may call, where it may reach, what it can never do, and that the
  * credential appears once.
  *
  * The consent digest and version travel back with the request. The server recomputes the digest
- * from what is stored and refuses if it moved, which closes publish-something-benign, wait for
- * this dialog to render, then change the manifest.
+ * from what is stored and refuses if the manifest changed after this dialog rendered.
  */
 export function InstallConsentDialog({
   preview,
@@ -48,8 +45,7 @@ export function InstallConsentDialog({
 }) {
   const [acknowledged, setAcknowledged] = useState(false);
   // important: a ref, claimed before any await. `disabled` from state does not reach the DOM
-  // until the next render, so two clicks in one tick both pass it. Eight forms in this repo
-  // were fixed for exactly this.
+  // until the next render, so two clicks in one tick would both pass it.
   const submitting = useRef(false);
 
   if (!preview) return null;

@@ -5,11 +5,11 @@
  * middleware it installs only compresses when the content type it reads is a string, and
  * Next's node response adapter stores every header it copies from a Response as an array
  * (next/dist/server/base-http/node.js appendHeader), so the check fails and the body leaves
- * as identity. Measured on dev: /instances crossed the wire as ~300 KB of JSON on every poll.
+ * as identity.
  *
- * The upstream leg stays identity on purpose (see the proxy route's header comment): undici
- * decodes a compressed upstream body while content-length still describes the compressed
- * bytes. So the proxy compresses here, after the upstream body is known to be plain.
+ * The upstream leg stays identity (see the proxy route's header comment): undici decodes a
+ * compressed upstream body while content-length still describes the compressed bytes. So the
+ * proxy compresses here, after the upstream body is known to be plain.
  */
 
 const MIN_COMPRESS_BYTES = 1024;
@@ -73,8 +73,8 @@ export function varyOnAcceptEncoding(headers: Headers): void {
 
 /**
  * Gzip `body` and fix the headers that describe it: no content-length (unknown until the
- * stream ends), content-encoding gzip, and a strong ETag weakened, since the bytes it named
- * are no longer the bytes on the wire.
+ * stream ends), content-encoding gzip, and a strong ETag weakened, since the bytes on the wire
+ * differ from the bytes it named.
  */
 export function gzipBody(
   body: ReadableStream<Uint8Array>,

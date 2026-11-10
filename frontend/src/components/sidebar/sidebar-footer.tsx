@@ -52,9 +52,9 @@ function ThemeIcon({ theme }: { theme: Theme }) {
   if (theme === "dark") return <Moon className="h-5 w-5" />;
   return <Monitor className="h-5 w-5" />;
 }
-// note: no NavItemSpinner, no NavRailIcon and no linkIntentProps on either of these. The first
-// two read useLinkStatus, which only has context inside a next/link, and the third would ask
-// the router to prefetch an absolute URL.
+// No NavItemSpinner, no NavRailIcon and no linkIntentProps on either of these. The first two
+// read useLinkStatus, which only has context inside a next/link, and the third would ask the
+// router to prefetch an absolute URL.
 function SupportRailLink({ link, onOpen }: { link: SupportLink; onOpen: () => void }) {
   const Icon = link.icon;
   return (

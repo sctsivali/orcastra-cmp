@@ -12,11 +12,8 @@ interface CodeBlockProps {
   /** The text shown. Never truncated: a snippet that is cut cannot be pasted. */
   value: string;
   /**
-   * What the copy button puts on the clipboard, when that differs from what is displayed.
-   *
-   * The one case that needs it: a snippet whose secret is masked on screen so a screenshot does
-   * not leak it, while the copy still has to produce something that runs. Hiding is about what
-   * is visible, not about what is pasted.
+   * What the copy button puts on the clipboard, when that differs from what is displayed: ex; a
+   * snippet whose secret is masked on screen, while the copy still has to run.
    */
   copyValue?: string;
   /** Optional caption on the header row, ex; the file a block belongs in. */
@@ -26,32 +23,19 @@ interface CodeBlockProps {
   className?: string;
 }
 
-// A copyable multi-line snippet.
+// A copyable multi-line snippet. Every snippet in the product renders here.
 //
-// The idiom existed three times already (node-register-form, the certificates page, the server
-// page) and none of them was shared. Every snippet in the product now renders here, so there is
-// one look rather than one per screen.
+// important: the block is theme-independent, palette included. Its content is destined for a
+// shell or a config file, so it is painted as terminal output with the surface, frame and green
+// of the xterm theme in `src/lib/terminal-theme.ts` (`bg-terminal`, `border-terminal-border`,
+// `text-terminal-accent`). Background and text move together: `text-foreground` over the fixed
+// dark surface is near-black on near-black in the light theme. Text contrast is 10.20:1.
 //
-// important: the block is deliberately theme-independent, and so is its palette. What it holds is
-// destined for a shell or a config file, so it is painted as terminal output, which is what a
-// reader already expects a snippet to look like. The colours are not its own: `bg-terminal`,
-// `border-terminal-border` and `text-terminal-accent` are the surface, frame and green of the
-// xterm theme this app already ships in `src/lib/terminal-theme.ts`. Reusing them keeps the
-// product at two dark surfaces instead of three.
+// `scripts/checks/check-semantic-colour.mjs` names this file as the one place outside the
+// terminal and console trees allowed to paint a fixed surface. Do not spread it from here.
 //
-// The pair has to move together. Leaving `text-foreground` over a fixed dark background renders
-// near-black on near-black in the light theme, which is why the browser check measures contrast
-// in BOTH themes rather than only the dark one. Measures 10.20:1 against a 4.5:1 floor, up from
-// 9.35:1 before the surface was retinted onto the app's hue.
-//
-// `scripts/checks/check-semantic-colour.mjs` bans arbitrary colour hex outside the terminal and
-// console trees and names this file as its one exemption. Do not spread the hexes from here.
-//
-// The header row stays outside the block on the themed surface: the copy button belongs to the
-// app's control language, not to the terminal.
-//
-// Click selects the whole block, because a snippet is copied far more often than it is edited,
-// and the copy button is the same ghost-sized control the rest of the app uses.
+// The header row stays on the themed surface, because the copy button belongs to the app's
+// controls. A click selects the whole block: a snippet is copied far more often than edited.
 export function CodeBlock({ value, copyValue, label, copyLabel = "Snippet", className }: CodeBlockProps) {
   const [copied, setCopied] = React.useState(false);
 

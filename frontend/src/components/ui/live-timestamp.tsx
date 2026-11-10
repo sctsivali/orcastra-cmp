@@ -11,7 +11,7 @@ export interface LiveTimestampProps {
   staleAfterMs?: number;
   /** Overrides the age check: the cluster is not answering, or the row has left the list. */
   forceStale?: boolean;
-  /** One clause naming the cause, ex; "nuc2 did not answer the last reachability check". */
+  /** One clause naming the cause, ex; "cluster-b did not answer the last reachability check". */
   reason?: string;
   className?: string;
 }
@@ -19,16 +19,15 @@ export interface LiveTimestampProps {
 /**
  * How old the number beside it is.
  *
- * Fresh renders as one muted line with no icon and no colour, which is the same thing an
- * operator already reads next to every RefreshButton, so it costs no new vocabulary and
- * disappears into the chrome. It only becomes visible when the reading has gone cold.
+ * Fresh renders as one muted line with no icon and no colour, the same line an operator reads
+ * next to every RefreshButton. It only stands out once the reading has gone cold.
  *
- * important: no refresh control here. Detail panels get liveness from their own poll; adding
- * a second control beside the section one would leave an operator guessing which is which.
+ * No refresh control here. Detail panels get liveness from their own poll; adding a second
+ * control beside the section one would leave an operator guessing which is which.
  *
- * note: the ticking line is aria-hidden with a status sibling that has content only when
- * stale, so a screen reader is told once that the reading is cold rather than being read the
- * second hand. useRelativeTime already pauses while the tab is hidden.
+ * The ticking line is aria-hidden with a status sibling that has content only when stale, so a
+ * screen reader hears once that the reading is cold instead of every tick. useRelativeTime
+ * already pauses while the tab is hidden.
  */
 export function LiveTimestamp({
   updatedAt,
@@ -40,8 +39,8 @@ export function LiveTimestamp({
   const relative = useRelativeTime(updatedAt);
 
   if (!updatedAt) {
-    // An unknown age must read as unknown. A body cached before collected_at existed carries
-    // no stamp, and rendering that as "just now" is the failure this component exists to stop.
+    // An unknown age must read as unknown. A cached body without collected_at carries no
+    // stamp, and rendering that as "just now" would claim a freshness that was never measured.
     return (
       <p className={cn("text-xs tabular-nums text-muted-foreground", className)}>
         Age unknown

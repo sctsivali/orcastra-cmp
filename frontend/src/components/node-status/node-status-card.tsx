@@ -60,10 +60,9 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
   const updateNodeTags = useUpdateNodeTags();
   const updateNodeDisplayName = useUpdateNodeDisplayName();
   const { isReadOnly } = useReadOnlyMode();
-  // important: this card is mounted ungated on the Overview, which every role reaches. The
-  // node name and its status are the tenant's business, because their instance runs there.
-  // The control-plane endpoint, the raw connection error, the rename action and the upgrade
-  // runbook are the operator's, and a tenant is shown none of them anywhere else.
+  // important: every role reaches this card on the Overview. The node name and status concern a
+  // tenant whose instance runs there. The control-plane endpoint, the raw connection error, the
+  // rename action and the upgrade runbook are operator detail and stay partner-only.
   const { isPartner } = usePermissions();
   const [editNameDialogOpen, setEditNameDialogOpen] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -86,9 +85,9 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
         nodeName: node.name,
         displayName: newDisplayName,
       });
-      // Close dialog first before showing toast and refetch
+      // Close the dialog before the toast and the refetch.
       setEditNameDialogOpen(false);
-      // Small delay to ensure dialog is fully closed
+      // Let the dialog finish closing first.
       setTimeout(() => {
         toast({
           title: "Cluster name updated",
@@ -154,15 +153,14 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
   const StatusIcon = statusMeta.icon;
 
   return (
-    // note: no entrance stagger and no hover lift. A status surface does not animate for
-    // decoration, and the card itself is not a control: its buttons are.
+    // No entrance stagger and no hover lift: a status surface does not animate for decoration,
+    // and the card itself is not a control.
     <Card data-slot="cluster-card" className="overflow-hidden">
       <CardContent className="p-3 md:p-4">
-        {/* important: flex-wrap with a basis-48 title block, not flex-col sm:flex-row. The grid
-            is three-up at xl, a 309px card at 1280 with the sidebar open (the same measurement
-            projects-section.tsx records), and the badge group (status, Clustered, kebab) is
-            about 190px, so a fixed row left the title around 35px. Wrapping drops the badges
-            under the title on a narrow card instead of crushing the name. */}
+        {/* flex-wrap with a basis-48 title block. At xl the grid is three-up, a 309px card at
+            1280 with the sidebar open, and the badge group (status, Clustered, kebab) is about
+            190px, so a fixed row would leave the title about 35px. Wrapping drops the badges
+            under the title on a narrow card. */}
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0 flex-1 basis-48">
             <div
@@ -194,15 +192,14 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {/* "Connected" and "Online" were two spellings of one idea across two pages.
-                One vocabulary now, from lib/cluster-status.ts. */}
+            {/* Status vocabulary from lib/cluster-status.ts, shared with every other page. */}
             <Badge variant={statusMeta.tone} className="gap-1">
               <StatusIcon className="h-3 w-3" />
               {statusMeta.label}
             </Badge>
             {node.clustered && <Badge variant="muted">Clustered</Badge>}
-            {/* the endpoint behind this is require_partner() (backend nodes.py), so offering it
-                to a tenant is a button that can only ever answer 403 */}
+            {/* The endpoint behind this is require_partner() (backend nodes.py), so a tenant
+                would only ever get a 403. */}
             {isPartner && (
               <div onClick={(e) => e.stopPropagation()}>
                 <DropdownMenu open={dropdownOpen} onOpenChange={setDropdownOpen}>
@@ -218,7 +215,7 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
                         e.preventDefault();
                         setNewDisplayName(node.display_name || node.name);
                         setEditNameDialogOpen(true);
-                        setDropdownOpen(false); // Close dropdown when opening dialog
+                        setDropdownOpen(false);
                       }}
                     >
                       <Edit className="mr-2 h-4 w-4" />
@@ -241,9 +238,8 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
                 <span className="font-medium">API Version:</span> {node.api_version}
               </span>
             )}
-            {/* The backend's verdict against the Cluster's own release track. Partner+ only: it
-                carries the upgrade command, a maintenance instruction a tenant can neither run
-                nor act on. */}
+            {/* The backend's verdict against the cluster's own release track. Partner+ only: it
+                carries the upgrade command, which a tenant cannot run. */}
             {isPartner && (
               <HypervisorReleaseStatus
                 release={node.hypervisor_release}
@@ -258,7 +254,6 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
         )}
         {node.connected && node.resources && (
           <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {/* CPU Info */}
             <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Cpu className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -269,9 +264,9 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
                 <CpuAllocationFigure cpu={cpu} className="block font-semibold text-foreground" />
                 {/* The monitoring card's meter: the clamped share of threads in the allocation
                     tone, so an over-commit reads as a ratio rather than as a red bar.
-                    important: role="meter", not Radix's progressbar. This is a level, not a task
-                    in progress, and "no progressbar on the page" is how the house loader is
-                    told apart from a settled Overview. */}
+                    important: role="meter", not Radix's progressbar. This is a level, and "no
+                    progressbar on the page" is how the house loader is told apart from a
+                    settled Overview. */}
                 {cpu.threads > 0 && (
                   <Progress
                     role="meter"
@@ -285,7 +280,6 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
               </div>
             </div>
 
-            {/* Memory */}
             <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <MemoryStick className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -307,7 +301,6 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
               </div>
             </div>
 
-            {/* GPU Info */}
             <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -347,7 +340,6 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
           <p className="mt-3 text-xs text-destructive">{node.error}</p>
         )}
 
-        {/* Tags */}
         <div 
           className="mt-3 pt-3 border-t"
           onClick={(e) => e.stopPropagation()}
@@ -361,7 +353,7 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
           />
         </div>
 
-        {/* Cluster members exist for any clustered host, not only a MicroCloud one */}
+        {/* Cluster members exist for any clustered host, not only a MicroCloud one. */}
         {node.clustered && node.connected && (
           <div className="mt-3 pt-3 border-t">
             <Button
@@ -379,7 +371,6 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
           </div>
         )}
 
-        {/* View Details Button */}
         <div className="mt-3">
           <Button
             variant="ghost"
@@ -395,7 +386,6 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
         </div>
       </CardContent>
 
-      {/* Edit Name Dialog */}
       <Dialog open={editNameDialogOpen} onOpenChange={setEditNameDialogOpen}>
         <DialogContent className="sm:max-w-[425px]" onClick={(e) => e.stopPropagation()}>
           <DialogHeader>

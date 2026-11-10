@@ -45,9 +45,9 @@ function outcomeWord(status: TaskRecord["status"]): string {
   }
 }
 
-/** Mounted once by MainLayout. Absent entirely on a deployment without the task journal, and
- *  absent until the settings say so: mounting on "unknown" opened a socket and a list read
- *  against routes that a journal-off deployment does not serve, for a strip that then vanished. */
+/** Mounted once by MainLayout. Absent on a deployment without the task journal, and absent
+ *  until the settings confirm the journal: mounting on "unknown" would open a socket and a list
+ *  read against routes that a journal-off deployment does not serve. */
 export function TaskPanel() {
   const enabled = useTaskJournalEnabled();
   if (enabled !== true) return null;
@@ -164,8 +164,7 @@ function TaskPanelInner() {
   }, [refreshSummary]);
 
   // A link inside the dock opens the dialog over the tab the operator is on; only the toast,
-  // which arrives while the panel may be closed, brings the Tasks tab forward. Found live: the
-  // log tab's search landed on the Tasks tab after a detail link.
+  // which arrives while the panel may be closed, brings the Tasks tab forward.
   const openTask = React.useCallback((id: string) => setDetailTaskId(id), []);
   const showTaskFromToast = React.useCallback(
     (id: string) => {
@@ -225,8 +224,8 @@ function TaskPanelInner() {
   const disconnected = summary.data?.disconnected_clusters ?? [];
   // The queue holds every open row in the caller's scope, and its badge is the summary's
   // `running` count, so it is live on the collapsed strip without reading the queue itself.
-  // note: the count leaves LXD's own background tasks out while the tab still lists them: on a
-  // sick daemon they sat open for weeks and buried the ten real actions under ninety-one.
+  // The count leaves LXD's own background tasks out while the tab still lists them: on an
+  // unhealthy daemon they can stay open for weeks and bury the real actions.
   const queued = summary.data ? summary.data.running : null;
   const apiDown = summary.isError;
 
@@ -277,7 +276,7 @@ function TaskPanelInner() {
           showOperator={isPartner}
           caretRef={caretRef}
         />
-        {/* note: the body is flex-none on a phone. With flex-1 (basis 0%) inside a column whose
+        {/* The body is flex-none on a phone. With flex-1 (basis 0%) inside a column whose
             height is its content, the 50dvh height is ignored and the body shrinks to its rows;
             the desktop section has an explicit height, so flex-1 fills it there. */}
         {dockOpen ? (
@@ -300,8 +299,8 @@ function TaskPanelInner() {
           </div>
         ) : null}
       </Tabs>
-      {/* note: a div, not a p. The harness reads the first `p[role=status]` on a page as the
-          table's row count, and this region must never be that element. */}
+      {/* A div: browser tests read the first `p[role=status]` on a page as the table's row
+          count, and this region must never be that element. */}
       <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {currentAnnouncement}
       </div>

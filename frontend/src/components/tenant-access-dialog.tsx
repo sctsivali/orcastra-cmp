@@ -41,7 +41,7 @@ import type {
 /** One rule of an assigned policy, named by the policy it came from. */
 type EffectiveRule = Omit<PolicyRule, "id"> & { permissions: TenantPermission[]; policy_name: string };
 
-/** The cluster column sorts by the name the row shows, not the id. */
+/** Sort key for the cluster column: the display name the row shows. */
 function clusterSortName(clusters: PolicyCluster[], clusterId: string): string {
   return clusterId === "*"
     ? "All Clusters"
@@ -53,11 +53,10 @@ function clusterSortName(clusters: PolicyCluster[], clusterId: string): string {
 // ============================================
 
 interface TenantAccessDialogProps {
-  /** the tenant user email we're managing */
+  /** Email of the tenant user whose access is managed. */
   userEmail: string;
-  /** organization IDs the user belongs to */
+  /** Organization IDs the tenant user belongs to. */
   userOrgIds: number[];
-  /** dialog open state */
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -68,14 +67,13 @@ export function TenantAccessDialog({
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  // nested dialog state
   const [createPolicyOpen, setCreatePolicyOpen] = useState(false);
   const [editPolicyObj, setEditPolicyObj] = useState<AccessPolicy | null>(null);
   const [revokeId, setRevokeId] = useState<number | null>(null);
 
   // ── Data fetching ──
 
-  // assignments for THIS user
+  // Assignments of the tenant user.
   const {
     data: assignmentsData,
     isLoading: assignmentsLoading,
@@ -87,7 +85,7 @@ export function TenantAccessDialog({
     enabled: open,
   });
 
-  // all policies (for the orgs the user belongs to)
+  // Every policy the caller can see; filtered to the tenant user's organizations below.
   const {
     data: policiesData,
     isLoading: policiesLoading,
@@ -99,17 +97,17 @@ export function TenantAccessDialog({
     enabled: open,
   });
 
-  // clusters for rule builder
+  // Clusters for the rule editor.
   const { data: clustersData } = useClusters();
 
-  // orgs for policy editor
+  // Organizations for the policy editor.
   const { data: orgs } = useQuery({
     queryKey: ["integration-organizations"],
     queryFn: () => integrationsAPI.listOrganizations(),
     enabled: open,
   });
 
-  // user's accessible orgs (filtered by membership on backend)
+  // Organizations the signed-in caller can access; the backend filters by membership.
   const { data: myOrgs } = useQuery({
     queryKey: ["organizations"],
     queryFn: () => api.organizations.list(),
@@ -126,7 +124,7 @@ export function TenantAccessDialog({
     }));
   }, [clustersData]);
 
-  // filter orgs to only those the user has access to
+  // The policy editor offers only organizations the caller can access.
   const myOrgIds = useMemo(
     () => new Set((myOrgs || []).map((o) => Number(o.id))),
     [myOrgs],
@@ -138,15 +136,13 @@ export function TenantAccessDialog({
   const assignments = assignmentsData?.assignments || [];
   const allPolicies = policiesData?.policies || [];
 
-  // policies assigned to this user
   const assignedPolicyIds = new Set(assignments.map((a) => a.policy_id));
 
-  // available policies (in user's orgs & not already assigned)
   const availablePolicies = allPolicies.filter(
     (p) => userOrgIds.includes(p.organization_id) && !assignedPolicyIds.has(p.id),
   );
 
-  // effective permissions: flatten all assigned policy rules
+  // Effective permissions: every rule of every assigned policy.
   const effectiveRules = useMemo(() => {
     const rules: EffectiveRule[] = [];
     for (const a of assignments) {
@@ -166,7 +162,6 @@ export function TenantAccessDialog({
     return rules;
   }, [assignments, allPolicies]);
 
-  // count unique clusters
   const uniqueClusters = new Set(effectiveRules.map((r) => r.cluster_id));
 
   // ── Mutations ──
@@ -222,7 +217,7 @@ export function TenantAccessDialog({
   // ── Handlers ──
 
   // important: claimed synchronously; isPending disables a button only on the next render, so a
-  // double click assigned, revoked or created twice.
+  // double click would assign, revoke or create twice.
   const assignInFlightRef = useRef(false);
   const revokeInFlightRef = useRef(false);
   const submitInFlightRef = useRef(false);
@@ -238,7 +233,7 @@ export function TenantAccessDialog({
         organization_id: policy.organization_id,
       });
     } catch {
-      // the mutation's onError toasts why
+      // The mutation's onError toasts the reason.
     } finally {
       assignInFlightRef.current = false;
     }
@@ -250,7 +245,7 @@ export function TenantAccessDialog({
     try {
       await revokeMutation.mutateAsync(assignmentId);
     } catch {
-      // the mutation's onError toasts why
+      // The mutation's onError toasts the reason.
     } finally {
       revokeInFlightRef.current = false;
     }
@@ -266,26 +261,25 @@ export function TenantAccessDialog({
         await createPolicyMutation.mutateAsync(data as PolicyCreateRequest);
       }
     } catch {
-      // the mutation's onError toasts why
+      // The mutation's onError toasts the reason.
     } finally {
       submitInFlightRef.current = false;
     }
   };
 
   const isLoading = assignmentsLoading || policiesLoading;
-  // A failed read is not an empty one: "No policies assigned yet" over a failed read invited an
-  // operator to assign a second copy of what the tenant already holds.
+  // A failed read is not an empty one: "No policies assigned yet" over a failed read would invite
+  // an operator to assign a second copy of what the tenant already holds.
   const readError = (assignmentsError && !assignmentsData) ? assignmentsError
     : (policiesError && !policiesData) ? policiesError
     : null;
-  // note: per row. One shared isPending spun every Assign button while one request was out.
+  // Per row, so only the Assign button whose request is out shows the spinner.
   const assigningPolicyId = assignMutation.isPending ? assignMutation.variables?.policy_id : undefined;
 
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="max-w-3xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden p-0">
-          {/* Header */}
           <div className="px-6 pt-6 pb-4 border-b shrink-0">
             <DialogHeader>
               <DialogTitle className="text-lg">
@@ -296,7 +290,6 @@ export function TenantAccessDialog({
               </DialogDescription>
             </DialogHeader>
 
-            {/* Summary stats */}
             {!isLoading && !readError && (
               <div className="flex items-center gap-4 mt-3">
                 <div className="text-xs text-muted-foreground">
@@ -312,7 +305,6 @@ export function TenantAccessDialog({
             )}
           </div>
 
-          {/* Body */}
           <DialogBody className="px-6 py-4 space-y-6">
               {isLoading ? (
                 <div className="flex items-center justify-center py-16">
@@ -330,7 +322,6 @@ export function TenantAccessDialog({
                 />
               ) : (
                 <>
-                  {/* ── Section 1: Assigned Policies ── */}
                   <div>
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-sm font-semibold flex items-center gap-2">
@@ -368,12 +359,10 @@ export function TenantAccessDialog({
                     )}
                   </div>
 
-                  {/* ── Section 2: Effective Permissions ── */}
                   {effectiveRules.length > 0 && (
                     <EffectivePermissionsSection rules={effectiveRules} clusters={clusters} />
                   )}
 
-                  {/* ── Section 3: Available Policies ── */}
                   <div>
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-sm font-semibold flex items-center gap-2">
@@ -471,7 +460,6 @@ export function TenantAccessDialog({
               )}
           </DialogBody>
 
-          {/* Footer */}
           <div className="px-6 py-3 border-t flex justify-end shrink-0">
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Close
@@ -480,7 +468,6 @@ export function TenantAccessDialog({
         </DialogContent>
       </Dialog>
 
-      {/* Nested: Create Policy */}
       <PolicyEditorDialog
         open={createPolicyOpen}
         onOpenChange={setCreatePolicyOpen}
@@ -492,7 +479,6 @@ export function TenantAccessDialog({
         isPending={createPolicyMutation.isPending}
       />
 
-      {/* Nested: Edit Policy */}
       {editPolicyObj && (
         <PolicyEditorDialog
           open={!!editPolicyObj}
@@ -526,7 +512,7 @@ function AssignedPolicyCard({
   onEditPolicy: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  // note: memoised because it feeds the sort and the page slice below. A fresh array on every
+  // Memoised because it feeds the sort and the page slice below. A fresh array on every
   // render would re-sort the whole rule set each time the parent re-renders.
   const rules = useMemo(() => policy?.rules || [], [policy]);
 
@@ -534,7 +520,7 @@ function AssignedPolicyCard({
   const [pageSize, setPageSize] = useState(PANEL_PAGE_SIZE);
   const resetPage = useCallback(() => setPage(1), []);
 
-  // rule table sorting (cluster column sorts by the resolved display name shown in the row)
+  // The cluster column sorts by the display name shown in the row.
   const ruleSortAccessors = useMemo(
     () => ({
       cluster: (r: PolicyRule) => clusterSortName(clusters, r.cluster_id),
@@ -553,21 +539,20 @@ function AssignedPolicyCard({
 
   // Sort the whole rule set, then take the page from it.
   const sortedRules = useMemo(() => sortRules(rules), [sortRules, rules]);
-  // note: clamped on read rather than reset in an effect, so revoking a policy cannot leave
-  // this card sitting on a page that no longer exists and painting nothing.
+  // Clamped on read rather than reset in an effect, so revoking a policy cannot leave this
+  // card on a page past the end, painting nothing.
   const totalPages = Math.max(1, Math.ceil(sortedRules.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pagedRules = sortedRules.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
     <div className="border rounded-lg overflow-hidden">
-      {/* header */}
       <div className="flex items-center justify-between p-3 bg-muted/20">
         <button
           type="button"
           onClick={() => setExpanded(!expanded)}
           aria-expanded={expanded}
-          // note: the clipped policy name below is still the whole string in the DOM, so this
+          // The clipped policy name below is still the whole string in the DOM, so this
           // control already announces it in full. The label states the action as well, because
           // "policy-name, button" does not say what the button does.
           aria-label={`${expanded ? "Hide" : "Show"} the rules in policy ${assignment.policy_name}`}
@@ -652,7 +637,6 @@ function AssignedPolicyCard({
         </div>
       </div>
 
-      {/* meta */}
       <div className="px-3 py-1.5 border-t flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground bg-muted/10">
         <span>Organization: <strong className="text-foreground">{assignment.organization_name}</strong></span>
         <span>Assigned by: {assignment.assigned_by}</span>
@@ -664,7 +648,6 @@ function AssignedPolicyCard({
         )}
       </div>
 
-      {/* expanded rules */}
       {expanded && rules.length > 0 && (
         <div className="border-t">
           <Table density="compact">
@@ -765,7 +748,7 @@ function EffectivePermissionsSection({
   const [pageSize, setPageSize] = useState(PANEL_PAGE_SIZE);
   const resetPage = useCallback(() => setPage(1), []);
 
-  // effective rules sorting (cluster column sorts by the resolved display name shown in the row)
+  // The cluster column sorts by the display name shown in the row.
   const effectiveSortAccessors = useMemo(
     () => ({
       cluster: (r: EffectiveRule) => clusterSortName(clusters, r.cluster_id),
@@ -785,7 +768,7 @@ function EffectivePermissionsSection({
 
   // Sort the whole aggregated set, then take the page from it.
   const sortedRules = useMemo(() => sortEffectiveRules(rules), [sortEffectiveRules, rules]);
-  // note: clamped on read rather than reset in an effect, so a policy revoked while this
+  // Clamped on read rather than reset in an effect, so a policy revoked while this
   // section is open cannot strand the operator on a page past the end.
   const totalPages = Math.max(1, Math.ceil(sortedRules.length / pageSize));
   const currentPage = Math.min(page, totalPages);

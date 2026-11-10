@@ -12,8 +12,7 @@ import { usePersonalizationMutations } from "./personalization/use-personalizati
 
 // The two sidebar text pairs autoTextColor picks between, and the alpha tiers that go with
 // them. Named because app/globals.css seeds the same values for the pre-paint path and
-// scripts/checks/check-personalization-defaults.mjs holds the two copies equal; a literal
-// buried in a branch is how they drifted apart before.
+// scripts/checks/check-personalization-defaults.mjs holds the two copies equal.
 const SIDEBAR_TEXT_ON_DARK = "#f8fafc";
 const SIDEBAR_TEXT_ON_LIGHT = "#1e293b";
 const SIDEBAR_MUTED_ON_DARK = "rgba(248,250,252,0.6)";
@@ -29,8 +28,8 @@ function mutedForText(textColor: string): string {
 export const PersonalizationContext = React.createContext<PersonalizationContextType | undefined>(undefined);
 
 /**
- * Persist visual personalization hint in cookie for instant load (365 days).
- * Only stores CSS-relevant values - NOT images/logos (too large for cookies).
+ * Writes the visual hint cookie (365 days) so the next load paints at once. CSS values only:
+ * images and logos are too large for a cookie.
  */
 function setPersonalizationCookie(settings: PersonalizationSettings, withIllustrations: boolean) {
   if (typeof document === "undefined") return;
@@ -42,14 +41,11 @@ function setPersonalizationCookie(settings: PersonalizationSettings, withIllustr
     const encoded = encodeURIComponent(JSON.stringify(hint));
     document.cookie = `${PERSONALIZATION_COOKIE}=${encoded};path=/;max-age=${365 * 24 * 60 * 60};SameSite=Lax`;
   } catch {
-    // cookie write failed - degrade gracefully
+    // A failed write only costs the instant first paint.
   }
 }
 
-/**
- * Read personalization hint from cookie (client-side only).
- * Returns partial settings merged with defaults for instant initial render.
- */
+/** The hint cookie as settings merged with defaults, for the first render. Client side only. */
 function readPersonalizationCookie(): PersonalizationSettings | null {
   if (typeof document === "undefined") return null;
   const match = document.cookie.match(new RegExp(`${PERSONALIZATION_COOKIE}=([^;]+)`));
@@ -81,7 +77,7 @@ export function PersonalizationProvider({ children, initialSettings }: {
     scopeKey,
   };
   // A caller with no role sees only the access notice and the backend refuses its reads, so
-  // there is nothing to fetch and every attempt would be a 403 (issue #17).
+  // there is nothing to fetch and every attempt would be a 403.
   const mayRead = !Array.isArray(session?.user?.groups) || hasMappedRole(session.user.groups);
   // The illustrations choice on screen is the organization's, and only an account whose branding is
   // read carries it. Signed out, or without a role, the server already rendered the deployment's
@@ -105,7 +101,6 @@ export function PersonalizationProvider({ children, initialSettings }: {
     isLoading,
   };
 
-  // Apply CSS custom properties for colors
   React.useEffect(() => {
     if (typeof document === "undefined") return;
     
@@ -114,11 +109,11 @@ export function PersonalizationProvider({ children, initialSettings }: {
     const sidebarBgColor =
       settings.colors.sidebarBgColor || DEFAULT_PERSONALIZATION.colors.sidebarBgColor;
     
-    // Set accent color (used for buttons and sidebar active state)
+    // The accent drives buttons and the sidebar active state.
     root.style.setProperty("--personalization-accent", accentColor);
     root.style.setProperty("--personalization-sidebar-bg", sidebarBgColor);
     
-    // Convert hex to HSL for better integration with shadcn/ui
+    // shadcn/ui tokens take HSL components.
     const accentHSL = hexToHSL(accentColor);
     const sidebarBgHSL = hexToHSL(sidebarBgColor);
     
@@ -128,7 +123,7 @@ export function PersonalizationProvider({ children, initialSettings }: {
       root.style.setProperty("--personalization-accent-l", `${accentHSL.l}%`);
     }
     
-    // Determine text color based on background brightness
+    // Pick the text colour from the background brightness.
     let textColor =
       settings.colors.sidebarTextColor || DEFAULT_PERSONALIZATION.colors.sidebarTextColor;
 
@@ -138,9 +133,8 @@ export function PersonalizationProvider({ children, initialSettings }: {
         textColor = isDarkBg ? SIDEBAR_TEXT_ON_DARK : SIDEBAR_TEXT_ON_LIGHT;
       }
     }
-    // note: derived from whichever text colour won above, in every branch. It used to be
-    // initialised to the light-ground alpha and only corrected inside the two branches, so an
-    // unparseable sidebar colour left near-white text sitting under a near-black muted tier.
+    // Derived from whichever text colour won above, in every branch, so an unparseable sidebar
+    // colour cannot leave near-white text over a near-black muted tier.
     const mutedTextColor = mutedForText(textColor);
     
     root.style.setProperty("--personalization-sidebar-text", textColor);
@@ -160,7 +154,7 @@ export function PersonalizationProvider({ children, initialSettings }: {
     document.documentElement.dataset.illustrations = settings.illustrations;
   }, [settings.illustrations, ownsIllustrations]);
 
-  // Persist visual hint cookie whenever visual settings change (for FOUC prevention on next load)
+  // Rewrite the hint cookie on every visual change so the next load does not flash.
   React.useEffect(() => {
     setPersonalizationCookie(settings, ownsIllustrations);
   }, [settings.colors, settings.branding.appName, settings.theme, settings.illustrations, ownsIllustrations]);
@@ -172,13 +166,7 @@ export function PersonalizationProvider({ children, initialSettings }: {
   );
 }
 
-// ============================================
-// Helper Functions
-// ============================================
-
-/**
- * Calculate relative luminance for WCAG contrast
- */
+/** WCAG relative luminance of a hex colour; 0.5 when it does not parse. */
 function calculateRelativeLuminance(hex: string): number {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
   if (!result) return 0.5;
@@ -192,13 +180,7 @@ function calculateRelativeLuminance(hex: string): number {
   return 0.2126 * sRGB[0] + 0.7152 * sRGB[1] + 0.0722 * sRGB[2];
 }
 
-// ============================================
-// Hooks
-// ============================================
-
-/**
- * Hook to access personalization context
- */
+/** The personalization context. Throws outside a PersonalizationProvider. */
 export function usePersonalization() {
   const context = React.useContext(PersonalizationContext);
   if (context === undefined) {
@@ -207,9 +189,7 @@ export function usePersonalization() {
   return context;
 }
 
-/**
- * Hook to get the appropriate logo based on theme and sidebar settings
- */
+/** The logo for the current theme and sidebar colours. */
 export function useCurrentLogo(theme: "light" | "dark" | "system") {
   const { settings } = usePersonalization();
   
@@ -233,7 +213,7 @@ export function useCurrentLogo(theme: "light" | "dark" | "system") {
       return settings.logo.darkModeLogo || "/orca-logo-white.png";
     }
     
-    // Auto mode
+    // Auto: a custom sidebar background decides first.
     if (settings.colors.useCustomSidebarBg) {
       const bgLuminance = calculateRelativeLuminance(
         settings.colors.sidebarBgColor || DEFAULT_PERSONALIZATION.colors.sidebarBgColor,
@@ -245,7 +225,7 @@ export function useCurrentLogo(theme: "light" | "dark" | "system") {
       return settings.logo.lightModeLogo || "/orca-logo-black.png";
     }
     
-    // Follow system theme
+    // Otherwise follow the effective theme.
     if (effectiveTheme === "light") {
       return settings.logo.lightModeLogo || "/orca-logo-black.png";
     }

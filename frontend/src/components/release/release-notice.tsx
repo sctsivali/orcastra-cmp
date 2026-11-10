@@ -11,7 +11,7 @@ import { releaseNoticeCopy } from "./release-copy";
 /**
  * Tells an Administrator, on every page, that the running version is out of date: end of life or
  * missing a security fix (cannot be dismissed), deprecated (back after seven days), or a newer
- * release (hidden until the next one). Nobody else is ever asked or shown anything.
+ * release (hidden until the next one). Other roles see nothing.
  */
 export function ReleaseNotice() {
   const { data, scopeKey, isAdmin } = useReleaseStatus();

@@ -3,9 +3,9 @@
 /**
  * Branding editor: one organization's own branding, or (Administrator) the deployment default.
  *
- * What an account sees is resolved on the server: its organization's own row, filled from the
- * organization that sold to it (followed live), filled from the deployment default
- * (backend services/branding/). This editor writes one of those rows and says which.
+ * The server resolves what an account sees: its organization's own row, filled from the
+ * organization that sold to it (followed live), then from the deployment default (backend
+ * services/branding/). This editor writes one of those rows and says which.
  */
 
 import * as React from "react";
@@ -50,9 +50,9 @@ export function OrgPersonalizationSettings() {
   const queryClient = useQueryClient();
   const globalPersonalization = usePersonalization();
   const { isAdmin, isLoading: rolesLoading } = usePermissions();
-  // ids are coerced to strings the moment they enter this component. OrgResponse.id is an int,
-  // and a raw number in this state is what made the Select below render its placeholder while an
-  // organization was in fact selected: Radix matches by value, and 122 is not "122".
+  // Ids are coerced to strings where they enter this component. OrgResponse.id is an int, and
+  // Radix Select matches by value, so a raw number renders the placeholder over a real
+  // selection: 122 is not "122".
   const [orgs, setOrgs] = React.useState<OrgOption[]>([]);
   const [mine, setMine] = React.useState<MyBranding | null>(null);
   const [orgId, setOrgId] = React.useState<string | null>(null);
@@ -88,10 +88,9 @@ export function OrgPersonalizationSettings() {
     const init = async () => {
       setIsLoading(true);
       try {
-        // important: BOTH, and the second one is the whole point. The list is ordered by name and
-        // for an Admin it is every active organization, so "the first one" is whichever customer
-        // sorts alphabetically first. Seeding the selection from the endpoint the sidebar reads
-        // makes "what you edit" and "what you see" the same thing by construction.
+        // important: the selection is seeded from the endpoint the sidebar reads, so the editor
+        // and the sidebar point at the same organization. The list is ordered by name and, for an
+        // Admin, holds every active organization, so its first entry is arbitrary.
         const [orgList, myBranding] = await Promise.all([
           api.organizations.list(),
           api.organizations.getMyOrgPreferences().catch(() => null),
@@ -231,11 +230,10 @@ export function OrgPersonalizationSettings() {
         </Card>
       )}
 
-      {/* Which branding every control below writes to.
-          Sticky on purpose. This is the only thing standing between an operator and rewriting a
-          customer's branding, and the controls that do the writing are a scroll away, which is
-          exactly how an operator came to change ALIMRUGI's colours while watching their own.
-          Offset by the app header, which is sticky at h-14 on mobile and h-16 from md. */}
+      {/* Which branding every control below writes to. Sticky because the controls that write
+          are a scroll away, and this line is what keeps an operator from editing another
+          organization's branding while watching their own. Offset by the app header, which is
+          sticky at h-14 on mobile and h-16 from md. */}
       <div
         className={cn(
           "sticky top-14 md:top-16 z-20 flex items-start gap-2 rounded-md border px-4 py-3 text-sm",

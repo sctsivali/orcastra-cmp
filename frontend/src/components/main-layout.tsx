@@ -23,13 +23,13 @@ import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTerminalStore } from "@/lib/terminal-store";
 import { useConsoleStore } from "@/lib/console-store";
 
-// Dynamically import TerminalManager to avoid SSR issues with xterm
+// Client only: xterm cannot render on the server.
 const TerminalManager = dynamic(
   () => import("./terminal/terminal-manager").then((mod) => mod.TerminalManager),
   { ssr: false }
 );
 
-// Dynamically import ConsoleManager to avoid SSR issues with SPICE
+// Client only: the SPICE client cannot render on the server.
 const ConsoleManager = dynamic(
   () => import("./console/console-manager").then((mod) => mod.ConsoleManager),
   { ssr: false }
@@ -47,30 +47,29 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
   const isLandingPage = pathname === "/";
   const access = useAccessGate({ enabled: !isAuthPage });
   // important: mount each floating window manager only once its store holds a window. They pull
-  // xterm, react-rnd, react-draggable and react-resizable, about 167 KB gzipped, which every cold
-  // page load downloaded for an operator with no terminal or console open. Both stores rehydrate
-  // from localStorage synchronously, and this layout never renders on the server, so windows
-  // restored after a reload are counted on the first render.
+  // xterm, react-rnd, react-draggable and react-resizable (about 167 KB gzipped), which a cold
+  // page load would otherwise download with no window open. Both stores rehydrate from
+  // localStorage synchronously in the browser, so windows restored after a reload are counted on
+  // the first client render.
   const hasTerminals = useTerminalStore((s) => s.terminals.length > 0);
   const hasConsoles = useConsoleStore((s) => s.consoles.length > 0);
   const [mounted, setMounted] = React.useState(false);
   
-  // Client-side only mounting to avoid hydration issues with Date
+  // The footer year comes from Date, so it is filled in only after mount.
   React.useEffect(() => {
     setMounted(true);
   }, []);
   
-  // Detect if we're on a full-page terminal or console view (opened in new tab)
-  // These pages have their own terminal/console rendering, so we skip the managers
+  // Full-page terminal and console views (opened in a new tab) render their own window, so the
+  // shell and the floating managers are skipped there.
   const isFullPageTerminalOrConsole = pathname.startsWith("/terminal/") || pathname.startsWith("/console/");
   
-  // Safe footer text with year replacement - only on client
   const footerText = React.useMemo(() => {
     const text = settings?.branding?.footerText || "© {YEAR} ORCASTRA";
     if (mounted) {
       return text.replace("{YEAR}", new Date().getFullYear().toString());
     }
-    // During SSR, return text without year replacement
+    // Before mount, a fixed year keeps the server and first client render identical.
     return text.replace("{YEAR}", "2025");
   }, [settings?.branding?.footerText, mounted]);
   
@@ -80,8 +79,8 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
     return <>{children}</>;
   }
 
-  // Issue #17: before any of the shell, so a caller with no role or no cluster access never
-  // mounts the sidebar, the task panel or a page whose reads the backend would refuse.
+  // Before any of the shell, so a caller with no role or no cluster access never mounts the
+  // sidebar, the task panel or a page whose reads the backend would refuse.
   if (access.state === "checking") {
     return <LoadingLottiePage />;
   }
@@ -100,28 +99,24 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="relative flex min-h-[100dvh]">
       <DocumentBranding />
-      {/* Hide sidebar/header on full-page terminal/console views */}
       {!isFullPageTerminalOrConsole && <Sidebar />}
       <div
         className={cn(
-          // Scope the transition to margin. transition-all lerps every animatable property,
-          // which makes a personalization sidebar background fade on every collapse.
-          // A wide table contributes its min-content width through this flex item. Without
-          // min-w-0, mobile browsers expand the layout viewport to that desktop-sized width,
-          // which also centres fixed dialogs outside the visual viewport.
+          // Transition margin only: transition-all would also fade a personalization sidebar
+          // background on every collapse. A wide table contributes its min-content width
+          // through this flex item; without min-w-0, mobile browsers widen the layout viewport
+          // to it, which also centres fixed dialogs outside the visual viewport.
           "flex min-w-0 flex-1 flex-col transition-[margin] duration-200 ease-out motion-reduce:transition-none",
-          // Prevent content from affecting sidebar positioning.
-          // note: clip, not hidden. `overflow-x-hidden` makes this column a scroll container,
-          // and the sticky task panel would then pin to the column instead of the viewport.
+          // Clip, not hidden: `overflow-x-hidden` makes this column a scroll container, and the
+          // sticky task panel would then pin to the column instead of the viewport.
           "overflow-x-clip",
-          // On full-page views, no margin. Otherwise apply sidebar margins
-          // Use clean conditional to avoid tailwind-merge breakpoint conflicts
+          // No margin on full-page views. One class per state avoids tailwind-merge
+          // breakpoint conflicts.
           !isFullPageTerminalOrConsole && (sidebarCollapsed ? "md:ml-16" : "md:ml-64")
         )}
       >
-        {/* Hide header on full-page terminal/console views */}
         {!isFullPageTerminalOrConsole && <Header />}
-        {/* Issue #15: a sealed or unreachable Vault, said on every page rather than read as "no clusters" */}
+        {/* A sealed or unreachable Vault, said on every page instead of read as "no clusters" */}
         {!isFullPageTerminalOrConsole && <VaultNotice />}
         {/* Administrators: the running version is out of date (end of life, security, deprecated, newer) */}
         {!isFullPageTerminalOrConsole && <ReleaseNotice />}
@@ -131,10 +126,9 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
           aria-busy={navPending || undefined}
           className={cn(
           "flex-1",
-          // Full-page terminal/console views need no padding - they manage their own layout
+          // Full-page views manage their own layout and need no padding.
           isFullPageTerminalOrConsole ? "" : "container py-4 px-4 md:py-6 md:px-6 lg:py-8 lg:px-8"
         )}>{children}</main>
-        {/* Hide footer on full-page terminal/console views */}
         {!isFullPageTerminalOrConsole && (
           <footer className={cn(
             "border-t py-4 md:py-6",
@@ -162,14 +156,11 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
         {!isFullPageTerminalOrConsole && <TaskPanel />}
       </div>
       
-      {/* Terminal/Console Managers - only render when NOT on full-page views */}
-      {/* Full-page terminal/console views have their own rendering */}
+      {/* Floating terminal and console windows; full-page views render their own. */}
       {!isFullPageTerminalOrConsole && (
         <>
-          {/* Terminal Manager - renders floating terminal windows */}
           {hasTerminals && <TerminalManager />}
 
-          {/* Console Manager - renders floating console windows (SPICE for VMs) */}
           {hasConsoles && <ConsoleManager />}
         </>
       )}

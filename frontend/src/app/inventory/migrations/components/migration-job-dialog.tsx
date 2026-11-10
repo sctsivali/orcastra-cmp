@@ -85,7 +85,7 @@ export function MigrationJobDialog({ jobId, onOpenChange, writeDisabledReason }:
   const overallProgress = job ? jobProgress(job) : null;
   const retainedMove =
     !!job && RETAINED_PHASES.has(job.phase) && job.intent === "move" && job.strategy !== "member_relocation";
-  // note: automatic cleanup needs today's flag and the contract approved with the plan. The job
+  // Automatic cleanup needs today's flag and the contract approved with the plan. The job
   // response does not carry the contract, so it is read from the plan the job was started from.
   const approvedPlan = useMigrationPlan(job && retainedMove ? job.plan_id : null, retainedMove);
   const approvedCleanup = approvedPlan.data?.rollback_contract?.automatic_cleanup;

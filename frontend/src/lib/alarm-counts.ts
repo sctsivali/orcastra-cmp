@@ -13,8 +13,8 @@ export interface AlarmCounts {
   total: number;
 }
 
-// note: an offline-cluster row has carried node_id on some responses and only cluster_id on
-// others; the type names the second.
+// An offline-cluster row carries node_id on some responses and only cluster_id on others; the
+// type names the second.
 function offlineClusterId(warning: CertificateWarning): string {
   return (warning as CertificateWarning & { node_id?: string }).node_id || warning.cluster_id || "";
 }
@@ -22,10 +22,9 @@ function offlineClusterId(warning: CertificateWarning): string {
 /**
  * The alarm tiles' numbers, for every cluster in scope or for one.
  *
- * important: the same node accessor and severity buckets the warnings page filters by, so a
- * tile's number is the count the list it opens shows. The dashboard and Monitoring each counted
- * for themselves before, and Monitoring's View All left the kernel findings out while the
- * dashboard's counted them, so one fleet had two totals.
+ * Uses the same node accessor and severity buckets the warnings page filters by, so a tile's
+ * number is the count the list it opens shows. The dashboard and Monitoring both count here, so
+ * one fleet has one total.
  */
 export function alarmCounts(
   warnings: readonly WarningInfo[],
@@ -46,8 +45,8 @@ export function alarmCounts(
   }
   counts.certIssues = mine(system?.certificate_warnings, (row) => row.cluster_id || "").length;
   counts.offlineClusters = mine(system?.node_warnings, offlineClusterId).length;
-  // note: its own tile, not folded into Critical or Warning. Those tiles open the platform tab,
-  // which has no kernel rows, and a tile's number must be the count its list shows.
+  // Kernel advisories have their own tile. Critical and Warning open the platform tab, which has
+  // no kernel rows, and a tile's number must be the count its list shows.
   counts.kernels = mine(system?.kernel_advisories, (row) => row.cluster_id).length;
   counts.total += counts.certIssues + counts.offlineClusters + counts.kernels;
   return counts;

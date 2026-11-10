@@ -14,7 +14,7 @@ const LISTING_STALE_MS = 5_000;
 const LISTING_GC_MS = 60_000;
 const MAX_DELETE_SLICES = 2_000;
 
-// A refusal is an answer: asking a stopped instance again in a second tells nobody anything.
+// No retry on a coded refusal: a stopped instance gives the same answer a second later.
 function retryListing(failures: number, error: unknown): boolean {
   return fileErrorCode(error) === undefined && failures < 1;
 }

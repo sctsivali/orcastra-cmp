@@ -26,7 +26,7 @@ import {
 import { formatWindow, type WindowedReading } from "@/components/system-resources/rates";
 
 interface HostSectionProps {
-  /** Null from a backend older than the split; every card then shows the empty value. */
+  /** Null from an older backend that sends no host block; every card then shows the empty value. */
   host: HostInfo | null;
   os: OSInfo;
   cpu: WindowedReading | null;
@@ -80,7 +80,7 @@ function HostCpuCard({ host, reading }: { host: HostInfo | null; reading: Window
   const cpu = host?.cpu ?? null;
   const virtual = host?.is_virtual_machine === true;
   const unit = virtual ? "vCPU" : "CPU thread";
-  // a backend older than the counters sends no cpu_times, and its own percent has no stated window
+  // An older backend sends no cpu_times, and its own percent has no stated window.
   const canMeasure = Boolean(cpu && host?.cpu_times);
   const load = (value: number | null | undefined) => (value === null || value === undefined ? EMPTY_VALUE : value.toFixed(2));
   return (

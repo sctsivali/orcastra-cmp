@@ -27,9 +27,8 @@ interface GpuAllocationGaugeProps {
 /**
  * The fleet (or single node) GPU allocation gauge.
  *
- * important: with no compute GPU there is no arc. A 0.0% arc over a denominator of zero reads
- * as a failed probe, which is exactly how "0 / 1 GPUs" came to be reported as "the GPU is not
- * detected". State the fact instead, and always show the cards count beside the ratio.
+ * With no compute GPU there is no arc: a 0.0% arc over a denominator of zero reads as a failed
+ * probe. The fact is stated instead, and the cards count always shows beside the ratio.
  */
 export function GpuAllocationGauge({ stats, scope }: GpuAllocationGaugeProps) {
   const gpu = summarizeGpus({

@@ -1,16 +1,13 @@
 /**
- * One vocabulary and one set of numbers for GPUs, everywhere in the console.
+ * One vocabulary and one set of numbers for GPUs across the console.
  *
  * Two nouns, never swapped:
  *   GPU  = a compute GPU, sellable capacity        (gpu_total / gpu_used / gpu_available)
  *   card = a detected DRM card of any class        (gpu_cards_total / gpu_cards[])
  *
- * A Jetson Orin NX enumerates two cards for one physical GPU, so "1" and "2" are both true
- * about the same node and the label is what makes them readable. Wherever the compute ratio
- * appears, the cards count appears next to it whenever the two differ.
- *
- * LXD reports no GPU telemetry: there is no busy percentage and no VRAM usage anywhere in its
- * API. Everything here describes allocation, and the copy says so.
+ * One physical GPU can enumerate as two cards (ex; a Jetson Orin NX), so wherever the compute
+ * ratio appears, the cards count appears next to it when the two differ. LXD reports no GPU
+ * telemetry (no busy percentage, no VRAM usage), so everything here describes allocation.
  */
 
 import type { GPUCardInfo } from "@/types/api";
@@ -29,8 +26,8 @@ export const GPU_CLASS_LABEL: Record<GpuClass, string> = {
 export const GPU_UTILIZATION_NOTE =
   "Allocation only. LXD reports which GPUs are attached to an instance, not how busy they are.";
 export const GPU_EMPTY_TITLE = "No GPU detected";
-// note: plain language since 2026-11-07. "No compute GPU" over "1 card detected" read as a
-// contradiction to anyone who does not know that a server's onboard VGA is a card too.
+// Plain language: "No compute GPU" over "1 card detected" reads as a contradiction to anyone
+// who does not know that a server's onboard VGA is a card too.
 export const GPU_NO_COMPUTE_TITLE = "No GPU for instances";
 export const GPU_CAPACITY_NOTE =
   "A compute GPU is one an instance can be given, for example an NVIDIA, AMD or Intel discrete " +
@@ -47,7 +44,7 @@ export function gpuClassOf(card: GPUCardInfo): GpuClass {
 
 /**
  * The card's name. Never runs through formatLabel: a driver ("nv_platform") and a product
- * name are registry-authored, and re-casing them is the x86_64 trap in another costume.
+ * name are registry-authored, and re-casing corrupts them as it would "x86_64".
  */
 export function gpuCardLabel(card: GPUCardInfo): string {
   const named = card.model_name || card.nvidia?.model || card.product;
@@ -67,10 +64,8 @@ export function gpuCardQualifier(card: GPUCardInfo): string {
 }
 
 /**
- * The selector that will actually be written into the LXD device.
- *
- * A Tegra iGPU has no PCI address, so `id` (the DRM card id) is the only way to name it. The
- * picker used to show both columns as dashes and zeros while silently choosing between them.
+ * The selector written into the LXD device. A Tegra iGPU has no PCI address, so `id` (the DRM
+ * card id) is the only way to name it.
  */
 export function gpuIdentifier(card: GPUCardInfo): {
   by: "pci" | "id";
@@ -122,7 +117,7 @@ export interface GpuSummary {
 export function summarizeGpus(src: GpuSummarySource | null | undefined): GpuSummary {
   const computeTotal = src?.gpu_total ?? 0;
   const used = Math.min(src?.gpu_used ?? 0, computeTotal);
-  // Reads degrade rather than break while the backend rollout is in flight.
+  // A response without the card fields falls back to the compute count.
   const cardsTotal = src?.gpu_cards_total ?? src?.gpu_cards?.length ?? computeTotal;
   const cards = src?.gpu_cards ?? [];
   return {

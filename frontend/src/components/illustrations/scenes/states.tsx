@@ -3,7 +3,7 @@ import { IllustrationFrame, type IllustrationProps } from "../illustration-frame
 import { Padlock, ServerStack } from "../iso/parts";
 import { IsoBox, IsoLink, IsoShadow } from "../iso/primitives";
 
-// Gates and failures. Calm on purpose: the message and the next step are in the text, the scene
+// Gates and failures, drawn calm: the message and the next step are in the text, and the scene
 // only names the situation (locked, or a connection that did not hold).
 
 export function AccessGateIllustration(props: IllustrationProps) {

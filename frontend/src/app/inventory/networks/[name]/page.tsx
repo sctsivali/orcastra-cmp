@@ -45,8 +45,8 @@ function NetworkDetailLoading() {
   );
 }
 
-// Export with a Suspense wrapper - required because NetworkDetailContent calls
-// useSearchParams(); without it `next build` fails prerendering this route.
+// The Suspense wrapper is required because NetworkDetailContent calls useSearchParams();
+// without it `next build` fails prerendering this route.
 export default function NetworkDetailPage() {
   return (
     <Suspense fallback={<NetworkDetailLoading />}>

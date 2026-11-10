@@ -1,7 +1,4 @@
-/**
- * Console Tray - Shows minimized console windows.
- * Fixed position at bottom of screen.
- */
+/** Minimized console windows, docked at the bottom of the screen. */
 
 "use client";
 
@@ -51,21 +48,18 @@ export function ConsoleTray({
             key={console.id}
             className="flex items-center gap-1 px-2 py-1 rounded-md bg-muted/50 hover:bg-muted transition-colors min-h-[44px]"
           >
-            {/* Icon based on type */}
             {console.instanceType === "virtual-machine" ? (
               <Monitor className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
             ) : (
               <Terminal className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
             )}
 
-            {/* Instance name */}
             <span className="text-sm font-medium max-w-[120px] truncate">
               {console.instanceName}
             </span>
 
             <SessionStatusBadge status={console.connectionStatus} chrome={false} className="shrink-0" />
 
-            {/* Restore button - larger touch target */}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -81,7 +75,6 @@ export function ConsoleTray({
               <TooltipContent>Restore</TooltipContent>
             </Tooltip>
 
-            {/* Close button - larger touch target */}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button

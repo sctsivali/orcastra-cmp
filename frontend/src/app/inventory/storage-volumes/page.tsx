@@ -90,8 +90,8 @@ const VOLUMES = defineTable<VolumeInfo>()({
     },
     {
       field: "location",
-      // note: LXD's volume.location is the member holding a local volume, empty when the pool
-      // is shared. "Location" means geography everywhere else in the console.
+      // LXD's volume.location is the member holding a local volume, empty when the pool is
+      // shared. "Location" means geography everywhere else in the console.
       label: "Cluster Member",
       sort: (v) => v.location ?? "",
       facet: (v) => v.location ?? "",
@@ -101,20 +101,18 @@ const VOLUMES = defineTable<VolumeInfo>()({
     {
       field: "project",
       label: "Project",
-      // The project that HOLDS this volume, which is a different question from the
-      // `projects` column below it: that one answers who consumes it.
+      // The project that holds this volume. The `projects` column below answers who consumes
+      // it.
       sort: (v) => v.project ?? "",
       facet: (v) => v.project ?? "",
       facetSpec: { role: "project", primary: true },
     },
     {
-      // filter-coverage: this is not the project dimension. It answers which projects
-      // CONSUME the volume, derived from used_by, while the "project" column above answers
-      // which one holds it, and that is the column carrying the project role.
+      // filter-coverage: not the project dimension. It lists the projects that consume the
+      // volume, from used_by; the "project" column above holds the project role.
       field: "projects",
       label: "Used By Projects",
-      // Was a copy of the used_by accessor, so the header sorted by resource count while the
-      // cell displayed a project count. It now sorts by what it displays.
+      // Sorts by the project count the cell displays, not the resource count.
       sort: (v) => projectsFromUsedBy(v.used_by).length,
       facet: (v) => projectsFromUsedBy(v.used_by),
       facetSpec: { emptyLabel: "(no project)" },
@@ -140,8 +138,8 @@ function StorageVolumesContent() {
   const [pageSize, setPageSize] = useState(25);
   const resetPage = () => setCurrentPage(1);
 
-  // note: derived from the rows, not from the fleet. It is empty exactly when the scope
-  // returns nothing, which is the state that used to leave the empty row one column wide.
+  // Derived from the rows, not from the fleet, so it is empty exactly when the scope returns
+  // nothing and columnCount drops the Cluster column with it.
   const nodes = useMemo(
     () => Array.from(new Set(volumes.map((v) => v.node).filter(Boolean))).sort(),
     [volumes],
@@ -153,7 +151,7 @@ function StorageVolumesContent() {
   );
 
   // The column appears once any node is known, the facet once there are two to choose
-  // between. The thresholds differ on purpose: one option filters nothing.
+  // between: one option filters nothing.
   const availableFields = useMemo(
     () => VOLUMES.facetFields.filter((f) => (f !== "node" || nodes.length > 0) && (f !== "location" || locations.length > 0)),
     [nodes.length, locations.length],
@@ -185,10 +183,8 @@ function StorageVolumesContent() {
     currentPage * pageSize,
   );
 
-  // Derived from the headers actually rendered: seven fixed columns (Name, Pool, Type, Content
-  // Type, Used By, Project, Used By Projects) plus Node and Location when the scope has them. It
-  // used to count eight, so the empty row was one column too wide on every scope that returns
-  // nothing; the table-filters spec measures it against the header row.
+  // Must match the headers rendered below: seven fixed columns (Name, Pool, Type, Content Type,
+  // Used By, Project, Used By Projects) plus Cluster and Cluster Member when the scope has them.
   const columnCount = 7 + (nodes.length > 0 ? 1 : 0) + (locations.length > 0 ? 1 : 0);
 
   if (isLoading) {
@@ -345,8 +341,7 @@ export default function StorageVolumesPage() {
   );
 }
 
-// note: `pool` is on every volume and is not a column in this table, so the subject strip is
-// where an operator finally learns which pool a volume lives in without leaving the page.
+// The subject strip names the pool and cluster: a volume name alone is not an identity.
 function volumeSubject(volume: StorageVolumeInfo): UsedBySubject {
   const config = volume.config ?? {};
   return {

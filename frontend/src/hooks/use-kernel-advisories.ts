@@ -10,9 +10,9 @@ import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { jitter } from "@/lib/query-config";
 import { APIError } from "@/types/api";
 
-// note: kernels only change on a reboot and the server keeps each cluster's reading for ten
-// minutes, so a two-minute poll is plenty. Every card shares this one query key, so a page of
-// cluster cards costs one request, not one per card.
+// Kernels only change on a reboot and the server keeps each cluster's reading for ten minutes,
+// so a two-minute poll is enough. Every card shares this one query key, so a page of cluster
+// cards costs one request.
 const KERNEL_ADVISORY_POLL_MS = 120_000;
 // The server reads Ubuntu every few hours; this only follows the time of its last read.
 const UBUNTU_STATUS_POLL_MS = 10 * 60 * 1000;

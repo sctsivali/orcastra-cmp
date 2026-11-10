@@ -25,14 +25,12 @@ export function useCounterAnimation(
     const startValue = prevValueRef.current;
     const difference = endValue - startValue;
 
-    // If the difference is small, use a shorter duration
     const adjustedDuration = Math.abs(difference) <= 5 ? duration * 0.5 : duration;
 
     const animate = () => {
       const now = Date.now();
       const progress = Math.min((now - startTime) / adjustedDuration, 1);
       
-      // Easing function: easeOutCubic - faster ending
       const easeOutCubic = 1 - Math.pow(1 - progress, 3);
       
       const currentCount = Math.floor(startValue + difference * easeOutCubic);

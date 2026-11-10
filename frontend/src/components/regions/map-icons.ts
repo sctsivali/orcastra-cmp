@@ -15,10 +15,9 @@ import { RegionSummary } from "@/types/api";
 /**
  * Resolves a theme token to a concrete colour.
  *
- * Inline styles on a DivIcon can carry `hsl(var(--token))` directly, because the element
- * lands inside the themed tree and the browser resolves it. A Canvas layer cannot: Leaflet
- * hands the string to `ctx.fillStyle`, which knows nothing about custom properties and
- * silently paints nothing. So canvas colours have to be read out first.
+ * Inline styles on a DivIcon can carry `hsl(var(--token))` directly, because the browser
+ * resolves it inside the themed tree. A Canvas layer cannot: Leaflet hands the string to
+ * `ctx.fillStyle`, which ignores custom properties and silently paints nothing.
  */
 export function themeColor(token: string, alpha?: number): string {
   if (typeof window === "undefined") return "transparent";
@@ -30,8 +29,8 @@ export function themeColor(token: string, alpha?: number): string {
 function createStatusIcon(color: string): L.DivIcon {
   return L.divIcon({
     className: "custom-marker",
-    // note: the border is --background rather than white so the pin reads as a cut-out of
-    // the map in both themes, the same trick the status chips use.
+    // The border is --background rather than white so the pin reads as a cut-out of the map in
+    // both themes, as the status chips do.
     html: `
       <div style="
         background-color: ${color};
@@ -60,10 +59,9 @@ function createStatusIcon(color: string): L.DivIcon {
 
 export type RegionStatus = "online" | "partial" | "offline";
 
-// note: the markers are injected as raw HTML into a Leaflet DivIcon, so they take a CSS value
-// rather than a Tailwind class. Reading the same --status-* custom properties is what keeps the
-// map on the product's status palette in both themes instead of three hex literals that drift
-// the first time a token is retuned. The country outlines use the same tokens from map-theme.css.
+// The markers are raw HTML in a Leaflet DivIcon, so they take a CSS value rather than a Tailwind
+// class. Reading the --status-* custom properties keeps the map on the product's status palette
+// in both themes. The country outlines use the same tokens from map-theme.css.
 const STATUS_TOKEN: Record<RegionStatus, string> = {
   online: "--status-online",
   partial: "--status-pending",
@@ -86,14 +84,14 @@ const CHIP_HEIGHT = 22;
  * The marker for a region that is a whole country: its ISO code on the status colour, and the
  * cluster count when there is more than one.
  *
- * A square chip rather than the round pin, so it does not read as a point on the ground. The shaded
- * outline is what says where; the chip is the part a click, a keyboard and a phone-sized finger
- * can always reach, including on a country too small to see at world zoom (Singapore, Monaco).
+ * A square chip rather than the round pin, so it does not read as a point on the ground. The
+ * shaded outline says where; the chip is what a click, a keyboard and a finger can always reach,
+ * even on a country too small to see at world zoom (ex; Singapore, Monaco).
  */
 export function createCountryChip(region: RegionSummary): L.DivIcon {
   const token = STATUS_TOKEN[regionStatus(region)];
   const count = region.node_count > 1 ? (region.node_count > 99 ? "99+" : String(region.node_count)) : "";
-  // fixed per character, so the anchor sits on the point whatever the count
+  // Fixed per character, so the anchor sits on the point whatever the count.
   const width = 30 + (count ? 6 + count.length * 7 : 0);
   return L.divIcon({
     className: "country-chip",
@@ -126,9 +124,8 @@ export function createCountryChip(region: RegionSummary): L.DivIcon {
 }
 
 /**
- * Cluster bubbles carry their count twice already, as a number and as a diameter, so a
- * third encoding in hue bought nothing and cost three hardcoded purples that ignored both
- * the theme and the personalization accent.
+ * Cluster bubbles carry their count as a number and as a diameter, so they take no hue of
+ * their own: the primary token, which follows the theme and the personalization accent.
  */
 export function createClusterIcon(cluster: L.MarkerCluster): L.DivIcon {
   const count = cluster.getChildCount();
@@ -162,14 +159,13 @@ export function createClusterIcon(cluster: L.MarkerCluster): L.DivIcon {
 /**
  * Popup markup for one region.
  *
- * important: every interpolated value is escaped. Region, city and facility strings come
- * from cluster metadata written through PATCH /clusters/{id}/location, which the backend
- * stores as unconstrained text, and Leaflet renders a popup string as HTML. Interpolating
- * them raw let anyone able to register or relocate a cluster store markup that executes in
- * the browser of every operator who later opened this page.
+ * important: every interpolated value is escaped. Region, city and facility strings come from
+ * cluster metadata written through PATCH /clusters/{id}/location, which the backend stores as
+ * unconstrained text, and Leaflet renders a popup string as HTML. Raw interpolation would let
+ * anyone able to register or relocate a cluster run script in every operator's browser.
  */
 export function createPopupContent(region: RegionSummary): string {
-  // note: null for a Tenant, which is sent places and its own instances but no hardware.
+  // Null for a Tenant, which is sent places and its own instances but no hardware.
   const hardware = region.hardware;
 
   const row = (label: string, value: string | number) =>

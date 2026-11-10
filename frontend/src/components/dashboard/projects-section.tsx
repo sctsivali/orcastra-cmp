@@ -24,7 +24,7 @@ import { INSTANCE_PAGE_SIZE, ProjectCard } from "./project-card";
 interface ProjectsSectionProps {
   projectsData: ProjectListResponse[] | undefined;
   projectsLoading: boolean;
-  /** The query's own failure, distinct from a fleet that genuinely holds no projects. */
+  /** The query's own failure, distinct from a fleet that holds no projects. */
   projectsError: unknown;
   vmsData: VMInfo[];
   /** The instance list has not answered yet: project cards show their count as loading. */
@@ -46,9 +46,9 @@ interface ProjectsContext {
   index: Map<string, { names: string[]; tags: string[]; count: number }>;
 }
 
-// A card grid, so it takes the shared toolbar and filter engine but none of the table
-// plumbing. Tags stay behind TagFilter rather than the generic facet popover: getTagColor
-// derives a tag's colour from its prefix, so the colour is data here, not decoration.
+// A card grid: the shared toolbar and filter engine without the table plumbing. Tags render
+// through TagFilter rather than the generic facet popover, because getTagColor derives a tag's
+// colour from its prefix and the popover cannot show it.
 const PROJECTS = defineTable<ProjectInfo, ProjectsContext>()({
   searchPlaceholder: "Search projects by name, cluster, description, or instance",
   defaultSort: { field: "name", direction: "asc" },
@@ -66,15 +66,11 @@ const PROJECTS = defineTable<ProjectInfo, ProjectsContext>()({
       field: "instances",
       label: "Instances",
       // The count is not a field on a project. It comes off the same index the search and the
-      // Tags facet already read, which is why this is the context-aware `filter` spelling rather
-      // than fromSort: a sort accessor is handed the row and nothing else, so there is no sort
-      // accessor here for a filter to be derived from. The sort side is merged in inside the
-      // component, where the index is in scope.
+      // Tags facet read, so this uses the context-aware `filter` form; fromSort needs a sort
+      // accessor, which is handed the row alone. The sort side is merged in inside the component.
       //
-      // note: declared rather than left as a sort-only dimension. check-table-filters.mjs bans a
-      // column an operator can order by but not filter by, and a locally merged accessor would
-      // slip past that rule only because the parser cannot see where the accessor was put.
-      // The None preset also answers "which projects are empty", which nothing else here does.
+      // Declared here so the sortable column carries a filter, as check-table-filters.mjs asks;
+      // the None preset also answers which projects are empty.
       filter: {
         kind: "number",
         value: (p, ctx) => ctx.index.get(`${p.host}:${p.name}`)?.count ?? 0,
@@ -119,21 +115,18 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
   const lastUpdated = useRelativeTime(lastUpdatedAt);
   const headingId = React.useId();
   const [expandedProjects, setExpandedProjects] = React.useState<Set<string>>(new Set());
-  // important: the page inside each expanded card lives here, beside expandedProjects, rather
-  // than inside ProjectCard. The grid pager below slices the card list, so a card off the current
-  // page unmounts and loses any state it held, while this Set survives. A child-held page would
-  // therefore bring the card back looking restored and showing different rows, which is worse
-  // than either losing the state cleanly or keeping it.
+  // important: the page inside each expanded card lives here, beside expandedProjects. The grid
+  // pager unmounts cards off the current page while this Set survives, so a page held in the
+  // card would reopen it on different rows.
   const [instancePages, setInstancePages] = React.useState<Map<string, number>>(new Map());
 
-  // note: page and size stay in component state and out of the URL. lib/table-filter.ts records
-  // that decision for the whole console, and a page number is not a stable thing to share: it
-  // resolves against the reader's page size, sort and today's fleet, not the writer's.
+  // Page and size stay in component state, out of the URL, as lib/table-filter.ts sets for the
+  // whole console: a shared page number would resolve against the reader's page size, sort and
+  // fleet.
   const [page, setPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState(12);
   const resetPage = React.useCallback(() => setPage(1), []);
-  // note: one index built once, instead of getProjectInstances re-scanning the whole
-  // instance list inside a predicate that ran from both a reduce and a map on every render.
+  // One index per instance list, so search, facets and counts never re-scan the whole list.
   const projectIndex = React.useMemo(() => {
     const index = new Map<string, { names: string[]; tags: string[]; count: number }>();
     for (const vm of (vmsData ?? []) as any[]) {
@@ -183,15 +176,12 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
   const selectedTags = filters.selectedValues("tags");
   const { isReadOnly } = useReadOnlyMode();
 
-  // The instance count is not a field on a project: it lives in the index built from the
-  // instances query, and a declared sort accessor is handed the row and nothing else. So this one
-  // is merged in here, where the index is in scope, while the rest still come from PROJECTS so
-  // the control and the table cannot drift apart.
+  // The instance count lives in the index, and a declared sort accessor is handed the row alone,
+  // so its accessor is merged in here; the rest come from PROJECTS so the control and the table
+  // cannot drift apart.
   //
-  // important: keyed off projectIndex, which is memoised on vmsData. The old projectInstanceCounts
-  // prop computed the identical number but was rebuilt as a fresh Map on every Dashboard render,
-  // so closing over it would hand sortItems a new identity every render and re-sort the whole
-  // list each time.
+  // important: keyed off projectIndex, which is memoised on vmsData. A dependency rebuilt on every
+  // render would hand sortItems a new identity and re-sort the whole list each time.
   const sortAccessors = React.useMemo(
     () => ({
       ...PROJECTS.sortAccessors,
@@ -206,12 +196,10 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
     resetPage,
   );
 
-  // Get unique nodes from projects
-  // Collect all unique tags from projects and instances
+  // Every tag on a project or an instance, for TagFilter.
   const allTags = React.useMemo(() => {
     const tags = new Set<string>();
     
-    // Tags from projects - handle null/undefined projectsData
     if (projectsData && Array.isArray(projectsData)) {
       projectsData.forEach((nodeProjects) => {
         if (nodeProjects && nodeProjects.projects) {
@@ -224,7 +212,6 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
       });
     }
     
-    // Tags from instances
     vmsData.forEach((vm) => {
       vm.tags?.forEach((tag) => tags.add(tag));
     });
@@ -236,9 +223,8 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
     const newExpanded = new Set(expandedProjects);
     if (newExpanded.has(projectKey)) {
       newExpanded.delete(projectKey);
-      // Collapsing is the operator putting the card away, so reopening starts at the top. Done at
-      // the source of the change rather than from an effect watching isExpanded. Dropping the
-      // entry rather than writing 1 also keeps the map to the cards that are actually open.
+      // Collapsing resets the card to its first page, here at the source rather than in an effect
+      // watching isExpanded. Deleting the entry keeps the map to the cards that are open.
       setInstancePages((pages) => {
         if (!pages.has(projectKey)) return pages;
         const next = new Map(pages);
@@ -247,9 +233,8 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
       });
     } else {
       newExpanded.add(projectKey);
-      // A search that reached this card through an instance name opens it on the page holding
-      // the first match. The card pages its instances five at a time and filters none of them,
-      // so in a busy project the instance the operator searched for sat on a later page.
+      // A search that matched an instance name opens the card on the page holding the first
+      // match; the card filters none of its instances, so the match could sit on a later page.
       const query = filters.searchInput.trim().toLowerCase();
       const match = query
         ? vmsData
@@ -286,12 +271,7 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
     return { running, stopped, other, total: instances.length };
   };
 
-  // note: this used to union the index hits back on top of filteredRows. Those extras never went
-  // through the facet masks, so a project the Node or Tags facet excluded still rendered a card,
-  // and the toolbar counted filteredRows while the grid showed more. The search now reaches the
-  // index through the hook's extraSearch, so one set feeds both.
-  //
-  // note: `reachable` is optional on the wire, so only an explicit false counts as unreachable.
+  // `reachable` is optional on the wire, so only an explicit false counts as unreachable.
   // Treating undefined as unreachable would light the banner for every older payload.
   const unreachableNodes = React.useMemo(
     () => (projectsData ?? []).filter((n) => n?.reachable === false).map((n) => n.host),
@@ -311,21 +291,19 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
     const projectsMissing = new Set(unreachableNodes);
     return (instancesUnread ?? []).filter((host) => !projectsMissing.has(host));
   }, [instancesUnread, unreachableNodes]);
-  // note: the instance list's reasons under the projects', so an unreachable host keeps the
+  // The instance list's reasons go under the projects', so an unreachable host keeps the
   // reason its projects read gave. The two sets are disjoint above, so nothing else is shadowed.
   const reachReasons = React.useMemo(
     () => ({ ...(instancesUnreadReasons ?? {}), ...unreachableReasons }),
     [instancesUnreadReasons, unreachableReasons],
   );
   const unreadHostSet = React.useMemo(() => new Set(instancesUnread ?? []), [instancesUnread]);
-  // Every host answered and every one of them failed: the fleet is not empty, it is unreadable.
+  // Every host reported a failure, so the fleet is unreadable rather than empty.
   const allNodesUnreachable =
     (projectsData?.length ?? 0) > 0 && unreachableNodes.length === projectsData!.length;
 
-  // Filter, then sort, then slice, in that order, which is the contract use-table-filters.ts
-  // states: the sort covers the whole filtered set rather than the page an operator happens to be
-  // looking at. Before this the grid rendered filteredRows unsorted, so the order was whatever the
-  // per-node fan-out returned and a card could move between pages on any refetch.
+  // Filter, then sort, then slice, the order use-table-filters.ts requires: the sort covers the
+  // whole filtered set, so a card does not move between pages on a refetch.
   const sortedProjects = React.useMemo(
     () => sortItems(filters.filteredRows),
     [filters.filteredRows, sortItems],
@@ -343,10 +321,9 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
   });
 
   // important: clamped on read, never corrected in an effect. useAllProjects polls, and an effect
-  // keyed on the row count would snap an operator back a page mid-task on any refresh that shrank
-  // the list, and would still paint one wrong frame before it caught up. Math.max(1, ...) rather
-  // than a bare Math.ceil because an empty result gives 0 pages, and Math.min would then hand the
-  // slice a page zero.
+  // keyed on the row count would move an operator back a page on any refresh that shrank the
+  // list, after one wrong frame. Math.max(1, ...) because an empty result gives 0 pages and the
+  // slice would get page zero.
   const totalPages = Math.max(1, Math.ceil(sortedProjects.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const visibleProjects = sortedProjects.slice(
@@ -370,10 +347,9 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
         </div>
       </div>
 
-      {/* The sort control rides the toolbar's actions slot rather than taking a row of its own.
-          A card grid has no column headers to click, so this is the only place the order can be
-          read or changed, and it belongs beside the other controls rather than above a grid that
-          already carries a filter row and a tag row. */}
+      {/* The sort control sits in the toolbar's actions slot: with no column headers to click it
+          is the only place to read or change the order, and the grid already carries a filter
+          row and a tag row. */}
       <TableToolbar
         filters={filters}
         noun="projects"
@@ -387,8 +363,7 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
         }
       />
 
-      {/* Tag Filter: an alternative renderer for the same facet, not a second control. Its
-          colours come from the tag prefix, which the generic popover cannot show. */}
+      {/* Another renderer for the `tags` facet, with colours from the tag prefix. */}
       {allTags.length > 0 && (
         <TagFilter
           availableTags={allTags}
@@ -397,13 +372,10 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
         />
       )}
       
-      {/* A host that did not answer is not a host with no projects. The payload has carried
-          `reachable` and a per-host `error` all along; this section was the one place that
-          dropped both and drew an empty grid instead. Same component the other fan-out lists
-          use, so the wording and the role gate on the reason text stay in one place.
-          One banner for both reads: two of them said "5" and "1" and never that it was 6
-          clusters. The instance-only hosts join once the instance list has answered: until then
-          a count is loading, not missing. */}
+      {/* A host that did not answer is named with its per-host `error`, through the component
+          the other fan-out lists use, so the wording and the role gate on the reason stay in one
+          place. One banner covers both reads, so it gives one cluster total. Instance-only hosts
+          join once the instance list has answered: until then a count is loading, not missing. */}
       <UnreachableNodesBanner
         noun="projects and instances"
         partialNoun="instances"
@@ -412,12 +384,9 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
         reasons={reachReasons}
       />
 
-      {/* important: two-up starts at lg and three-up at xl, not md and lg. Measured live, the
-          old thresholds gave a 224px card at both 768 and 1024, which leaves the header's title
-          column about 52px once the host badge and the kebab have taken their fixed width, so a
-          name as short as "Ryo-Labs" broke mid-word. The card needs roughly 340px to hold its own
-          header. At 1280 a three-up card is 309px, which clears it, so the widest band is
-          unchanged. */}
+      {/* Two-up starts at lg and three-up at xl: the card header needs about 340px. One breakpoint
+          earlier, a card at a 768px or 1024px viewport is 224px wide, leaving the title about
+          52px beside the host badge and the menu. */}
       {focus.hidden && (
         <RowFocusNotice label={focus.hidden.label} onShow={focus.showHidden} className="mb-4" />
       )}
@@ -467,10 +436,8 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
                   />
                 </div>
               ) : (
-                // important: three different situations used to share one sentence. "No projects
-                // yet" is a claim about the fleet, and it was printed just as readily when the
-                // read had failed or when every node was unreachable, which tells the operator
-                // the opposite of what happened. The payload already distinguishes them.
+                // Three situations, three sentences: "No projects yet" is a claim about the fleet
+                // and must not show when the read failed or every cluster was unreachable.
                 <div className="col-span-full">
                   {projectsError ? (
                     <EmptyState
@@ -498,11 +465,9 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
         )}
       </div>
 
-      {/* note: 12, 24, 48 and 96 rather than the shared default of 10, 25, 50, 100, 200. The grid
-          is one, two or three columns wide and every one of these divides by all three, so a full
-          page never leaves a ragged last row.
-          No mt-4 wrapper, unlike the table pages: those follow a Table inside a CardContent with
-          no vertical rhythm of its own, while the parent here is already space-y-4. */}
+      {/* 12, 24, 48 and 96 instead of the shared default of 10, 25, 50, 100, 200: each divides by
+          one, two and three columns, so a full page never leaves a ragged last row. No mt-4
+          wrapper, unlike the table pages: the parent here is already space-y-4. */}
       {totalPages > 1 && (
         <div data-slot="projects-pagination">
           <DataTablePagination

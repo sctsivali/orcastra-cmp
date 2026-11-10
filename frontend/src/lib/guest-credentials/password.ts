@@ -1,10 +1,10 @@
 // Guest password rules the browser can check, and the generator.
 //
 // The policy is the backend's (services/guest_credentials/passwords.py, after NIST SP 800-63B
-// revision 4): at least 15 characters because a guest console login is a single factor, at most
-// 128, printable ASCII only because the password has to be typed at a console whose keymap nobody
-// here controls. No composition rules. The server also refuses common, repetitive and sequential
-// passwords and ones built from the account or instance name; those are its decision alone.
+// revision 4): 15 to 128 characters, since a guest console login is a single factor, and printable
+// ASCII only, since it may be typed at a console with an unknown keymap. No composition rules. Only
+// the server refuses common, repetitive and sequential passwords and ones built from the account or
+// instance name.
 
 export const PASSWORD_MIN = 15;
 export const PASSWORD_MAX = 128;

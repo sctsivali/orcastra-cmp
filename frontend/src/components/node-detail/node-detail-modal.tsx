@@ -36,21 +36,16 @@ export interface NodeDetailModalProps {
   onClose: () => void;
   /** When the list this row came from was collected. Used on the System tab. */
   listCollectedAt?: string | null;
-  /** The row has left the list. What is shown is the last state we saw. */
+  /** The row has left the list. The dialog shows the last state seen. */
   isOrphaned?: boolean;
 }
 
 /**
  * Hardware detail for one cluster.
  *
- * important: this used to be a pure function of a prop. The parent copied the clicked row into
- * useState and passed that object down, so the numbers were a photograph taken at click time
- * and stayed that way for as long as the dialog was open. Now the parent passes the row it
- * re-derives from the live list, and the four resource tabs additionally read the uncached
- * per-cluster endpoint while they are on screen.
- *
- * note: gated on the tab, not just on the dialog. Four of five tabs need resources and System
- * needs none, so an operator reading kernel versions holds no live poll open against a cluster.
+ * The parent passes the row it re-derives from the live list, and the four resource tabs also
+ * read the uncached per-cluster endpoint while they are on screen. The live read is gated on the
+ * tab: System needs no resources, so reading kernel versions holds no poll open against a cluster.
  */
 export function NodeDetailModal({
   node,
@@ -59,10 +54,9 @@ export function NodeDetailModal({
   listCollectedAt,
   isOrphaned = false,
 }: NodeDetailModalProps) {
-  // important: this dialog opens from the node card on the Overview, which every role reaches.
-  // The card no longer shows the control-plane endpoint to a tenant, so showing it one click
-  // deeper would make that gate cosmetic. Placed here, not next to its use, because of the
-  // early return below.
+  // important: every role reaches this dialog from the Overview node card. The card hides the
+  // control-plane endpoint from a tenant, so this dialog must too. The hook sits here because
+  // of the early return below.
   const { isPartner } = usePermissions();
   const [tab, setTab] = React.useState<NodeDetailTab>("system");
 
@@ -75,8 +69,8 @@ export function NodeDetailModal({
     enabled: wantsResources,
   });
 
-  // important: every hook above the early return. The file had none, so `if (!node) return null`
-  // sat at the top legally; adding one below it fails react-hooks/rules-of-hooks.
+  // important: every hook stays above this early return; a hook below it fails
+  // react-hooks/rules-of-hooks.
   if (!node) return null;
 
   const meta = clusterStatusMeta(node);
@@ -84,9 +78,8 @@ export function NodeDetailModal({
   const isPendingTrust = !node.connected && !node.error;
   const unreachable = meta.status !== ClusterStatus.ONLINE;
 
-  // note: never blank a panel while the live read is in flight. The list row already carries a
-  // complete NodeResources of the same type, so every tab paints at once and the live body
-  // replaces it in place rather than flashing an empty state.
+  // Never blank a panel while the live read is in flight. The list row already carries a
+  // complete NodeResources, so every tab paints at once and the live body replaces it in place.
   const showingLive = wantsResources && liveResources !== undefined;
   const resources = showingLive ? liveResources : node.resources;
 
@@ -112,15 +105,15 @@ export function NodeDetailModal({
           <div className="flex-1">
             <DialogTitle className="flex items-center gap-2 text-2xl">
               {label}
-              {/* certificate-handshake state, and the page that resolves it is partner-gated */}
+              {/* Certificate-handshake state; the page that resolves it is partner-gated. */}
               {isPartner && isPendingTrust && (
                 <Badge className="text-xs" variant="secondary">
                   Pending Trust
                 </Badge>
               )}
             </DialogTitle>
-            {/* a tenant gets the cluster id, which is already the Node column on every table,
-                rather than the hypervisor endpoint they cannot address */}
+            {/* A tenant gets the cluster id, already the Node column on every table, instead
+                of the hypervisor endpoint it cannot address. */}
             <DialogDescription className="font-mono">
               {isPartner ? node.endpoint : node.name}
             </DialogDescription>
@@ -142,8 +135,8 @@ export function NodeDetailModal({
           />
         ) : null}
 
-        {/* note: DialogBody rather than a self-scrolling DialogContent, so the cluster name and
-            its age line stay pinned while a long storage list scrolls under them. */}
+        {/* DialogBody rather than a self-scrolling DialogContent, so the cluster name and its
+            age line stay pinned while a long storage list scrolls under them. */}
         <DialogBody>
           <Tabs
             className="w-full"

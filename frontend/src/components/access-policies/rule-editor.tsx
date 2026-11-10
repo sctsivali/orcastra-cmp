@@ -30,12 +30,12 @@ export interface PolicyCluster {
 }
 
 /**
- * A rule being edited. `key` is client-only and never sent: the rows are removable from the
- * middle, and an index key handed one rule's expanded state and pending reads to the next.
+ * A rule being edited. `key` is client-only and never sent: rows can be removed from the middle,
+ * and an index key would hand one rule's expanded state and pending reads to the next.
  */
 export type DraftRule = Omit<PolicyRule, "id"> & { key: string };
 
-// snapshot is not offered yet
+// The snapshot permission is not offered in the editor.
 export const VISIBLE_PERMISSIONS = ALL_TENANT_PERMISSIONS.filter((p) => p !== "snapshot");
 
 function PermissionCheckboxGroup({
@@ -48,7 +48,7 @@ function PermissionCheckboxGroup({
   const baseId = useId();
   const toggle = (perm: TenantPermission) => {
     if (selected.includes(perm)) {
-      // A rule granting nothing is not a rule; the last permission stays until another is ticked.
+      // A rule must grant something; the last permission stays until another is ticked.
       if (selected.length > 1) {
         onChange(selected.filter((p) => p !== perm));
       }
@@ -101,7 +101,7 @@ export function RuleEditor({
   const fieldId = useId();
   const hostId = rule.cluster_id !== "*" ? rule.cluster_id : "";
 
-  // projects for this cluster (the API takes the cluster id as host)
+  // The projects API takes the cluster id as the host.
   const { data: projectsData, isLoading: projectsLoading } = useQuery({
     queryKey: queryKeys.projectsFor(scopeKey, hostId),
     queryFn: () => projectAPI.list(hostId),
@@ -109,8 +109,8 @@ export function RuleEditor({
     staleTime: 60_000, // re-expanding a rule should not read again
   });
 
-  // instances for this cluster, through the pending-delete filter: this key is the per-host
-  // instance list other pages read too
+  // Read through the pending-delete filter: this key is the per-host instance list other pages
+  // read too.
   const instanceQueryClient = useQueryClient();
   const { data: instancesData, isLoading: instancesLoading } = useQuery({
     queryKey: queryKeys.instancesFor(scopeKey, hostId),
@@ -183,10 +183,8 @@ export function RuleEditor({
                 searchPlaceholder="Search clusters…"
                 options={[
                   { value: "*", label: "* (All Clusters)" },
-                  // note: a scope picker, not a target picker. An offline cluster is a
-                  // perfectly valid thing to write a rule about, so the status is marked but
-                  // never disabled and never warned about. Disabling here would block a rule
-                  // an operator is writing precisely because the cluster is down.
+                  // A scope picker: a rule may name an offline cluster, so the status is shown
+                  // but never disables or warns about an option.
                   ...clusters.map((c) => {
                     const meta = clusterStatusMeta(c.status);
                     return {

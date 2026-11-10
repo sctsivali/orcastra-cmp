@@ -5,14 +5,12 @@ import { EmptyState } from "@/components/ui/empty-state";
 import type { IllustrationProps } from "@/components/illustrations/illustration-frame";
 import { TableCell, TableRow } from "@/components/ui/table";
 
-// The single placeholder for a value the API did not return. Six spellings existed before
-// this ("—", "N/A", "-", "None", "No description", "No groups"). The em dash wins because
-// formatLabel() in lib/utils.ts already returns it for empty input, so any other choice
-// would put the helper and the convention in conflict.
+// The single placeholder for a value the API did not return: "—", the same glyph formatLabel()
+// in lib/utils.ts returns for empty input.
 export { EMPTY_VALUE };
 
-// important: the label replaces the glyph for assistive tech. A screen reader announcing
-// "em dash" tells the user nothing about why the cell is blank.
+// The label replaces the glyph for assistive tech. A screen reader announcing "em dash" tells
+// the user nothing about why the cell is blank.
 export function TableEmptyValue({ label = "No value" }: { label?: string }) {
   return (
     <span className="text-muted-foreground" aria-label={label}>
@@ -25,10 +23,9 @@ export function TableEmptyValue({ label = "No value" }: { label?: string }) {
 // the identifier value (a cluster id under a display name, host/project under an instance
 // name). Never use it as a standalone cell value.
 //
-// note: `wrap` is for the one case where the qualifier is a long opaque value with nowhere else
-// to appear, ex; a cluster endpoint on a page that has no detail dialog. The clip is otherwise
-// correct and stays the default, but a caller that owns a reveal must be able to turn it off, or
-// the reveal expands a box whose contents are still clipped one element further in.
+// `wrap` is for a qualifier that is a long opaque value with nowhere else to appear, ex; a
+// cluster endpoint on a page that has no detail dialog. The clip stays the default; a caller
+// that owns a reveal turns it off, or the reveal expands a box whose contents are still clipped.
 export function TableSubText({
   className,
   wrap,
@@ -46,9 +43,7 @@ export function TableSubText({
   );
 }
 
-// The one "no rows" row. Replaces the py-6 / py-8 / py-10 / no-padding variants and the
-// pages that rendered their empty state as a sibling div outside the table entirely.
-// note: p-0 on the cell because EmptyState brings its own py-12.
+// The one "no rows" row. p-0 on the cell because EmptyState brings its own py-12.
 export function TableEmptyRow({
   colSpan,
   icon,
@@ -71,9 +66,9 @@ export function TableEmptyRow({
   return (
     <TableRow className="hover:bg-transparent">
       <TableCell colSpan={colSpan} className="p-0">
-        {/* note: when the table scrolls sideways this cell spans every column, so the message used
-            to centre across columns off screen. It sits in a box as wide as the visible area
-            (measured by the Table container), pinned to the scroller's left edge. */}
+        {/* When the table scrolls sideways this cell spans every column, so the message sits in
+            a box as wide as the visible area (measured by the Table container), pinned to the
+            scroller's left edge. */}
         <div className="sticky left-0 max-w-[var(--table-visible-width,100%)]">
           <EmptyState
             icon={icon}

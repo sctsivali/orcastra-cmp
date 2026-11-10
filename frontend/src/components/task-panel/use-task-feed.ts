@@ -2,20 +2,16 @@
 
 /**
  * The task feed: one WebSocket per tab to /api/v1/tasks/ws, patched straight into the React
- * Query caches.
- *
- * A module-level store read through useSyncExternalStore (the lib/pending-creates.ts shape),
- * because two surfaces read it (the panel owns the socket, the Operations page only reads the
- * state) and neither may open a second socket.
+ * Query caches. A module-level store read through useSyncExternalStore: the panel owns the
+ * socket, the Operations page only reads the state, and neither may open a second socket.
  *
  * States: idle -> connecting -> connected -> reconnecting (attempt < 3) -> polling (attempt >= 3)
- * -> connected; paused once the tab has been hidden for 60 s (socket closed, reopened on
- * visible). Backoff 2 s doubling to 30 s, then one retry a minute once four handshakes in a row
- * never opened (a browser reports a refused handshake as 1006, the same as an outage). A 1008
- * close (authentication refused), or a ticket the server refuses to mint (401, 403), stops every
- * retry until the session token changes; a token rotation while connected closes the socket for
- * a silent reconnect under the new session, and so does a 4401 (the session ended), both at
- * attempt 0. Every connect mints its own single-use ticket first.
+ * -> connected; paused after 60 s hidden (socket closed, reopened on visible). Backoff 2 s
+ * doubling to 30 s, then one retry a minute after four handshakes in a row never opened (a
+ * browser reports a refused handshake as 1006, like an outage). A 1008 close or a refused ticket
+ * mint (401, 403) stops retries until the session token changes. A token rotation while
+ * connected, or a 4401 close (session ended), reconnects silently at attempt 0. Every connect
+ * mints its own single-use ticket first.
  */
 
 import { useEffect, useSyncExternalStore } from "react";
@@ -159,7 +155,7 @@ function handleFrame(frame: TaskFeedFrame): void {
   }
 }
 
-/** Frames are coalesced per animation frame, so a burst costs one render, not one per row. */
+/** Frames are coalesced per animation frame, so a burst costs one render. */
 function flush(): void {
   flushScheduled = false;
   const frames = buffer;
@@ -407,9 +403,8 @@ function release(): void {
   flushScheduled = false;
   queryClient = null;
   activeScopeKey = null;
-  // Actor changes use the same singleton. Nothing learned from the previous socket, including
-  // whether its worker follower was active or whether its token was rejected, may become the
-  // next actor's initial state.
+  // The singleton outlives actor changes: nothing learned from the previous socket (follower
+  // state, a rejected token) may become the next actor's initial state.
   snapshot = { ...IDLE };
   emit();
 }
@@ -418,8 +413,8 @@ function release(): void {
  * The session token as the panel sees it. A rotation closes the open socket so the reconnect
  * carries the new token; a new token also lifts a 1008 halt.
  *
- * note: lib/api.ts holds one onTokenRefreshed slot and providers.tsx owns it, so the feed
- * watches the session directly instead of taking that slot away.
+ * lib/api.ts holds one onTokenRefreshed slot and providers.tsx owns it, so the feed watches the
+ * session directly instead of taking that slot away.
  */
 function noteToken(token: string | null): void {
   if (halted) {

@@ -1,13 +1,12 @@
 /**
- * The task journal surface: /tasks, /tasks/queue, /tasks/{id} and /cluster-log.
+ * Client for the task journal: /tasks, /tasks/queue, /tasks/{id} and /cluster-log.
  *
- * Its own file for the same reason extensions-api.ts is: lib/api.ts is past 2000 lines. It uses
- * the same fetchAPI so timeouts, GET deduplication and the 401 recovery path behave identically.
+ * Uses the shared fetchAPI, so timeouts, GET deduplication and 401 recovery match lib/api.ts.
  *
  * important: these handlers keep no response cache, so `fresh` only bypasses the in-flight
- * dedupe (`force`) and never sends `?fresh=true`. The parameter would be dropped by FastAPI
- * while the middleware still charged the request against the scarce per-operator bypass
- * budget, which is exactly the defect fetchUncachedRead in lib/api.ts documents.
+ * dedupe (`force`) and never sends `?fresh=true`. FastAPI would drop the parameter while the
+ * middleware still charged the request against the per-operator cache-bypass budget (see
+ * fetchUncachedRead in lib/api.ts).
  */
 
 import { fetchAPI, type ReadOptions } from "@/lib/api";
@@ -114,11 +113,10 @@ export const tasksAPI = {
     uncachedRead<ClusterLogResponse>(withQuery("/cluster-log", { ...params }), opts),
 
   /**
-   * Websocket-class operations (exec, console) are never cancelled through /tasks; they are
-   * ended the way the Sessions page ends them.
+   * Ends a websocket-class operation (exec, console) the way the Sessions page does; those are
+   * never cancelled through /tasks. The route answers 200 with `success: false` when the cluster
+   * did not act (ActionResponse), so the outcome is read from the body.
    */
-  // The console route answers 200 with `success: false` when the cluster did not act (its
-  // ActionResponse idiom), so the outcome is read from the body, not the status.
   killConsoleSession: async (
     instanceName: string,
     operationId: string,

@@ -1,13 +1,10 @@
 /**
- * Sessions - Personal session dashboard.
+ * Sessions: the signed-in user's console sessions.
  *
- * Two tabs:
- * - Active: live sessions (auto-refresh 5s)
- * - History: past sessions from audit log (with pagination)
- *
- * Both tabs default to the signed-in user's own sessions and can be switched to an
- * organisation scope, which shows every session on the caller's clusters. Isolation is
- * enforced server-side by the caller's allowed-cluster set, not here.
+ * Active lists live sessions (polled every 5 s), History lists past sessions from the audit
+ * log, and Break-Glass holds the break-glass panel. Active and History default to the user's
+ * own sessions and can switch to the organisation scope, every session on the caller's
+ * clusters. The server enforces isolation through the caller's allowed-cluster set.
  */
 
 "use client";
@@ -113,7 +110,7 @@ interface AuditLogEntry {
   created_at: string;
 }
 
-// Use relative URLs - Next.js rewrites proxy to backend
+// Relative URLs: the app/api/v1 route handler proxies them to the backend.
 const API_URL = "";
 
 // ============ Main Component ============
@@ -124,7 +121,6 @@ export default function SessionsPage() {
   return (
     <TooltipProvider delayDuration={100}>
       <div className="p-6 space-y-6">
-        {/* Header */}
         <div>
           <h1 className="text-2xl font-bold tracking-tight">
             Sessions
@@ -134,7 +130,6 @@ export default function SessionsPage() {
           </p>
         </div>
 
-        {/* Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList>
             <TabsTrigger value="active" className="gap-1.5">
@@ -178,7 +173,7 @@ const ACTIVE_SESSIONS = defineTable<SessionData>()({
   id: "active",
   searchPlaceholder: "Search sessions",
   defaultSort: { field: "duration", direction: "desc" },
-  // host is searched but is not a rendered column, which is how it already worked.
+  // Host is searchable even though it is not a rendered column.
   searchExtra: (s) => [s.host],
   columns: [
     { field: "instance", label: "Instance", sort: (s) => s.instance_name, search: (s) => s.instance_name, filter: fromSort("text") },
@@ -186,8 +181,8 @@ const ACTIVE_SESSIONS = defineTable<SessionData>()({
       field: "protocol",
       label: "Protocol",
       sort: (s) => s.protocol,
-      // note: the menu, the search and the cell read one word. Searching the stored value matched
-      // a spelling the table no longer shows, and the menu printed a third one through formatLabel.
+      // The menu, the search and the cell all read sessionProtocolLabel, so a protocol has one
+      // spelling everywhere.
       search: (s) => sessionProtocolLabel(s.protocol),
       facet: (s) => s.protocol,
       facetSpec: { primary: true, format: sessionProtocolLabel } },
@@ -233,17 +228,17 @@ function ActiveSessionsTab() {
   const requestControllerRef = useRef<AbortController | null>(null);
   activeActorScopeRef.current = actorScope;
   activeRequestScopeRef.current = requestScopeKey;
-  // note: the bearer is read at call time, paired with the actor it belongs to. As a dependency
-  // of fetchSessions it re-ran the loading fetch on every silent rotation (about every four
-  // minutes), flashing the loader and restarting the poll. A request is only sent with the token
-  // of the actor it was made for; an actor change is handled by the actorScope reset above.
+  // The bearer is read at call time, paired with the actor it belongs to. As a dependency of
+  // fetchSessions it would re-run the loading fetch on every silent token rotation, flashing the
+  // loader and restarting the poll. A request is only sent with the token of the actor it was
+  // made for; an actor change is handled by the actorScope reset above.
   const actorTokenRef = useRef({ scope: actorScope, token: actorAccessToken });
   actorTokenRef.current = { scope: actorScope, token: actorAccessToken };
 
   // Session routes survive a same-document sign-out/sign-in. Gate actor-owned state during
   // render so the next actor cannot see the previous rows while effect cleanup is pending.
-  // The scope is part of the key for the same reason: rows fetched for Mine are not the
-  // Organization list, and showing them under that label until the new fetch lands was wrong.
+  // The scope is part of the key for the same reason: rows fetched for Mine must not show
+  // under Organization while the new fetch is pending.
   const sessionsAreCurrent = sessionsRequestScope === requestScopeKey;
   const currentSessions = sessionsAreCurrent ? sessions : [];
   const currentSelectedSession =
@@ -357,8 +352,8 @@ function ActiveSessionsTab() {
 
   useEffect(() => { void fetchSessions(true).catch(() => {}); }, [fetchSessions]);
 
-  // The 5 s poll runs only while the page is visible: a hidden tab asking every five seconds buys
-  // nobody anything. Coming back catches up at once rather than waiting out the interval.
+  // The 5 s poll runs only while the page is visible. Coming back to the tab reads at once
+  // rather than waiting out the interval.
   useEffect(() => {
     if (!autoRefresh) {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -384,9 +379,9 @@ function ActiveSessionsTab() {
     [filters.filteredRows, sortItems],
   );
 
-  // important: clamped on read, not corrected in an effect. This list polls every 5s and a
-  // session ending shrinks it under the operator, so the page they are on can stop existing
-  // between two frames. An effect would fire only after the empty frame had already painted.
+  // Clamped on read rather than corrected in an effect. The list polls every 5 s and an ending
+  // session can shrink it under the operator; an effect would fire only after an empty page had
+  // already painted.
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pagedSessions = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
@@ -406,7 +401,6 @@ function ActiveSessionsTab() {
         uploadRate={totalUlRate}
       />
 
-      {/* Table */}
       <Card>
         <CardHeader className="pb-3 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -436,8 +430,7 @@ function ActiveSessionsTab() {
           />
         </CardHeader>
         <CardContent>
-          {/* A short list and a correct list look identical, which is how the
-              per-worker bug went unnoticed for so long. Say when it is partial. */}
+          {/* A partial list looks like a complete one, so say when it is partial. */}
           {currentDegraded && (
             <div className="mb-3">
               <PartialReadNotice>
@@ -446,8 +439,8 @@ function ActiveSessionsTab() {
               </PartialReadNotice>
             </div>
           )}
-          {/* important: only replace the table when there is nothing to show. A
-              5s poll that blips would otherwise wipe rows we still hold. */}
+          {/* Replace the table only when there is nothing to show, so one failed 5 s poll
+              does not wipe the rows still held. */}
           {currentError && currentSessions.length > 0 && (
             <div className="mb-3">
               <PartialReadNotice>Showing the last known data. {currentError}</PartialReadNotice>
@@ -572,21 +565,16 @@ const SESSION_HISTORY = defineTable<AuditLogEntry>()({
   ] });
 
 /**
- * One request's worth of trail. The endpoint caps a page at 1000.
- *
- * important: this used to be the whole read. The page asked for 500 rows of a trail that held
- * 660, so the oldest 160 were unreachable and the pager below was slicing a set that had
- * already lost its tail. The three counters above the table were wrong for the same reason:
- * they sum whatever was fetched, so they under-reported every session past the cap.
+ * One request's worth of trail; the endpoint caps a page at 1000. The tab keeps requesting pages
+ * up to AUDIT_CEILING: the pager and the counters above the table cover only what was fetched.
  */
 const AUDIT_PAGE = 500;
 
 /**
  * Where the read stops even if the trail continues.
  *
- * Filtering, search and sort all run in the browser over the whole fetched set, which is what
- * makes this table useful and what server-side paging alone would take away. That trade only
- * holds while the set fits in a browser, so it is bounded, and the boundary is stated on screen
+ * Filtering, search and sort run in the browser over the whole fetched set, which only works
+ * while the set fits in a browser. So the read is bounded, and the boundary is stated on screen
  * rather than left to look like the end of the trail.
  */
 const AUDIT_CEILING = 5000;
@@ -601,7 +589,7 @@ function SessionHistoryTab() {
   const [selectedSessionActorScope, setSelectedSessionActorScope] = useState(actorScope);
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [logsRequestScope, setLogsRequestScope] = useState(`${actorScope}:self`);
-  // What the server says the whole trail holds, which is not always what we fetched.
+  // What the server says the whole trail holds, which can exceed what was fetched.
   const [trailTotal, setTrailTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -616,8 +604,8 @@ function SessionHistoryTab() {
   const requestControllerRef = useRef<AbortController | null>(null);
   activeActorScopeRef.current = actorScope;
   activeRequestScopeRef.current = requestScopeKey;
-  // note: read at call time and paired with its actor, as in ActiveSessionsTab: a silent
-  // rotation re-read the whole trail.
+  // Read at call time and paired with its actor, as in ActiveSessionsTab, so a silent token
+  // rotation does not re-read the whole trail.
   const actorTokenRef = useRef({ scope: actorScope, token: actorAccessToken });
   actorTokenRef.current = { scope: actorScope, token: actorAccessToken };
 
@@ -688,8 +676,7 @@ function SessionHistoryTab() {
     if (showLoading) setLoading(true);
     setError(null);
     try {
-      // scope has always been supported here and the page never sent it, so the
-      // organisation trail the backend maintains was unreachable from the UI.
+      // `scope` picks the user's own trail or the organisation's.
       const collected: AuditLogEntry[] = [];
       let offset = 0;
       let total = 0;
@@ -718,7 +705,7 @@ function SessionHistoryTab() {
         collected.push(...rows);
         total = typeof payload?.total === "number" ? payload.total : collected.length;
         offset += rows.length;
-        // note: the empty-page break is the one that matters. has_more is computed from a count
+        // The empty-page break is the one that matters. has_more is computed from a count
         // taken before the page was read, so a row deleted between the two would otherwise
         // leave this asking for an offset that never returns anything.
         if (!payload?.has_more || rows.length === 0 || collected.length >= AUDIT_CEILING) break;
@@ -760,14 +747,13 @@ function SessionHistoryTab() {
     [filters.filteredRows, sortItems],
   );
 
-  // pagination
   const totalPages = Math.ceil(sorted.length / pageSize);
   const paginated = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
     return sorted.slice(start, start + pageSize);
   }, [sorted, currentPage, pageSize]);
 
-  // aggregate stats from disconnect events
+  // Aggregate stats from disconnect events.
   const disconnects = currentLogs.filter((l) => l.event_type === "disconnect");
   const totalDuration = disconnects.reduce((sum, l) => sum + (l.duration_seconds ?? 0), 0);
   const totalDl = disconnects.reduce((sum, l) => sum + (l.download_bytes ?? 0), 0);
@@ -777,9 +763,9 @@ function SessionHistoryTab() {
 
   return (
     <div className="space-y-4">
-      {/* note: above the strip, not inside the table card. The totals sum the same capped read
-          as the table, and the filters run in the browser over those rows, so neither reaches an
-          entry past the cap; the old copy sent people to the filters to find older sessions. */}
+      {/* Above the strip, not inside the table card: the totals sum the same capped read as the
+          table, and the filters run in the browser over those rows, so neither reaches an entry
+          past the cap. */}
       {currentTrailTotal > currentLogs.length && (
         <PartialReadNotice>
           Showing the {formatCount(currentLogs.length)} most recent entries of{" "}
@@ -796,11 +782,10 @@ function SessionHistoryTab() {
         uploadBytes={totalUl}
       />
 
-      {/* Table */}
       <Card>
         <CardHeader className="pb-3 space-y-4">
           {/* flex-wrap, as on the Active card: at 375 px the scope toggle and the refresh stamp
-              pushed the whole page 11 px sideways. */}
+              would otherwise push the whole page sideways. */}
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <CardTitle className="text-lg">Session History</CardTitle>
@@ -922,9 +907,9 @@ function ActiveRow({ session, onSelect, scope }: {
             </TableLink>
           </span>
           <TableSubText><NodeLink clusterId={session.host} /> / {session.project}</TableSubText>
-          {/* under an organisation scope every row is somebody else's, so the row is
-              meaningless without saying whose. Kept out of the personal view, where it
-              would just repeat the signed-in user on every line. */}
+          {/* Under an organisation scope every row is somebody else's, so the row says whose.
+              The personal view leaves it out, where it would repeat the signed-in user on every
+              line. */}
           {scope === "org" && (
             <TableSubText>{session.user.email || EMPTY_VALUE}</TableSubText>
           )}
@@ -936,8 +921,8 @@ function ActiveRow({ session, onSelect, scope }: {
           {session.is_break_glass && (
             <Tooltip>
               <TooltipTrigger asChild>
-                {/* shrink-0 + nowrap: the label broke across two lines in a narrow
-                    Protocol column and crowded the protocol name beside it */}
+                {/* shrink-0 and nowrap keep the label on one line in a narrow Protocol column,
+                    clear of the protocol name beside it. */}
                 <Badge variant="destructive" className="gap-1 shrink-0 whitespace-nowrap">
                   <ShieldAlert className="h-3 w-3 shrink-0" />
                   Break-glass
@@ -962,9 +947,9 @@ function ActiveRow({ session, onSelect, scope }: {
         </Tooltip>
       </TableCell>
       <TableCell>
-        {/* nowrap: one line per direction. In a narrow column `↓119.69 MB` split from its unit. */}
+        {/* nowrap: one line per direction, so a value never splits from its unit. */}
         <div className="flex flex-col whitespace-nowrap tabular-nums">
-          {/* Plain text: a direction, not a state. The arrow carries it. */}
+          {/* Plain text rather than a badge; the arrow shows the direction. */}
           <span>
             <ArrowDownToLine className="h-3 w-3 inline mr-1 text-muted-foreground" aria-hidden="true" />
             {formatBytes(session.bandwidth.download_bytes)}
@@ -1013,8 +998,8 @@ function HistoryRow({ log, onSelect, scope }: {
             </TableLink>
           </span>
           <TableSubText><NodeLink clusterId={log.host} /> / {log.project}</TableSubText>
-          {/* same reasoning as the active table: an organisation view of other people's
-              sessions has to say whose, and a break-glass entry has to be legible as one. */}
+          {/* As in the active table: an organisation view of other people's sessions says
+              whose, and marks a break-glass entry as one. */}
           {scope === "org" && (
             <TableSubText>
               {log.user_email || EMPTY_VALUE}
@@ -1047,5 +1032,3 @@ function HistoryRow({ log, onSelect, scope }: {
     </TableRow>
   );
 }
-
-// ============ Shared Components ============

@@ -3,8 +3,8 @@ import type { InstanceMetrics } from "@/types/api";
 
 /**
  * What one metrics sample says about CPU and memory, decided once for every surface that shows
- * it. The instance dialog and the console bar used to each read the raw fields their own way,
- * so the bar printed "0.0%" while the dialog said the second sample had not arrived.
+ * it, so the instance dialog and the console bar agree (ex; neither shows "0.0%" while the
+ * second sample has not arrived).
  */
 export type CpuReading =
   // `unlimited`: no limits.cpu, so `vcpus` and the percent are measured against the host
@@ -35,7 +35,7 @@ export interface MemoryReading {
   cache: number | null;
   /** Used still counts page cache the guest can reclaim, so it overstates pressure. */
   includesCache: boolean;
-  /** No limits.memory: `total` is the host's memory, not a ceiling this instance was given. */
+  /** No limits.memory, so `total` is the host's memory rather than this instance's ceiling. */
   unlimited: boolean;
 }
 

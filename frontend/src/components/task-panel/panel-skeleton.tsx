@@ -16,7 +16,7 @@ export function skeletonRowsFor(height: number): number {
  */
 export function PanelSkeleton({ rows }: { rows: number }) {
   return (
-    // note: no role="status" here. The panel owns the one polite live region on this surface,
+    // No role="status" here. The panel owns the one polite live region on this surface,
     // and it announces the load itself; a second region would speak over it.
     <div className="flex flex-col px-3 py-2" aria-busy="true">
       <span className="sr-only">Loading</span>

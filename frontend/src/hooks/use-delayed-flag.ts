@@ -3,8 +3,7 @@
 import * as React from "react";
 
 // Suppresses sub-threshold flashes: returns true only once `value` has stayed true for
-// `delayMs`. A navigation that commits in 80ms therefore shows no indicator at all, which
-// is what keeps a fast hop from looking busier than a slow one.
+// `delayMs`, so a navigation that commits in 80ms shows no indicator at all.
 export function useDelayedFlag(value: boolean, delayMs = 150): boolean {
   const [delayed, setDelayed] = React.useState(false);
 

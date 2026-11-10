@@ -6,9 +6,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { isIllustrationPreference, type IllustrationPreference } from "@/types/personalization";
 
 /**
- * Whether cards show their illustration, for everyone this branding applies to, beside Default Theme
- * in the branding editor. It is the only place the choice is made (owner decision 2026-11-09): there
- * is no per-account override, so a tenant sees what its organization chose.
+ * Branding editor field: whether cards show illustrations for everyone the branding applies to.
+ * There is no per-account override.
  */
 export function IllustrationsDefaultField({
   value,

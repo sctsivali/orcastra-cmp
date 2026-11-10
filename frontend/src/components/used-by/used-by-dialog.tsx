@@ -21,16 +21,10 @@ import { inventoryLinks } from "@/lib/inventory-links";
 import { plural } from "@/lib/utils";
 
 // One dialog for the whole used_by family, opened from either the "Used By" or the "Projects"
-// cell of six inventory tables.
+// cell of the inventory tables.
 //
-// It replaces two components that rendered the same references with two different parsers and
-// each dropped half the answer: one showed project and name with no kind, the other kind and
-// name with no project, and the second one re-parsed with a weaker regex than the module whose
-// header says it must stay in step with the backend's tenant-visibility parser.
-//
-// note: the two table columns stay separate. They carry different sort and facet accessors and
-// different URL keys, so merging the cells would break two facets and a shared link. Only the
-// dialog merges; the columns just open it in different views.
+// The two table columns stay separate: they carry different sort and facet accessors and
+// different URL keys. Only the dialog is shared; the columns open it in different views.
 export function UsedByDialog({
   subject,
   panelId,
@@ -49,10 +43,9 @@ export function UsedByDialog({
   if (!subject) return null;
 
   const panels = subject.panels ?? [];
-  // important: through the shared parser, not a local regex. Writing a second one here is
-  // exactly the defect this component exists to remove, and "it is only for a count in the
-  // subtitle" is the same reasoning that produced the one being deleted. It is also cached on
-  // the array identity, so this costs nothing the table has not already paid.
+  // important: count through the shared parser, never a local regex. lib/used-by.ts stays in
+  // step with the backend's tenant-visibility parser, and its result is cached on the array
+  // identity, so this costs nothing the table has not already paid.
   const projectCount = projectsFromUsedBy(subject.usedBy).length;
 
   return (
@@ -79,8 +72,8 @@ export function UsedByDialog({
             />
           ) : (
             <Tabs value={panelId} onValueChange={setPanelId}>
-              {/* A single-panel subject gets no tab strip: one tab is chrome that costs a row of
-                  vertical density and teaches nothing. */}
+              {/* A subject with no extra panels takes the branch above and gets no tab strip:
+                  a single tab costs a row of vertical density and teaches nothing. */}
               <TabsList>
                 <TabsTrigger value={USAGE_PANEL_ID}>Usage</TabsTrigger>
                 {panels.map((panel) => (
@@ -117,8 +110,8 @@ export function UsedByDialog({
 }
 
 function titleFor(subject: UsedBySubject): React.ReactNode {
-  // Networks are the one kind with a real detail route, so the title links there. Do not fake
-  // this for the others: every other destination is a filtered list, not a record page.
+  // Networks are the one kind with a real detail route, so the title links there. Every other
+  // destination is a filtered list.
   if (subject.kind === "networks" && subject.node) {
     return (
       <TableLink

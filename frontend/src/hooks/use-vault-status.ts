@@ -19,7 +19,7 @@ const isDegraded = (state: VaultState | undefined): state is NoticeState =>
   state !== undefined && state !== "ok" && state !== "not_configured";
 
 /**
- * Whether the dashboard should say that Vault is sealed or unavailable (issue #15).
+ * Whether the dashboard should say that Vault is sealed or unavailable.
  *
  * important: shows only on an answer. Loading and a failed read of the status itself show
  * nothing, because "the status could not be read" is not "Vault is sealed". Sealed and
@@ -29,7 +29,7 @@ const isDegraded = (state: VaultState | undefined): state is NoticeState =>
 export function useVaultStatus() {
   const { data: session, status } = useSession();
   const groups = session?.user?.groups;
-  // note: a retained session during a refresh still counts, or the notice blinks every 4 minutes.
+  // A retained session during a refresh still counts, or the notice blinks every 4 minutes.
   const enabled = Boolean(session) && status !== "unauthenticated" && Array.isArray(groups) && hasMappedRole(groups);
   const queryClient = useQueryClient();
   const [checking, setChecking] = useState(false);
@@ -68,7 +68,7 @@ export function useVaultStatus() {
       sweepTimerRef.current = null;
       void refresh();
     }, RECONNECT_SWEEP_MS);
-    // note: keyed on the read, not the body, so two identical answers still count twice.
+    // Keyed on the read, not the body, so two identical answers still count twice.
   }, [query.dataUpdatedAt, data, queryClient]);
 
   useEffect(
@@ -84,7 +84,7 @@ export function useVaultStatus() {
       const fresh: VaultStatus = await vaultStatusAPI.get({ fresh: true });
       queryClient.setQueryData(VAULT_STATUS_KEY, fresh);
     } catch {
-      // note: a failed check changes nothing on screen; the poll keeps going.
+      // A failed check changes nothing on screen; the poll keeps going.
     } finally {
       setChecking(false);
     }

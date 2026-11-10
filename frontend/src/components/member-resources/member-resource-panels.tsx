@@ -26,10 +26,9 @@ interface MemberResourcePanelsProps {
 /**
  * The populated body of the member resource dialog.
  *
- * important: `degraded_parts` is not decoration. A storage or instance read that failed used to
- * be swallowed and the panel rendered zeroes, so "0 B / 0 B" and a missing Storage Pools card
- * read as "this member has no storage" rather than as "we could not find out". Anything the
- * backend marks lost is named here, next to the number it affects.
+ * important: honour `degraded_parts`. Without it a failed storage or instance read renders as
+ * zeroes, which reads as "this member has no storage" instead of "could not be read". Anything
+ * the backend marks lost is named here, next to the number it affects.
  */
 export function MemberResourcePanels({
   resources,
@@ -40,15 +39,15 @@ export function MemberResourcePanels({
   const storageLost = lostParts.some((part) => part.startsWith("storage")) || Boolean(resources.storage_partial);
   const instancesLost = lostParts.includes("instances") || Boolean(resources.instances_partial);
 
-  // note: allocation, not utilisation. The figure is the sum of limits.cpu of the running
-  // instances placed here (one core for an instance with no limit); LXD's resources API carries
-  // no host CPU utilisation, and KVM lets the sum exceed the thread count, so it is a ratio.
+  // Allocation, not utilisation: the sum of limits.cpu of the running instances placed here
+  // (one core for an instance with no limit). LXD's resources API carries no host CPU
+  // utilisation, and KVM lets the sum exceed the thread count, so it is a ratio.
   const cpu = cpuAllocation(resources);
 
-  // What the storage card headlines. A cluster-wide pool (ceph) is seen from every member, and
-  // adding it to each one made a 1.7 TB member read as 12.4 TB. A build that reports the
-  // local/shared split headlines the member's own disks and lists the shared store once, on its
-  // own line; an older payload (no split) falls back to the sum of its rows.
+  // What the storage card headlines. A cluster-wide pool (ceph) is seen from every member, so
+  // adding it to each would inflate every member's total. With the local/shared split the card
+  // headlines the member's own disks and lists the shared store once, on its own line; a
+  // payload without the split falls back to the sum of its rows.
   const storage = React.useMemo(() => {
     const local = resources.storage_local_total;
     const hasSplit = typeof local === "number" && typeof resources.storage_shared_total === "number";
@@ -83,9 +82,7 @@ export function MemberResourcePanels({
         </PartialReadNotice>
       )}
 
-      {/* Overview Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* CPU */}
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -116,7 +113,6 @@ export function MemberResourcePanels({
           </CardContent>
         </Card>
 
-        {/* Memory */}
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -144,7 +140,6 @@ export function MemberResourcePanels({
           </CardContent>
         </Card>
 
-        {/* Storage */}
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -177,7 +172,6 @@ export function MemberResourcePanels({
           </CardContent>
         </Card>
 
-        {/* Instances */}
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -220,7 +214,6 @@ export function MemberResourcePanels({
         </Card>
       </div>
 
-      {/* GPU */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
@@ -234,9 +227,7 @@ export function MemberResourcePanels({
         </CardContent>
       </Card>
 
-      {/* Storage Pools */}
-      {/* important: an empty list used to make this card disappear with no explanation, which
-          is the same silence the degraded marker exists to break. A failed read says so. */}
+      {/* A pool list lost to a failed read says so instead of the card disappearing. */}
       {storageLost && !(resources.storage_pools ?? []).length ? (
         <Card>
           <CardHeader>
@@ -295,7 +286,6 @@ export function MemberResourcePanels({
         </Card>
       )}
 
-      {/* Resource Summary */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Resource Summary</CardTitle>

@@ -20,11 +20,8 @@ function Field({ label, value }: { label: string; value: string }) {
 }
 
 /**
- * The System tab.
- *
- * note: this is the one panel that reads only the list row and never NodeResources. That is
- * the split axis for this directory, and it is what lets the modal leave the live per-cluster
- * poll switched off while an operator is reading kernel versions.
+ * The System tab. It reads only the list row and never NodeResources, so the modal leaves the
+ * live per-cluster poll off while this tab is open.
  */
 export function NodeSystemPanel({ node }: { node: NodeStatus }) {
   const { isPartner } = usePermissions();
@@ -47,19 +44,19 @@ export function NodeSystemPanel({ node }: { node: NodeStatus }) {
             value={node.server_version ? versionRange(node.hypervisor_release, node.server_version) : EMPTY}
           />
           <Field label="API Version" value={node.api_version || EMPTY} />
-          {/* auth mode and the storage driver are the operator's picture of the hypervisor, not
-              the tenant's picture of where their instance runs */}
+          {/* Auth mode and the storage driver are operator detail about the hypervisor, so a
+              tenant does not see them. */}
           {isPartner ? <Field label="Authentication" value={node.auth || EMPTY} /> : null}
           <Field label="Server Name" value={String(env?.server_name || EMPTY)} />
           <Field label="OS" value={osVersion ? `${osName} ${osVersion}` : osName} />
           <Field label="Kernel" value={String(env?.kernel_version || EMPTY)} />
-          {/* note: never through formatLabel. It title-cases raw enums and turns x86_64 into "X86 64". */}
+          {/* Never through formatLabel. It title-cases raw enums and turns x86_64 into "X86 64". */}
           <Field label="Architecture" value={String(env?.kernel_architecture || EMPTY)} />
           <Field label="Clustering" value={env?.server_clustered ? "Clustered" : "Standalone server"} />
           {isPartner ? <Field label="Storage Backend" value={String(env?.storage || EMPTY)} /> : null}
           <Field label="Firewall" value={String(env?.firewall || EMPTY)} />
         </div>
-        {/* the same verdict as the Overview card, beside the version it is about */}
+        {/* The same verdict as the Overview card, beside the version it is about. */}
         {isPartner && node.server_version && node.hypervisor_release ? (
           <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
             <p className="font-medium">Version Check</p>
@@ -70,7 +67,7 @@ export function NodeSystemPanel({ node }: { node: NodeStatus }) {
             />
           </div>
         ) : null}
-        {/* every member's verdict, patched included: this panel is where an operator reads kernels */}
+        {/* Every member's verdict, patched included, since this is where kernels are read. */}
         {isPartner ? (
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-sm font-medium text-muted-foreground">Kernel CVEs</p>

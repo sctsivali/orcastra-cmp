@@ -17,11 +17,9 @@ export interface PoolCapacity {
 /**
  * What a pool's `space` block is worth to a table row.
  *
- * important: an absent `space` is not a zero-byte pool. LXD omits the block entirely for
- * object storage drivers, and backend/app/routers/storage_pools.py serialises that as `{}`
- * rather than dropping the key, so `resources` is truthy while `used` and `total` are
- * undefined. Reading them straight through a formatter is how this cell used to print
- * "NaN undefined / NaN undefined".
+ * important: an absent `space` is not a zero-byte pool. LXD omits the block for object storage
+ * drivers, and backend/app/routers/storage_pools.py serialises that as `{}`, so `resources` is
+ * truthy while `used` and `total` are undefined. Formatting them directly prints "NaN undefined".
  */
 export function poolCapacity(space: unknown): PoolCapacity {
   return capacityReading(space) ?? { used: 0, total: 0, percent: null };
@@ -30,13 +28,11 @@ export function poolCapacity(space: unknown): PoolCapacity {
 /**
  * Used of total, the bar, and the percentage.
  *
- * note: the bar is a fixed width rather than the column's, so a reader compares fill against
- * fill down the column instead of against a track that changes length every row.
+ * The bar has a fixed width, so a reader compares fill against fill down the column.
  *
- * note: the percentage stays muted until it means something. The dialogs that colour it
- * unconditionally show two or three bars at a time; this table shows up to a hundred rows, and
- * a green number on every one of them teaches an operator to stop reading the colour. The bar
- * fill keeps the full ramp, because that is the part being scanned.
+ * The percentage stays muted below the elevated threshold: across up to a hundred rows, a green
+ * number on every one teaches an operator to stop reading the colour. The bar fill keeps the
+ * full ramp, because that is the part being scanned.
  */
 export function PoolCapacityCell({
   capacity,
@@ -57,16 +53,16 @@ export function PoolCapacityCell({
   return (
     <div className="space-y-1.5">
       {/* important: the accessible name carries the reading as well as the purpose. An
-          aria-label replaces the text it sits on, so naming only the action left the one thing
-          the cell exists to state unreachable, and put the control outside WCAG 2.5.3. */}
+          aria-label replaces the text it sits on, so naming only the action hides the reading
+          and fails WCAG 2.5.3. */}
       <TableLink
         onClick={onOpen}
         aria-label={`Show the capacity breakdown for ${poolName}, ${reading}`}
       >
         {reading}
       </TableLink>
-      {/* note: the meter announces the percentage only. The link above it already carries the
-          used-of-total reading, and repeating it here made the cell read three times over. */}
+      {/* The meter announces the percentage only; the link above already carries the
+          used-of-total reading. */}
       <div className="flex items-center gap-2">
         <UsageBar
           className="h-1.5 w-24"

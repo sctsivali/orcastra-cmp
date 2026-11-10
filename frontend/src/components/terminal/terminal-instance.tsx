@@ -1,7 +1,4 @@
-/**
- * Terminal Instance: the floating terminal window's shell, a TerminalView reporting to the
- * terminal store.
- */
+/** The floating terminal window's shell: a TerminalView that reports to the terminal store. */
 
 "use client";
 

@@ -36,8 +36,7 @@ interface UnreachableNodesBannerProps {
   nodes: string[] | undefined;
   /**
    * Nodes that answered but lost some rows (a pool that refused, a project that could not be
-   * read). They share the one banner with `nodes`: two stacked cards for one list read as two
-   * problems, and neither said how many clusters were short in all.
+   * read). They share the one banner with `nodes`, so one list shows one card with one total.
    */
   partialNodes?: string[] | undefined;
   /**
@@ -54,8 +53,7 @@ interface UnreachableNodesBannerProps {
   partialNoun?: string;
   /**
    * Why each node did not answer, keyed by its name in `nodes` or `partialNodes`, shown under
-   * Show Details. A name with no reason still lists: a payload cached by an older build carries
-   * none.
+   * Show Details. A name with no reason is still listed.
    *
    * important: a reason can carry LXD's own error text. It travels on the same role gate as the
    * names and never reaches a role without cluster:read.
@@ -83,8 +81,8 @@ const REASON_KIND = /^(?:unreachable|forbidden|error|partial|late):\s*/;
  * The sentence for both shapes at once. A partial read says "could not fully read", so a regex on
  * "Could not reach" cannot mistake it for an outage, and "some", because most of its rows are there.
  *
- * important: the leading "Could not reach N cluster(s)" clause is matched by regex in four specs,
- * so it stays byte-identical whenever an unreachable cluster exists. Only what follows it moves.
+ * important: the browser specs in frontend/e2e match the leading "Could not reach N cluster(s)"
+ * clause by regex, so it stays byte-identical whenever an unreachable cluster exists.
  */
 function sentenceFor(
   unreachable: number,
@@ -122,11 +120,9 @@ function sentenceFor(
 }
 
 /**
- * The caution shell, written once for both shapes.
- *
- * note: a token border and a toned icon on the card, not a wash. It was a 10% amber tint under
- * amber-600, the raw palette shape scripts/checks/check-semantic-colour.mjs ratchets; the prose
- * already inherited --foreground, so only the icon and the border carry the caution.
+ * The caution shell, written once for both shapes. A token border and a toned icon carry the
+ * caution rather than a tinted wash (see scripts/checks/check-semantic-colour.mjs); the prose
+ * stays --foreground.
  *
  * important: `role="status"` sits on the sentence alone. It is a live region, so a control or a
  * long list inside it would be read out again on every background refetch.
@@ -160,13 +156,9 @@ function BannerShell({
 /**
  * What a role without cluster:read sees.
  *
- * It takes `noun` and nothing else, deliberately. A component that merely declines to render
- * `nodes` is one careless edit away from rendering it. A component that cannot be handed a node
- * name needs a type change first, and scripts/checks/check-banner-role-gate.mjs pins this
- * signature so that change cannot be a quiet one.
- *
- * No count either. How many nodes a fleet has is not something this operator is told anywhere
- * else in the console.
+ * It takes `noun` and nothing else, so handing it a node name needs a type change, and
+ * scripts/checks/check-banner-role-gate.mjs pins this signature. No count either: this role is
+ * not told the size of the fleet anywhere else in the console.
  */
 function UnreachableNodesNotice({ noun, className }: { noun: string; className?: string }) {
   return (
@@ -231,8 +223,8 @@ function UnreachableNodesDetail({
                   ? (reason ? `Still loading · ${reason}` : "Still loading")
                   : reason;
               return (
-                // note: index in the key. Callers pass node names, which are unique, but a
-                // duplicate string here must not silently drop a row from a warning banner.
+                // Index in the key: callers pass unique node names, but a duplicate string here
+                // must not silently drop a row from a warning banner.
                 <li key={`${node}-${i}`} className="flex flex-wrap items-baseline gap-x-2">
                   <span className="font-medium">{node}</span>
                   {detail ? <span className="min-w-0 break-words">{detail}</span> : null}
@@ -248,23 +240,16 @@ function UnreachableNodesDetail({
 
 /**
  * Says a list is short because a node did not answer, so an outage cannot read as an empty
- * result. Who is told WHICH node depends on the role.
+ * result: a fan-out endpoint returns 200 with whatever it could collect. Who is told which node
+ * depends on the role.
  *
- * A fan-out endpoint returns 200 with whatever it could collect. Without this, a cluster that
- * did not answer contributes nothing and looks exactly like a cluster that has nothing, which is
- * how an operator concludes a host has no images when it is simply down. The list is still
- * shown: partial data is useful as long as it is labelled.
+ * Admin and Partner hold cluster:read and get the names (and on /technologies the per-node
+ * reason). A tenant holds no cluster:read and is told node names nowhere else, so it gets only
+ * the fact that the list is incomplete; without it an instance on a dead node reads as deleted.
  *
- * Admin and Partner hold cluster:read and get the names, and on /technologies the per-node
- * reason as well, because for them the banner is a diagnosis. A tenant holds no cluster:read, is
- * scoped to instances, and is told the fleet's node names nowhere else in the console, so naming
- * them here would be the one surface that does. The tenant still gets the fact that the list is
- * incomplete, which is the part of this banner that is theirs: without it, an instance sitting on
- * a dead node simply vanishes from their list and reads as deleted.
- *
- * important: this is a UI redaction, not enforcement. The routers still send unreachable_nodes in
- * the payload. Backend scoping is the real boundary, and for a tenant with no policy assignment
- * that list is now empty at the source (`_narrow_by_tenant_acl` in app/core/org_scope.py).
+ * important: this is only a UI redaction. The routers still send unreachable_nodes; backend
+ * scoping is the boundary, and for a tenant with no policy assignment that list is empty at the
+ * source (`_narrow_by_tenant_acl` in app/core/org_scope.py).
  */
 export function UnreachableNodesBanner({
   nodes,
@@ -277,8 +262,8 @@ export function UnreachableNodesBanner({
 }: UnreachableNodesBannerProps) {
   // important: the hook runs before every early return, so the emptiness check cannot move above it.
   const { isLoading, hasRole } = usePermissions();
-  // important: above the early returns too. A list that drops to no missing clusters for one
-  // refetch and comes back must not close what the operator opened.
+  // important: above the early returns too, so a list that drops to no missing clusters for one
+  // refetch and comes back keeps open what the operator opened.
   const [open, setOpen] = useState(false);
 
   const unreachable = nodes ?? [];
@@ -290,19 +275,15 @@ export function UnreachableNodesBanner({
   const late = (lateNodes ?? []).filter((node) => !reached.has(node) && !partlySet.has(node));
   if (unreachable.length === 0 && partial.length === 0 && late.length === 0) return null;
 
-  // important: nothing, rather than the wrong copy, while the first session read is outstanding.
-  // usePermissions reports isLoading only when there is no session to read roles from, which is
-  // first load alone: a background useSession().update() keeps the previous session and leaves
-  // isLoading false, so a partner never watches this flip from the tenant line to the named one.
-  // With no session resolveRoles([]) answers [Role.TENANT], so rendering here would show the
-  // tenant line to everybody for a frame. A dead session lands in the same branch, which is the
-  // right way for a disclosure gate to fail.
+  // important: render nothing while the first session read is outstanding. With no session
+  // resolveRoles([]) answers [Role.TENANT], so rendering here would show the tenant line to
+  // everybody for a frame. isLoading is true only on first load (a background
+  // useSession().update() keeps the previous session); a dead session also fails closed here.
   if (isLoading) return null;
 
-  // hasRole(Role.PARTNER), not can(Permission.CLUSTER_READ). The permission names the protected
-  // thing more precisely and has zero other call sites in this tree, while seven sibling gates
-  // read exactly like this line. scripts/checks/check-banner-role-gate.mjs asserts the two stay
-  // equivalent against ROLE_PERMISSIONS, so the precision is kept without a second vocabulary.
+  // hasRole(Role.PARTNER) rather than can(Permission.CLUSTER_READ), matching the sibling role
+  // gates. scripts/checks/check-banner-role-gate.mjs asserts the two stay equivalent against
+  // ROLE_PERMISSIONS.
   if (!hasRole(Role.PARTNER)) {
     return <UnreachableNodesNotice noun={noun} className={className} />;
   }

@@ -8,45 +8,39 @@ import { formatDateTime } from "@/lib/utils";
 import type { MyAccessResponse, TenantPermission, ResolvedAccess } from "@/types";
 
 /**
- * Hook for tenant-level access control.
+ * Tenant-level access checks for UI gating.
  *
- * - Admin/Partner: bypass all ACL checks (full access).
- * - Tenant: fetches resolved policy rules from the backend and provides
- *   helpers to check cluster/project/instance permissions.
- *
- * Usage:
- *   const { canAccessCluster, canAccessProject, hasPermission } = useTenantAccess();
- *   if (!canAccessCluster("my-cluster")) return <NoAccess />;
- *   if (!hasPermission("my-cluster", "default", "vm1", "console")) return null;
+ * Admin and Partner bypass every ACL check. A Tenant reads its resolved policy rules from the
+ * backend, and the helpers match cluster, project and instance paths with `*` wildcards.
  */
 
 export interface UseTenantAccessResult {
-  /** true while the access data is being fetched */
+  /** True while the access data is being fetched. */
   isLoading: boolean;
-  /** raw resolved access data */
+  /** The resolved access rules. */
   access: ResolvedAccess[];
-  /** total clusters the tenant can see */
+  /** Clusters the tenant can see. */
   totalClusters: number;
-  /** total rules resolved for the tenant */
+  /** Rules resolved for the tenant. */
   totalRules: number;
-  /** check if user can access a given cluster (any permission) */
+  /** Whether the tenant holds any permission on a cluster. */
   canAccessCluster: (clusterId: string) => boolean;
-  /** check if user can access a given project within a cluster */
+  /** Whether the tenant holds any rule for a project within a cluster. */
   canAccessProject: (clusterId: string, projectName: string) => boolean;
-  /** check if user can access a given instance */
+  /** Whether the tenant can see an instance. */
   canAccessInstance: (clusterId: string, projectName: string, instanceName: string) => boolean;
-  /** check a specific permission for a resource path */
+  /** Checks one permission for a resource path. */
   hasPermission: (
     clusterId: string,
     projectName: string,
     instanceName: string,
     permission: TenantPermission,
   ) => boolean;
-  /** get all allowed cluster IDs */
+  /** Cluster IDs the tenant can access. */
   allowedClusterIds: string[];
-  /** filter a list of cluster IDs to only those allowed */
+  /** Keeps the rows whose cluster_id the tenant can access. */
   filterClusters: <T extends { cluster_id: string }>(clusters: T[]) => T[];
-  /** filter projects for a cluster */
+  /** Keeps the project names the tenant can access on a cluster. */
   filterProjects: (clusterId: string, projectNames: string[]) => string[];
   /**
    * Why an instance is view only because its paid term ended, or undefined. A rule from another
@@ -66,7 +60,7 @@ function covers(rule: ResolvedAccess, clusterId: string, projectName: string, in
 export function useTenantAccess(): UseTenantAccessResult {
   const { isPartner, isLoading: permLoading } = usePermissions();
 
-  // only fetch for tenant users (non-partner, non-admin)
+  // Only a Tenant fetches; Admin and Partner bypass the ACL.
   const {
     data,
     isLoading: queryLoading,
@@ -74,7 +68,7 @@ export function useTenantAccess(): UseTenantAccessResult {
     queryKey: ["tenant-my-access"],
     queryFn: () => api.tenantAccess.myAccess(),
     enabled: !isPartner && !permLoading,
-    staleTime: 60_000, // cache for 1 min
+    staleTime: 60_000,
   });
 
   const access = data?.access || [];
@@ -82,12 +76,12 @@ export function useTenantAccess(): UseTenantAccessResult {
   const totalRules = data?.total_rules || 0;
   const isLoading = permLoading || (!isPartner && queryLoading);
 
-  // build lookup maps for fast ACL checks
+  // Lookup map for the ACL checks.
   const aclMap = useMemo(() => {
-    if (isPartner) return null; // bypass for admin/partner
+    if (isPartner) return null; // Admin and Partner bypass
     const map = new Map<string, Set<TenantPermission>>();
     for (const rule of access) {
-      // key format: clusterId/project/instance
+      // Key format: clusterId/project/instance.
       const key = `${rule.cluster_id}/${rule.project_name}/${rule.instance_name}`;
       const existing = map.get(key) || new Set<TenantPermission>();
       for (const p of rule.permissions) {
@@ -98,14 +92,13 @@ export function useTenantAccess(): UseTenantAccessResult {
     return map;
   }, [access, isPartner]);
 
-  // unique cluster IDs the tenant can access
   const allowedClusterIds = useMemo(() => {
-    if (isPartner) return []; // not used for admin/partner
+    if (isPartner) return []; // Not used for Admin or Partner
     const ids = new Set(access.map((r) => r.cluster_id));
     return Array.from(ids);
   }, [access, isPartner]);
 
-  // wildcard-aware permission check
+  // Wildcard-aware permission check.
   const hasPermission = useMemo(() => {
     return (
       clusterId: string,
@@ -113,11 +106,11 @@ export function useTenantAccess(): UseTenantAccessResult {
       instanceName: string,
       permission: TenantPermission,
     ): boolean => {
-      // admin/partner always has access
+      // Admin and Partner always have access.
       if (isPartner) return true;
       if (!aclMap) return false;
 
-      // check from most specific to most general
+      // Most specific path first.
       const paths = [
         `${clusterId}/${projectName}/${instanceName}`,
         `${clusterId}/${projectName}/*`,
@@ -144,7 +137,7 @@ export function useTenantAccess(): UseTenantAccessResult {
     return (clusterId: string, projectName: string): boolean => {
       if (isPartner) return true;
       if (!aclMap) return false;
-      // check if any rule matches this cluster+project
+      // Any rule for this cluster and project, or for every project on it.
       for (const [key] of aclMap) {
         const [c, p] = key.split("/");
         if ((c === clusterId) && (p === projectName || p === "*")) return true;
@@ -155,7 +148,7 @@ export function useTenantAccess(): UseTenantAccessResult {
 
   const canAccessInstance = useMemo(() => {
     return (clusterId: string, projectName: string, instanceName: string): boolean => {
-      // any permission = can see the instance
+      // Seeing an instance means holding `view` on it.
       return hasPermission(clusterId, projectName, instanceName, "view");
     };
   }, [hasPermission]);

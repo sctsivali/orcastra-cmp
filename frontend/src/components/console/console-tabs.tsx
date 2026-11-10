@@ -1,7 +1,8 @@
 /**
- * Console Tabs: Graphics (a VM's display), Text (a shell, needs the VM agent), Serial (the serial
- * console, needs neither the agent nor networking), ISO (a VM's boot media), Files (the guest's
- * filesystem, needs the VM agent) and Credentials (the guest's logins, needs the VM agent).
+ * The console's tabs: Graphics (a VM's display), Text (a shell, needs the VM agent), Serial
+ * (the serial console, needs neither the agent nor networking), ISO (a VM's boot media), Files
+ * (the guest's filesystem, needs the VM agent) and Credentials (the guest's logins, needs the VM
+ * agent).
  */
 
 "use client";

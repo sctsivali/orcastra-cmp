@@ -1,22 +1,13 @@
 "use client";
 
 /**
- * PermissionGuard - conditionally renders children based on RBAC.
+ * Renders children only when the session holds a permission or a minimum role.
  *
- * Usage:
  *   <PermissionGuard permission={Permission.INSTANCE_DELETE}>
  *     <DeleteButton />
  *   </PermissionGuard>
  *
- *   <PermissionGuard minRole={Role.ADMIN}>
- *     <AdminPanel />
- *   </PermissionGuard>
- *
- *   <PermissionGuard permission={Permission.INSTANCE_WRITE} fallback={<span>Read-only</span>}>
- *     <EditButton />
- *   </PermissionGuard>
- *
- * NOTE: This is a UI helper only. Backend enforces authorization independently.
+ * A UI helper only; the backend enforces authorization independently.
  */
 
 import { ReactNode } from "react";
@@ -25,18 +16,18 @@ import { Role, Permission } from "@/types/rbac";
 
 interface PermissionGuardProps {
   children: ReactNode;
-  /** Required permission - child is hidden unless user holds this permission */
+  /** Children are hidden unless the user holds this permission. */
   permission?: Permission;
-  /** Required minimum role - child is hidden unless user meets this hierarchy level */
+  /** Children are hidden unless the user meets this role level. */
   minRole?: Role;
-  /** Content shown when permission check fails (default: nothing) */
+  /** Content shown when the check fails. Defaults to nothing. */
   fallback?: ReactNode;
-  /** If true, disable children instead of hiding (adds opacity + pointer-events:none) */
+  /** Disable children instead of hiding them (opacity plus pointer-events: none). */
   disableInsteadOfHide?: boolean;
   /**
-   * Content shown while the session is still resolving. Defaults to nothing, which is right
-   * for an inline guard around a button but wrong for a guard wrapping a whole page: there it
-   * paints a blank screen after the route has already committed.
+   * Content shown while the session is still resolving. Defaults to nothing, which suits an
+   * inline guard around a button; a guard wrapping a whole page would otherwise paint a blank
+   * screen after the route has committed.
    */
   pending?: ReactNode;
 }
@@ -51,7 +42,7 @@ export function PermissionGuard({
 }: PermissionGuardProps) {
   const { can, hasRole, isLoading } = usePermissions();
 
-  // while loading session, hide guarded content to avoid flash
+  // Hide guarded content while the session resolves, so it does not flash.
   if (isLoading) return <>{pending}</>;
 
   let allowed = true;
@@ -83,9 +74,7 @@ export function PermissionGuard({
   return <>{fallback}</>;
 }
 
-/**
- * RequireRole - shorthand that only checks minimum role.
- */
+/** Shorthand for a guard that checks only a minimum role. */
 export function RequireRole({
   role,
   children,

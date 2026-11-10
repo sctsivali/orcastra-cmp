@@ -66,7 +66,7 @@ function retryRead(failureCount: number, error: unknown): boolean {
 
 export const migrationQueryKeys = {
   all: (actorScope: string) => ["migrations", actorScope] as const,
-  // note: an object segment, so a view's list can never match a job id under the same prefix.
+  // An object segment, so a view's list can never match a job id under the same prefix.
   jobList: (actorScope: string, view: MigrationView) => ["migrations", actorScope, "jobs", { view }] as const,
   job: (actorScope: string, jobId: string) => ["migrations", actorScope, "jobs", jobId] as const,
   plans: (actorScope: string) => ["migrations", actorScope, "plans"] as const,
@@ -84,12 +84,12 @@ const reconciledTransitions = new WeakMap<object, Set<string>>();
  * Reconcile the inventories a move or copy changed when a job seen running reaches cutover or
  * stops being active.
  *
- * Starting a job reconciles on the response, when nothing has moved yet; the backend clears its
- * caches when the job commits each verdict, and this is the browser's half, so the Overview and
- * Instances pages do not keep the instance on its old cluster until their next poll.
+ * Starting a job reconciles on the response, when nothing has moved yet. The backend clears its
+ * caches as the job commits each verdict; this is the browser's half, so the Overview and
+ * Instances pages do not show the instance on its previous cluster until their next poll.
  *
- * A list holds one view, so a job that finishes leaves the Active list instead of showing its
- * final phase there. `historyTotal`, the exact History count, rising stands in for that.
+ * A list holds one view, so a finished job leaves the Active list instead of showing its final
+ * phase there; a rise in `historyTotal`, the exact History count, stands in for that.
  */
 function useReconcileFinishedMigrations(
   jobs: readonly MigrationJob[] | undefined,

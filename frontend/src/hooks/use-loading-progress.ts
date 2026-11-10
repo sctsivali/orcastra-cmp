@@ -1,8 +1,4 @@
-/**
- * Loading Progress Hook & Context
- * Provides loading state management with progress tracking and status messages
- * Uses React hooks for local state - lightweight and dependency-free
- */
+/** Loading state with phases, progress and rotating status messages, in local state. */
 
 import * as React from "react";
 
@@ -22,7 +18,7 @@ export interface LoadingState {
   phases: LoadingPhase[];
 }
 
-// Dynamic loading messages - 5-10 variations per phase to keep it interesting
+// Status messages per progress band; the ranges match getPhaseKey below.
 export const DYNAMIC_MESSAGES = {
   // Phase 1: Initializing (0-15%)
   initializing: [
@@ -102,8 +98,7 @@ export const DYNAMIC_MESSAGES = {
     "Just about done…",
     "Almost done. Probably.",
   ],
-  
-  // Complete
+
   complete: [
     "Complete!",
     "All done!",
@@ -112,7 +107,7 @@ export const DYNAMIC_MESSAGES = {
   ],
 };
 
-// Helper to get random message from array (with seed for consistency during same render)
+// A seed makes the pick deterministic; without one it is random.
 function getRandomMessage(messages: string[], seed?: number): string {
   const index = seed !== undefined 
     ? Math.floor(seed) % messages.length 
@@ -120,7 +115,7 @@ function getRandomMessage(messages: string[], seed?: number): string {
   return messages[index];
 }
 
-// Legacy static messages (for backward compatibility)
+// Fixed messages: the first of each band, plus per-resource messages.
 export const LOADING_MESSAGES = {
   initializing: DYNAMIC_MESSAGES.initializing[0],
   connecting: DYNAMIC_MESSAGES.connecting[0],
@@ -130,8 +125,7 @@ export const LOADING_MESSAGES = {
   almostDone: DYNAMIC_MESSAGES.almostDone[0],
   finalizing: "Finalizing…",
   complete: DYNAMIC_MESSAGES.complete[0],
-  
-  // Context-specific (legacy)
+
   fetchingVMs: "Loading virtual machines…",
   processingVMs: "Processing VM information…",
   fetchingNetworks: "Loading network configurations…",
@@ -149,17 +143,15 @@ export const LOADING_MESSAGES = {
   authenticating: "Authenticating session…",
 };
 
-// Predefined loading phases for different page types
+// Phase lists per page type.
 export const LOADING_PHASES = {
-  // Generic data page loading phases
   dataPage: [
     { id: "init", label: "Initializing" },
     { id: "fetch", label: "Fetching Data" },
     { id: "process", label: "Processing" },
     { id: "render", label: "Rendering" },
   ],
-  
-  // VM page specific
+
   vms: [
     { id: "init", label: "Initializing" },
     { id: "fetch", label: "Fetching VMs" },
@@ -167,16 +159,14 @@ export const LOADING_PHASES = {
     { id: "process", label: "Processing" },
     { id: "render", label: "Rendering" },
   ],
-  
-  // Network page specific
+
   networks: [
     { id: "init", label: "Initializing" },
     { id: "fetch", label: "Fetching Networks" },
     { id: "topology", label: "Loading Topology" },
     { id: "render", label: "Rendering" },
   ],
-  
-  // Dashboard
+
   dashboard: [
     { id: "init", label: "Initializing" },
     { id: "health", label: "Health Check" },
@@ -186,7 +176,6 @@ export const LOADING_PHASES = {
   ],
 };
 
-// Initial loading state
 const initialState: LoadingState = {
   isLoading: false,
   progress: 0,
@@ -195,10 +184,7 @@ const initialState: LoadingState = {
   phases: [],
 };
 
-/**
- * Custom hook for managing loading progress state
- * Provides local state management without external dependencies
- */
+/** Loading state driven by the caller: start, move through phases, finish. */
 export function useLoadingProgress(
   initialPhases?: Array<{ id: string; label: string }>
 ) {
@@ -333,17 +319,15 @@ export function useLoadingProgress(
 }
 
 /**
- * Hook to simulate progressive loading for data fetching
- * Automatically updates progress based on time elapsed
- * Returns progress value and status message for display
- * Uses dynamic rotating messages to keep it interesting
+ * Time-based progress for a load whose real progress is unknown. Eases toward 95% while
+ * `isLoading` holds and rotates the status message within each progress band.
  */
 export function useSimulatedProgress(
   isLoading: boolean,
   options?: {
-    minDuration?: number; // Minimum animation duration in ms
+    minDuration?: number; // Time scale of the easing curve in ms; larger is slower
     phases?: Array<{ id: string; label: string }>;
-    context?: string; // Loading context for status messages
+    context?: string; // Accepted but not read
     messageRotationInterval?: number; // How often to rotate messages (ms)
   }
 ) {
@@ -356,8 +340,7 @@ export function useSimulatedProgress(
   const [currentPhases, setCurrentPhases] = React.useState<LoadingPhase[]>([]);
   const [currentPhaseKey, setCurrentPhaseKey] = React.useState<keyof typeof DYNAMIC_MESSAGES>("initializing");
   const messageIndexRef = React.useRef(0);
-  
-  // Get current phase based on progress
+
   const getPhaseKey = React.useCallback((prog: number): keyof typeof DYNAMIC_MESSAGES => {
     if (prog < 15) return "initializing";
     if (prog < 30) return "connecting";
@@ -366,8 +349,7 @@ export function useSimulatedProgress(
     if (prog < 90) return "rendering";
     return "almostDone";
   }, []);
-  
-  // Rotate messages within the same phase
+
   React.useEffect(() => {
     if (!isLoading) return;
     
@@ -381,8 +363,7 @@ export function useSimulatedProgress(
     
     return () => clearInterval(intervalId);
   }, [isLoading, currentPhaseKey, messageRotationInterval]);
-  
-  // Initialize phases
+
   React.useEffect(() => {
     if (isLoading) {
       const phaseList = phases || LOADING_PHASES.dataPage;
@@ -399,11 +380,9 @@ export function useSimulatedProgress(
       setStatusMessage(getRandomMessage(DYNAMIC_MESSAGES.initializing));
     }
   }, [isLoading, phases]);
-  
-  // Animate progress
+
   React.useEffect(() => {
     if (!isLoading) {
-      // Complete animation when loading finishes
       setProgress(100);
       setStatusMessage(getRandomMessage(DYNAMIC_MESSAGES.complete));
       setCurrentPhases((prev) =>
@@ -419,8 +398,7 @@ export function useSimulatedProgress(
     const animate = () => {
       const elapsed = Date.now() - startTime;
       
-      // Use easing function for smooth progress
-      // Progress faster at start, slower near end (logarithmic easing)
+      // Exponential ease-out: fast at first, slowing toward the cap.
       const targetProgress = Math.min(
         95, // Max 95% during loading, final 5% on complete
         (1 - Math.exp(-elapsed / (minDuration * 2))) * 100
@@ -428,7 +406,7 @@ export function useSimulatedProgress(
       
       setProgress(targetProgress);
       
-      // Check if phase changed - if so, pick a new random message
+      // Entering a new band starts at a random message.
       const newPhaseKey = getPhaseKey(targetProgress);
       if (newPhaseKey !== lastPhaseKey) {
         lastPhaseKey = newPhaseKey;
@@ -437,7 +415,7 @@ export function useSimulatedProgress(
         setStatusMessage(DYNAMIC_MESSAGES[newPhaseKey][messageIndexRef.current]);
       }
       
-      // Update phases based on progress
+      // Each phase completes at its share of 95%.
       const phaseList = phases || LOADING_PHASES.dataPage;
       const phaseThresholds = phaseList.map((_, i) => ((i + 1) / phaseList.length) * 95);
       

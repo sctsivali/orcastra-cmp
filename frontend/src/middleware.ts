@@ -11,11 +11,10 @@ import { isSettingsTab } from "@/app/settings/settings-tabs";
 // session read refreshes it; the role gate below reads the cookie's groups until then.
 const { auth } = NextAuth({ ...authConfig, callbacks: { ...authConfig.callbacks, jwt: ({ token }) => token } });
 
-// note: middleware cannot tell a router prefetch from a real navigation. Next strips every
+// Middleware cannot tell a router prefetch from a real navigation. Next strips every
 // FLIGHT_HEADER (RSC, Next-Router-Prefetch, Next-Router-State-Tree, ...) from the request
-// before invoking middleware, deliberately: see server/web/adapter.js, "Headers should only
-// be stripped for middleware". Verified on 15.5.18 by dumping the header names seen here.
-// Anything that needs to treat a prefetch differently has to live outside this chain.
+// before invoking middleware (server/web/adapter.js, "Headers should only be stripped for
+// middleware"; confirmed on Next 15.5.18). Prefetch-specific handling has to live elsewhere.
 const authMiddleware = auth((request) => {
   const decision = inspectRequestTarget(
     request.method,
@@ -32,8 +31,8 @@ const authMiddleware = auth((request) => {
     });
   }
 
-  // note: App Router may stream a not-found page with HTTP 200. Reject unknown Settings
-  // paths before rendering so the URL contract also holds for clients checking status codes.
+  // App Router may stream a not-found page with HTTP 200. Unknown Settings paths are rejected
+  // before rendering so clients that check status codes see the 404.
   if (request.nextUrl.pathname.startsWith("/settings/") &&
       !isSettingsTab(request.nextUrl.pathname.slice("/settings/".length))) {
     return new NextResponse("Not found", { status: 404 });

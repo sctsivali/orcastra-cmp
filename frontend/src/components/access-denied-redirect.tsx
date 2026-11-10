@@ -8,8 +8,8 @@ interface AccessDeniedRedirectProps {
   to: string;
 }
 
-// Fallback for a page-level RequireRole. Renders nothing and bounces, so the operator lands
-// somewhere they can actually use instead of on an empty screen.
+// Fallback for a page-level RequireRole. Renders nothing and redirects, so the operator
+// lands on a page they can use instead of an empty screen.
 export function AccessDeniedRedirect({ to }: AccessDeniedRedirectProps) {
   const router = useRouter();
   useEffect(() => {

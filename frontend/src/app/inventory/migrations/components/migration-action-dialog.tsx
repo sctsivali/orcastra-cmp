@@ -125,8 +125,8 @@ export function MigrationActionDialog({
   const mutation = useMigrationAction();
   const { toast } = useToast();
   const submitInFlightRef = React.useRef(false);
-  // note: the open job polls, and an unknown job's reconciliation bumps its revision every few
-  // minutes. Only the action itself going away resets what the operator typed.
+  // The open job polls, and an unknown job's reconciliation bumps its revision every few
+  // minutes, so only the action itself going away resets what the operator typed.
   const withdrawn = !!action && !mutation.isPending && !(job.available_actions ?? []).includes(action);
 
   React.useEffect(() => {

@@ -26,19 +26,18 @@ interface HypervisorReleaseStatusProps {
 
 /**
  * The verdict beside "Hypervisor Version": Latest, Update Available, Newer than stable or Not
- * checked. The backend compares against the newest release on the Cluster's own track, so
- * nothing here knows a version number; the console used to carry a hand-typed table that went
- * stale and called 5.21.5 "Latest" while 5.21.9 was out.
+ * checked. The backend compares against the newest release on the Cluster's own track, so no
+ * version number is hard-coded here.
  *
- * note: "Latest" is passive, so it is text and an icon rather than a chip. The card's one solid
- * chip is its connection status.
+ * "Latest" is passive, so it is text and an icon rather than a chip. The card's one solid chip is
+ * its connection status.
  */
 export function HypervisorReleaseStatus({ release, currentVersion, clustered }: HypervisorReleaseStatusProps) {
   if (!release) return null;
   const security = securitySentence(release, currentVersion);
   if (!security) return <TrackVerdict release={release} currentVersion={currentVersion} clustered={clustered} />;
-  // note: beside the track verdict, not instead of it. An LTS build can be the newest on its line
-  // and still carry an open advisory until the next point release.
+  // Shown beside the track verdict rather than replacing it: an LTS build can be the newest on
+  // its line and still carry an open advisory until the next point release.
   return (
     <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
       <TrackVerdict release={release} currentVersion={currentVersion} clustered={clustered} />

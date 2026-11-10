@@ -3,16 +3,13 @@
 /**
  * Create or edit a profile.
  *
- * The Profiles page had been a reader since it shipped: the routes, the API client and the
- * hooks existed with no call site, so an operator changed a project-level profile with `lxc
- * profile edit` on the hypervisor. This dialog is the same shape as Create Network and Create
- * Network ACL: the body is a child of DialogContent so Radix unmounts it while closed, every
- * reopen starts clean, and Escape, the overlay and Cancel are refused while a write is in
- * flight.
+ * Same shape as Create Network and Create Network ACL: the body is a child of DialogContent so
+ * Radix unmounts it while closed and every reopen starts clean, and Escape, the overlay and
+ * Cancel are refused while a write is in flight.
  *
- * An edit seeds from a fresh read, not from the list row: the row can be minutes old and
- * carries no version. The read's etag travels back as If-Match, and a save over someone
- * else's change is refused with a Reload rather than overwriting it whole.
+ * An edit seeds from a fresh read, not from the list row, which can be minutes old and carries
+ * no version. The read's etag travels back as If-Match, so a save over someone else's change is
+ * refused with a Reload instead of overwriting it.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -165,7 +162,7 @@ function ProfileFormBody({ existing, onBusyChange, onDone, onCancel }: ProfileFo
   }, [isEdit, editRead.data]);
 
   // isPending, not isFetching: only the first read (and a Reload, which changes the key)
-  // replaces the form; a background fetch must never swap it out from under an edit
+  // replaces the form; a background fetch must never swap it out from under an edit.
   const reading = isEdit && editRead.isPending;
   const readFailed = isEdit && editRead.isError;
   const reload = () => setNonce((n) => n + 1);
@@ -200,8 +197,8 @@ function ProfileFormBody({ existing, onBusyChange, onDone, onCancel }: ProfileFo
     (blankRow ? "Fill in or remove the empty row" : "");
 
   // important: `submitting` is React state, so it only reaches `canSubmit` on the next render.
-  // Two clicks inside one tick both pass the disabled check and both fire a create, which is
-  // two profiles on the cluster. The ref is claimed synchronously, before any await.
+  // Two clicks inside one tick would both pass the disabled check and create two profiles. The
+  // ref is claimed synchronously, before any await.
   const submitInFlightRef = useRef(false);
 
   const canSubmit =
@@ -226,7 +223,7 @@ function ProfileFormBody({ existing, onBusyChange, onDone, onCancel }: ProfileFo
           name: existing!.name,
           host: existing!.node,
           project: existing!.project,
-          // the editor shows every key, so both maps are sent whole
+          // The editor shows every key, so both maps are sent whole.
           data: { description: description.trim(), config: rowsToMap(config), devices: draftsToDevices(devices) },
           etag,
         });

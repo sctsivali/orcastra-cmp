@@ -26,9 +26,8 @@ import {
 /**
  * Settings > Integrations: API keys, the organizations they sync, and the desktop consent.
  *
- * important: three sections behind a switcher, not three stacked panels. Stacked, the key grid
- * (twelve tall cards a page) pushed Synced Organizations and Desktop Control about 2000px below
- * the fold, and with them the warning that an organization's owner key had stopped working.
+ * Three sections behind a switcher: stacked, the key grid would push Synced Organizations and
+ * Desktop Control far below the fold. The frozen owner key warning shows on the other sections.
  */
 function IntegrationsSectionsContent() {
   const { isAdmin } = usePermissions();
@@ -37,7 +36,7 @@ function IntegrationsSectionsContent() {
   const navRef = useRef<HTMLElement>(null);
   useSectionChangeEffects(section, navRef);
 
-  // The same keys and options the sections read, so these are shared reads, not extra ones.
+  // The same query keys and options the sections use, so these reads are shared.
   const keysQuery = useQuery({
     queryKey: ["integrations", "api-keys"],
     queryFn: () => api.integrations.listAPIKeys(),
@@ -64,7 +63,7 @@ function IntegrationsSectionsContent() {
   useEffect(() => {
     if (focusPending !== section) return;
     setFocusPending(null);
-    // after the commit that mounted the section, so the element exists to scroll to and focus
+    // After the commit that mounted the section, so the element exists to scroll to and focus.
     if (section === "organizations") requestAnimationFrame(() => openSyncedOrganizations());
   }, [focusPending, section]);
 
@@ -102,7 +101,7 @@ function IntegrationsSectionsContent() {
           navRef={navRef}
         />
 
-        {/* The warning the stacked layout buried, on every section but its own. */}
+        {/* The frozen owner key warning, on every section but its own. */}
         {frozen > 0 && section !== "organizations" && (
           <Alert>
             <AlertTriangle className="h-4 w-4" aria-hidden />
@@ -138,8 +137,8 @@ function IntegrationsSectionsContent() {
           visited={visited.has("desktop-control")}
         >
           {/* The consent that decides whether the desktop and guest-access capabilities on those
-              keys do anything. One standing decision per organization, read on every call and
-              shared with every organization on the cluster, not a property of the key being made. */}
+              keys take effect: one standing decision per organization, read on every call and
+              shared with every organization on the cluster. It is not a property of a key. */}
           <DesktopControlSettings />
         </SectionPanel>
       </div>

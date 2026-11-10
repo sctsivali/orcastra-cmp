@@ -68,13 +68,11 @@ import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 import { NodeLink } from "@/components/ui/node-link";
 import { plural } from "@/lib/utils";
 
-// filter-coverage: no project dimension here, and not for lack of a mechanism. A group's
-// permissions[].url values do carry ?project= when LXD scopes them, and projectsFromUsedBy
-// already parses exactly that shape. Sampling the live fleet found one distinct permission URL
-// across every group, `/1.0`, with no project qualifier at all, so the facet would derive
-// "default" for every row: a single-option control that the pinned-role rule would then render
-// unconditionally. That turns an invisible gap into a visible dead control. Revisit if
-// per-project group permissions ever appear in the wild.
+// filter-coverage: no project dimension. permissions[].url carries ?project= when LXD scopes
+// it (projectsFromUsedBy parses that shape), but group permissions in practice are `/1.0`
+// with no project qualifier, so the facet would derive "default" for every row: a
+// single-option control the pinned-role rule would render unconditionally. Revisit if
+// per-project group permissions appear.
 /** One key for a row and for the dialog's report of what it made. */
 const groupRowKey = (g: { node?: string | null; name: string }) => `${g.node ?? ""}/${g.name}`;
 
@@ -104,25 +102,20 @@ const GROUPS = defineTable<any>()({
     { field: "permissions", label: "Permissions", sort: (g) => g.permissions?.length || 0, filter: fromSort("number", { unit: "count", presets: [{ label: "None", min: null, max: 0 }, { label: "Any", min: 1, max: null }] }) },
   ] });
 
-// The permissions table lives inside a dialog, so its filter state stays local rather than
-// being written into the address bar of the page behind it.
-
 function GroupsContent() {
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useGroups();
   const groups = (data as any)?.groups || [];
   const { toast } = useToast();
-  // Nodes the fan-out could not reach. Their rows are absent, so say so rather
-  // than let an outage read as an empty list.
+  // Nodes the fan-out could not reach. Their rows are absent, so say so instead of
+  // letting an outage read as an empty list.
   const reach = reachabilityOf(data);
   const unsupportedNodes: string[] = (data as any)?.unsupported_nodes ?? [];
   const deleteGroupMutation = useDeleteGroup();
   const { isReadOnly } = useReadOnlyMode();
   
-  // Pagination and search state
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  
-  // State for modals
+
   // Which panel the clicked cell wants. null means the dialog is closed.
   const [groupDetailTab, setGroupDetailTab] = useState<GroupDetailTab | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -132,12 +125,10 @@ function GroupsContent() {
   const [groupToDelete, setGroupToDelete] = useState<any>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Get unique nodes for filter
-  // Fetch identities for the selected group's node (for view members modal)
+  // Identities on the selected group's cluster.
   const { data: identitiesData } = useIdentities(selectedGroup?.node || "");
   const allIdentities: IdentityInfo[] = (identitiesData as IdentityListResponse)?.identities || [];
   
-  // Helper to find identity name from ID
   const getIdentityName = (identityId: string): string | null => {
     const identity = allIdentities.find(i => i.id === identityId);
     return identity?.name || null;
@@ -169,14 +160,11 @@ function GroupsContent() {
     clearFilters: filters.clearAll,
   });
 
-  // Pagination
   const totalPages = Math.ceil(sortedGroups.length / pageSize);
   const paginatedGroups = useMemo(() => {
     const startIndex = (currentPage - 1) * pageSize;
     return sortedGroups.slice(startIndex, startIndex + pageSize);
   }, [sortedGroups, currentPage, pageSize]);
-
-  // Permissions modal: its own filter and sort instance, state kept out of the URL.
 
   const openGroupDetail = (group: any, tab: GroupDetailTab) => {
     setSelectedGroup(group);
@@ -393,7 +381,6 @@ function GroupsContent() {
         </CardContent>
       </Card>
 
-      {/* Create Group Dialog */}
       <CreateGroupDialog
         open={createDialogOpen}
         onOpenChange={setCreateDialogOpen}
@@ -404,7 +391,6 @@ function GroupsContent() {
         }}
       />
 
-      {/* Edit Group Dialog */}
       <EditGroupDialog
         open={editDialogOpen}
         onOpenChange={setEditDialogOpen}
@@ -412,8 +398,7 @@ function GroupsContent() {
         onRefresh={refetch}
       />
 
-      {/* One dialog for both. Merging them also gave the group its own Overview, which is
-          where `description` and `node` finally appear: the members modal dropped both. */}
+      {/* One dialog for a group's overview, members and permissions. */}
       <GroupDetailDialog
         group={selectedGroup}
         open={groupDetailTab !== null}
@@ -423,7 +408,6 @@ function GroupsContent() {
         }}
       />
 
-      {/* Delete Group Confirmation Dialog */}
       <Dialog open={deleteDialogOpen} onOpenChange={(open) => {
         if (!open && !isDeleting) {
           setDeleteDialogOpen(false);
@@ -476,11 +460,10 @@ function GroupsContent() {
   );
 }
 
-// important: the five sibling partner pages gate here and these two did not, so a tenant
-// deep-linking straight to the route got the page shell and a wall of 403s instead of a
-// redirect. The backend is the real gate (require_partner on both routers); this keeps the
-// UI honest and stops the request being made at all, because the content component's
-// queries only mount once the role resolves.
+// important: the role gate. Without it a tenant deep-linking to the route gets the page shell
+// and a wall of 403s instead of a redirect. The backend is the real gate (require_partner on
+// the router); this also keeps the requests from being made, because the content component's
+// queries mount only once the role resolves.
 export default function GroupsPage() {
   const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
 

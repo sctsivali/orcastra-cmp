@@ -20,7 +20,7 @@ export function HostHealthView() {
   const { data, error, isLoading, isError, refetch, refreshNow, dataUpdatedAt } = useHostHealth({ poll: "page" });
   const [unsealOpen, setUnsealOpen] = useState(false);
 
-  // The age shown is the report's own (when the backend checked), not when this browser fetched it.
+  // The age shown is the backend's collection time rather than this browser's fetch time.
   const refresh = (
     <RefreshButton
       label="Refresh host health"

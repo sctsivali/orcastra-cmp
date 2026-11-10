@@ -22,10 +22,7 @@ export interface RowAction {
   onSelect: () => void;
   /** Paints the item with --destructive. Reserved for an action that removes something. */
   destructive?: boolean;
-  /**
-   * Why this action is unavailable right now. Present means unavailable, and the string is
-   * shown under the label rather than only being a reason the code knows about.
-   */
+  /** Why this action is unavailable right now. Present means unavailable; shown under the label. */
   unavailableReason?: string;
   /** Renders a separator above this item. */
   separatorBefore?: boolean;
@@ -39,41 +36,32 @@ export interface RowAction {
 interface RowActionsProps {
   actions: RowAction[];
   /**
-   * Names the trigger for a screen reader, ex; `Actions for image ubuntu/jammy`. Required:
-   * an icon-only button with no name announces as "button" and nothing else, which is the
-   * defect `scripts/checks/check-icon-button-names.mjs` exists to stop regrowing.
+   * Names the trigger for a screen reader, ex; `Actions for image ubuntu/jammy`. Required: an
+   * icon-only button with no name announces only as "button" (check-icon-button-names.mjs).
    *
-   * note: named triggerLabel rather than label because an accessible name is sentence case
-   * while a menu item's `label` is Title Case. check-heading-case.mjs reads the key, so two
-   * different casing contracts must not share one name.
+   * Named triggerLabel rather than label: an accessible name is sentence case while a menu
+   * item's `label` is Title Case, and check-heading-case.mjs checks casing by key.
    */
   triggerLabel: string;
   /**
-   * Replaces the kebab glyph. The Instances table draws a gear here at the owner's request
-   * (2026-10-27); every other table keeps the kebab, see documentation/ui/table-conventions.md.
-   * A glyph other than the kebab gets a visible "Actions" tooltip, because a gear alone reads as
-   * "settings" rather than "the menu for this row".
+   * Replaces the kebab glyph (the Instances table uses a gear). A glyph other than the kebab
+   * gets a visible "Actions" tooltip, because a gear alone reads as "settings" rather than "the
+   * menu for this row".
    */
   triggerIcon?: React.ComponentType<{ className?: string }>;
   className?: string;
 }
 
 /**
- * The kebab menu for a table row. One implementation, because three details here are easy to
- * get wrong and each one has already been gotten wrong somewhere in this repo.
+ * The kebab menu for a table row.
  *
- * important: the menu is controlled and closes itself before the handler runs, and every item
- * calls preventDefault in onSelect. A row that is itself clickable otherwise sees the click
- * fall through. Dispatch after onCloseAutoFocus so the outgoing modal focus scope cannot
- * redirect the dialog's return target to a menu item that is about to unmount.
+ * important: the menu is controlled and closes before the action runs, and every item calls
+ * preventDefault in onSelect, so the click cannot fall through to a clickable row. The action
+ * dispatches in onCloseAutoFocus, after focus returns to the trigger, so the closing focus scope
+ * cannot send a dialog's return focus to a menu item that is about to unmount.
  *
- * important: an unavailable item is marked with aria-disabled, never with Radix's `disabled`
- * prop. @radix-ui/react-menu passes `focusable: !disabled` to the roving-focus item and
- * filters disabled items out of the collections that drive arrow keys and typeahead, and the
- * house item class adds data-[disabled]:pointer-events-none on top. A `disabled` item is
- * therefore unreachable by keyboard and emits no hover, so the reason it is unavailable could
- * never be surfaced to anyone. Here the item stays focusable and explains itself instead.
- * Same reasoning as components/create-menu/create-menu.tsx.
+ * important: an unavailable item uses aria-disabled, never Radix's `disabled`, which drops the
+ * item from keyboard focus and hover so its reason could never show (as in create-menu.tsx).
  */
 export function RowActions({ actions, triggerLabel, triggerIcon, className }: RowActionsProps) {
   const [open, setOpen] = React.useState(false);
@@ -119,9 +107,8 @@ export function RowActions({ actions, triggerLabel, triggerIcon, className }: Ro
           <TooltipContent side="left">Actions</TooltipContent>
         </Tooltip>
       ) : trigger}
-      {/* note: the shared DropdownMenuContent animates in and out with no reduced-motion
-          guard. Fixing the primitive would touch every menu in the app, so the override is
-          scoped here, as create-menu.tsx already does. */}
+      {/* The shared DropdownMenuContent animates with no reduced-motion guard. The override
+          is scoped here, as in create-menu.tsx, rather than changing every menu in the app. */}
       <DropdownMenuContent
         align="end"
         className="w-60 motion-reduce:animate-none"
@@ -135,7 +122,7 @@ export function RowActions({ actions, triggerLabel, triggerIcon, className }: Ro
           if (!selection.trigger.isConnected || selection.trigger !== triggerRef.current
             || selection.triggerLabel !== latest.triggerLabel) return;
           triggerRef.current?.focus({ preventScroll: true });
-          // note: permissions or pending state can change during the menu's exit animation.
+          // Permissions or pending state can change during the menu's exit animation.
           if (!action || action.unavailableReason || action.pending) return;
           action.onSelect();
         }}

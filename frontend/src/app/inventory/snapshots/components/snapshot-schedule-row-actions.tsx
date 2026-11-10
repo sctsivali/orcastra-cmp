@@ -18,19 +18,10 @@ import type { SnapshotSchedule } from "@/types/api";
 import { scheduleState } from "./snapshot-schedule-vocabulary";
 
 /**
- * Pause, resume, run now and delete.
- *
- * Only the delete carries a dialog, and a plain one. `DestructiveConfirmDialog` documents that its
- * three gates are not interchangeable: type the name when the mistake would be WHICH row, tick a
- * box to accept a consequence, ask for a reason only where the act is recorded as an override.
- * Deleting a schedule is none of those. It destroys a PLAN, not a restore point, and the snapshots
- * it already took stay where they are and expire on their own. Adding friction here would be the
- * generic kind that component warns against, and it would teach an operator to click through the
- * gates that do matter.
- *
- * note: `check-submit-guards.mjs` matches only five handler names and none of these is one of
- * them, so CI stays green without the in-flight ref. It is here anyway: the double-fire it guards
- * against is real regardless of whether a script can see it.
+ * Pause, resume, run now and delete. Only the delete has a dialog, and a plain one: deleting a
+ * schedule removes a plan rather than a restore point, and the snapshots it took stay and expire
+ * on their own, so none of `DestructiveConfirmDialog`'s gates fits. The in-flight ref stops a
+ * double fire even though `check-submit-guards.mjs` does not match these handler names.
  */
 export function ScheduleRowActions({ schedule }: { schedule: SnapshotSchedule }) {
   const { toast } = useToast();
@@ -137,7 +128,6 @@ export function ScheduleRowActions({ schedule }: { schedule: SnapshotSchedule })
             The <span className="font-mono">{schedule.label}</span> schedule on{" "}
             <span className="font-mono">{schedule.instance_name}</span> stops and is removed.
             {" "}
-            {/* The question an operator will actually have, answered here rather than in support. */}
             The snapshots it already took stay where they are and expire on their own.
           </>
         }

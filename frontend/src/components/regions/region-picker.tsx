@@ -12,7 +12,7 @@ export function useRegionCatalog() {
   return useQuery<RegionCatalog>({
     queryKey: ["region-catalog"],
     queryFn: loadRegionCatalog,
-    // a bundled, versioned file: it cannot change under a running page
+    // A bundled, versioned file: it cannot change under a running page.
     staleTime: Infinity,
     gcTime: Infinity,
   });
@@ -44,9 +44,9 @@ export function RegionPicker({ id, value, onValueChange, disabled, ariaInvalid, 
   const selected = current?.id ?? (catalog ? "" : value);
   const options = React.useMemo(() => {
     const list = catalog?.regions.map(toOption) ?? [];
-    // note: a hidden legacy entry (the old province-wide "Jakarta", IKN) has no replacement to
-    // map onto, so it is offered while it is the current value; otherwise the picker would read
-    // as if no location were set.
+    // A hidden legacy entry with no replacement (ex; the province-wide "Jakarta", IKN) is
+    // offered while it is the current value; otherwise the picker would read as if no location
+    // were set.
     if (current && !list.some((o) => o.value === current.id)) {
       list.unshift({ ...toOption(current), badge: "Previous catalogue" });
     }

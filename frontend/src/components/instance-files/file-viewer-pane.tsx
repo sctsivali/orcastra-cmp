@@ -76,8 +76,9 @@ export function FileViewerPane({ target, file, writeReason, onClose, onDownload 
     setDirtyState(value);
   }, []);
 
-  // important: any change to a file in this guest refetches this query. Following it blindly moved
-  // the etag under a draft, so Save overwrote a change nobody had seen, and remounted the editor.
+  // important: any change to a file in this guest refetches this query. Adopting a refetch while a
+  // draft is open would move the etag under it, so Save would overwrite an unseen change, and
+  // would remount the editor.
   React.useEffect(() => {
     const data = content.data;
     if (!data) return;

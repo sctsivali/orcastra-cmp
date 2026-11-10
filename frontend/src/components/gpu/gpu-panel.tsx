@@ -27,9 +27,8 @@ interface GpuPanelProps {
 /**
  * The whole GPU surface for one cluster or cluster member.
  *
- * important: the card list is gated on how many cards exist, never on gpu_total. Gating on
- * the compute count is what made a display-only node say "No GPU cards detected on this node"
- * while the API was returning two cards.
+ * important: the card list is gated on how many cards exist, never on gpu_total. gpu_total
+ * counts compute cards only, so gating on it would hide every card of a display-only node.
  */
 export function GpuPanel({
   src,

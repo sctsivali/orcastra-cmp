@@ -88,7 +88,7 @@ export async function announceUnsealed(queryClient: QueryClient): Promise<void> 
     }
     queryClient.setQueryData(["vault-status"], fresh);
   } catch {
-    // note: the notice's own poll still runs; a failed nudge changes nothing on screen.
+    // The notice's own poll still runs; a failed nudge changes nothing on screen.
   }
 }
 

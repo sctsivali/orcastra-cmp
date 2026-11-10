@@ -113,7 +113,7 @@ export function useMigrationWizard({
   /** The step a plan link names. A plan opened without one starts at Preflight. */
   initialStep?: number | null;
   onStepChange?: (step: number) => void;
-  /** Says where a result went when the wizard that asked for it is no longer open. */
+  /** Says where a result went when the wizard that asked for it has closed. */
   onDetached?: (result: MigrationDetachedResult) => void;
 }) {
   const defaultRetention = rollout.defaultRetentionHours ?? 24;
@@ -292,8 +292,8 @@ export function useMigrationWizard({
     return nextPlan;
   };
 
-  // note: an expired plan is patched too. The server re-runs preflight and renews the plan in
-  // place, where a new POST would leave the expired draft behind as a duplicate.
+  // An expired plan is patched too. The server re-runs preflight and renews the plan in place,
+  // where a new POST would leave the expired draft behind as a duplicate.
   const patchPlan = async (body: MigrationPlanUpdateRequest, live: Live) => {
     if (!plan) return startPreflight(live);
     const nextPlan = await updatePlan.mutateAsync({ planId: plan.plan_id, revision: plan.revision, body });
@@ -391,9 +391,9 @@ export function useMigrationWizard({
       await patchPlan({ mappings: createPlanBody(draft).mappings, ...recoveryBody() }, live);
     }, "Preflight could not be refreshed.");
 
-  // important: Close always closes. A save that fails leaves the server's draft as it was last
-  // saved and says so in a toast, instead of holding the operator in a dialog whose every exit
-  // repeats the failing request.
+  // Close always closes. A save that fails leaves the server's draft as it was last saved and
+  // says so in a toast, instead of holding the operator in a dialog whose every exit repeats the
+  // failing request.
   const saveAndClose = () =>
     run(async (live) => {
       if (plan && planDirty && !executed) {

@@ -17,8 +17,8 @@ export function Header() {
   const { isAdmin, isPartner, isTenant } = usePermissions();
   const { isReadOnly } = useReadOnlyMode();
 
-  // The menu hides itself only when nothing is left to offer: the wrong role, or the operator
-  // is standing on the one create route this list still had. See create-menu-config.ts.
+  // The menu hides itself only when nothing is left to offer: the role allows no action, or
+  // the only one left is the route the operator is on. See create-menu-config.ts.
   const createActions = React.useMemo(
     () => visibleCreateActions(pathname, { isAdmin, isPartner, isTenant }),
     [pathname, isAdmin, isPartner, isTenant]
@@ -28,7 +28,6 @@ export function Header() {
     <header className="sticky top-0 z-40 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container flex h-14 md:h-16 items-center justify-between px-4 md:px-6">
         <div className="flex items-center gap-2 md:gap-6">
-          {/* Mobile Menu Button */}
           <Button
             variant="ghost"
             size="icon"
@@ -40,8 +39,8 @@ export function Header() {
           </Button>
         </div>
 
-        {/* One set of actions at every width. Two blocks behind a breakpoint is how the
-            desktop menu and the mobile one drifted apart before. */}
+        {/* One set of actions at every width, so the desktop and mobile menus cannot drift
+            apart. */}
         <div className="flex items-center gap-2 sm:gap-3">
           <CreateMenu actions={createActions} isReadOnly={isReadOnly} />
           <UserNav />

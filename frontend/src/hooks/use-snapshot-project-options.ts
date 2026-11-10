@@ -8,19 +8,12 @@ import type { SearchableSelectOption } from "@/components/ui/searchable-select";
 /**
  * Project names for the Snapshots scope picker, from the cached fleet-wide project read.
  *
- * The page used to call `useProjects(host)`, which is a live per-cluster read with no server
- * cache and no single-flight, so choosing a cluster started a request and the Project select sat
- * disabled until it landed. `useAllProjects` is the same data through the cached, single-flighted
- * fan-out, which means the list is already in hand when the page opens and narrowing by cluster is
- * a filter rather than a fetch.
+ * `useAllProjects` goes through the cached, single-flighted fan-out, so the list is in hand when
+ * the page opens and narrowing by cluster is a filter rather than a fetch. With Cluster set to
+ * All the list is the union across the fleet, which a per-cluster read cannot produce.
  *
- * It is also the only source that can answer the question the new default asks. With Cluster set
- * to All, the project list is the union across the fleet, and a per-cluster read cannot produce
- * one.
- *
- * Deliberately not `useProjectScopeOptions`: that hook backs an API-key permission grant and
- * carries orphan and partial-coverage reporting for it. Widening a security-sensitive hook to
- * serve a table filter puts it on this change's blast radius for no gain over sixty lines.
+ * Not `useProjectScopeOptions`: that hook backs an API-key permission grant and carries orphan
+ * and partial-coverage reporting for it.
  */
 
 const DEFAULT_PROJECT = "default";
@@ -53,14 +46,14 @@ export function useSnapshotProjectOptions(host: string): SnapshotProjectOptions 
         const name = project?.name;
         if (!name) continue;
         // `*` is the backend's wildcard for every project on a cluster. LXD forbids it as a real
-        // name; not relying on that costs nothing.
+        // name; this does not rely on that.
         if (name === "*") continue;
         names.add(name);
       }
     }
 
     // `default` first because it is the backend's own fallback and the one an operator reaches
-    // for most. cmdk re-scores by match once a query is typed, which correctly overrides this.
+    // for most. cmdk re-scores by match once a query is typed, which overrides this.
     const sorted = Array.from(names).sort((a, b) => {
       if (a === DEFAULT_PROJECT) return -1;
       if (b === DEFAULT_PROJECT) return 1;

@@ -42,11 +42,8 @@ interface InstanceActionDialogsProps {
 }
 
 /**
- * The two confirm-and-mutate dialogs for the instances table.
- *
- * Extracted from the page because confirm-and-mutate is one responsibility and it does not
- * belong in the same file as the live-streamed table. Behaviour is unchanged, including the
- * preventDefault that keeps the delete dialog open for the length of the request.
+ * The two confirm-and-mutate dialogs for the instances table: delete, and stop or restart.
+ * The delete dialog stays open for the length of the request.
  */
 export function InstanceActionDialogs({
   deleteTarget,

@@ -18,7 +18,7 @@ import {
 } from "@/lib/utils";
 import type { InstanceMetrics } from "@/types";
 
-// note: the console is fixed-dark chrome, so the ramp is the --status-* set read through the
+// The console is fixed-dark chrome, so the ramp is the --status-* set read through the
 // terminal-status rebinding (their dark values in either page theme), on the same thresholds as
 // the rest of the product, so the bar and the dialog turn amber and red together.
 function toneFor(percent: number): string {
@@ -141,7 +141,7 @@ export function InstanceResourcesPanel({
         {memory && memory.total > 0 && !memory.unlimited ? (
           <ProgressBar value={memory.percent} color={barFor(memory.percent)} />
         ) : null}
-        {/* note: without a memory limit "available" is the host's free memory, not this
+        {/* Without a memory limit "available" is the host's free memory, not this
             instance's headroom, so it is left out. */}
         {memory && memory.available !== null && !memory.unlimited ? (
           <div className="mt-1 text-gray-500">
@@ -193,7 +193,6 @@ export function InstanceResourcesPanel({
   );
 }
 
-/** Thin progress bar widget */
 function ProgressBar({ value, color }: { value: number; color: string }) {
   const clamped = Math.min(Math.max(value, 0), 100);
   return (

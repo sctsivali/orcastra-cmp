@@ -1,7 +1,4 @@
-/**
- * Boot Priority Panel - Manage instance startup order.
- * Allows drag-and-drop reordering of instance boot sequence.
- */
+/** Instance startup order for a project, reordered by drag and drop. */
 
 "use client";
 
@@ -68,7 +65,6 @@ export function BootPriorityPanel({
   const queryClient = useQueryClient();
   const { scopeKey } = useActorQueryScope();
 
-  // Fetch startup order
   const fetchStartupOrder = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -79,7 +75,6 @@ export function BootPriorityPanel({
       if (!isAuthActorSynchronized(actorScope)) return;
       
       if (data.success && data.entries) {
-        // Convert snake_case to camelCase
         const converted: StartupOrderEntry[] = data.entries.map((e) => ({
           instanceName: e.instance_name,
           host: e.host,
@@ -104,20 +99,17 @@ export function BootPriorityPanel({
     }
   }, [host, project, scopeKey]);
 
-  // Load on mount
   useEffect(() => {
     fetchStartupOrder();
   }, [fetchStartupOrder]);
 
-  // Save changes
   const saveChanges = async () => {
     setSaving(true);
 
     try {
-      // Build updates array
       const updates = entries.map((entry, index) => ({
         instance_name: entry.instanceName,
-        priority: index, // Use index as priority
+        priority: index, // the list order is the boot priority
         delay: entry.delay,
         autostart: entry.autostart,
       }));
@@ -144,20 +136,16 @@ export function BootPriorityPanel({
     }
   };
 
-  // Reset changes
   const resetChanges = () => {
     setEntries(JSON.parse(JSON.stringify(originalEntries)));
   };
 
-  // Check if there are unsaved changes
   const hasChanges = JSON.stringify(entries) !== JSON.stringify(originalEntries);
 
-  // Handle drag start
   const handleDragStart = (index: number) => {
     setDraggedIndex(index);
   };
 
-  // Handle drag over
   const handleDragOver = (e: React.DragEvent, index: number) => {
     e.preventDefault();
     if (draggedIndex === null || draggedIndex === index) return;
@@ -170,12 +158,10 @@ export function BootPriorityPanel({
     setDraggedIndex(index);
   };
 
-  // Handle drag end
   const handleDragEnd = () => {
     setDraggedIndex(null);
   };
 
-  // Update entry
   const updateEntry = (index: number, field: keyof StartupOrderEntry, value: any) => {
     const newEntries = [...entries];
     newEntries[index] = { ...newEntries[index], [field]: value };
@@ -205,7 +191,6 @@ export function BootPriorityPanel({
 
   return (
     <div className={cn("flex flex-col h-full", className)}>
-      {/* Header */}
       <div className="flex items-center justify-between p-4 border-b">
         <div>
           <h3 className="text-sm font-medium">Startup Order</h3>
@@ -238,7 +223,6 @@ export function BootPriorityPanel({
         </div>
       </div>
 
-      {/* Entries list */}
       <ScrollArea className="flex-1">
         <div className="p-4 space-y-2">
           {entries.length === 0 ? (
@@ -260,15 +244,12 @@ export function BootPriorityPanel({
                   entry.instanceName === currentInstanceName && "ring-2 ring-primary/30"
                 )}
               >
-                {/* Drag handle */}
                 <GripVertical className="h-4 w-4 text-muted-foreground shrink-0" />
 
-                {/* Priority badge */}
                 <Badge variant="outline" className="shrink-0 w-8 justify-center">
                   {index + 1}
                 </Badge>
 
-                {/* Instance info */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     {entry.instanceType === 'virtual-machine' ? (
@@ -286,7 +267,6 @@ export function BootPriorityPanel({
                   </div>
                 </div>
 
-                {/* Delay input */}
                 <div className="flex items-center gap-2 shrink-0">
                   <Clock className="h-4 w-4 text-muted-foreground" />
                   <Input
@@ -300,7 +280,6 @@ export function BootPriorityPanel({
                   <span className="text-xs text-muted-foreground">sec</span>
                 </div>
 
-                {/* Autostart toggle */}
                 <div className="flex items-center gap-2 shrink-0">
                   <Switch
                     checked={entry.autostart}
@@ -318,7 +297,6 @@ export function BootPriorityPanel({
         </div>
       </ScrollArea>
 
-      {/* Footer info */}
       <div className="p-3 border-t bg-muted/20">
         <p className="flex items-start gap-2 text-xs text-muted-foreground">
           <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />

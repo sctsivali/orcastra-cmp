@@ -16,9 +16,8 @@ interface UsageRowProps {
   onCopied: (message: string) => void;
 }
 
-// One reference, showing the four things the two dialogs it replaces each threw half of away:
-// what kind of resource it is, what it is called, which project it belongs to, and whether that
-// project was named by LXD or inferred by us.
+// One reference: what kind of resource it is, what it is called, which project it belongs to,
+// and whether LXD named that project or it was inferred.
 export function UsageRow({ reference, node, onCopied }: UsageRowProps) {
   const kind = referenceKind(reference);
   const Icon = kind.icon;
@@ -31,9 +30,8 @@ export function UsageRow({ reference, node, onCopied }: UsageRowProps) {
         <span className="inline-flex min-w-0 items-center gap-2">
           <Icon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           {href ? (
-            // note: the title says "Open in", never "View". Every destination but networks is a
-            // filtered list rather than a record page, and a link that overpromises is worse
-            // than one that is honest about landing you in a list.
+            // The title says "Open in", never "View": every destination but networks is a
+            // filtered list rather than a record page.
             <TableLink href={href} title={`Open ${name} in ${kind.label}s`}>
               {name}
             </TableLink>
@@ -45,9 +43,9 @@ export function UsageRow({ reference, node, onCopied }: UsageRowProps) {
       <TableCell>{kind.label}</TableCell>
       <TableCell>
         {reference.project}
-        {/* The fact both previous dialogs destroyed. It says whether LXD named the project or
-            whether we fell back to "default", which is the same fallback the tenant-visibility
-            gate takes, so an operator reading "Projects Using default" can tell the two apart. */}
+        {/* Whether LXD named the project or it fell back to "default", the same fallback the
+            tenant-visibility gate takes, so an operator reading "Projects Using default" can
+            tell the two apart. */}
         {!reference.projectExplicit && <TableSubText>inferred</TableSubText>}
       </TableCell>
       <TableCell className="font-mono">

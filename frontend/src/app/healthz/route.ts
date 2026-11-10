@@ -3,9 +3,9 @@
  *
  * important: this is the Docker healthcheck target (docker-compose.prod.yml, frontend/Dockerfile).
  * It must depend on nothing outside the process: no backend call (that is /health, the readiness
- * proxy), no auth (the middleware matcher exempts it), no redirect. The previous probe asked `/`,
- * an auth-gated page whose redirect pointed at the public origin, so the container's health was
- * judged by the edge in front of it and autoheal restarted a working frontend on every edge 502.
+ * proxy), no auth (the middleware matcher exempts it), no redirect. A probe on an auth-gated page
+ * follows its redirect to the public origin, so the container would be judged by the edge in front
+ * of it and autoheal would restart a working frontend on every edge 502.
  */
 import { NextResponse } from "next/server";
 

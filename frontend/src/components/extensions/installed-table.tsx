@@ -34,8 +34,7 @@ import { ExtensionsIllustration } from "@/components/illustrations/scenes/catalo
 const COLUMN_COUNT = 6;
 
 const INSTALLED_ADDONS = defineTable<ExtensionInstall>()({
-  // See the note on the catalogue's id: the two lists share one query string, so each namespaces
-  // its own parameters.
+  // The two lists share one query string, so each namespaces its parameters with its own id.
   id: "installed",
   searchPlaceholder: "Search installations",
   defaultSort: { field: "name", direction: "asc" },
@@ -85,8 +84,8 @@ const INSTALLED_ADDONS = defineTable<ExtensionInstall>()({
     {
       field: "clusters",
       label: "Clusters",
-      // No sort accessor on purpose. Ordering installations by how many clusters they reach
-      // answers nothing an operator asks, while narrowing to the ones on a given cluster does.
+      // Facet only: narrowing to the installations on a given cluster is useful, ordering by how
+      // many clusters they reach is not.
       facet: (row) => row.granted_scope.map((grant) => grant.cluster_id),
       facetSpec: { emptyLabel: "(no clusters)" },
     },
@@ -160,8 +159,7 @@ function InstalledTableContent({
 
   if (loading) return <Skeleton className="h-40 rounded-lg" />;
 
-  // Distinct from "nothing is installed": a failed read used to render the empty state, which told
-  // an operator their installations were gone when the dashboard simply got no answer.
+  // A failed read renders an error with Retry, distinct from "nothing is installed".
   if (error) {
     return (
       <EmptyState
@@ -192,8 +190,8 @@ function InstalledTableContent({
     <div className="space-y-4">
       <TableToolbar filters={filters} noun="installations" />
 
-      {/* note: overflow-y-hidden because any containerClassName turns on vertical scroll, and
-          this table grows with its rows. The ground is the page, not a card. */}
+      {/* overflow-y-hidden because any containerClassName turns on vertical scroll, and this
+          table grows with its rows. The pinned column's ground is the page background. */}
       <Table containerClassName="overflow-y-hidden [--pinned-ground:hsl(var(--background))]">
         <TableHeader>
           <TableRow>
@@ -309,11 +307,8 @@ function InstalledTableContent({
 }
 
 /**
- * The boundary the query string requires.
- *
- * Reading the query string opts a client component out of prerendering, and Next then fails
- * `next build` on the route unless a boundary sits above it. Carrying its own means this can be
- * dropped anywhere without the caller having to know that about it.
+ * Carries its own Suspense boundary. Reading the query string opts a client component out of
+ * prerendering, and `next build` fails on the route unless a boundary sits above it.
  */
 export function InstalledTable(props: InstalledTableProps) {
   return (

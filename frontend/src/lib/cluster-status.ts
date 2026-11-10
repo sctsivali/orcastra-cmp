@@ -15,15 +15,10 @@ import {
 } from "@/types/api";
 
 /**
- * One vocabulary for "can this cluster be used right now".
+ * One vocabulary for "can this cluster be used right now": label, icon, tone and colour.
  *
- * Before this, five files answered the question independently and disagreed on all three
- * axes. The shades drifted (emerald-500 in one file, green-500 in another, green-400 in a
- * third; zinc-400 against gray-400), the wording drifted ("Connected" against "Online",
- * "Some nodes not connected" against "Offline"), and the regions page shipped its dots with
- * no dark: variants at all. documentation/ui/frontend-design-language.md names exactly this
- * as the defect: semantic colour comes from a token, never from a raw palette step, and
- * never from two steps of the same semantic in two places.
+ * Every surface resolves a cluster's status here, so the wording and shades agree. Semantic
+ * colour comes from the status tokens, never from a raw palette step.
  */
 
 export type ClusterStatusTone = "positive" | "caution" | "neutral" | "negative";
@@ -36,8 +31,8 @@ export interface ClusterStatusMeta {
   icon: LucideIcon;
   /** Foreground utility for an inline icon. */
   iconClassName: string;
-  /** Sort weight. Lower sorts first, so reachable clusters lead a picker. */
   tone: ClusterStatusTone;
+  /** Sort weight. Lower sorts first, so reachable clusters lead a picker. */
   toneRank: number;
   /** True only for ONLINE. Never derive this by comparing the label. */
   reachable: boolean;
@@ -73,8 +68,8 @@ const ENTRIES: Record<ClusterStatus, Entry> = {
   },
   [ClusterStatus.NOT_AUTHORIZED]: {
     status: ClusterStatus.NOT_AUTHORIZED,
-    // note: not formatLabel("not_authorized"), which gives "Not Authorized" and reads as a
-    // permission denial. The cluster answered; the trust handshake is what is unfinished.
+    // Not formatLabel("not_authorized"), which gives "Not Authorized" and reads as a
+    // permission denial. The cluster answered; the trust handshake is unfinished.
     label: "Pending Trust",
     icon: ShieldAlert,
     iconClassName: "text-status-pending",
@@ -92,9 +87,9 @@ const ENTRIES: Record<ClusterStatus, Entry> = {
   [ClusterStatus.OFFLINE]: {
     status: ClusterStatus.OFFLINE,
     label: "Offline",
-    // XCircle for offline, AlertTriangle for error: the existing clusters page already drew
-    // that line and it is worth keeping. A host that is down and a fault in us are different
-    // problems, and the icon is the only thing separating them once both go red.
+    // XCircle for offline, AlertTriangle for error: a host that is down and a fault on the
+    // dashboard's side are different problems, and once both are red the icon tells them
+    // apart.
     icon: XCircle,
     iconClassName: "text-status-offline",
     tone: "negative",
@@ -119,9 +114,8 @@ const UNKNOWN: Entry = {
   reachable: false,
 };
 
-// important: the monitoring endpoint emits "pending_trust", which is not in the enum, from
-// routers/monitoring.py. Accepting it here keeps monitoring/node-card.tsx correct without a
-// backend change. Drop this alias only once that endpoint speaks the enum.
+// Status words outside the enum that a cached or older response can still carry
+// (ex; "pending_trust" from the monitoring endpoint), mapped onto the enum.
 const ALIASES: Record<string, ClusterStatus> = {
   pending_trust: ClusterStatus.NOT_AUTHORIZED,
   not_trusted: ClusterStatus.NOT_AUTHORIZED,
@@ -143,9 +137,8 @@ function isMonitoringNode(value: unknown): value is ClusterMonitoringMetrics {
  * Resolve any shape the product carries into the one vocabulary.
  *
  * Accepts a NodeStatus as well as the enum because the dashboard cards and the connection
- * summary hold booleans. The backend now sends a `status` field on NodeStatus, so this reads
- * it directly rather than pattern-matching `node.error` for words like "trust", which would
- * change what the UI decides the first time a backend message is reworded.
+ * summary hold booleans. NodeStatus carries a `status` field, which is read directly;
+ * matching words like "trust" in `node.error` would break when a backend message is reworded.
  */
 export function clusterStatusMeta(
   input:
@@ -159,14 +152,14 @@ export function clusterStatusMeta(
   let key: string | undefined;
 
   if (isMonitoringNode(input)) {
-    // is_online wins because a body cached before the monitoring endpoint spoke the enum can
-    // still carry the old cluster_status vocabulary, and "connected" is never ambiguous.
+    // is_online wins: a cached body can carry cluster_status words outside the enum, and the
+    // boolean is never ambiguous.
     key = input.is_online ? ClusterStatus.ONLINE : input.cluster_status;
   } else if (isNodeStatus(input)) {
     key =
       input.status ??
-      // Fallback for a body cached before the backend carried `status`. Structural, not
-      // textual: reachable=true with connected=false means the host answered and refused us.
+      // Fallback for a cached body without `status`, read from the booleans: reachable=true
+      // with connected=false means the host answered and refused the dashboard.
       (input.connected
         ? ClusterStatus.ONLINE
         : input.reachable === true
@@ -192,8 +185,8 @@ export function clusterStatusMeta(
 /**
  * The line under a cluster's name in a picker: the id when it differs from the display name,
  * then the endpoint, so two clusters an operator named alike still tell apart. The backend
- * writes the literal "unknown" when it has no endpoint; printing that under a name reads as a
- * fact about the cluster rather than a gap in what we know, so it shows as nothing.
+ * writes the literal "unknown" when it has no endpoint; under a name that reads as a fact
+ * about the cluster, so it shows as nothing.
  */
 export function clusterSublabel(
   id: string,

@@ -14,27 +14,26 @@ import {
   CommandList,
 } from "@/components/ui/command";
 
-// A structural slice, deliberately not the ClusterStatus enum: a components/ui primitive that
-// imports a domain type stops being reusable. ClusterStatusMeta from lib/cluster-status.ts is
-// assignable to this with no adapter, so there is still exactly one mapping in the codebase.
+// A structural type rather than the ClusterStatus enum, so this primitive imports no domain type.
+// ClusterStatusMeta from lib/cluster-status.ts is assignable to it with no adapter.
 export interface SearchableSelectStatus {
   // Rendered as plain text beside the option. A chip per row reads louder than the option's
-  // own name in a py-1.5 row, and order by tone already leads with reachable clusters.
+  // own name in a py-1.5 row.
   label: string;
-  // Ordering weight owned by the caller's vocabulary, not by this primitive.
+  // The caller's ordering weight. This primitive renders options in the order given.
   tone: "positive" | "caution" | "neutral" | "negative";
 }
 
 export interface SearchableSelectOption {
   value: string;
   label: string;
-  // secondary line under the label (ex; cluster endpoint), also matched while searching
+  // Secondary line under the label (ex; cluster endpoint), also matched while searching.
   sublabel?: string;
-  // trailing hint shown on the right (ex; hypervisor type), also matched while searching
+  // Trailing hint shown on the right (ex; hypervisor type), also matched while searching.
   //
   // important: keep this a string. The cmdk match key below is a template literal, so a
-  // ReactNode here interpolates to "[object Object]": every option would match the query
-  // "object" and contribute nothing else to search. Anything richer belongs in `status`.
+  // ReactNode here interpolates to "[object Object]" and every option matches "object".
+  // Anything richer belongs in `status`.
   badge?: string;
   disabled?: boolean;
   // Extra terms matched while searching but never shown, ex; a regency's seat town.
@@ -55,9 +54,9 @@ interface SearchableSelectProps {
   searchPlaceholder?: string;
   emptyText?: string;
   disabled?: boolean;
-  // note: the search row only renders once the option count passes this, so short lists stay uncluttered
+  // The search row renders only once the option count passes this, so short lists stay uncluttered.
   searchThreshold?: number;
-  // forwarded to the trigger so callers can keep their existing styling (ex; error border)
+  // Forwarded to the trigger so callers can keep their existing styling (ex; error border).
   className?: string;
   contentClassName?: string;
   // Optional leading glyph on the trigger, for a control that sits in a toolbar rather than
@@ -66,9 +65,8 @@ interface SearchableSelectProps {
   // Accessible name for a trigger with no visible <Label> beside it, ex; a toolbar filter.
   // Without one a screen reader announces the current value and nothing about what it selects.
   ariaLabel?: string;
-  // Lands on the trigger, so a sibling <Label htmlFor> actually points at something. shadcn's
-  // SelectTrigger took an id and several call sites still pass one to a label that would
-  // otherwise dangle.
+  // Lands on the trigger, so a sibling <Label htmlFor> points at it, as with shadcn's
+  // SelectTrigger.
   id?: string;
   // The notice under the field that says why the list is empty or the read failed.
   ariaDescribedBy?: string;
@@ -107,22 +105,18 @@ export function SearchableSelect({
   const commandRef = React.useRef<HTMLDivElement>(null);
 
   // important: freeze the rendered order while the popover is open. Status arrives on a poll,
-  // and re-sorting a live list moves a row out from under the cursor between the eye and the
-  // click. On a control that creates real infrastructure, that is a wrong cluster, not a
-  // cosmetic glitch.
+  // and re-sorting a live list moves a row out from under the cursor; on a control that
+  // creates infrastructure, the click then lands on the wrong cluster.
   const frozen = React.useRef(options);
   if (!open || !freezeOptionsWhileOpen) frozen.current = options;
   const rendered = open && freezeOptionsWhileOpen ? frozen.current : options;
 
   const showSearch = rendered.length > searchThreshold;
-  // A combobox must name the listbox it controls, otherwise a screen reader announces the
-  // trigger with no relationship to the options. Radix renders the list in a portal, so the two
-  // are not adjacent in the DOM and only an explicit id ties them together.
+  // A combobox must name the listbox it controls. Radix renders the list in a portal, so only
+  // an explicit id ties the two together.
   //
   // important: the id goes on PopoverContent, never on CommandList. cmdk sets its own `id` after
-  // spreading the caller's props, so an id passed to the list is silently dropped and this
-  // reference resolves to nothing. It sat that way here until an audit rendered the two
-  // libraries and checked which id actually reached the DOM.
+  // spreading the caller's props, so an id passed to the list is silently dropped.
   const listboxId = React.useId();
 
   return (
@@ -145,9 +139,9 @@ export function SearchableSelect({
           aria-invalid={ariaInvalid || undefined}
           disabled={disabled}
           className={cn(
-            // gap-2, not only justify-between: on a w-auto trigger the two groups fill the
-            // width and justify-between then leaves no space at all, so the value and its
-            // status label rendered as one word ("nodeOnline").
+            // gap-2 as well as justify-between: on a w-auto trigger the two groups fill the
+            // width, and without a gap the value and its status label run together
+            // ("nodeOnline").
             "flex h-10 w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
             className
           )}
@@ -166,9 +160,8 @@ export function SearchableSelect({
             </span>
           </span>
           <span className="flex shrink-0 items-center gap-2">
-            {/* The trigger has to carry the state too. Without it the whole signal vanishes
-                the moment the popover closes, which is exactly when the operator is about to
-                submit against the cluster they picked. */}
+            {/* The trigger shows the status too, so it stays visible after the popover
+                closes, when the operator is about to submit. */}
             {selected?.status && (
               <span className="text-xs text-muted-foreground">
                 {selected.status.label}
@@ -178,16 +171,11 @@ export function SearchableSelect({
           </span>
         </button>
       </PopoverTrigger>
-      {/* The id belongs on the panel. cmdk's List sets its own id after spreading the
-          caller's props, so an id passed there is dropped and this combobox's aria-controls
-          resolved to nothing. A combobox is required to reference its popup. */}
       <PopoverContent id={listboxId}
         align="start"
-        // important: with no search row there is nothing inside cmdk holding focus, so Radix
-        // parks it on this panel instead. Arrow keys still moved the highlight, but Enter never
-        // reached cmdk's handler and a keyboard user could highlight a cluster and not choose
-        // it. That is every list at or under searchThreshold, which is the monitoring filter and
-        // most of what a partner or tenant sees.
+        // important: with no search row nothing inside cmdk holds focus, so Radix parks it on
+        // this panel and Enter never reaches cmdk's handler: a keyboard user could highlight an
+        // option but not choose it. This applies to every list at or under searchThreshold.
         onOpenAutoFocus={(event) => {
           if (showSearch) return;
           event.preventDefault();
@@ -206,10 +194,8 @@ export function SearchableSelect({
               {rendered.map((opt) => (
                 <CommandItem
                   key={opt.value}
-                  // include value/sublabel/badge/status so search matches more than the visible
-                  // label. The status label is in here on purpose: typing "offline" narrows the
-                  // list to the broken clusters, which is how an operator finds them rather
-                  // than only avoids them.
+                  // Value, sublabel, badge, status and keywords all feed the match, so typing
+                  // "offline" narrows the list to the clusters in that state.
                   value={`${opt.value} ${opt.label} ${opt.sublabel ?? ""} ${opt.badge ?? ""} ${opt.status?.label ?? ""} ${opt.keywords?.join(" ") ?? ""}`}
                   disabled={opt.disabled}
                   onSelect={() => {

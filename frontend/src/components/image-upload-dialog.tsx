@@ -108,9 +108,9 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
   const [progress, setProgress] = useState(0); // 0..100 (upload bytes)
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  // Tracks the live session so we can release its server-side slot on
-  // cancel/error/teardown instead of leaving it for the idle sweep. Held in a
-  // ref (not state) so the unmount/pagehide handlers see the latest value.
+  // The live session, so cancel, error or teardown releases its server-side slot
+  // instead of leaving it to the idle sweep. A ref rather than state, so the
+  // unmount and pagehide handlers see the latest value.
   const sessionRef = useRef<ActiveUploadSession | null>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
   const runInFlightRef = useRef(false);
@@ -157,7 +157,7 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
         new DOMException("Authenticated actor changed", "AbortError"),
       );
       uploadAbortRef.current = null;
-      // The new actor must never delete A's server-side upload with B's bearer.
+      // important: the new actor's bearer must never delete the previous actor's upload.
       sessionRef.current = null;
       runInFlightRef.current = false;
       clearFormState();
@@ -179,7 +179,7 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
   const reset = () => {
     uploadAbortRef.current?.abort();
     uploadAbortRef.current = null;
-    abortActive(); // release a session only when finalization has not started
+    abortActive(); // Releases the session only if finalization has not started.
     runInFlightRef.current = false;
     clearFormState();
   };
@@ -277,7 +277,7 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
       });
       if (!isCurrentRequest()) return;
 
-      sessionRef.current = null; // terminal: nothing to release
+      sessionRef.current = null; // Terminal: nothing left to release.
       // The store that holds it. The upload names a project, but a project without its own
       // image store lands in the host's default store, and the list read says which.
       const store = await imageAPI
@@ -341,7 +341,7 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
     <Dialog
       open={open}
       onOpenChange={(o) => {
-        if (busy) return; // don't let it close mid-upload
+        if (busy) return; // Stays open mid-upload.
         if (!o) reset();
         onOpenChange(o);
       }}

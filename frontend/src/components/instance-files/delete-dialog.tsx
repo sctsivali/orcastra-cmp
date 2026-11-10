@@ -17,8 +17,9 @@ interface DeleteDialogProps {
 }
 
 /**
- * Three weights of confirmation, because deleting a file and deleting /usr/lib are not one act.
- * A folder is counted first, so the prompt says what is about to go rather than a generic warning.
+ * Confirmation in three weights: a file, a counted folder, and a folder that is a system path or
+ * could not be counted, which needs its path typed. Folders are counted first so the prompt says
+ * what will go.
  */
 export function DeleteDialog({ target, folder, entries, open, onConfirm, onClose }: DeleteDialogProps) {
   const [summary, setSummary] = React.useState<SelectionSummary | null>(null);

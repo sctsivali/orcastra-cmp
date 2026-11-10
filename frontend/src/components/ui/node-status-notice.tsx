@@ -19,7 +19,7 @@ interface NodeStatusNoticeProps {
   /**
    * Nothing in the list can be picked, because every cluster in the operator's scope is
    * still waiting on its trust handshake. A dropdown where every row is dimmed and nothing
-   * says why is a dead end, and on this fleet it is the ordinary state for a partner.
+   * says why is a dead end.
    */
   noSelectableNodes?: boolean;
   /** Epoch ms of the reachability data, so the line can say how old the claim is. */
@@ -29,12 +29,10 @@ interface NodeStatusNoticeProps {
 }
 
 /**
- * The consequence of picking a cluster that will not answer, said where the operator is
- * actually looking.
- *
- * A twelve-pixel word inside a closed popover is not a warning. This sits under the field,
- * next to the submit button, and only for a selected node that is not online, so it stays
- * rare enough to keep meaning something.
+ * The consequence of picking a cluster that will not answer, shown under the field next to the
+ * submit button, where the operator is looking. Apart from the unavailable and no-selectable
+ * cases it renders only for a selected node that is not online, so it stays rare enough to be
+ * noticed.
  */
 export function NodeStatusNotice({
   meta,
@@ -88,8 +86,8 @@ export function NodeStatusNotice({
     meta.status === ClusterStatus.NOT_AUTHORIZED || meta.status === ClusterStatus.PENDING
       ? `${name}has not completed the trust handshake, so creating here will fail.`
       : `${name}did not answer the last reachability check. Creating here will fail until it responds.`;
-  // note: the age is its own sentence. Folding it into the headline produced "did not answer
-  // when last checked just now", which reads as a contradiction.
+  // The age is its own sentence: folded into the headline it reads as "did not answer when
+  // last checked just now", a contradiction.
   const checked = updatedAt ? ` Checked ${formatRelativeTime(updatedAt)}.` : "";
   // The curated reason repeats the headline for offline and untrusted clusters, so it only
   // earns its place when the status is one the headline cannot explain.

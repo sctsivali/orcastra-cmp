@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 /**
- * Regenerates the offline basemap shipped at public/geo/world-land-50m.v1.json.
+ * Regenerates the offline basemap served from public/geo/world-land-50m.v1.json.
  *
- * The regions map draws its landmass from a vendored file rather than a third-party tile
- * CDN, so the page keeps working for self-hosted and air-gapped installs and cannot be
- * degraded by someone else's pricing change. This script exists so that vendored file is
- * reproducible: nobody has to trust an opaque 460 KB blob in a public repository.
+ * The regions map draws its landmass from this vendored file instead of a third-party
+ * tile CDN, so the page keeps working on self-hosted and air-gapped installs. This
+ * script makes the 460 KB file reproducible from its public source.
  *
  * Source:  Natural Earth 1:50m Admin 0 Countries
  * License: public domain (https://www.naturalearthdata.com/about/terms-of-use/)
@@ -107,7 +106,7 @@ function processRing(ring) {
 
 function processPolygon(rings) {
   const kept = rings.map(processRing).filter(Boolean);
-  // The first ring is the outer boundary. If it collapsed, the holes are meaningless.
+  // Collapsed rings are dropped, and a polygon with no ring left is dropped with them.
   return kept.length > 0 ? kept : null;
 }
 
@@ -134,15 +133,14 @@ async function main() {
   const features = [];
   for (const feature of source.features) {
     const geometry = processGeometry(feature.geometry);
-    // Names are dropped deliberately: the layer is a silent backdrop with no labels and
-    // no interaction, so every property is dead weight over the wire.
+    // Properties are dropped: the layer is a backdrop with no labels and no
+    // interaction, so every property is dead weight over the wire.
     if (geometry) features.push({ type: "Feature", properties: {}, geometry });
   }
 
   const output = {
     type: "FeatureCollection",
-    // Provenance travels with the data so the licence is answerable from the artifact
-    // itself, not only from this script.
+    // Provenance travels with the data, so the licence can be read from the file itself.
     source: "Natural Earth 1:50m Admin 0 Countries (public domain)",
     generator: "scripts/build-basemap.mjs",
     simplification: { tolerance: TOLERANCE, precision: PRECISION },

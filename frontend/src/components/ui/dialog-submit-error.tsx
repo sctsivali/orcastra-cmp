@@ -20,7 +20,7 @@ interface DialogSubmitErrorProps {
  *
  * important: place it between the scrolling DialogBody and the DialogFooter, never inside the
  * body. Inside, a tall form puts the error below the fold while the pinned footer shows no sign
- * of it; that is how a refused snapshot read as a dialog that did nothing at 720 px.
+ * of it, and the dialog looks as if it did nothing.
  *
  * Focus stays on the submit button so a retry is one key press. Alert carries role="alert", so
  * the message is announced without moving focus.

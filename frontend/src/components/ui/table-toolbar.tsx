@@ -21,7 +21,7 @@ export interface TableToolbarProps<F extends string> {
   className?: string;
   /**
    * The rows have not been read (still loading, or the read failed with nothing held), so there
-   * is no count to state. "0 sessions" above a loader claimed an empty list that nobody had read.
+   * is no count to state; "0 sessions" above a loader would claim an empty list.
    */
   countUnknown?: boolean;
   /**
@@ -52,10 +52,8 @@ export function countSentence({
 /**
  * Search, filters and the result count for a list view.
  *
- * note: the toolbar owns the "N of M" sentence for every page. It used to be hand-rolled in
- * four places, and on most pages the totals lived inside DataTablePagination, which renders
- * only when there is more than one page. The count therefore disappeared at exactly the moment
- * filtering made it interesting.
+ * The toolbar owns the "N of M" sentence for every page. DataTablePagination renders only when
+ * there is more than one page, so a count kept there would vanish once a filter fits one page.
  */
 export function TableToolbar<F extends string>({
   filters,
@@ -172,17 +170,16 @@ export function TableToolbar<F extends string>({
         onClearAll={clearAll}
       />
 
-      {/* aria-atomic so the whole sentence is announced rather than a diff. The count updates
-          only after the search debounce settles, so it speaks once per settled query rather
-          than once per character. "N of M" follows whether a search or filter is active, not
-          whether it removed a row: a search every row matches still read as unfiltered. */}
+      {/* aria-atomic announces the whole sentence. The count updates only after the search
+          debounce settles, so it speaks once per settled query. "N of M" shows whenever a
+          search or filter is active, even one that every row matches. */}
       <p
         role="status"
         aria-live="polite"
         aria-atomic="true"
         aria-busy={countUnknown}
-        // note: min-h keeps the line's height while it is empty, so the table does not jump when
-        // the count arrives.
+        // min-h keeps the line's height while it is empty, so the table does not jump when the
+        // count arrives.
         className="min-h-5 text-sm text-muted-foreground"
       >
         {countUnknown

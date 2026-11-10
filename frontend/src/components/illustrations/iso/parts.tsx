@@ -2,8 +2,7 @@ import * as React from "react";
 import { IsoBall, IsoBox, IsoCylinder, IsoDisc, IsoExtrude, IsoFlat, IsoGlyph, IsoInset, type Material } from "./primitives";
 import { circleOutline, scaleOutline, type Pt, type Vec3 } from "./projection";
 
-// Compound objects shared by several scenes. Keeping them here is what makes a server in the
-// Multi-Cluster scene the same server as the one in the empty state: one object, one drawing.
+// Compound objects shared by several scenes, so an object looks the same in every scene.
 
 const markOn = (material: Material) => (material === "ink" ? "cut" : "detail");
 

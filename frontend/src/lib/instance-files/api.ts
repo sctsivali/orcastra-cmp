@@ -77,8 +77,8 @@ function query(target: GuestTarget): string {
   }).toString();
 }
 
-// note: paths travel in JSON bodies only. `request_security` answers 404 for a `path` query that
-// looks like /etc/shadow, .ssh or anything ending .conf, which is ordinary in a guest.
+// Paths travel in JSON bodies only. `request_security` answers 404 for a `path` query that looks
+// like /etc/shadow, .ssh or anything ending .conf, which is ordinary in a guest.
 function route(target: GuestTarget, name: string): string {
   return `/instance-files/${name}?${query(target)}`;
 }

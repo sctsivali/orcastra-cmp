@@ -6,17 +6,16 @@ import { AlertTriangle } from "lucide-react";
 /**
  * A reading that came back incomplete, said out loud.
  *
- * important: this is the alternative to rendering a zero. A cluster read that lost one part
- * used to answer with the parts that survived and no marker, so "0 B" meant both "no storage"
- * and "we could not find out". Every surface that can serve a partial reading says so with
- * this, so the two never look the same again.
+ * important: render this instead of a zero. A cluster read that lost one part answers with
+ * the parts that survived, so without a marker "0 B" would mean both "no storage" and "could
+ * not find out". Every surface that can serve a partial reading says so with this notice.
  */
 export function PartialReadNotice({
   children,
   "data-testid": testId,
 }: {
   children: React.ReactNode;
-  /** A hook for the browser harness, which asserts the notice on a degraded reading. */
+  /** A hook for browser tests that assert the notice on a degraded reading. */
   "data-testid"?: string;
 }) {
   return (

@@ -1,17 +1,15 @@
 /**
  * Pending instance-creation store.
  *
- * A tiny module-level store (consumed via useSyncExternalStore) that tracks
- * instances which have been submitted for creation but haven't materialized in
- * the instance list yet. The create form seeds an entry on submit; the
- * operation-events stream updates its live status/progress; the instances list
- * renders it as a "Creating… 48%" placeholder row until the real instance
- * appears (or the operation fails).
+ * A module-level store (read through useSyncExternalStore) of instances submitted
+ * for creation that are not in the instance list yet. The create form seeds an
+ * entry on submit, the operation-events stream updates its status and progress,
+ * and the instances list renders it as a "Creating… 48%" row until the real
+ * instance appears or the operation fails.
  *
- * Kept outside React (and outside React Query) so it survives the navigation
- * from the create page to the list page. Entries and subscriptions are scoped
- * by authenticated actor because this module also survives sign-out/sign-in
- * transitions in the same browser document.
+ * Kept outside React and React Query so it survives the navigation from the
+ * create page to the list. Entries and subscriptions are scoped by actor because
+ * the module also survives a sign-out and sign-in in the same document.
  */
 import { requestRowFocus } from "@/lib/row-focus";
 
@@ -33,7 +31,7 @@ export interface PendingCreate {
   description?: string;
   status?: string;
   statusCode?: number;
-  /** LXD image-pull progress, e.g. "rootfs: 48%". */
+  /** LXD image-pull progress, ex; "rootfs: 48%". */
   progress?: string;
   error?: string;
   createdAt: number;
@@ -46,14 +44,10 @@ export interface PendingCreate {
 /**
  * How long a create may sit with no signal before the row stops claiming to be in progress.
  *
- * important: this store had no expiry at all, and that is half of the stuck-Creating defect. A placeholder
- * is cleared by an operation frame, a lifecycle frame, or the instance appearing in a list.
- * A create that LXD refused in the background produces none of the three, and the events feed
- * is subscribed without a project so a create into a non-default project may not produce them
- * either. So the row spun on "Creating..." indefinitely and the operator was told nothing.
- *
- * Ten minutes is above a slow remote image pull, which is the longest legitimate wait, so this
- * expires a create that has genuinely lost its signal rather than one that is merely slow.
+ * A placeholder is cleared by an operation frame, a lifecycle frame, or the instance appearing in
+ * a list. A create that LXD refused in the background produces none of these, and the events feed
+ * is subscribed without a project, so a create into a non-default project may not produce them
+ * either. Ten minutes is above a slow remote image pull, the longest legitimate wait.
  */
 export const PENDING_STALE_MS = 10 * 60 * 1000;
 
@@ -231,10 +225,9 @@ export function removePendingCreate(actorScope: string, id: string): void {
  * The placeholder's instance exists in the list now: retire the row and ask the list to bring
  * the real row into view.
  *
- * note: a dedicated function rather than a flag on removePendingCreate, so Dismiss on a
- * failed row and the delete path keep calling removePendingCreate and cannot request focus by
- * accident. Resolution already proved the row exists, so the focus intent starts now. Reusing
- * a long-running create's original timestamp would make the five-minute focus TTL discard it.
+ * Separate from removePendingCreate, so Dismiss on a failed row and the delete path cannot
+ * request focus by accident. The focus intent starts now: a long-running create's original
+ * timestamp would fall outside the five-minute focus TTL.
  */
 export function resolvePendingCreate(actorScope: string, id: string): void {
   const entry = getPendingSnapshot(actorScope).find((p) => p.id === id);

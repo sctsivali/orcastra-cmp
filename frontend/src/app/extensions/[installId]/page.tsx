@@ -42,9 +42,8 @@ function InstallDetail() {
   const installId = Number(params.installId);
   const [issued, setIssued] = useState<ExtensionInstallResponse | null>(null);
 
-  // important: the panel lives in the URL. Settings cannot deep-link to a tab and a refresh
-  // drops you back to the first one, which is the limitation this surface deliberately does not
-  // inherit: an operator sent a link to a delivery log should land on the delivery log.
+  // The panel lives in the URL, so a link to a delivery log lands on the delivery log and a
+  // refresh keeps the open tab.
   const raw = search.get("panel");
   const panel: Panel = PANELS.includes(raw as Panel) ? (raw as Panel) : "overview";
   const setPanel = useCallback(
@@ -73,25 +72,23 @@ function InstallDetail() {
     staleTime: 3600000,
   });
 
-  // note: the same query key the webhook panel uses, so react-query serves both from one fetch
-  // rather than the health panel doubling the request the tab below it already makes. The
-  // deliveries query below deliberately does not share a key any more, and says why.
+  // The same query key the webhook panel uses, so react-query serves the health panel and that
+  // tab from one fetch. The deliveries query below keeps its own key.
   const subscriptions = useQuery({
     queryKey: ["extensions", "subscriptions", installId],
     queryFn: () => extensionsAPI.listSubscriptions(installId),
   });
 
   // The health panel reads `counts`, which the server computes over every delivery on the
-  // installation. It asks for a single row because it does not render the list: reducing over
-  // whatever page happened to be in hand is exactly how it came to report the newest fifty as the
-  // whole history.
+  // installation. It asks for a single row because it does not render the list; counting over a
+  // page in hand would report the newest fifty as the whole history.
   const deliveries = useQuery({
     queryKey: ["extensions", "deliveries", installId, "counts"],
     queryFn: () => extensionsAPI.listDeliveries(installId, { limit: 1 }),
   });
 
   // The whole extensions family, not only this install: the overview lists the same install's
-  // status and the catalogue counts installs, and both stayed as they were until a reload.
+  // status and the catalogue counts installs, so both must refresh too.
   const invalidate = () => reconcileMutationImpact(queryClient, "extension.write");
 
   const saveSettings = useMutation({
@@ -123,9 +120,9 @@ function InstallDetail() {
 
   const [confirmUninstall, setConfirmUninstall] = useState(false);
   const [uninstallError, setUninstallError] = useState<string | null>(null);
-  // important: a ref, not `isPending`. The shared dialog blocks its confirm on React state, which
-  // does not reach the DOM until the next render, so two clicks in one tick both get through. The
-  // house pattern for this is a ref claimed before any await, the same as the consent dialog.
+  // important: guarded by a ref instead of `isPending`. The shared dialog blocks its confirm on
+  // React state, which reaches the DOM only on the next render, so two clicks in one tick would
+  // both get through. A ref claimed before any await, as in the consent dialog.
   const uninstalling = useRef(false);
   const uninstall = useMutation({
     mutationFn: () => extensionsAPI.uninstall(installId),
@@ -174,8 +171,8 @@ function InstallDetail() {
             </p>
           </div>
         </div>
-        {/* Actions only. The status moved into the Health panel, where the notice explaining a
-            suspension already lives; beside these buttons it read as a third one. */}
+        {/* Actions only. The status is in the Health panel, beside the notice explaining a
+            suspension; next to these buttons it would read as a third one. */}
         <div className="flex items-center gap-2">
           <RefreshButton
             label="Refresh this installation"
@@ -261,9 +258,8 @@ function InstallDetail() {
           <section>
             <h2 className="text-lg font-semibold">Clusters</h2>
             <ul className="mt-2 flex flex-wrap gap-2">
-              {/* The reach an add-on was granted, and the one place an operator asks "which
-                  cluster is that". It rendered the id as dead text, so answering meant leaving the
-                  page and searching for it by hand. */}
+              {/* The reach an add-on was granted. Each id links to its cluster, so "which
+                  cluster is that" is answered without leaving the page. */}
               {row.granted_scope.map((grant) => (
                 <li key={String(grant.cluster_id)}>
                   <NodeLink clusterId={String(grant.cluster_id)} className="font-mono text-sm" />

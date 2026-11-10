@@ -1,9 +1,4 @@
-/**
- * Terminal Tray - Minimized terminals container.
- * Shows minimized terminals in a tray at the bottom-right corner.
- * Similar to Facebook chat bubbles.
- * Supports drag-to-reorder functionality.
- */
+/** The bottom-right tray of minimized terminals, reordered by drag on pointer devices. */
 
 "use client";
 
@@ -57,11 +52,10 @@ function TrayItem({
   isDropTarget,
 }: TrayItemProps) {
   const [isHovered, setIsHovered] = useState(false);
-  // Always show buttons on mobile (touch devices)
+  // Touch devices have no hover, so the buttons always show there.
   const [isMobile, setIsMobile] = useState(false);
   
   React.useEffect(() => {
-    // Check if device supports touch
     setIsMobile('ontouchstart' in window || navigator.maxTouchPoints > 0);
   }, []);
 
@@ -69,18 +63,18 @@ function TrayItem({
 
   return (
     <div
-      draggable={!isMobile} // Disable drag on mobile to prevent issues
+      draggable={!isMobile}
       onDragStart={(e) => !isMobile && onDragStart(e, terminal.id)}
       onDragOver={onDragOver}
       onDrop={(e) => onDrop(e, terminal.id)}
       className={cn(
         "relative group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all",
         "bg-terminal-raised hover:bg-terminal-border border border-terminal-border hover:border-blue-500/50",
-        // Always add padding for buttons on mobile
+        // Room for the absolutely positioned action buttons.
         (showButtons || isMobile) && "pr-20",
         isDragging && "opacity-50 scale-95",
         isDropTarget && "border-primary bg-primary/10",
-        // Better touch target on mobile
+        // 44 px touch target.
         "min-h-[44px]"
       )}
       onMouseEnter={() => setIsHovered(true)}
@@ -88,7 +82,6 @@ function TrayItem({
       onTouchStart={() => setIsHovered(true)}
       onClick={onRestore}
     >
-      {/* Drag handle - hide on mobile */}
       {!isMobile && (
         <div className="opacity-0 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing">
           <GripVertical className="h-3 w-3 text-gray-500" />
@@ -98,7 +91,6 @@ function TrayItem({
       <TerminalIcon className="h-4 w-4 shrink-0 text-blue-400" />
       <SessionStatusIcon status={terminal.status} />
 
-      {/* Name */}
       <div className="flex flex-col min-w-0">
         <span className="text-xs font-medium text-gray-200 truncate max-w-[120px]">
           {terminal.instanceName}
@@ -108,7 +100,6 @@ function TrayItem({
         </span>
       </div>
 
-      {/* Actions - always visible on mobile */}
       {showButtons && (
         <div className="absolute right-2 flex items-center gap-1">
           <TooltipProvider delayDuration={0}>
@@ -158,15 +149,12 @@ export function TerminalTray() {
   const { terminals, trayExpanded, toggleTray, restoreTerminal, closeTerminal, closeAllTerminals, restoreAllTerminals, reorderMinimizedTerminals } =
     useTerminalStore();
 
-  // Drag and drop state
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
 
-  // Get minimized terminals
   const minimizedTerminals = terminals.filter((t) => t.minimized);
   const activeTerminals = terminals.filter((t) => !t.minimized);
 
-  // Drag handlers
   const handleDragStart = (e: React.DragEvent, terminalId: string) => {
     setDraggedId(terminalId);
     e.dataTransfer.effectAllowed = 'move';
@@ -183,7 +171,7 @@ export function TerminalTray() {
     const sourceId = e.dataTransfer.getData('text/plain');
     
     if (sourceId && sourceId !== targetId) {
-      // Find indices in the minimized list
+      // The store reorders by position in the minimized list.
       const minimizedIds = minimizedTerminals.map(t => t.id);
       const fromIndex = minimizedIds.indexOf(sourceId);
       const toIndex = minimizedIds.indexOf(targetId);
@@ -202,12 +190,10 @@ export function TerminalTray() {
     setDropTargetId(null);
   };
 
-  // Don't render if no terminals
   if (terminals.length === 0) return null;
 
   return (
     <div className="fixed bottom-[calc(1rem+var(--dock-height,0px))] right-4 z-[99999] flex flex-col items-end gap-2 pointer-events-auto">
-      {/* Minimized terminals list */}
       {trayExpanded && minimizedTerminals.length > 0 && (
         <div 
           className="flex flex-col gap-2 mb-2 animate-in slide-in-from-bottom-2 fade-in duration-200"
@@ -230,7 +216,6 @@ export function TerminalTray() {
             />
           ))}
 
-          {/* Bulk actions for minimized terminals */}
           <div className="flex items-center gap-1.5 justify-end">
             <TooltipProvider delayDuration={0}>
               <Tooltip>
@@ -268,16 +253,13 @@ export function TerminalTray() {
         </div>
       )}
 
-      {/* Tray toggle button */}
       <div className="flex items-center gap-2">
-        {/* Active count badge */}
         {activeTerminals.length > 0 && (
           <Badge variant="outline" className="min-h-[32px] border-terminal-border bg-terminal text-gray-200">
             {activeTerminals.length} active
           </Badge>
         )}
 
-        {/* Main tray button - ensure proper touch target */}
         <Button
           variant="outline"
           size="sm"

@@ -39,7 +39,7 @@ export interface InstanceFileExplorerProps {
   host: string;
   project: string;
   instanceName: string;
-  /** False while hidden: no reads run for a tab nobody is looking at. */
+  /** False while the tab is hidden, so no reads run. */
   active?: boolean;
   initialPath?: string;
   /** Reachable from the states that point at another console tab. */
@@ -123,9 +123,9 @@ export function InstanceFileExplorer({
     async (paths: string[], archive: boolean) => {
       try {
         const ticket = await instanceFilesAPI.createDownload(target, paths, archive);
-        // important: same-origin with `download`. A failed ticket then fails in the browser's
-        // download list. A top-level navigation would replace this page, and with it every open
-        // console session.
+        // important: a same-origin anchor with `download`, so a failed ticket fails in the
+        // browser's download list. A top-level navigation would replace this page, and with it
+        // every open console session.
         const anchor = document.createElement("a");
         anchor.href = ticket.url;
         anchor.download = ticket.name;
@@ -175,7 +175,7 @@ export function InstanceFileExplorer({
         case "delete": return setPrompt({ kind: "delete", entries });
         case "properties": return setPrompt({ kind: "properties", entry: first });
         case "copy-path":
-          // note: escaped, as shown. A name holding a newline and a command would otherwise run
+          // Copied escaped, as shown. A name holding a newline and a command would otherwise run
           // when pasted into a shell.
           return void copyText(guestText(path)).then(() => toast({ title: "Path copied" }));
       }
@@ -277,9 +277,9 @@ export function InstanceFileExplorer({
         onFilter={(value) => dispatch({ type: "filter", value })}
         onShowHidden={(value) => dispatch({ type: "hidden", value })}
         onToggleTree={() => (mode === "wide" ? setTreePinned(!treePinned) : setTreeOverlay(!treeOverlay))}
-        // important: refetch rather than refresh. invalidateQueries swallows a failed read, which
-        // the button would report as a success. And refetch, unlike an invalidation, runs a
-        // disabled query, so it is guarded: this toolbar stays up for an account without files.
+        // important: refetch, not `refresh`. invalidateQueries swallows a failed read, which the
+        // button would report as a success. refetch also runs a disabled query, hence the canUse
+        // guard: this toolbar stays up for an account without files.
         onRefresh={() => (canUse ? listing.refetch({ throwOnError: true }) : undefined)}
         onNewFolder={() => setPrompt({ kind: "new-folder" })}
         onNewFile={() => setPrompt({ kind: "new-file" })}

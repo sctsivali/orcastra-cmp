@@ -24,9 +24,8 @@ export interface SortSelectProps<F extends string> {
   value: F;
   direction: SortDirection;
   /**
-   * Same contract as SortableTableHead: called with the field to sort by. useTableSort's
-   * handleSort is the intended argument, so a card grid and a table cannot end up disagreeing
-   * about what selecting a dimension means.
+   * Same contract as SortableTableHead: called with the field to sort by. Pass useTableSort's
+   * handleSort so a card grid and a table agree on what selecting a dimension means.
    */
   onSort: (field: F) => void;
   /** Visible text naming the control. */
@@ -37,14 +36,11 @@ export interface SortSelectProps<F extends string> {
 /**
  * The visible counterpart to SortableTableHead, for a list with no column headers to click.
  *
- * important: the direction is a separate button rather than two entries per field. Six options
- * for three dimensions stops being scannable, and it would leave "which way is this sorted right
- * now" to be read out of the selected option's text instead of off a control showing its own
- * state.
+ * The direction is a separate button rather than two entries per field, so the options stay
+ * scannable and the current order shows as the button's own state.
  *
- * note: a single option renders as text plus the same direction toggle, no Select. A Select
- * with one entry is a control that can choose nothing (the rule use-table-filters.ts already
- * states for facets), while a one-dimension grid still needs to say its order and reverse it.
+ * A single option renders as text plus the same direction toggle, with no Select: a one-entry
+ * Select can choose nothing, while a one-dimension grid still needs to show and reverse its order.
  */
 export function SortSelect<F extends string>({
   options,
@@ -58,13 +54,9 @@ export function SortSelect<F extends string>({
   const activeLabel = options.find((option) => option.value === value)?.label ?? value;
   const Icon = direction === "asc" ? ArrowUpNarrowWide : ArrowDownWideNarrow;
 
-  // important: the name states both the order in force and the order a click produces.
-  // check-icon-button-names.mjs counts buttons with no name, never buttons whose name is
-  // ambiguous, so a toggle labelled the same in both states passes the guard and still
-  // leaves a screen reader unable to tell which way the list runs.
-  // note: an arrow rather than a chevron. Chevrons are how this app draws disclosure, and
-  // /inventory already carries two of them above the grid, so a third would make "the
-  // expander" unaddressable for anything selecting on the icon.
+  // The name states both the order in force and the order a click produces, so a screen reader
+  // can tell which way the list runs. check-icon-button-names.mjs only catches unnamed buttons.
+  // An arrow rather than a chevron, because chevrons mark disclosure controls in this app.
   // Hoisted so both branches below render the identical control with the identical name.
   const directionButton = (
     <Button
@@ -95,9 +87,8 @@ export function SortSelect<F extends string>({
 
   return (
     <div className={cn("flex items-center gap-2", className)}>
-      {/* note: a Radix trigger is a button rather than an input, so htmlFor would associate with
-          nothing. aria-labelledby is what names it, the same shape range-filter.tsx and
-          text-filter.tsx already use for their own panels. */}
+      {/* A Radix trigger is a button rather than an input, so htmlFor would associate with
+          nothing. aria-labelledby names it, as in range-filter.tsx and text-filter.tsx. */}
       <span id={labelId} className="whitespace-nowrap text-sm font-medium">
         {label}
       </span>
@@ -105,10 +96,9 @@ export function SortSelect<F extends string>({
       <Select
         value={value}
         onValueChange={(next) => {
-          // important: handleSort flips the direction when it is handed the field already
-          // selected (use-table-sort.ts), which is what makes a table header toggle. Re-picking
-          // the current entry in a list is not that gesture, so without this guard reopening the
-          // menu and choosing what is already chosen would silently reverse the whole grid.
+          // important: handleSort flips the direction when handed the field already selected
+          // (use-table-sort.ts). Without this guard, re-picking the current entry would silently
+          // reverse the whole grid.
           if (next !== value) onSort(next as F);
         }}
       >

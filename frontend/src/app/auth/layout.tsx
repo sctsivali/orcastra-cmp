@@ -1,9 +1,8 @@
 /**
- * Auth Layout
+ * Layout for the sign-in and error pages; the global app shell hides its chrome on /auth/*.
  *
- * The sign-in and error pages. The global app shell suppresses sidebar/header/footer for /auth/*.
- * Branded here, on the server, with the deployment default an Administrator set, so the first
- * byte already carries the name, logo and accent; nobody is signed in yet to have anything else.
+ * Branded on the server with the deployment default an Administrator set, so the first byte
+ * already carries the name, logo and accent. No one is signed in yet to have other branding.
  */
 
 import type { CSSProperties, ReactNode } from "react";

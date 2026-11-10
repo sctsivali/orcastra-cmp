@@ -5,8 +5,8 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-// note: the placeholder glyph, kept in step with components/ui/table-text.tsx. Importing
-// it from there would point lib/ at components/, which nothing else in lib/ does.
+// The placeholder glyph for a value the API did not return. components/ui/table-text.tsx
+// re-exports it.
 export const EMPTY_VALUE = "\u2014";
 
 const SI_BYTE_UNITS = ["B", "kB", "MB", "GB", "TB", "PB"] as const;
@@ -82,9 +82,8 @@ function joinByteValue(value: FormattedByteValue): string {
 /**
  * Every size in the console: memory, disks, pools, images, files and transfers.
  *
- * important: decimal, and labelled decimal, on every screen. One disk used to read 10GiB in a
- * column and 10.74 GB on its usage meter, because memory and limits were binary and storage was
- * decimal. documentation/ui/byte-units.md has the decision and what it costs.
+ * Decimal (SI) and labelled decimal on every screen, memory and limits included, so one disk
+ * reads the same in a column and on its usage meter.
  */
 export function formatBytes(bytes: number, options: SplitByteFormatOptions): FormattedByteValue;
 export function formatBytes(bytes: number, options?: number | ByteFormatOptions): string;
@@ -113,11 +112,10 @@ export function formatNetworkRate(bytesPerSecond: number, decimals = 2): string 
 
 /**
  * A length of time from seconds, in its two largest units: `45s`, `5m 3s`, `8h 46m`, `2d 3h`.
- * A single time is glued and a compound keeps two units (frontend-design-language.md).
  *
- * important: zero is a real reading, not an absent one, so it formats as "0s" rather than the
- * placeholder: a session that closed at once, an instance with no CPU time. Only a value nobody
- * recorded (null, not finite, negative) is the missing-value dash.
+ * important: zero is a valid reading (a session that closed at once, an instance with no CPU
+ * time), so it formats as "0s". Only an unrecorded value (null, not finite, negative) gets the
+ * missing-value dash.
  */
 export function formatElapsed(seconds: number | null | undefined): string {
   if (seconds === null || seconds === undefined) return EMPTY_VALUE;
@@ -137,9 +135,8 @@ export function formatElapsed(seconds: number | null | undefined): string {
 /**
  * A span of CPU time, from LXD's cumulative nanosecond counter.
  *
- * note: formatUptime in the metrics tab is not reused: it returns undefined for 0 and floors at
- * whole minutes, so 45 seconds of CPU time would read "0m" and a genuine zero would vanish behind
- * the missing-value dash.
+ * Not formatUptime from the metrics tab: it returns undefined for 0 and floors at whole minutes,
+ * so 45 seconds of CPU time would read "0m" and a real zero would show the missing-value dash.
  */
 export function formatCpuTime(nanoseconds: number | null | undefined): string {
   if (nanoseconds === null || nanoseconds === undefined) return EMPTY_VALUE;
@@ -147,28 +144,22 @@ export function formatCpuTime(nanoseconds: number | null | undefined): string {
   return formatElapsed(nanoseconds / 1e9);
 }
 
-/**
- * CPU or link frequency, given in MHz.
- *
- * Lives here rather than in a component because formatBytes taught this codebase the lesson
- * the expensive way: thirteen private copies exist and they disagree on whether 8 GiB reads
- * as "8 GB" or "8.0 GB".
- */
+/** CPU or link frequency, given in MHz. Shared so every screen formats it the same way. */
 export function formatFrequency(mhz: number | null | undefined): string {
   if (mhz === null || mhz === undefined || !Number.isFinite(mhz) || mhz <= 0) return EMPTY_VALUE;
   if (mhz < 1000) return `${Math.round(mhz)} MHz`;
   return `${parseFloat((mhz / 1000).toFixed(2))} GHz`;
 }
 
-/** Link speed, given in Mbit/s. Same reasoning as formatFrequency. */
+/** Link speed, given in Mbit/s. */
 export function formatLinkSpeed(mbit: number | null | undefined): string {
   if (mbit === null || mbit === undefined || !Number.isFinite(mbit) || mbit <= 0) return EMPTY_VALUE;
   if (mbit < 1000) return `${mbit} Mb/s`;
   return `${parseFloat((mbit / 1000).toFixed(1))} Gb/s`;
 }
 
-// An API timestamp with no offset is UTC, and new Date() would read it as local. That was a small
-// error before the zone label; with one it is a wrong time stated with confidence.
+// An API timestamp with no offset is UTC. new Date() would read it as local time, and the zone
+// label would then state a wrong time.
 const OFFSETLESS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/;
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -178,7 +169,7 @@ function parseTimestamp(value: string | null | undefined): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-// en-US names Indonesia's zones GMT+7, GMT+8 and GMT+9, which no operator here says.
+// en-US names Indonesia's zones GMT+7, GMT+8 and GMT+9; operators there say WIB, WITA and WIT.
 const ZONE_NAMES: Record<string, string> = {
   "Asia/Jakarta": "WIB",
   "Asia/Pontianak": "WIB",
@@ -210,8 +201,8 @@ function dateAndTime(value: string | null | undefined, withSeconds: boolean): st
 /** "Oct 30, 2026", for a day rather than a moment, so it carries no zone. */
 export function formatDate(value: string | null | undefined): string {
   if (!value) return EMPTY_VALUE;
-  // important: a bare date is that day everywhere. Read as UTC midnight and shown in a zone west of
-  // Greenwich it would print the day before.
+  // important: a bare date is that day everywhere, so it is read and shown in UTC. UTC midnight
+  // shown in a zone west of Greenwich would print the day before.
   const date = DATE_ONLY.test(value) ? new Date(`${value}T00:00:00Z`) : parseTimestamp(value);
   if (!date || Number.isNaN(date.getTime())) return EMPTY_VALUE;
   return new Intl.DateTimeFormat("en-US", {
@@ -232,11 +223,10 @@ export function formatDateTimeSeconds(value: string | null | undefined): string 
   return dateAndTime(value, true);
 }
 
-// Generate a UUID that also works in non-secure contexts. `crypto.randomUUID`
-// only exists over HTTPS or on localhost, so on a plain-HTTP LAN deployment
-// (e.g. http://10.0.1.5) it is undefined and calling it throws
-// "crypto.randomUUID is not a function". These IDs are only used as local React
-// keys for form rows, so a non-cryptographic fallback is fine.
+// A UUID that also works in non-secure contexts. `crypto.randomUUID` only exists
+// over HTTPS or on localhost, so on a plain-HTTP LAN deployment calling it throws.
+// Callers use these as React keys for form rows and as request idempotency keys,
+// neither of them a secret.
 export function safeRandomUUID(): string {
   const c = typeof globalThis !== "undefined" ? globalThis.crypto : undefined;
   if (c && typeof c.randomUUID === "function") {
@@ -261,15 +251,12 @@ export function safeRandomUUID(): string {
 // The `--name` an operator pastes into `lxc config trust add`, identifying the certificate on
 // the hypervisor's trust list.
 //
-// important: this is generated in the browser and never sent to the backend. Node registration
-// labels the certificate this way, and the string has to stay stable because it is what an
-// operator matches against when auditing or removing trust later. The random suffix only breaks
-// ties between two registrations inside the same millisecond, so a non-cryptographic source is
-// the right one; nothing authenticates on this value.
+// important: generated in the browser and never sent to the backend. Keep the shape stable: an
+// operator matches against it when auditing or removing trust. The random suffix only breaks ties
+// within one millisecond, so a non-cryptographic source is fine; nothing authenticates on it.
 //
-// note: renew and regenerate do NOT use this. The backend builds their identity in this same
-// shape (`trust_identity_name` in services/lxd_certs/rotation.py) and returns the whole command
-// ready to paste, so every entry in a trust list reads alike.
+// Renew and regenerate do not use this. The backend builds their identity in the same shape
+// (`trust_identity_name` in services/lxd_certs/rotation.py) and returns the whole command.
 export function generateIdentityName(clusterId: string): string {
   const now = new Date();
   const year = now.getFullYear();
@@ -284,7 +271,7 @@ export function generateIdentityName(clusterId: string): string {
   return `orca-${clusterId}-${datetime}`;
 }
 
-// note: after trust is added on the host, nothing proves it until a check runs. The backend keeps a
+// After trust is added on the host, nothing proves it until a check runs. The backend keeps a
 // refused cluster tripped for 60 s per worker and the healer passes every 30 s, so on its own the
 // cluster can stay Pending Trust for a minute or more. Check Authentication or Verify proves it at
 // once and releases every worker within seconds.
@@ -302,7 +289,7 @@ export function hypervisorCli(type: string | null | undefined): "incus" | "lxc" 
   return isIncusType(type) ? "incus" : "lxc";
 }
 
-// standardize known hypervisor type display while preserving future providers
+// Known hypervisor types get their brand casing; any other type passes through trimmed.
 export function formatHypervisorType(type: string | null | undefined): string {
   if (!type) return "Hypervisor";
   const trimmed = type.trim();
@@ -313,8 +300,8 @@ export function formatHypervisorType(type: string | null | undefined): string {
   return trimmed || "Hypervisor";
 }
 
-// The seven continent codes the region catalogue uses. Also the single source of truth for
-// the region catalogue (lib/regions/catalog.json), whose entries carry these codes.
+// The seven continent codes, and the single source of truth for them: the entries in
+// lib/regions/catalog.json carry these codes.
 export const CONTINENT_NAMES: Record<string, string> = {
   AF: "Africa",
   AN: "Antarctica",
@@ -326,12 +313,11 @@ export const CONTINENT_NAMES: Record<string, string> = {
 };
 
 // important: the API stores and filters on the code, so nothing here may reach a request or a
-// URL. A code is also actively misleading on screen: an operator reading the console in
-// Indonesian reads "AS" (Asia) as "Amerika Serikat", and formatLabel turns it into "As".
+// URL. On screen a code misleads: in Indonesian "AS" (Asia) reads as "Amerika Serikat", and
+// formatLabel turns it into "As".
 //
-// note: returns undefined rather than a placeholder string for a missing or unknown-sentinel
-// value, so the caller's own empty rendering applies. "XX" is what the backend writes for a
-// cluster with no recorded location (routers/regions.py).
+// Returns undefined for a missing value or the "XX" sentinel the backend writes for a cluster
+// with no recorded location (routers/regions.py), so the caller's own empty rendering applies.
 export function formatContinent(value: string | null | undefined): string | undefined {
   if (!value) return undefined;
   const trimmed = value.trim();
@@ -344,8 +330,8 @@ export function formatContinent(value: string | null | undefined): string | unde
  * A server collection time (ISO string) as epoch milliseconds, or 0 when absent or unreadable.
  *
  * Lists served from the backend cache carry the time their read finished (`collected_at`). A
- * "last updated" label must show that, not when the browser received the body, or a cached
- * answer reads as current. Callers fall back to React Query's dataUpdatedAt on 0.
+ * "last updated" label shows that instead of the receive time, so a cached answer does not read
+ * as current. Callers fall back to React Query's dataUpdatedAt on 0.
  */
 export function collectedAtMs(collectedAt: string | null | undefined): number {
   const parsed = collectedAt ? Date.parse(collectedAt) : Number.NaN;
@@ -440,16 +426,15 @@ export function formatLabel(value: string | null | undefined): string {
     .join(" ");
 }
 
-// Instance type display. One vocabulary for an enum the app previously spelled four ways
-// ("VM"/"Container", "VM"/"CT", "Container"/"VM", and the raw "virtual-machine").
-//
-// important: instance type always goes through this, never formatLabel, because
-// formatLabel("vm") returns "VM" via the acronym map and that is the fifth vocabulary.
 /** Lower-cases a leading word for use mid-sentence, leaving an initialism such as "CLI command" alone. */
 export function lowerFirst(text: string): string {
   return /^[A-Z]{2}/.test(text) ? text : text.charAt(0).toLowerCase() + text.slice(1);
 }
 
+// Instance type display: "Virtual Machine" or "Container".
+//
+// Instance type always goes through this, never formatLabel, which would turn "vm" into "VM"
+// through the acronym map.
 export function formatInstanceType(type: string | null | undefined): string {
   if (!type) return "Unknown";
   const t = type.trim().toLowerCase();
@@ -462,8 +447,7 @@ export function formatInstanceType(type: string | null | undefined): string {
  * An ISO timestamp as epoch milliseconds, or null when there is nothing to read.
  *
  * important: an unparseable or absent stamp must stay null. LiveTimestamp renders null as
- * "Age unknown", and coercing it to 0 or to Date.now() would report a body of unknown age as
- * current, which is the one thing that component exists to prevent.
+ * "Age unknown"; coercing it to 0 or Date.now() would report a body of unknown age as current.
  */
 export function toMillis(value: string | null | undefined): number | null {
   if (!value) return null;
@@ -488,7 +472,7 @@ export function formatVcpuCount(count: number): string {
   return plural(count, "vCPU");
 }
 
-/** "1,234": one grouping everywhere, not whatever the browser's locale happens to use. */
+/** "1,234": one grouping everywhere, whatever the browser's locale. */
 export function formatCount(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
 }

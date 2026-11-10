@@ -56,9 +56,9 @@ export function getInstanceStreamHosts(
 /**
  * Actor-scoped fleet reconciliation state machine.
  *
- * The coordinator deliberately owns no React, DOM, WebSocket, or query-cache state. Callers
- * provide visibility, stream health, error classification, and the authoritative read. This
- * keeps cadence and Retry-After behavior deterministic under a fake clock.
+ * The coordinator owns no React, DOM, WebSocket, or query-cache state. Callers provide
+ * visibility, stream health, error classification, and the authoritative read, so cadence and
+ * Retry-After behavior stay deterministic under a fake clock.
  */
 export function createInstanceFreshnessCoordinator(
   options: InstanceFreshnessCoordinatorOptions,

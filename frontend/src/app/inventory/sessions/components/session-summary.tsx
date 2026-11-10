@@ -15,18 +15,11 @@ import { DownloadIllustration, DurationIllustration, SessionsActiveIllustration,
 import { EMPTY_VALUE, formatBytes, formatCount, formatElapsed, formatNetworkRate } from "@/lib/utils";
 
 /**
- * One counter above a Sessions table, in the house stat style: the Regions tile in
- * components/regions/regions-page.tsx, a small icon beside a `text-sm` label over a
- * `text-2xl font-bold` value in the body face.
- *
- * note: the two strips had drifted into three sizes and two faces (Geist Mono on the time and the
- * rates, sans on the counts), with an uppercase label no other tile uses. Monospace is for
- * identifiers; a count, size, rate or duration is the body face with tabular figures, which also
- * keeps the 5 s rate poll from shifting the digits sideways.
- *
- * note: the icon sits in the label row rather than beside the value. Beside it, a 32 px icon took
- * the room a rate like `999.9 MB/s` needs, and at 768 px the value ran under the icon. Label and
- * value stay sibling paragraphs: the live Sessions spec reads the count as the label's next `p`.
+ * One counter above a Sessions table, in the house stat style of the Regions tile: a small icon
+ * beside a `text-sm` label over a `text-2xl font-bold` value in the body face, with tabular
+ * figures so the 5 s rate poll does not shift the digits. The icon sits in the label row because
+ * beside the value it would take the room a rate like `999.9 MB/s` needs. Label and value stay
+ * sibling paragraphs: an end-to-end spec reads the count as the label's next `p`.
  */
 function SummaryTile({
   label,
@@ -39,8 +32,8 @@ function SummaryTile({
   icon: LucideIcon;
   illustration: ComponentType<IllustrationProps>;
 }) {
-  // note: the scene shows only from a 300px tile (illustrations.css, illo-stat), where the value
-  // still keeps the 135 px a rate needs beside it; below that the label's icon returns.
+  // The scene shows only from a 300px tile (illustrations.css, illo-stat), where the value still
+  // keeps the 135 px a rate needs beside it; below that the label's icon returns.
   return (
     <Card className="illo-stat">
       <CardContent className="flex items-start justify-between gap-4 pt-4">
@@ -59,12 +52,11 @@ function SummaryTile({
   );
 }
 
-// note: the sidebar takes 256 px from md up, so the content is narrower at 768 px than at 640 px.
-// Measured at 24 px bold Geist, the widest values are `999.9 MB/s` (135 px) here and `999.99 GB`
-// (123 px) in history, plus 48 px of tile padding. The three live tiles use auto-fit, which
-// measures the real container (sidebar open or collapsed) and needs no breakpoint; 12rem holds
-// 135 px. The four history tiles keep the API Keys breakpoints instead, because auto-fit would
-// leave three and one at 1024 px, and 1, 2, 4 fits 123 px at every width.
+// The sidebar takes 256 px from md up, so the content is narrower at 768 px than at 640 px.
+// At 24 px bold Geist the widest values are `999.9 MB/s` (135 px) live and `999.99 GB` (123 px) in
+// history, plus 48 px of tile padding. The live tiles use auto-fit, which measures the real
+// container; 12rem holds 135 px. The history tiles keep fixed breakpoints (1, 2, 4), because
+// auto-fit would leave three and one at 1024 px.
 const ACTIVE_STRIP = "grid gap-4 grid-cols-[repeat(auto-fit,minmax(12rem,1fr))]";
 const HISTORY_STRIP = "grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4";
 
@@ -92,7 +84,7 @@ export function ActiveSummary({
 
 /**
  * The history strip, summed over the disconnect rows that were read. A read that has not landed
- * (or failed with nothing held) shows the placeholder, never a `0` or `0 B` nobody measured.
+ * (or failed with nothing held) shows the placeholder rather than an unmeasured `0` or `0 B`.
  */
 export function HistorySummary({
   countUnknown,

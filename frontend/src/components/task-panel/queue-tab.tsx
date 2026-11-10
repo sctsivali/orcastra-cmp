@@ -33,9 +33,9 @@ export interface QueueTabProps {
   collectionIncomplete: boolean;
 }
 
-// A grid row, not a table row. The queue is a grouped list ordered by acceptance, and a
+// A grid row: the queue is a grouped list in the order the journal accepted the tasks, and a
 // TableBody here would be a table with no defineTable behind it.
-// The first column holds a queue position or the word Running; 2rem clipped the word.
+// The first column holds a queue position or the word Running, which 2rem would clip.
 const ROW_CLASS = "grid h-8 grid-cols-[3.5rem_minmax(0,1fr)_auto_auto] items-center gap-2 border-b px-3 text-xs";
 
 function QueueRow({

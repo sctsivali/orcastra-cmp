@@ -1,30 +1,18 @@
 /**
  * Same-path URL writes that do not navigate.
  *
- * Filters, tabs and pickers keep their state in the query string, and every such write used to
- * go through `router.replace(url, { scroll: false })`. That is a navigation, and three things
- * come with it:
+ * On Next 15.5 a same-path, params-only `router.replace` can take the aliased-prefetch path (a
+ * param-less prefetch entry alive, a `loading.tsx` on the segment), which never sets
+ * `shouldScroll`: the page jumps to the top under an open popover, and each keystroke costs an
+ * RSC round trip. Next patches `window.history.replaceState` (app-router.js) to update
+ * `useSearchParams` and `usePathname` on the next commit with no fetch or scroll; the patch reads
+ * the state argument for its own markers, so a fresh object is passed every time. `replaceState`
+ * adds no history entry, so Back leaves the page instead of walking the filter session.
  *
- * - Next 15.5 routes a same-path, params-only replace through its aliased-prefetch path whenever
- *   a param-less prefetch entry for the page is alive (a sidebar link hovered in the last 30 s)
- *   and the segment has a `loading.tsx`. That path never sets `shouldScroll`, so the lazily
- *   refetched segment scrolls the document to the top under the open popover. Reproduced on the
- *   Overview, intermittently, on every build since the filter engine landed.
- * - Every keystroke of a debounced search was an RSC round trip to the server for a page whose
- *   data the client already holds.
- * - `replaceState` never adds a history entry, which is the contract the filter engine already
- *   promised: Back leaves the page, it does not walk the filter session.
- *
- * Next patches `window.history.replaceState` (app-router.js) to dispatch its restore action, so
- * `useSearchParams` and `usePathname` update on the next transition commit, with no fetch and no
- * scroll handling of its own. The patch only reads the state argument for its own markers, so a
- * fresh object is passed every time.
- *
- * important: the patch is installed after hydration. A write from a mount-time effect can run
- * before it exists and would then leave the router's own view of the URL stale, so effect-time
- * writers (legacy param translation, a default picked from data) stay on `router.replace`.
- * `scripts/checks/check-url-writes.mjs` holds that line. No `basePath` is configured; if one
- * ever is, `pathname` here must be prefixed with it.
+ * important: the patch is installed after hydration. A mount-time effect write can run before it
+ * and leave the router's URL stale, so effect-time writers stay on `router.replace`
+ * (scripts/checks/check-url-writes.mjs). No `basePath` is configured; adding one means prefixing
+ * `pathname` here.
  */
 
 export function replaceUrl(url: string): void {

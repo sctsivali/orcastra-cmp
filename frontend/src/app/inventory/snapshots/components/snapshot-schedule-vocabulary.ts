@@ -2,18 +2,15 @@ import type { ScheduleFrequency, SnapshotSchedule } from "@/types/api";
 import { plural } from "@/lib/utils";
 
 /**
- * Every word and number the schedule surface uses, in one module.
+ * Every word and number the schedule surface uses, in one module, so the sort, the facet, the
+ * cell and the form read one map (as snapshot-origin.ts does for origins).
  *
- * The same reasoning snapshot-origin.ts states about origins: the sort, the facet, the cell and
- * the form all read one map, so they cannot drift into two spellings of one idea on one screen.
- *
- * note: every preset label begins with a digit or a time. `check-heading-case.mjs` treats every
- * `label:` literal as a title needing Title Case and skips it only when the first character is a
- * digit, so "6 hours" is legal where "Every six hours" would fail the build. That constraint
- * happens to produce the more scannable spelling anyway.
+ * Every preset label begins with a digit or a time. `check-heading-case.mjs` treats a `label:`
+ * literal as a title needing Title Case unless its first character is a digit, so "6 hours"
+ * passes where "Every six hours" would fail the build.
  */
 
-/** Mirrors the Literal on the backend's request model. check-schedule-presets.mjs holds them equal. */
+/** Mirrors `Frequency` in backend/app/models/snapshot_schedule_schemas.py; keep them equal. */
 export const FREQUENCIES: readonly { value: ScheduleFrequency; label: string }[] = [
   { value: "every_6_hours", label: "6 hours" },
   { value: "every_12_hours", label: "12 hours" },
@@ -53,8 +50,7 @@ export const WEEKDAYS: readonly { value: string; label: string }[] = [
  * Hours as UTC, with the operator's own offset in the label.
  *
  * Storage is UTC because a local-time schedule at 02:30 either fires twice or not at all on a
- * daylight-saving boundary, and that arithmetic is exactly what nobody exercises. Reading it in
- * local time is a display problem, so it is solved here rather than in the column.
+ * daylight-saving boundary. Local time is a display concern, handled here and not in the column.
  */
 export function hourOptions(): { value: string; label: string }[] {
   const offsetMinutes = -new Date().getTimezoneOffset();
@@ -70,11 +66,10 @@ export function hourOptions(): { value: string; label: string }[] {
 }
 
 /**
- * The third state, derived rather than stored.
+ * The displayed state, with `failing` derived rather than stored.
  *
  * The database holds active and paused only. A schedule that has failed is still active and will
- * try again, so inventing a stored "failing" would let a row report a state its own columns
- * contradict. The console needs the distinction to be scannable, so it derives it here, once.
+ * try again, so a stored "failing" could contradict the row's own columns. It is derived here.
  */
 export type ScheduleState = "active" | "failing" | "paused" | "unknown";
 
@@ -113,11 +108,10 @@ const PERIOD_HOURS: Record<ScheduleFrequency, number> = {
 };
 
 /**
- * What this schedule will actually hold, said in one sentence under the form.
+ * Whether retention fits inside expiry; scheduleSentence says the result under the form.
  *
- * Retention and expiry interact and the interaction is invisible: keeping 3 weekly snapshots that
- * each expire after 7 days holds exactly one, forever, and nothing on screen would say why. The
- * form does the arithmetic once here rather than leaving the operator to do it wrong every time.
+ * The interaction is invisible on screen: keeping 3 weekly snapshots that each expire after
+ * 7 days holds one at a time.
  */
 export function retentionFits(
   frequency: ScheduleFrequency,

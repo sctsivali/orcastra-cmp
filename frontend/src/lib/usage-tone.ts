@@ -1,32 +1,26 @@
 /**
  * One utilisation ramp, for the bar and for the number beside it.
  *
- * Two families of token, and the split is measured rather than aesthetic. A bar is a
- * non-text graphic against a 3:1 floor, and `--success` / `--warning` / `--destructive`
- * are tuned as backgrounds that carry their own foreground, so they are right there. The
- * same tokens fail AA as text in light mode (documentation/ui/cluster-status-vocabulary.md
- * measures them at 3.15:1, 2.73:1 and 3.82:1 against a 4.5:1 floor), so the percentage
- * label uses the `--status-*` set instead, measured at 4.52:1 to 10.01:1 across both
- * surfaces in both themes.
+ * Two token families, chosen by contrast. A bar is a non-text graphic against a 3:1 floor,
+ * so its fill can use `--success` and `--destructive`, which are tuned as backgrounds. As
+ * text those fail AA in light mode (3.15:1 and 3.82:1 against 4.5:1), so the percentage
+ * label uses the `--status-*` set, 4.52:1 to 10.01:1 on both surfaces in both themes.
  *
- * Three bands, not four. The member resource modal used to paint 50 to 74 percent yellow,
- * which is not a warning on a hypervisor: half-used capacity is the working state, and a
- * caution colour there teaches an operator to stop reading the colour at all.
+ * Three bands. Half-used capacity is the working state on a hypervisor, so 50 to 74
+ * percent stays green; a caution colour there teaches an operator to ignore the colour.
  */
 
 export interface UsageTone {
   /** Class for the percentage text. AA as text in both themes. */
   text: string;
-  /** Class for a bar fill. Measured as a graphic, not as text. */
+  /** Class for a bar fill, held to the 3:1 graphic floor. */
   fill: string;
   /**
    * Class for a gauge arc, an SVG stroke over `--card`.
    *
-   * note: `--status-*`, not the fill tokens. `--success` measures 3.19:1 on `--card` in light
-   * mode and 3.34:1 in dark, too close to the 3:1 graphic floor for a thin arc, and the series
-   * hexes the monitoring gauges used before were worse: #10b981 at 2.43:1 and #f59e0b at 2.06:1
-   * in light mode. The status set measures, light then dark on `--card`: online 4.95 and 7.68,
-   * pending 4.87 and 8.74, offline 6.15 and 4.84.
+   * Uses `--status-*`: `--success` measures 3.19:1 on `--card` in light mode and 3.34:1 in
+   * dark, too close to the 3:1 graphic floor for a thin arc. The status set on `--card`,
+   * light then dark: online 4.95 and 7.68, pending 4.87 and 8.74, offline 6.15 and 4.84.
    */
   stroke: string;
 }
@@ -37,10 +31,8 @@ export const USAGE_ELEVATED_PERCENT = 75;
 /**
  * A reading as a percentage of its total, clamped to the range a bar can draw.
  *
- * note: lives next to the ramp because every caller of one calls the other, and a total of
- * zero has to answer 0 rather than NaN or Infinity. Thin provisioning can put used above
- * total, which clamps to 100: the bar cannot draw past its track, and the used-of-total text
- * beside it still says what actually happened.
+ * A total of zero answers 0 rather than NaN or Infinity. Thin provisioning can put used
+ * above total, which clamps to 100; the used-of-total text beside the bar shows the figures.
  */
 export function usagePercent(used: number, total: number): number {
   if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0) return 0;

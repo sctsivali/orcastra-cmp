@@ -1,18 +1,16 @@
 // Parsing for LXD `used_by` / resource references.
 //
-// important: this is a faithful port of `parse_lxd_reference` in
-// backend/app/core/tenant_visibility.py. That function decides tenant visibility, so a
-// frontend that parses the same string differently will display a project attribution
-// that disagrees with the one authorization was based on. Keep the two in step.
+// important: a faithful port of `parse_lxd_reference` in backend/app/core/tenant_visibility.py,
+// which decides tenant visibility. Parsing the same string differently here would display a
+// project attribution that disagrees with the one authorization used. Keep the two in step.
 //
-// The one deliberate divergence: the Python decodes query values twice (parse_qs decodes,
-// then unquote decodes again). That only differs for a value containing a literal `%`,
-// which an LXD project name cannot contain, so this decodes once.
+// One divergence: the Python decodes query values twice (parse_qs, then unquote). That only
+// differs for a value containing a literal `%`, which an LXD project name cannot contain, so
+// this decodes once.
 //
-// important: the parity contract covers `project` and `instance` only. Those are the two
-// values parse_lxd_reference returns and the two authorization keys off. `kind`, `name` and
-// `projectExplicit` are a frontend display extension the backend never computes. Helpers below
-// may read them freely; none of them may re-derive project or instance.
+// important: parity covers `project` and `instance` only, the two values parse_lxd_reference
+// returns and authorization keys off. `kind`, `name` and `projectExplicit` are display fields
+// the backend never computes. Helpers may read them; none may re-derive project or instance.
 
 export const DEFAULT_PROJECT = "default";
 
@@ -22,7 +20,7 @@ const INSTANCE_VOLUME_TYPES = new Set(["container", "virtual-machine"]);
 export interface LxdReference {
   /** Project the reference belongs to. Falls back to "default", matching the backend. */
   project: string;
-  /** True when the reference itself named the project, rather than us defaulting. */
+  /** True when the reference itself named the project; false when it defaulted. */
   projectExplicit: boolean;
   /** Instance name, when the reference points at an instance or an instance-backed volume. */
   instance: string | null;
@@ -33,9 +31,8 @@ export interface LxdReference {
   raw: string;
 }
 
-// note: mirrors Python's unquote, which leaves a malformed escape as-is rather than
-// throwing. decodeURIComponent throws on "%zz", and an exception here would take down
-// the whole table render.
+// Mirrors Python's unquote, which leaves a malformed escape as-is. decodeURIComponent throws
+// on "%zz", and an exception here would take down the whole table render.
 function safeDecode(value: string): string {
   try {
     return decodeURIComponent(value);
@@ -90,9 +87,8 @@ export function parseLxdReference(reference: string): LxdReference {
     return { project, projectExplicit, instance: name, kind: "volumes", name, raw: reference };
   }
 
-  // Everything else (profiles, networks, custom volumes, images) still carries a project.
-  // The previous implementation dropped these entirely, which is why a network used only
-  // by a profile derived no project at all.
+  // Everything else (profiles, networks, custom volumes, images) keeps the project read above;
+  // the last two path segments give its kind and name.
   let kind: string | null = null;
   let name: string | null = null;
   if (parts.length >= 2) {
@@ -103,16 +99,11 @@ export function parseLxdReference(reference: string): LxdReference {
   return { project, projectExplicit, instance: null, kind, name, raw: reference };
 }
 
-// important: a reference is the only input, exactly as it is for the backend. There is
-// deliberately no lookup against the fetched instance list here.
-//
-// That list is org-scoped, so consulting it would let the browser attribute a project the
-// backend never attributed for the same string, and the backend is what enforces tenant
-// visibility. One string, one answer, on both sides. The previous implementation did the
-// lookup and is why a resource owned by another organization read as "default".
-//
-// A reference with no project qualifier means the default project, which is what LXD's own
-// convention and parse_lxd_reference both say.
+// important: the reference string is the only input, as in the backend; there is no lookup
+// against the fetched instance list. That list is org-scoped, so consulting it would attribute
+// a project the backend never attributed for the same string, and the backend enforces tenant
+// visibility. A reference with no project qualifier means the default project, per LXD and
+// parse_lxd_reference.
 
 // Cache keyed on the used_by array identity. Query results hold their arrays steady between
 // refetches, so a sort comparator asking for the same row repeatedly parses once.
@@ -136,13 +127,12 @@ export function projectsFromUsedBy(
 }
 
 
-// Cache keyed on the used_by array identity, the same discipline as projectsFromUsedBy. Query
-// results hold their arrays steady between refetches, so a list is parsed once no matter how
-// many of the helpers below look at it.
+// Keyed on the used_by array identity like projectsCache, so a list is parsed once however
+// many of the helpers below read it.
 //
-// note: each derived cache keys on the SAME `usedBy` array, never on an array a helper
-// returns. referencesFromUsedBy allocates a fresh array on a miss, so keying a second cache
-// off its result would leak an entry per call.
+// Each derived cache keys on the caller's `usedBy` array, never on an array a helper returns.
+// referencesFromUsedBy allocates a fresh array on a miss, so keying a second cache off its
+// result would leak an entry per call.
 const referencesCache = new WeakMap<readonly string[], readonly LxdReference[]>();
 
 /** Every reference parsed once, in input order. */
@@ -167,11 +157,8 @@ export interface ProjectReferences {
 const byProjectCache = new WeakMap<readonly string[], readonly ProjectReferences[]>();
 
 /**
- * Group by project keeping the whole reference.
- *
- * Replaces resourcesByProject, which collapsed each reference to a bare name. That is why the
- * dialog it fed could show a project and a name, but never say whether the thing named was an
- * instance, a profile or somebody else's volume.
+ * Group by project, keeping the whole reference so a dialog can say what each one is (an
+ * instance, a profile, another project's volume) as well as its name.
  */
 export function referencesByProject(
   usedBy: readonly string[] | null | undefined,
@@ -204,9 +191,8 @@ export function referencesByProject(
 /**
  * Reorder into project order for the grouped view.
  *
- * important: relies on sort being stable, which the language guarantees, so whatever column
- * the operator sorted by still holds inside each project. Grouping must not silently discard
- * the sort the user chose.
+ * important: relies on Array.prototype.sort being stable (guaranteed since ES2019), so the
+ * operator's column sort still holds inside each project.
  */
 export function orderByProject(
   references: readonly LxdReference[],

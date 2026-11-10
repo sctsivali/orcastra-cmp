@@ -18,7 +18,7 @@ export function policyOf(overview: GuestOverview): PasswordPolicy {
   return { min: overview.password_policy.min_length, max: overview.password_policy.max_length, scheme: overview.guest.hash_default };
 }
 
-/** A refusal about the password itself belongs next to the field, not beside the buttons. */
+/** Whether a refusal is about the password itself, which is shown next to the field. */
 export function isPasswordRefusal(error: unknown): boolean {
   const code = credentialErrorCode(error) ?? "";
   return code.startsWith("password_") || code === "guest_hash_unsupported";

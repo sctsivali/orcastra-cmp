@@ -56,8 +56,8 @@ function FlyoutGroup({ group, ctx }: { group: NavGroup; ctx: NavRenderContext })
 
   const terminalCount = useTerminalStore((s) => s.terminals.length);
   const consoleCount = useConsoleStore((s) => s.consoles.length);
-  // note: only a group that carries the Host Health item counts it, and that item is admin-only,
-  // so the filtered tree never hands a non-admin's group one.
+  // Only a group that carries the Host Health item counts it, and that item is admin-only, so
+  // the filtered tree never hands a non-admin's group one.
   const attention = useHostHealthAttention(group.items.some((i) => i.badge === "host-health"));
   const sessions = group.id === "compute" ? terminalCount + consoleCount : 0;
   const badge = sessions + attention;
@@ -76,10 +76,9 @@ function FlyoutGroup({ group, ctx }: { group: NavGroup; ctx: NavRenderContext })
     if (closeTimer.current) clearTimeout(closeTimer.current);
   }, []);
 
-  // important: pointer events, not mouse events. A tap fires a synthetic mouseenter before
-  // click in every mobile browser, so hover-to-open would open the flyout and the trigger's
-  // own click would immediately toggle it shut. Ignoring non-mouse pointers lets a tap fall
-  // through to Radix's normal click-to-toggle.
+  // important: pointer events, not mouse events. Mobile browsers fire a synthetic mouseenter
+  // before the click of a tap, so hover-to-open would open the flyout and the trigger's own
+  // click would toggle it shut. A non-mouse pointer falls through to Radix's click-to-toggle.
   const handlePointerEnter = (e: React.PointerEvent) => {
     if (e.pointerType !== "mouse") return;
     interaction.current = "mouse";
@@ -90,9 +89,9 @@ function FlyoutGroup({ group, ctx }: { group: NavGroup; ctx: NavRenderContext })
     closeSoon();
   };
 
-  // important: close on route commit, not on click. Closing on click unmounted the <Link>
-  // and killed its pending spinner, so the flyout vanished and nothing replaced it until the
-  // page arrived. Clicking outside still closes it if a navigation stalls.
+  // important: close on route commit, not on click. Closing on click would unmount the <Link>
+  // and its pending spinner, leaving nothing on screen until the page arrives. Clicking outside
+  // still closes it if a navigation stalls.
   React.useEffect(() => {
     setOpen(false);
   }, [pathname]);

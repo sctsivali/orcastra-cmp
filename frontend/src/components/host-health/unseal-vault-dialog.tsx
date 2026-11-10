@@ -258,9 +258,9 @@ export function UnsealVaultDialog({ open, onOpenChange }: UnsealVaultDialogProps
                       ref={inputRef}
                       id="vault-unseal-key"
                       name="vault-unseal-key"
-                      // note: text, masked with CSS, not type="password". Browsers offer to save a
-                      // password field into the account's synced password store whatever autocomplete
-                      // says, and a key share must never end up there.
+                      // important: text masked with CSS rather than type="password". Browsers offer
+                      // to save a password field into the account's synced password store whatever
+                      // autocomplete says, and a key share must never end up there.
                       type="text"
                       value={key}
                       onChange={(e) => {
@@ -322,7 +322,7 @@ export function UnsealVaultDialog({ open, onOpenChange }: UnsealVaultDialogProps
               </Button>
             )}
             <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
-              {/* note: not "Close": the dialog's own corner button already carries that name */}
+              {/* Not "Close": the dialog's corner button already carries that name. */}
               {unsealed ? "Done" : "Cancel"}
             </Button>
             {status && !unsealed && status.unseal_available && (

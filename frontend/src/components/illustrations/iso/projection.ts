@@ -13,9 +13,9 @@ export type Plane = "left" | "right" | "top";
 
 export const CANVAS = { width: 160, height: 120 } as const;
 
-// The ground plate's centre sits a little below the canvas middle so objects rising from it
-// stay inside the frame. SCALE sets how big objects are against the plate: at 1.25 the default
-// plate (half 30) spans x 15..145, y 38.5..113.5 and the objects, not the floor, fill the frame.
+// The ground plate's centre sits a little below the canvas middle so objects rising from it stay
+// inside the frame. SCALE sets how big objects are against the plate: at 1.25 the default plate
+// (half 30) spans x 15..145, y 38.5..113.5, so the objects fill the frame more than the floor.
 const ORIGIN: Pt = [80, 76];
 const SCALE = 1.25;
 const COS30 = Math.sqrt(3) / 2;
@@ -29,8 +29,8 @@ export function screenLength(n: number): number {
   return n * SCALE;
 }
 
-// note: two decimals keep the markup small without visible drift at 3x zoom. `-0` is folded so
-// server and client render identical strings.
+// Two decimals keep the markup small without visible drift at 3x zoom. `-0` is folded so server
+// and client render identical strings.
 export function fmt(n: number): string {
   const rounded = Math.round(n * 100) / 100;
   return String(Object.is(rounded, -0) ? 0 : rounded);
@@ -125,7 +125,7 @@ export function circleOutline(cu: number, cv: number, radius: number, segments =
 
 /**
  * The part of `subject` inside the convex polygon `clip` (Sutherland-Hodgman), in screen space.
- * Used to show only what can be seen through an opening, without an SVG clipPath and the
+ * Shows only what can be seen through an opening, without an SVG clipPath and the
  * document-unique id it would need.
  */
 export function clipConvex(subject: readonly Pt[], clip: readonly Pt[]): Pt[] {

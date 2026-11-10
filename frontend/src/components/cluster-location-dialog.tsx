@@ -49,8 +49,8 @@ export function ClusterLocationDialog({
     setSelected(catalog ? resolveRegion(catalog, current?.region_id) ?? null : null);
   }, [open, catalog, current?.region_id]);
 
-  // important: isPending is React state, so the disabled prop only updates on the next render.
-  // Two clicks inside one tick both fire the mutation. Claimed synchronously, before any await.
+  // important: isPending is React state, so the disabled prop only updates on the next render
+  // and two clicks inside one tick would both fire the mutation. Claimed before any await.
   const submitInFlightRef = React.useRef(false);
 
   const handleSave = async () => {
@@ -59,8 +59,8 @@ export function ClusterLocationDialog({
     submitInFlightRef.current = true;
 
     try {
-      // note: the PATCH replaces the whole location, so the facility recorded at registration
-      // travels with it. Leaving it out used to erase it on every location edit.
+      // important: the PATCH replaces the whole location, so the facility recorded at
+      // registration must travel with it or every location edit erases it.
       await updateLocation.mutateAsync({
         clusterId: cluster.cluster_id,
         location: toGeoLocation(selected, {

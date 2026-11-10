@@ -2,10 +2,10 @@
  * The graphical console's pointer: motion, buttons and wheel to the SPICE inputs channel.
  *
  * important: motion is coalesced, never dropped. SPICE lets a client have 8 unacknowledged moves
- * in flight; the vendored handler discarded every move past that, so on a link slower than about
- * 130 ms the last position never reached the guest and a click landed where the pointer had been.
- * Here the newest position (or, in server mode, the summed movement) waits and goes out as soon
- * as an ACK opens the window, and a press or release always sends the pending position first.
+ * in flight; discarding moves past that means that on a slow link the last position never reaches
+ * the guest and a click lands where the pointer had been. The newest position (or, in server
+ * mode, the summed movement) waits and goes out as soon as an ACK opens the window, and a press
+ * or release always sends the pending position first.
  *
  * Client mouse mode (an absolute device in the guest) sends positions. Server mode (relative,
  * typically a BIOS or a guest without a tablet driver) locks the browser pointer on click and
@@ -254,13 +254,13 @@ export class PointerBridge {
       void this.canvas.requestPointerLock?.();
       return;
     }
-    if (event.button > 2) return; // back/forward are not guest buttons
+    if (event.button > 2) return; // Back and forward are not guest buttons.
     event.preventDefault();
     if (event.pointerType !== "touch") {
       try {
         this.canvas.setPointerCapture(event.pointerId);
       } catch {
-        /* the pointer is already gone */
+        /* The pointer is already gone. */
       }
     }
     if (this.mode === "client") this.pending = this.toGuest(event);

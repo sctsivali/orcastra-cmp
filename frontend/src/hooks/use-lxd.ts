@@ -1,6 +1,4 @@
-/**
- * Custom React Query hooks for Orcastra CMP
- */
+/** React Query hooks for the LXD resources the dashboard reads and changes. */
 
 import {
   useQuery,
@@ -78,7 +76,6 @@ import {
   type InstanceIdentity,
 } from "@/lib/instance-reconciliation";
 
-// Query Keys
 export const queryKeys = {
   vms: ["vms"] as const,
   vmsFor: (actorScope: string, host?: string, status?: string) =>
@@ -139,8 +136,7 @@ export const queryKeys = {
   imagesByHost: (actorScope: string, host: string) =>
     ["images", actorScope, host] as const,
   // The list keys below are shared by their hooks and by the sidebar's hover warm-up
-  // (components/sidebar/nav-config.tsx). Two literals for one key is how the warm-up came to
-  // fill seven entries no page ever read.
+  // (components/sidebar/nav-config.tsx), so the warm-up fills the entries the pages read.
   imagesFor: (actorScope: string) => [...queryKeys.images, actorScope] as const,
   networksFor: (actorScope: string, host?: string, project?: string, requestEpoch?: number) =>
     ["networks", actorScope, host, project ?? null, requestEpoch ?? 0] as const,
@@ -157,7 +153,8 @@ export const queryKeys = {
   // different shape (an array of one response).
   imageStore: (actorScope: string, host: string, project: string) =>
     ["images", actorScope, host, "store", project] as const,
-  // Every store on a host, distinct from useImages(host)'s one-element array under ["images", host].
+  // Every store on a host, distinct from useImages(host)'s one-element array under
+  // ["images", actorScope, host].
   imageStores: (actorScope: string, host: string) =>
     ["images", actorScope, host, "stores"] as const,
   nodes: ["nodes"] as const,
@@ -219,7 +216,6 @@ function removeInstanceDetails(
   });
 }
 
-// Default retry configuration with exponential backoff
 const defaultRetryConfig = {
   retry: 3,
   retryDelay: (attemptIndex: number) => Math.min(1000 * 2 ** attemptIndex, 30000),
@@ -234,10 +230,10 @@ export function useVMs(host?: string, status?: string) {
     queryFn: ({ signal }) => vmAPI.list(host, status, undefined, undefined, { signal }),
     enabled: isAuthenticated,
     // Matched to the 180s backend response cache: capacity and state move without
-    // anyone acting in this console, so a manual button alone was not enough.
+    // anyone acting in this console, so a manual refresh alone is not enough.
     refetchInterval: fleetInterval,
     refetchIntervalInBackground: false,
-    ...STATIC_DATA_CONFIG, // Cache for 3min; manual refresh via button
+    ...STATIC_DATA_CONFIG,
   });
 }
 
@@ -350,13 +346,12 @@ export function useImages(host?: string, opts?: { enabled?: boolean }) {
     queryFn: async (read) => {
       if (host) {
         const result = await imageAPI.listByHost(host, undefined, read);
-        return [result]; // Normalize to array
+        return [result]; // Same array shape as listAll
       }
       return imageAPI.listAll(read);
     },
-    // Always enabled - fetches all images when host is undefined, or filtered when host is provided
     // Matched to the 180s backend response cache: capacity and state move without
-    // anyone acting in this console, so a manual button alone was not enough.
+    // anyone acting in this console, so a manual refresh alone is not enough.
     refetchInterval: fleetInterval,
     refetchIntervalInBackground: false,
     ...SEMI_STATIC_DATA_CONFIG,
@@ -364,7 +359,7 @@ export function useImages(host?: string, opts?: { enabled?: boolean }) {
 }
 
 // The image store a project reads on a host. The backend resolves `features.images`, so the
-// response's `project` is the store that actually answered (its own, or `default` when the
+// response's `project` is the store that answered (its own, or `default` when the
 // project shares the host's store).
 export function useImagesByHost(
   host: string,
@@ -384,7 +379,7 @@ export function useImagesByHost(
 }
 
 // Every image store on a host the caller may see; rows carry their store. Keyed under
-// ["images", host] so the invalidations that reach the fleet list reach this too.
+// ["images", actorScope, host] so the invalidations that reach the fleet list reach this too.
 export function useImageStores(host?: string, opts?: { enabled?: boolean }) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
@@ -432,25 +427,21 @@ export function useRemoteImages(opts?: { enabled?: boolean; engine?: string | nu
 // Nodes Hooks
 export function useNodesStatus() {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
-  // note: lazy initialiser, so the cadence is fixed per hook instance rather than wandering
-  // on every render. Jitter keeps a page of cards from missing an expired TTL in one burst.
+  // Lazy initialiser, so the cadence is fixed per hook instance instead of changing on every
+  // render. Jitter keeps a page of cards from refetching in one burst when the TTL expires.
   const [fleetInterval] = useState(() => jitter(POLL_MS.fleet));
   return useRefreshableQuery({
     queryKey: queryKeys.nodesFor(scopeKey),
     queryFn: (read) => nodeAPI.status(read),
     enabled: isAuthenticated,
-    // important: this was 3600000. One hour, against a backend that caches the same body for
-    // 180s, so every number sourced from /nodes was up to an hour old and the cluster cards
-    // simply did not move. Matched to the server TTL: polling faster cannot produce a newer
-    // number, it returns the identical cached body.
+    // Matched to the 180s backend cache: polling faster returns the identical cached body.
     refetchInterval: fleetInterval,
     refetchIntervalInBackground: false,
     staleTime: POLL_MS.fleet / 2,
     retry: 3,
     refetchOnWindowFocus: false,
-    // note: was 'always', which fired a full fan-out on every mount even seconds after the
-    // last one. The sidebar prefetches this key on hover, so sweeping the nav produced a
-    // request per hover. Registration freshness comes from the invalidations, not from here.
+    // Not "always": the sidebar prefetches this key on hover, and "always" would fire a full
+    // fan-out per hover. Registration freshness comes from the invalidations.
     refetchOnMount: true,
   });
 }
@@ -461,11 +452,11 @@ export function useNodeNames() {
     queryKey: queryKeys.nodeNamesFor(scopeKey),
     queryFn: ({ signal }) => nodeAPI.names({ signal }),
     enabled: isAuthenticated,
-    // note: membership changes when a cluster is registered or removed. Those writes
-    // invalidate this key while no picker is mounted, so the next picker to mount refetches
-    // it (refetchOnMount, the QueryClient default); the three minutes bound everything else.
+    // Membership changes when a cluster is registered or removed. Those writes invalidate this
+    // key while no picker is mounted, so the next picker to mount refetches it (refetchOnMount,
+    // the QueryClient default); the three minutes bound everything else.
     staleTime: 1000 * 60 * 3,
-    gcTime: 1000 * 60 * 60 * 24, // keep in cache for 24 hours
+    gcTime: 1000 * 60 * 60 * 24,
     refetchOnWindowFocus: false,
     // Catalog data does not poll; a first-load failure recovers through the retry here, the
     // remount retry, and the Retry the picker offers. Never a 429: that would be a storm.
@@ -476,9 +467,8 @@ export function useNodeNames() {
 /**
  * Per-cluster reachability for node pickers.
  *
- * Separate query key from nodeNames on purpose: this polls on a minute, and sharing a key
- * would drag the name list along with it. Cheap by construction on the backend, which rides
- * the cached /nodes fan-out rather than generating its own.
+ * Keyed apart from nodeNames: this polls every minute, and a shared key would drag the name
+ * list along with it. The backend answers from the cached /nodes fan-out.
  */
 export function useNodeAvailability() {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
@@ -486,9 +476,7 @@ export function useNodeAvailability() {
     queryKey: queryKeys.nodeAvailabilityFor(scopeKey),
     queryFn: (read) => nodeAPI.availability(read),
     enabled: isAuthenticated,
-    // note: this hand-rolled set was character for character the attended tier. Using the
-    // preset keeps the one place a 60s cadence is defined from drifting away from the
-    // 45s backend TTL it is matched to.
+    // The attended tier, whose 60s cadence is matched to the 45s backend TTL.
     ...ATTENDED_DATA_CONFIG,
   });
 }
@@ -525,10 +513,9 @@ export function useInvalidateAllNodesCache() {
  * Live resources for one cluster, for a surface someone is looking at right now.
  *
  * important: GET /nodes/{node}/resources is uncached on the backend, so every poll is a real
- * call into that one cluster. Gate it on the panel being open, and back off geometrically once
- * it starts failing rather than holding a dead host on a connect timeout forever. The query key
- * is per actor and node, which is the only place a per-cluster back-off is even expressible:
- * /nodes is one fan-out and cannot back off for a single member of it.
+ * call into that one cluster. Gate it on the panel being open; the poll backs off geometrically
+ * once it starts failing. The key is per actor and node, so the back-off holds for one cluster
+ * (/nodes is one fan-out and cannot back off for a single member).
  */
 export function useNodeResources(nodeName: string, opts?: { enabled?: boolean }) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
@@ -560,16 +547,16 @@ export function useAllProjects(options: { enabled?: boolean } = {}) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
     queryKey: queryKeys.allProjectsFor(scopeKey),
-    // note: opts carries {fresh} through to fetchRead, which appends the cache-bypass
-    // parameter. Without it a Retry inside the API-key project picker would re-read the same
-    // 30s server cache and report success on the identical unreachable cluster.
+    // `opts` carries {fresh} through to fetchRead, which appends the cache-bypass parameter.
+    // Without it a Retry in the API-key project picker re-reads the same 30s server cache and
+    // reports success on the same unreachable cluster.
     queryFn: (opts) => projectAPI.listAll(opts),
     enabled: isAuthenticated && (options.enabled ?? true),
-    refetchInterval: 300000, // refresh every 5 minutes (300 seconds)
-    staleTime: 30000, // Consider data stale after 30 seconds
+    refetchInterval: 300000,
+    staleTime: 30000,
     retry: (failureCount: number, error: unknown) => {
-      // don't retry auth/rate-limit errors. On the status, not the message: the 429 text is
-      // human now and no longer carries the number.
+      // No retry on auth or rate-limit errors. Match on the status: the 429 message is human
+      // text and does not carry the code.
       if (error instanceof APIError && [401, 403, 429].includes(error.status)) return false;
       return failureCount < 2;
     },
@@ -642,8 +629,8 @@ const UNKNOWN_PROJECT_DELETE_FOLLOW_MS = 2 * 60_000;
 const UNKNOWN_PROJECT_DELETE_POLL_MS = 10_000;
 
 /**
- * Read the cluster's projects until the one being deleted is gone or the backend's own follow-up
- * window ends, then reconcile once more. The reads are unforced: the backend clears its project
+ * Read the cluster's projects every ten seconds, for up to two minutes, until the one being
+ * deleted is gone, then reconcile once more. The reads are unforced: the backend clears its project
  * caches when the delete settles, so they cost no forced-refresh budget.
  */
 async function followUnknownProjectDelete(
@@ -743,10 +730,9 @@ export function useUpdateNodeTags() {
 }
 
 // ========================================
-// Enterprise Tag System Hooks
+// Tag System Hooks
 // ========================================
 
-// Query keys for tag system
 export const tagQueryKeys = {
   categories: ["tagCategories"] as const,
   tags: ["tags"] as const,
@@ -757,48 +743,36 @@ export const tagQueryKeys = {
   userVisibility: ["tags", "visibility"] as const,
 };
 
-/**
- * Hook to fetch all tag categories.
- * Categories are relatively static, so use longer cache times.
- */
+/** Tag categories. They rarely change, so the cache times are long. */
 export function useTagCategories(includeInactive = false) {
   return useQuery({
     queryKey: [...tagQueryKeys.categories, { includeInactive }],
     queryFn: () => tagAPI.listCategories(includeInactive),
-    staleTime: 10 * 60 * 1000, // 10 minutes - categories rarely change
-    gcTime: 30 * 60 * 1000, // 30 minutes cache
+    staleTime: 10 * 60 * 1000,
+    gcTime: 30 * 60 * 1000,
     refetchOnWindowFocus: false,
   });
 }
 
-/**
- * Hook to fetch all tags with optional filtering.
- * Supports category filtering and search.
- */
+/** Tags, optionally filtered by category and search text. */
 export function useTagList(params?: { categoryId?: number; search?: string }) {
   return useQuery({
     queryKey: tagQueryKeys.tagList(params?.categoryId, params?.search),
     queryFn: () => tagAPI.listTags({ category_id: params?.categoryId, search: params?.search }),
-    staleTime: 5 * 60 * 1000, // 5 minutes
-    gcTime: 15 * 60 * 1000, // 15 minutes cache
+    staleTime: 5 * 60 * 1000,
+    gcTime: 15 * 60 * 1000,
   });
 }
 
-/**
- * Hook to fetch tag statistics.
- */
 export function useTagStats() {
   return useQuery({
     queryKey: tagQueryKeys.tagStats,
     queryFn: () => tagAPI.getStats(),
-    staleTime: 2 * 60 * 1000, // 2 minutes - stats can change more frequently
-    refetchInterval: 5 * 60 * 1000, // Auto-refresh every 5 minutes
+    staleTime: 2 * 60 * 1000,
+    refetchInterval: 5 * 60 * 1000,
   });
 }
 
-/**
- * Hook to fetch tags for a specific resource.
- */
 export function useResourceTags(
   resourceType: "node" | "project" | "instance",
   resourceId: string,
@@ -810,25 +784,19 @@ export function useResourceTags(
     queryKey: tagQueryKeys.resourceTags(resourceType, resourceId, host, project),
     queryFn: () => tagAPI.getResourceTags(resourceType, resourceId, host, project),
     enabled: enabled && !!resourceId,
-    staleTime: 60 * 1000, // 1 minute
+    staleTime: 60 * 1000,
   });
 }
 
-/**
- * Hook to fetch user's tag visibility settings.
- */
 export function useUserTagVisibility() {
   return useQuery({
     queryKey: tagQueryKeys.userVisibility,
     queryFn: () => tagAPI.getUserVisibility(),
-    staleTime: 5 * 60 * 1000, // 5 minutes
-    retry: 1, // Don't retry too much - user might not have settings yet
+    staleTime: 5 * 60 * 1000,
+    retry: 1, // A user may have no settings yet
   });
 }
 
-/**
- * Hook to create a new tag category.
- */
 export function useCreateTagCategory() {
   const queryClient = useQueryClient();
 
@@ -838,9 +806,6 @@ export function useCreateTagCategory() {
   });
 }
 
-/**
- * Hook to update a tag category.
- */
 export function useUpdateTagCategory() {
   const queryClient = useQueryClient();
 
@@ -851,9 +816,6 @@ export function useUpdateTagCategory() {
   });
 }
 
-/**
- * Hook to create a new tag.
- */
 export function useCreateTag() {
   const queryClient = useQueryClient();
 
@@ -863,9 +825,6 @@ export function useCreateTag() {
   });
 }
 
-/**
- * Hook to update a tag.
- */
 export function useUpdateTag() {
   const queryClient = useQueryClient();
 
@@ -876,9 +835,6 @@ export function useUpdateTag() {
   });
 }
 
-/**
- * Hook to delete a tag.
- */
 export function useDeleteTag() {
   const queryClient = useQueryClient();
 
@@ -888,10 +844,7 @@ export function useDeleteTag() {
   });
 }
 
-/**
- * Hook to set tags for a resource (replaces all existing tags).
- * This is the primary hook for updating resource tags.
- */
+/** Replaces every tag on a resource. */
 export function useSetResourceTags() {
   const queryClient = useQueryClient();
 
@@ -920,9 +873,7 @@ export function useSetResourceTags() {
   });
 }
 
-/**
- * Hook to add tags to a resource (keeps existing tags).
- */
+/** Adds tags to a resource and keeps the existing ones. */
 export function useAddResourceTags() {
   const queryClient = useQueryClient();
 
@@ -951,9 +902,6 @@ export function useAddResourceTags() {
   });
 }
 
-/**
- * Hook to remove a single tag from a resource.
- */
 export function useRemoveResourceTag() {
   const queryClient = useQueryClient();
 
@@ -982,9 +930,6 @@ export function useRemoveResourceTag() {
   });
 }
 
-/**
- * Hook to update user's tag visibility settings.
- */
 export function useUpdateUserTagVisibility() {
   const queryClient = useQueryClient();
 
@@ -995,10 +940,7 @@ export function useUpdateUserTagVisibility() {
   });
 }
 
-/**
- * Hook to initialize default tag categories.
- * Useful for admin setup or first-time initialization.
- */
+/** Creates the default tag categories. */
 export function useInitTagCategories() {
   const queryClient = useQueryClient();
 
@@ -1013,7 +955,7 @@ export function useHealth() {
   return useQuery({
     queryKey: queryKeys.health,
     queryFn: healthCheck,
-    refetchInterval: 60000, // Check health every minute
+    refetchInterval: 60000,
     refetchIntervalInBackground: false,
     retry: 3,
   });
@@ -1025,9 +967,8 @@ export function useHealth() {
 
 // Warnings Hooks
 // important: /warnings is mounted with require_partner(), so a tenant is answered 403. The
-// dashboard mounts this unconditionally, which meant every tenant page load fired two
-// forbidden requests and logged two console errors. Gated here rather than at the call sites
-// so a new consumer cannot reintroduce it.
+// gate lives here rather than at the call sites, so no consumer fires forbidden requests on a
+// tenant's page load.
 export function useWarnings(host?: string, options: { enabled?: boolean } = {}) {
   const { isPartner } = usePermissions();
   const { scopeKey, isAuthenticated } = useActorQueryScope();
@@ -1036,7 +977,7 @@ export function useWarnings(host?: string, options: { enabled?: boolean } = {}) 
     queryFn: (read) => api.warnings.list(host, read),
     ...DYNAMIC_DATA_CONFIG,
     enabled: isAuthenticated && isPartner && (options.enabled ?? true),
-    refetchInterval: 60000, // Check warnings every minute
+    refetchInterval: 60000,
   });
 }
 
@@ -1055,18 +996,13 @@ export function useIPAM(host?: string) {
 // The pool LIST for one node, without the fleet-wide resources call.
 //
 // important: the two pool queries are separate caches of the same data, so both must be
-// invalidated together. Only ["storagePools"] was, so after creating or deleting a pool the
-// create form's dropdown kept the old list until SEMI_STATIC_DATA_CONFIG's staleTime lapsed,
-// and the storage-pools refresh button did not touch it at all.
+// invalidated together; otherwise the create form's dropdown shows a stale list after a pool
+// is created or deleted.
 const STORAGE_POOL_LIST_KEY = "storagePoolList";
 
-// important: `useStoragePools` used to resolve the per-node list and `resources-all` in one
-// unguarded Promise.all, so a slow or failing fan-out across every cluster took the pool list
-// down with it, and TanStack reported that error state identically to "this node has no pools".
-// The create form builds `devices.root` from the resolved pool, so it read an unrelated
-// cluster's timeout as "no storage here" and refused a create it could have made. Anything that
-// only needs the list should still use this hook, which never pays for the capacity read at
-// all; the combined hook below now degrades instead of failing.
+// important: anything that only needs the list uses this hook, which never pays for the
+// fleet-wide capacity read. A failed capacity read must not read as "this node has no pools":
+// the create form builds `devices.root` from the resolved pool and would refuse a valid create.
 export function useStoragePoolList(
   host?: string,
   opts?: { enabled?: boolean; requestEpoch?: number },
@@ -1075,8 +1011,8 @@ export function useStoragePoolList(
   return useRefreshableQuery({
     queryKey: [STORAGE_POOL_LIST_KEY, scopeKey, host, opts?.requestEpoch ?? 0],
     queryFn: (read) => api.storagePools.list(host, read),
-    // note: `enabled` lets a form that has no node yet skip the fleet-wide read it would
-    // otherwise fire on mount. Default true, so the list pages are unchanged.
+    // `enabled` lets a form that has no node yet skip the fleet-wide read it would otherwise
+    // fire on mount. It defaults to true for the list pages.
     enabled: isAuthenticated && (opts?.enabled ?? true),
     ...SEMI_STATIC_DATA_CONFIG,
   });
@@ -1088,14 +1024,11 @@ export async function readStoragePools(
   read: ReadOptions,
   includeCapacity: boolean,
 ) {
-  // important: the capacity read is secondary and must not be able to fail the list. It
-  // fans out to every cluster, so it is the likelier of the two to time out, and losing it
-  // used to blank the whole page under "No storage pools found" while the list itself had
-  // answered. An operator reading that would look for pools that were never gone.
-  // `capacityFailed` is what lets the surface say which of the two happened, instead of
-  // rendering an absent reading the same way as a reading of nothing.
-  // note: a Tenant is refused the capacity read (a pool's size counts every party's volumes,
-  // owner decision 2026-10-26), so it is not asked rather than failed on every load.
+  // important: the capacity read is secondary and must not be able to fail the list. It fans
+  // out to every cluster, so it is the likelier of the two to time out. `capacityFailed` lets
+  // the surface tell a failed capacity read apart from a reading of nothing.
+  // A Tenant is refused the capacity read (a pool's size counts every party's volumes), so it
+  // is not asked rather than failed on every load.
   const [poolsData, resourcesData] = await Promise.all([
     api.storagePools.list(host, read) as Promise<Record<string, unknown>>,
     includeCapacity
@@ -1109,7 +1042,7 @@ export async function readStoragePools(
     capacityFailed: !resourcesData.ok,
     resources: (resourcesData.value as Record<string, unknown>)?.resources || {},
   };
-  // either half answered from a stale cache entry: keep the follow-up that replaces it
+  // If either half came from a stale cache entry, keep the mark so the delayed re-read replaces it.
   return carryStaleMark(resourcesData.value, carryStaleMark(poolsData, merged));
 }
 
@@ -1124,9 +1057,8 @@ export function useStoragePools(
     enabled: isAuthenticated && (opts?.enabled ?? true),
     queryKey: queryKeys.storagePoolsFor(scopeKey, host, opts?.requestEpoch),
     queryFn: (read) => readStoragePools(host, read, isPartner),
-    // Always enabled - fetches all pools when host is undefined
     // Matched to the 180s backend response cache: capacity and state move without
-    // anyone acting in this console, so a manual button alone was not enough.
+    // anyone acting in this console, so a manual refresh alone is not enough.
     refetchInterval: fleetInterval,
     refetchIntervalInBackground: false,
     ...SEMI_STATIC_DATA_CONFIG,
@@ -1183,10 +1115,9 @@ export function useStorageVolumes(
     enabled: isAuthenticated && (opts?.enabled ?? true),
     queryFn: (read) => api.storageVolumes.list(host, pool, read),
     // Matched to the 180s backend response cache: capacity and state move without
-    // anyone acting in this console, so a manual button alone was not enough.
+    // anyone acting in this console, so a manual refresh alone is not enough.
     refetchInterval: fleetInterval,
     refetchIntervalInBackground: false,
-    // Always enabled - fetches all volumes when pool/host is undefined
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
@@ -1194,10 +1125,8 @@ export function useStorageVolumes(
 export function useStorageVolume(pool: string, type: string, name: string, host: string) {
   return useQuery({
     queryKey: ["storageVolume", pool, type, name, host],
-    // important: the API takes (volumeType, name, host, pool) and this used to forward
-    // (pool, type, name, host), so every argument landed one slot early and the request went
-    // to /storage/volumes/{pool}/{type}?host={name}&pool={host}. It never fired because
-    // nothing called this hook. Adding the first caller is what would have shipped it.
+    // important: the API takes (volumeType, name, host, pool), a different order from this
+    // hook's (pool, type, name, host). Forwarding in hook order shifts every argument one slot.
     queryFn: () => api.storageVolumes.get(type, name, host, pool),
     enabled: !!pool && !!type && !!name && !!host,
     ...SEMI_STATIC_DATA_CONFIG,
@@ -1217,7 +1146,7 @@ export function useDeleteStorageVolume() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    // important: same scrambled argument order as useStorageVolume above. See the note there.
+    // important: the API argument order differs from the hook's; see useStorageVolume above.
     mutationFn: ({
       pool,
       type,
@@ -1242,7 +1171,7 @@ export function useDeleteStorageVolume() {
  *
  * Invalidates the instance queries rather than patching them locally: the write can override a
  * profile-inherited device onto the instance, which changes `devices` as well as the address,
- * and only a re-read shows that honestly.
+ * and only a re-read shows that.
  */
 export function useSetNicAddress() {
   const queryClient = useQueryClient();
@@ -1273,7 +1202,7 @@ export function useSetNicAddress() {
 // Networks Hooks
 /**
  * @param project omit for every project, each row naming the one that holds it. Pass one to
- *   get the set that project can actually use, which is what a picker needs: a project only
+ *   get the set that project can use, which is what a picker needs: a project only
  *   holds its own networks when it sets features.networks, otherwise it sees default's.
  */
 export function useNetworks(
@@ -1290,10 +1219,9 @@ export function useNetworks(
     enabled: isAuthenticated && (opts?.enabled ?? true),
     queryFn: (read) => api.networks.list(host, project, read),
     // Matched to the 180s backend response cache: capacity and state move without
-    // anyone acting in this console, so a manual button alone was not enough.
+    // anyone acting in this console, so a manual refresh alone is not enough.
     refetchInterval: fleetInterval,
     refetchIntervalInBackground: false,
-    // Always enabled - fetches all networks when host is undefined
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
@@ -1379,8 +1307,8 @@ export function useNetworkACLForEdit(
     gcTime: 0,
     retry: false,
     refetchOnWindowFocus: false,
-    // a reconnect must not re-read underneath an edit in progress: the re-seed would drop the
-    // operator's changes without the stale notice this dialog exists to show
+    // A reconnect must not re-read underneath an edit in progress: the re-seed would drop the
+    // operator's changes without the stale notice this dialog exists to show.
     refetchOnReconnect: false,
   });
 }
@@ -1405,10 +1333,6 @@ export function useDeleteNetworkACL() {
   });
 }
 
-/**
- * The update half of the ACL surface, which had a route, an API client and no hook, so the
- * page could create and delete a policy but never correct one.
- */
 export function useUpdateNetworkACL() {
   const queryClient = useQueryClient();
 
@@ -1439,7 +1363,6 @@ export function useProfiles(host?: string, project?: string, opts?: { enabled?: 
     queryKey: queryKeys.profilesFor(scopeKey, host, project),
     enabled: isAuthenticated && (opts?.enabled ?? true),
     queryFn: (read) => api.profiles.list(host, project, read),
-    // Always enabled - fetches all profiles when host is undefined
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
@@ -1487,8 +1410,8 @@ export function useProfileForEdit(
     gcTime: 0,
     retry: false,
     refetchOnWindowFocus: false,
-    // a reconnect must not re-read underneath an edit in progress: the re-seed would drop the
-    // operator's changes without the stale notice this dialog exists to show
+    // A reconnect must not re-read underneath an edit in progress: the re-seed would drop the
+    // operator's changes without the stale notice this dialog exists to show.
     refetchOnReconnect: false,
   });
 }
@@ -1557,7 +1480,6 @@ export function useInstances(
           project: opts?.project,
         }),
       ),
-    // Always enabled - fetches all instances when host is undefined
     ...DYNAMIC_DATA_CONFIG,
     enabled: isAuthenticated && (opts?.enabled ?? true),
     ...(opts?.verifyFresh ? { staleTime: 0, refetchOnMount: "always" as const } : {}),
@@ -1574,24 +1496,20 @@ export function useInstances(
           retryDelay: (attemptIndex: number) => Math.min(500 * 2 ** attemptIndex, 2000),
         }
       : {}),
-    // Default: poll so newly-created instances and status transitions show
-    // without a manual refresh. When `realtime` is set (instances page), polling
-    // is disabled and the list is kept current via the LXD events stream
-    // (see useInstanceStream), and the query just provides the initial snapshot.
-    // note: was 10000 against a 30s backend TTL, so two of every three polls returned the
-    // identical cached body. false when the events WebSocket is driving this key instead.
+    // Polls at the 30s backend TTL so new instances and status transitions show without a
+    // manual refresh. With `realtime` (the instances page) the LXD events stream keeps the list
+    // current (see useInstanceStream) and this query only provides the initial snapshot.
     refetchInterval: opts?.realtime ? false : POLL_MS.active,
     refetchIntervalInBackground: false,
   });
 }
 
-// note: ON_DEMAND_CONFIG rather than DYNAMIC_DATA_CONFIG, because this is opened by a person
-// rather than polled. The only caller is the Monitoring Top Consumers drill-down: that summary
-// deliberately carries just enough data for its chart, so the detail dialog explicitly hydrates
-// it before rendering the full configuration. Normal instance rows already carry those fields.
+// ON_DEMAND_CONFIG: read when a person opens a dialog or menu, without polling. Some callers start
+// from a partial summary (ex; the Monitoring Top Consumers rows carry only what the chart needs)
+// and use this to hydrate it before rendering the full configuration.
 //
-// important: `enabled` is re-asserted AFTER the spread. ON_DEMAND_CONFIG sets enabled false by
-// design, so spreading it last would silently disable every caller.
+// important: `enabled` is re-asserted AFTER the spread. ON_DEMAND_CONFIG sets enabled false,
+// so spreading it last would silently disable every caller.
 export function useInstance(name: string, host: string, enabled = true, project?: string) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   const effectiveProject = project || "default";
@@ -1650,7 +1568,7 @@ export function useInstanceWritePolicy(
   });
 }
 
-/** Fresh, uncached specification read used to seed the edit dialog. */
+/** Fresh, uncached specification read that seeds the edit dialog. */
 export function useInstanceSpecificationForEdit(
   name: string,
   host: string,
@@ -1762,10 +1680,8 @@ export function useStartInstance() {
   
   return useMutation({
     // important: the project travels with the request. A name is unique per project, not per
-    // host, so a power action that omits it is asking the backend to guess. It used to guess by
-    // searching every project and taking the first hit, which meant the ACL was checked against
-    // `default` while the action ran somewhere else. The backend is now strict, so omitting the
-    // project here would 404 on any instance outside `default`. delete and console already sent it.
+    // host, and the backend resolves the instance strictly in the given project: omitting it
+    // 404s on any instance outside `default`.
     mutationFn: ({ name, host, project }: { name: string; host: string; project?: string }) =>
       api.vms.start(name, { host, project }),
     onSuccess: () => {
@@ -1778,8 +1694,8 @@ export function useStopInstance() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    // force power-cycles instead of a graceful ACPI shutdown (needed for a VM
-    // with no OS installed / sitting at a boot menu, which can't answer ACPI).
+    // `force` power-cycles instead of a graceful ACPI shutdown, for a VM with no OS
+    // installed or sitting at a boot menu, which cannot answer ACPI.
     mutationFn: ({ name, host, force, project }: { name: string; host: string; force?: boolean; project?: string }) =>
       api.vms.stop(name, { host, force, timeout: 30, project }),
     onSuccess: () => {
@@ -1878,7 +1794,7 @@ export function useDeleteInstance() {
     },
     onSuccess: async (_data, variables) => {
       settleInstanceDelete(queryClient, identityOf(variables));
-      // a failed create's placeholder for this instance has nothing left to report
+      // A failed create's placeholder for this instance has nothing left to report.
       removePendingCreate(scopeKey, keyFor(variables.host, normalizeProject(variables.project), variables.name));
       removeInstanceDetails(
         queryClient,
@@ -2034,7 +1950,7 @@ export function useClusterMembers(node: string) {
     queryKey: ["clusterMembers", node],
     queryFn: (read) => api.clusterMembers.list(node, read),
     // Matched to the 180s backend response cache: capacity and state move without
-    // anyone acting in this console, so a manual button alone was not enough.
+    // anyone acting in this console, so a manual refresh alone is not enough.
     refetchInterval: fleetInterval,
     refetchIntervalInBackground: false,
     enabled: !!node,
@@ -2059,14 +1975,14 @@ export function useMemberResources(
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
     queryKey: queryKeys.memberResources(scopeKey, node, memberName),
-    // note: getResources routes through the extended fan-out budget, which was unreachable
-    // from the UI while this hook never passed a fresh flag.
+    // `read` forwards the fresh flag, which getResources needs to reach the extended fan-out
+    // budget.
     queryFn: (read) => api.clusterMembers.getResources(node, memberName, read),
-    // note: gated so a closed modal stops polling. The backend caches this for 60s, so the
-    // interval matches: anything faster returns the same body.
+    // Gated so a closed modal stops polling. The backend caches this for 60s and the interval
+    // matches it: anything faster returns the same body.
     enabled: isAuthenticated && (opts?.enabled ?? true) && !!node && !!memberName,
-    staleTime: 30 * 1000, // 30 seconds
-    gcTime: 5 * 60 * 1000, // 5 minutes
+    staleTime: 30 * 1000,
+    gcTime: 5 * 60 * 1000,
     refetchInterval: backingOffInterval(POLL_MS.attended),
     refetchIntervalInBackground: false,
   });
@@ -2082,14 +1998,13 @@ export function useClusters(fresh: boolean = false) {
       api.clusters.list(fresh || manual, { signal }),
     enabled: isAuthenticated,
     // Matched to the 180s backend response cache: capacity and state move without
-    // anyone acting in this console, so a manual button alone was not enough.
+    // anyone acting in this console, so a manual refresh alone is not enough.
     refetchInterval: fleetInterval,
     refetchIntervalInBackground: false,
     ...SEMI_STATIC_DATA_CONFIG,
-    // note: a 30 s window, not 0 with refetchOnMount "always". Those predate the coherence
-    // registry: every register, delete, certificate, location and auth-check now invalidates
-    // the "clusters" family (lib/mutation-coherence.ts), so the only thing "always" still bought
-    // was a request on every quick hop between pages. A visit after 30 s refetches as before.
+    // A 30 s window rather than refetchOnMount "always": every register, delete, certificate,
+    // location and auth-check invalidates the "clusters" family (lib/mutation-coherence.ts), so
+    // "always" would only add a request on every quick hop between pages.
     staleTime: 30 * 1000,
     refetchOnMount: true,
   });
@@ -2101,7 +2016,7 @@ export function useCluster(clusterId: string) {
     queryFn: () => api.clusters.get(clusterId),
     enabled: !!clusterId,
     ...SEMI_STATIC_DATA_CONFIG,
-    refetchOnMount: true, // Always refetch on mount to ensure fresh data
+    refetchOnMount: true,
   });
 }
 
@@ -2155,7 +2070,7 @@ export function useFacilitySuggestions() {
   return useQuery({
     queryKey: ["facilities"],
     queryFn: () => api.clusters.getFacilities(),
-    staleTime: 300000, // 5 min - facility data rarely changes
+    staleTime: 300000, // Facility data rarely changes
   });
 }
 
@@ -2164,8 +2079,8 @@ export function useFacilitySuggestions() {
 /**
  * The monitoring dashboard. `polling` is false while the admin WebSocket pushes each collection.
  *
- * note: 30 s, the server's cadence. The response is cached for 35 s and rebuilt by a collector
- * every 30 s, so a 5 s poll only fetched the same body six times.
+ * Polls at 30 s, the server's cadence: the response is cached for 35 s and rebuilt by a collector
+ * every 30 s, so a faster poll returns the same body.
  */
 export function useMonitoringDashboard(enabled: boolean = true, polling: boolean = true) {
   const scopeKey = useMonitoringScopeKey();
@@ -2174,10 +2089,10 @@ export function useMonitoringDashboard(enabled: boolean = true, polling: boolean
     queryFn: (read) => api.monitoring.getDashboard(read),
     enabled,
     refetchInterval: polling ? POLL_MS.active : false,
-    staleTime: 5000, // Consider fresh for 5 seconds to avoid redundant fetches
+    staleTime: 5000,
     gcTime: 60 * 1000,
-    refetchOnWindowFocus: polling, // Only refetch on focus when polling
-    refetchIntervalInBackground: false, // Stop polling when tab is hidden
+    refetchOnWindowFocus: polling,
+    refetchIntervalInBackground: false,
     retry: 3,
     retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000),
   });
@@ -2198,8 +2113,8 @@ export function useMonitoringNodeMetrics(nodeName: string, enabled: boolean = tr
 /**
  * Chart history for the last `windowSeconds`.
  *
- * note: no prefetch of the other ranges. Each history read parses the stored history on the
- * server, so warming five ranges on every page load cost five parses nobody had asked for.
+ * The other ranges are not prefetched: each history read parses the stored history on the
+ * server, and warming five ranges on every page load costs five parses for ranges not on screen.
  */
 export function useMonitoringHistory(
   windowSeconds: number = DEFAULT_HISTORY_WINDOW_SECONDS,
@@ -2215,11 +2130,11 @@ export function useMonitoringHistory(
     refetchInterval: POLL_MS.active, // one new point per collection: the sweep, then a 30 s pause
     staleTime: 30000,
     gcTime: 600000, // keep visited ranges for fast switching back
-    refetchIntervalInBackground: false, // Stop polling when tab is hidden
-    retry: 2, // Retry up to 2 times on failure
+    refetchIntervalInBackground: false,
+    retry: 2,
     retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 5000),
     placeholderData: (previousData) => {
-      // Keep previous data for seamless display while fetching
+      // Keep the previous data on screen while fetching.
       if (previousData) return previousData;
       // Cross-range fallback: the closest range already cached
       const nearest = HISTORY_WINDOWS.map((range) => range.seconds)
@@ -2245,7 +2160,7 @@ export function useCertificates() {
   return useRefreshableQuery({
     queryKey: ["certificates"],
     queryFn: (read) => api.certificates.list(read),
-    refetchInterval: 60000, // Refresh every minute
+    refetchInterval: 60000,
     staleTime: 30000,
   });
 }
@@ -2310,16 +2225,16 @@ export function useRemoveSupersededTrust() {
 }
 
 export function useSystemWarnings(options: { enabled?: boolean } = {}) {
-  // the same 403 as useWarnings: /warnings/system/all sits behind require_partner()
+  // The same 403 as useWarnings: /warnings/system/all sits behind require_partner().
   const { isPartner } = usePermissions();
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
     enabled: isAuthenticated && isPartner && (options.enabled ?? true),
     queryKey: ["systemWarnings", scopeKey],
-    // note: every sibling destructures { fresh }; this one did not, so the second half of
-    // "Refresh all" on the warnings page silently reused whatever was already in flight.
+    // `read` carries `fresh`, so the second half of "Refresh all" on the warnings page makes a
+    // new read instead of reusing the one in flight.
     queryFn: (read) => api.certificates.getSystemWarnings(read),
-    refetchInterval: 60000, // Refresh every minute
+    refetchInterval: 60000,
     staleTime: 30000,
   });
 }
@@ -2329,8 +2244,8 @@ export function useRegionsOverview() {
   return useRefreshableQuery({
     queryKey: ["regions", "overview"],
     queryFn: (read) => api.regions.getOverview(read),
-    refetchInterval: 120000, // Refresh every 2 minutes
-    staleTime: 60000, // Data considered fresh for 1 minute
+    refetchInterval: 120000,
+    staleTime: 60000,
   });
 }
 
@@ -2360,12 +2275,10 @@ export function useInstanceSnapshots(
   const queryClient = useQueryClient();
   return useRefreshableQuery({
     queryKey: queryKeys.instanceSnapshots(scopeKey, host, project, instanceName),
-    // note: `fresh` is deliberately NOT forwarded. It exists to bypass a backend response cache,
-    // and the snapshot routes have none: they read the cluster on every call. Sending it anyway
-    // spent the shared 12-per-minute cache-bypass budget on requests that had nothing to bypass,
-    // so an operator watching a restore and clicking Refresh could exhaust the allowance for the
-    // surfaces that really are cached. The refetch still happens; only the pointless parameter is
-    // gone. Cancellation still propagates so changing actor or target cannot land a stale row.
+    // `fresh` is not forwarded: it bypasses a backend response cache, and the snapshot routes
+    // have none. Sending it would spend the shared 12-per-minute cache-bypass budget that the
+    // cached surfaces need. The signal is forwarded, so a change of actor or target cannot land
+    // a stale row.
     queryFn: ({ signal }) => readSnapshotList(
       queryClient,
       scopeKey,
@@ -2374,23 +2287,12 @@ export function useInstanceSnapshots(
     ),
     ...SEMI_STATIC_DATA_CONFIG,
     ...(verifyFresh ? { staleTime: 0, refetchOnMount: "always" as const } : {}),
-    // After the spread on purpose: the preset carries its own `enabled` and would otherwise
-    // re-enable a query the caller gated on the active tab.
+    // After the spread: the preset carries its own `enabled` and would otherwise re-enable a
+    // query the caller gated on the active tab.
     enabled: isAuthenticated && enabled && !!instanceName && !!host,
   });
 }
 
-/**
- * Snapshots across the fleet, or narrowed to one cluster and project.
- *
- * Undefined for either argument means "all", which is the page's default. Narrowing to BOTH is
- * what makes the backend measure sizes, so it is the only scope change that costs a request.
- *
- * note: no `enabled` gate. This used to be `enabled: !!host`, which was what stopped a tenant's
- * deep link firing a request before the redirect landed. The page now gates structurally instead,
- * returning before it mounts the component that calls this at all, so an `enabled` option here
- * would be a second mechanism for one job and the one nobody reads.
- */
 /**
  * What a restore of one snapshot can do on its instance's storage, read each time the dialog
  * opens. A failed read leaves the dialog as it was: the server enforces the same plan.
@@ -2411,15 +2313,21 @@ export function useSnapshotRestorePlan(
   });
 }
 
+/**
+ * Snapshots across the fleet, or narrowed to one cluster and project.
+ *
+ * Undefined for either argument means "all", the page's default. Narrowing to BOTH makes the
+ * backend measure sizes, so it is the only scope change that costs a request. There is no
+ * `enabled` gate: the page returns before it mounts the component that calls this, which keeps a
+ * tenant's deep link from firing a request before the redirect.
+ */
 export function useFleetSnapshots(host?: string, project?: string) {
   const queryClient = useQueryClient();
   const { scopeKey } = useActorQueryScope();
   return useRefreshableQuery({
     queryKey: ["fleetSnapshots", host ?? null, project ?? null],
-    // note: the read options are forwarded. This used to ignore them, which was harmless while
-    // /snapshots had no response cache and became a real defect the moment it gained one: the
-    // Refresh button would report success having read the cache it was pressed to bypass.
-    // A row a delete already took away stays away even if this read started before it.
+    // The read options are forwarded so Refresh bypasses the /snapshots response cache. A row a
+    // delete already took away stays away even if this read started before it.
     queryFn: (opts) => readSnapshotList(queryClient, scopeKey, () => api.snapshots.listFleet(host, project, opts)),
     ...SEMI_STATIC_DATA_CONFIG,
   });
@@ -2442,12 +2350,11 @@ export function useSnapshotSchedules(
     ),
     queryFn: (opts) => api.snapshotSchedules.list(filters, opts),
     ...SEMI_STATIC_DATA_CONFIG,
-    // After the spread on purpose: the preset carries its own `enabled` and its own `retry`.
+    // After the spread: the preset carries its own `enabled` and its own `retry`.
     enabled: isAuthenticated && enabled,
-    // important: a 404 here is the deployment saying the schedule routes are not mounted, which is
-    // the documented default (SNAPSHOT_SCHEDULES_ENABLED is off unless set). The shared preset only
-    // declines to retry 401, 403 and 429, so without this every mount of the snapshots page and of
-    // every instance Snapshots tab costs three requests to learn the same permanent answer.
+    // A 404 means the schedule routes are not mounted, the documented default
+    // (SNAPSHOT_SCHEDULES_ENABLED is off unless set). The shared preset retries a 404, so every
+    // snapshots page and instance Snapshots tab would spend three requests on a permanent answer.
     retry: (failureCount: number, error: unknown) =>
       error instanceof APIError && error.status === 404
         ? false
@@ -2528,15 +2435,15 @@ export function useCreateSnapshot() {
         const settled = result.status === "succeeded";
         if (settled) await refreshSnapshotSlice(queryClient, scopeKey, body.host, project);
         const reconciled = reconcileSnapshotState(queryClient, scopeKey);
-        // note: a settled answer is final, so its operation is not followed. Following it read a
-        // success at once and ran the forced fleet reconcile above a second time.
+        // A settled answer is final, so its operation is not followed; following it would run
+        // the forced fleet reconcile a second time.
         if (settled || !result.operation_id) {
           await reconciled;
           return;
         }
         // important: followed at once, beside the reconcile rather than after it. LXD drops a
-        // finished operation shortly after it ends (on nuc2 one read 10 s later answered 404), and
-        // a follow that first waited for the fleet read lost the verdict that way.
+        // finished operation shortly after it ends (a read 10 s later can answer 404), so a
+        // follow that first waits for the fleet read loses the verdict.
         const { verdict } = await reconcileSnapshotOperation(
           queryClient, scopeKey, result.operation_id,
           { host: body.host, project, instance: instanceName },
@@ -2581,8 +2488,8 @@ export function useDeleteSnapshot() {
       }),
     retry: false,
     onSuccess: (result, { instanceName, snapshotName, host, project }) => {
-      // important: hidden on the answer, not before it. A refused delete (403, 409, 502) never
-      // reaches here and its row never moves; one the cluster accepted but has not finished
+      // important: the row is hidden on the answer, never before it. A refused delete (403, 409,
+      // 502) never reaches here and its row stays; one the cluster accepted but has not finished
       // (`settled: false`) stays hidden until the operation's verdict, and comes back if it fails.
       const identity: SnapshotIdentity = {
         actorScope: scopeKey,
@@ -2594,7 +2501,7 @@ export function useDeleteSnapshot() {
       const settled = result.settled !== false;
       const token = markSnapshotDeleted(queryClient, identity, { settled });
       void (async () => {
-        // Followed beside the reconcile, not after it: see useCreateSnapshot.
+        // Followed beside the reconcile rather than after it; see useCreateSnapshot.
         const reconciled = reconcileSnapshotState(queryClient, scopeKey);
         if (settled || !result.operation_id) {
           await reconciled;
@@ -2638,7 +2545,7 @@ export function useRestoreSnapshot() {
     retry: false,
     onSuccess: (result, { instanceName, body }) => {
       void (async () => {
-        // Followed beside the reconcile, not after it: see useCreateSnapshot.
+        // Followed beside the reconcile rather than after it; see useCreateSnapshot.
         const reconciled = reconcileSnapshotState(queryClient, scopeKey);
         if (result.settled !== false || !result.operation_id) {
           await reconciled;
@@ -2654,7 +2561,7 @@ export function useRestoreSnapshot() {
   });
 }
 
-// Instance Mobility Hooks
+// Daemon operation tracking for the snapshot mutations
 type CopyOperationInfo = {
   status?: string | null;
   status_code?: number | null;
@@ -2720,7 +2627,7 @@ async function reconcileSnapshotState(
  * Follow the accepted daemon operation without ever replaying the snapshot mutation, and say how
  * it ended. `unknown` covers a follow that gave up or lost the actor.
  *
- * note: read through the snapshot route that answers the operation's initiator, not through
+ * Read through the snapshot route that answers the operation's initiator, not through
  * `/operations/{id}`, which refuses every caller in a shared cluster's `default` project.
  */
 async function reconcileSnapshotOperation(

@@ -57,14 +57,13 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
             <Settings2 className="h-4 w-4 shrink-0" />
             <span>General</span>
           </TabsTrigger>
-          {/* Integrations - Admin + Partner */}
+          {/* isPartner is true for Administrators as well. */}
           {isPartner && (
           <TabsTrigger value="integrations" className="gap-2 text-xs sm:text-sm px-3 sm:px-4 py-1.5">
             <Shield className="h-4 w-4 shrink-0" />
             <span>Integrations</span>
           </TabsTrigger>
           )}
-          {/* User Groups - Admin + Partner (partners can assign tenants) */}
           {isPartner && (
           <TabsTrigger value="user-groups" className="gap-2 text-xs sm:text-sm px-3 sm:px-4 py-1.5">
             <Users className="h-4 w-4 shrink-0" />
@@ -72,14 +71,12 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
           </TabsTrigger>
           )}
 
-          {/* Personalization - Admin + Partner */}
           {isPartner && (
           <TabsTrigger value="personalization" className="gap-2 text-xs sm:text-sm px-3 sm:px-4 py-1.5">
             <Palette className="h-4 w-4 shrink-0" />
             <span>Personalization</span>
           </TabsTrigger>
           )}
-          {/* System Info - Admin + Partner */}
           {isPartner && (
           <TabsTrigger value="dashboard-host" className="gap-2 text-xs sm:text-sm px-3 sm:px-4 py-1.5">
             <Activity className="h-4 w-4 shrink-0" />
@@ -89,15 +86,14 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
         </TabsList>
         </div>
 
-        {/* General Settings Tab - all roles, My Keys hidden for Tenant */}
         <TabsContent value="general" className="space-y-6">
           <div className="grid gap-6">
             {/* Desktop Control lives in Integrations, beside the API keys it governs. A tenant
-                cannot open that tab, and this consent is deliberately theirs to give rather than
-                their partner's, so for them it stays here. */}
+                cannot open that tab, and this consent is the tenant's own to give, so for a
+                tenant it stays here. */}
             {!isPartner && <DesktopControlSettings />}
-            {/* Extensions pointer - the surface is a route, not a tab, because a refresh
-                inside a tab would destroy the one-time credential an install shows. */}
+            {/* Extensions is a route rather than a tab: a refresh inside a tab would destroy
+                the one-time credential an install shows. */}
             {isPartner && (
             <Card className="illo-launch illo-host hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/extensions')}>
               <div className="flex items-center">
@@ -133,7 +129,6 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
             </Card>
             )}
 
-            {/* My Keys Card - Admin + Partner only */}
             {isPartner && (
             <Card className="illo-launch illo-host hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/my-keys')}>
               <div className="flex items-center">
@@ -175,7 +170,6 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
           </div>
         </TabsContent>
 
-        {/* System Info Tab - Admin + Partner */}
         {isPartner && (
         <TabsContent value="dashboard-host" className="space-y-6">
           {isAdmin && <ReleaseStatusCard />}
@@ -183,15 +177,14 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
         </TabsContent>
         )}
 
-        {/* Personalization Tab - a Partner edits its organizations' branding; an Administrator also
-            edits the deployment default, which is what it sees itself (backend services/branding/). */}
+        {/* A Partner edits its organizations' branding; an Administrator also edits the
+            deployment default, which is what it sees itself (backend services/branding/). */}
         {isPartner && (
         <TabsContent value="personalization">
           <OrgPersonalizationSettings />
         </TabsContent>
         )}
 
-        {/* Integrations Tab - Admin + Partner */}
         {isPartner && (
         <TabsContent value="integrations" className="space-y-6">
           {/* API keys, Synced Organizations and Desktop Control as sections (?section=). */}
@@ -199,7 +192,6 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
         </TabsContent>
         )}
 
-        {/* User Groups Tab - Admin + Partner */}
         {isPartner && (
         <TabsContent value="user-groups">
           <UserGroupsSettings />

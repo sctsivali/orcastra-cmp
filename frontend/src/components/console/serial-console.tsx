@@ -1,5 +1,5 @@
 /**
- * Serial Console: the instance's serial console (LXD console type "console").
+ * The instance's serial console (LXD console type "console").
  *
  * It needs neither the VM agent nor networking, so it is what an operator uses to watch a boot,
  * reach a rescue prompt, or log in to a guest whose agent is not running. Output from before the

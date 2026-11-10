@@ -80,10 +80,8 @@ const toTime = (v: string | null | undefined): number | null => {
   return isNaN(t) ? null : t;
 };
 
-// Separate component that uses useSearchParams
-// Three tables, three shapes, three namespaces. Shared state would filter one tab by a
-// field another does not carry, which is the defect this page already shipped in reverse:
-// one severity Select rendered once but wired only to the platform tab.
+// Each tab has its own table definition and URL namespace: shared filter state would filter one
+// tab by a field another does not carry.
 const PLATFORM_WARNINGS = defineTable<WarningInfo>()({
   id: "all",
   searchPlaceholder: "Search warnings",
@@ -109,14 +107,13 @@ const PLATFORM_WARNINGS = defineTable<WarningInfo>()({
     {
       field: "node",
       label: "Cluster",
-      // important: the registered node, not `location`. On a clustered host `location` is the
-      // LXD member name (microcloud20), which nothing else in the console links by, so a link
-      // carrying the cluster id landed on "No warning matches the current filters." while
-      // the tile it came from counted five. The member is rendered as sub-text and searched.
+      // important: keyed on the registered node, not `location`. On a clustered host `location`
+      // is the LXD member name, which no link into this page carries, so a link with the cluster
+      // id would match nothing. The member is rendered as sub-text and searched.
       sort: (w) => warningNodeValue(w),
       facet: (w) => warningNodeValue(w),
       facetSpec: { role: "node", primary: true, emptyLabel: "(no cluster)" } },
-    // note: real and populated, and until now rendered only inside the detail dialog.
+    // Facet only: the table has no Project column; the detail dialog shows it.
     { field: "project", label: "Project", facet: (w) => w.project, facetSpec: { role: "project", emptyLabel: "(no project)" } },
     { field: "count", label: "Count", sort: (w) => w.count ?? 0, filter: fromSort("number", { unit: "count" }) },
     { field: "last_seen", label: "Last Seen", sort: (w) => toTime(w.last_seen_at), filter: fromSort("date", { horizon: "past" }) },
@@ -125,11 +122,9 @@ const PLATFORM_WARNINGS = defineTable<WarningInfo>()({
 const CERT_WARNINGS = defineTable<CertificateWarning>()({
   id: "certificates",
   searchPlaceholder: "Search certificate issues",
-  // important: the id is searchable too. The accessors below fall back to `cluster_id` only when
-  // there is no display name, so a cluster that HAS one could not be found by the id an operator
-  // reads off every other surface. sort and facet are deliberately left alone: a facet accessor's
-  // return value is both the URL value and the option label, so widening it would rename the
-  // options and break every existing ?node=<display_name> link into this page.
+  // important: sort and facet stay on the display name. A facet value is both the URL value and
+  // the option label, so widening it would rename the options and break existing links. The
+  // cluster id is searchable here instead; the accessors use it only without a display name.
   searchExtra: (w) => [w.cluster_id],
   defaultSort: { field: "days", direction: "asc" },
   columns: [
@@ -159,11 +154,9 @@ const CERT_WARNINGS = defineTable<CertificateWarning>()({
 const NODE_WARNINGS = defineTable<CertificateWarning>()({
   id: "nodes",
   searchPlaceholder: "Search offline clusters",
-  // important: the id is searchable too. The accessors below fall back to `cluster_id` only when
-  // there is no display name, so a cluster that HAS one could not be found by the id an operator
-  // reads off every other surface. sort and facet are deliberately left alone: a facet accessor's
-  // return value is both the URL value and the option label, so widening it would rename the
-  // options and break every existing ?node=<display_name> link into this page.
+  // important: sort and facet stay on the display name. A facet value is both the URL value and
+  // the option label, so widening it would rename the options and break existing links. The
+  // cluster id is searchable here instead; the accessors use it only without a display name.
   searchExtra: (w) => [w.cluster_id],
   defaultSort: { field: "cluster", direction: "asc" },
   columns: [
@@ -181,10 +174,7 @@ const NODE_WARNINGS = defineTable<CertificateWarning>()({
       sort: (w) => SEVERITY_RANK[warningSeverityValue(w.severity || "critical")] ?? 99,
       facet: (w) => warningSeverityValue(w.severity || "critical"),
       facetSpec: { primary: true, format: warningSeverityLabel } },
-    // note: `message` is what CertificateWarning actually carries. The columns here used to
-    // read `error` and `checked_at`, which the model has never had, so every row rendered the
-    // same "Connection failed" fallback and an empty date while the populated message went
-    // unshown. Typing this table is what turned that from a review finding into a build error.
+    // CertificateWarning carries the connection error in `message`.
     { field: "message", label: "Message", sort: (w) => w.message || "", search: (w) => w.message || "", filter: fromSort("text") },
   ] });
 
@@ -207,14 +197,12 @@ function WarningsContent() {
   // than showing a shorter list with nothing to explain it.
   const reach = reachabilityOf(data);
 
-  // Certificate and node warnings from system warnings
   const certWarnings = useMemo(() => systemWarnings?.certificate_warnings || [], [systemWarnings]);
   const nodeWarnings = useMemo(() => systemWarnings?.node_warnings || [], [systemWarnings]);
   const kernelWarnings = useMemo(() => systemWarnings?.kernel_advisories || [], [systemWarnings]);
   
-  // important: the tab is URL state, read on every render and written on change. It used to be
-  // a useState re-seeded from ?tab= on every URL change while nothing ever wrote ?tab=, so a
-  // facet toggle on the certificates tab bounced the operator back to the platform tab.
+  // important: the tab is URL state, read on every render and written on change. A local state
+  // seeded from ?tab= would bounce the operator back to the platform tab on a facet toggle.
   // Severity and node live in the per-tab filter instances, same store, and the write composes
   // on the live query so a facet written in the same tick is kept.
   const activeTab = searchParams.get("tab") || "all";
@@ -228,9 +216,8 @@ function WarningsContent() {
     [pathname],
   );
 
-  // Bare ?severity= and ?node= predate the tabs being namespaced and are an external
-  // contract, so they are read forever and translated once into the platform tab's keys,
-  // then removed so the seed cannot reassert itself when the operator clears the control.
+  // Bare ?severity= and ?node= are an external contract: translated once into the platform tab's
+  // keys, then removed so the seed cannot reassert itself when the operator clears the control.
   // Internal links come through lib/inventory-links.ts and never carry these.
   useEffect(() => {
     const legacySeverity = searchParams.get("severity");
@@ -248,18 +235,17 @@ function WarningsContent() {
   }, [searchParams, router, pathname]);
 
 
-  // A pinned role is exempt from the two-value threshold, so only availableFields can drop it.
-  // Without these, a tab with no rows still rendered its node control with an empty popover, and
-  // an empty certificates tab is the DESIRED state here, not an edge case.
+  // A pinned role is exempt from the two-value threshold, so only availableFields can drop it;
+  // otherwise a tab with no rows shows its node control with an empty popover. An empty
+  // certificates tab is the normal state.
   //
-  // important: the gate names the FIELD, not the role. Two of these three spell the node
+  // important: the gate names the field, not the role. Two of these three tables call the node
   // dimension `cluster`.
   const gate = <F extends string>(fields: readonly F[], field: F, present: boolean) =>
     present ? fields : fields.filter((f) => f !== field);
 
-  // Paging is per tab for the same reason the filters are: three tables of three shapes and
-  // three lengths. One shared page number would drop the operator onto page 4 of a two-page
-  // certificates table the moment they switched tabs.
+  // Paging is per tab, like the filters: one shared page number would land the operator past the
+  // end of a shorter table on switching tabs.
   const [platformPage, setPlatformPage] = useState(1);
   const [platformPageSize, setPlatformPageSize] = useState(TABLE_PAGE_SIZE);
   const resetPlatformPage = useCallback(() => setPlatformPage(1), []);
@@ -297,7 +283,7 @@ function WarningsContent() {
     ),
   });
 
-  // Per-table sorting (3 independent tables: platform / certificates / offline nodes)
+  // Sorting is per table too.
   const {
     sortField: platformSortField,
     sortDirection: platformSortDirection,
@@ -340,8 +326,8 @@ function WarningsContent() {
   );
 
   
-  // State for warning detail modal. The kind travels with the record, because the three tabs
-  // carry three different shapes and the dialog renders each one differently.
+  // The kind travels with the selected record, because each tab carries its own shape and the
+  // dialog renders each one differently.
   const [warningUiActorScope, setWarningUiActorScope] = useState(scopeKey);
   const previousWarningActorScopeRef = useRef(scopeKey);
   const [selectedWarning, setSelectedWarning] = useState<WarningRecord | null>(null);
@@ -384,9 +370,8 @@ function WarningsContent() {
     return <LoadingLottiePage />;
   }
 
-  // A failed read is not an empty list. Either feed failing with nothing cached is the whole
-  // page failing: the three tabs cannot honestly say "no warnings" about a read that did not
-  // return.
+  // A failed read is not an empty list. Either feed failing with nothing cached fails the whole
+  // page: no tab can say "no warnings" about a read that did not return.
   if ((isError && !data) || (isSystemError && !systemWarnings)) {
     return (
       <PageReadError
@@ -401,9 +386,8 @@ function WarningsContent() {
     );
   }
   
-  // important: awaited, not fire-and-forget. The previous `void Promise.all(...)`
-  // discarded both the completion and any failure, so a refresh against a dead
-  // backend was indistinguishable from a successful one.
+  // Awaited, so the refresh button sees completion and failure: a refresh against a dead backend
+  // must not look like a successful one.
   const handleRefreshAll = () => Promise.all([refreshNow(), refreshSystemWarnings()]);
 
   return (
@@ -443,7 +427,6 @@ function WarningsContent() {
         <AlarmCount kind="offlineClusters" count={nodeWarnings.length} />
       </div>
 
-      {/* Tabbed Content */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList className="h-auto flex-wrap">
           <TabsTrigger value="all" className="gap-1 md:gap-2 text-xs md:text-sm">
@@ -472,7 +455,6 @@ function WarningsContent() {
           </TabsTrigger>
         </TabsList>
 
-        {/* Platform Warnings Tab */}
         <TabsContent value="all">
           <Card>
         <CardHeader className="pb-4 p-4 md:p-6 space-y-4">
@@ -593,7 +575,6 @@ function WarningsContent() {
       </Card>
         </TabsContent>
 
-        {/* Certificate Warnings Tab */}
         <TabsContent value="certificates">
           <Card>
             <CardHeader className="p-4 md:p-6 space-y-4">
@@ -603,16 +584,12 @@ function WarningsContent() {
                   Certificates expiring soon or already expired
                 </CardDescription>
               </div>
-              {/* Severity applies here too. One Select wired only to the platform tab is the
-                  defect this replaces: all three tables carry a severity. */}
               <TableToolbar filters={certFilters} noun="certificate issues" />
             </CardHeader>
             <CardContent className="p-0 md:p-6 md:pt-0">
               {sortedCertWarnings.length === 0 ? (
-                /* important: "all healthy" is a claim about the fleet, so it must not be made
-                   about a list that a filter emptied. On a health surface the two readings lead
-                   an operator to opposite conclusions, and the filtered one is now easier to
-                   reach than it was before this table could be narrowed and paged. */
+                /* "All healthy" is a claim about the fleet, so it must not be made about a list
+                   that a filter emptied. */
                 certFilters.activeFilterCount > 0 ? (
                   <EmptyState
                     icon={Shield}
@@ -718,7 +695,6 @@ function WarningsContent() {
           </Card>
         </TabsContent>
 
-        {/* Inactive clusters tab */}
         <TabsContent value="nodes">
           <Card>
             <CardHeader className="p-4 md:p-6 space-y-4">
@@ -732,8 +708,8 @@ function WarningsContent() {
             </CardHeader>
             <CardContent className="p-0 md:p-6 md:pt-0">
               {sortedNodeWarnings.length === 0 ? (
-                /* Same reason as the certificate tab: "all nodes are online" is a claim about
-                   the fleet and a filter must never be allowed to make it. */
+                /* Same reason as the certificate tab: "all clusters are online" is a claim
+                   about the fleet, and a filter must not make it. */
                 nodeFilters.activeFilterCount > 0 ? (
                   <EmptyState
                     icon={Wifi}
@@ -792,9 +768,8 @@ function WarningsContent() {
                             {warningSeverityDisplay(warning.severity || "critical").label}
                           </Badge>
                         </TableCell>
-                        {/* important: this was a tooltip on a bare span, so it opened for a mouse
-                            and for nothing else, and cursor-help advertised an affordance no
-                            keyboard or touch user could reach. */}
+                        {/* OverflowText rather than a hover tooltip, so keyboard and touch
+                            users can reach the full message. */}
                         <TableCell className="max-w-xs">
                           <OverflowText
                             value={warning.message || "Connection failed"}
@@ -840,9 +815,6 @@ function WarningsContent() {
         </TabsContent>
       </Tabs>
 
-      {/* One dialog for all three tabs. Certificates and Offline Nodes never had one, and
-          each dropped the field that matters most: a full cluster id, and the connection
-          error the table clips to two lines behind a tooltip. */}
       <WarningDetailDialog
         selected={currentSelectedWarning}
         open={warningUiIsCurrent && detailModalOpen}
@@ -856,7 +828,7 @@ function WarningsContent() {
   );
 }
 
-// Main page component with Suspense wrapper
+// The role gate sits above the Suspense boundary, so nothing below mounts for another role.
 export default function WarningsPage() {
   const router = useRouter();
   const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);

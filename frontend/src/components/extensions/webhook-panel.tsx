@@ -28,26 +28,16 @@ import type {
 } from "@/types/api";
 
 /**
- * Where an installation's events go, and what happened to each one.
- *
- * note: the delivery log is a feed rather than a `<Table>`. The table contract in this repo
- * requires every visible column to be filterable, and it is right to: a column an operator can
- * read but not narrow is a column that stops being usable at a hundred rows. A delivery log is
- * read newest-first and narrowed by state, so borrowing table markup would claim a contract this
- * surface does not honour, which is the failure the ratchet exists to catch.
- *
- * It is paged all the same. Being a feed was never a reason to stop at the newest fifty, which is
- * what it did: the server capped at fifty with no offset, so the fifty-first delivery was
- * unreachable and nothing said the list had been cut.
+ * Delivery log page size, paged by server offset. The log is a feed rather than a `<Table>`: it
+ * is read newest-first and narrowed by state only, while the table contract requires every
+ * visible column to be filterable.
  */
 const DELIVERY_PAGE_SIZE = 25;
 const DELIVERY_STATE_PARAM = "delivery";
 
 /**
- * The states where sending again means something.
- *
- * `delivered` is already done, and `pending` or `inflight` is one the dispatcher still owns, so
- * offering Retry there would race the sender rather than help.
+ * The states where sending again makes sense. `delivered` is done, and `pending` or `inflight`
+ * still belongs to the dispatcher, so a Retry there would race the sender.
  */
 const RETRYABLE = new Set<WebhookDeliveryState>(["failed", "dead", "dropped"]);
 
@@ -64,13 +54,13 @@ function WebhookPanelContent({ installId, vocabulary, onSecretIssued }: WebhookP
   const searchParams = useSearchParams();
   const [endpoint, setEndpoint] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
-  // note: `page` is the delivery log's, and it is the server's offset. The subscription list is
-  // held whole in memory and paged here, so it needs its own and cannot borrow that one.
+  // `page` is the delivery log's and maps to the server offset. The subscription list is held
+  // whole in memory and paged here, so it has its own.
   const [page, setPage] = useState(1);
   const [subscriptionPage, setSubscriptionPage] = useState(1);
 
-  // The parent already keeps the open panel in the URL so a delivery log can be linked to. A
-  // filtered log is what somebody actually wants to send, so the filter goes there too.
+  // The parent keeps the open panel in the URL so a delivery log can be linked to; the state
+  // filter goes there too.
   const stateFilter = searchParams.get(DELIVERY_STATE_PARAM) ?? "";
   const setStateFilter = (next: string) => {
     const params = currentQuery();
@@ -94,7 +84,7 @@ function WebhookPanelContent({ installId, vocabulary, onSecretIssued }: WebhookP
         offset: (page - 1) * DELIVERY_PAGE_SIZE,
       }),
     // The window shifts under a live log, so the previous page stays on screen while the next one
-    // loads rather than the list blinking through an empty state on every step.
+    // loads instead of blinking through an empty state.
     placeholderData: (previous) => previous,
   });
 
@@ -105,9 +95,8 @@ function WebhookPanelContent({ installId, vocabulary, onSecretIssued }: WebhookP
 
   const subscriptionRows = subscriptions.data ?? [];
   const subscriptionPages = Math.max(1, Math.ceil(subscriptionRows.length / PANEL_PAGE_SIZE));
-  // Clamped on read, the same rule the delivery pager below follows. Removing the only
-  // subscription on the last page shortens the list under whoever is reading it, and an effect
-  // would paint that empty page once before correcting itself.
+  // Clamped on read, like the delivery pager below. Removing the only subscription on the last
+  // page shortens the list, and an effect would paint that empty page once first.
   const currentSubscriptionPage = Math.min(subscriptionPage, subscriptionPages);
   const pagedSubscriptions = subscriptionRows.slice(
     (currentSubscriptionPage - 1) * PANEL_PAGE_SIZE,
@@ -237,12 +226,11 @@ function WebhookPanelContent({ installId, vocabulary, onSecretIssued }: WebhookP
           </ul>
         )}
 
-        {/* Absent rather than disabled when everything fits. No mt-4 wrapper: the section is
-            already a space-y-3 stack, whose gap wins over a margin on the child.
+        {/* Absent rather than disabled when everything fits. No mt-4 wrapper: the section's
+            space-y-3 gap wins over a margin on the child.
 
-            important: the label is not decoration. Two pagers sit on this panel, so without it
-            the screen carries two Previous and two Next buttons named identically and a screen
-            reader cannot say which list either one moves. */}
+            important: keep the label. Two pagers sit on this panel, and without it a screen
+            reader hears two identical Previous and Next pairs. */}
         {subscriptionPages > 1 && (
           <DataTablePagination
             variant="compact"
@@ -398,10 +386,8 @@ function WebhookPanelContent({ installId, vocabulary, onSecretIssued }: WebhookP
 }
 
 /**
- * The boundary the query string requires.
- *
- * The delivery state filter lives in the query string so a filtered log can be linked to, which
- * opts this out of prerendering and makes the boundary a build requirement rather than a nicety.
+ * Carries its own Suspense boundary. The delivery state filter lives in the query string, which
+ * opts this out of prerendering, so `next build` needs a boundary above it.
  */
 export function WebhookPanel(props: WebhookPanelProps) {
   return (

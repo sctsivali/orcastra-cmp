@@ -67,15 +67,14 @@ import { PageReadError } from "@/components/ui/read-error-state";
 
 const CLUSTERS = defineTable<any>()({
   searchPlaceholder: "Search clusters",
-  // important: the cluster id is searchable, and it is not part of the Cluster column's own
-  // `search` accessor. Every Node and Cluster cell in the console links here as
-  // `/inventory/clusters?q=<cluster_id>` through components/ui/node-link.tsx, and every one of
-  // them found nothing, because the row prints the id as sub-text while only the display name
-  // was searchable. `blitzkrieg` renders as "Hetzner", so this is not a near miss.
+  // important: the cluster id must stay searchable, outside the Cluster column's own `search`
+  // accessor. Every Node and Cluster cell in the console links here as
+  // `/inventory/clusters?q=<cluster_id>` through components/ui/node-link.tsx, and the row's
+  // display name can differ entirely from the id.
   //
-  // Deliberately searchExtra rather than a widened accessor. `search` returns ONE string, so
-  // widening means concatenating, and `q=industrial nuc` would then match across the two values
-  // and correspond to nothing on screen. Each element here is tested on its own.
+  // searchExtra instead of a widened accessor: `search` returns one string, so widening means
+  // concatenating, and `q=industrial edge` would then match across the two values and
+  // correspond to nothing on screen. Each element here is tested on its own.
   searchExtra: (c) => [c.cluster_id],
   defaultSort: { field: "cluster", direction: "asc" },
   columns: [
@@ -84,8 +83,8 @@ const CLUSTERS = defineTable<any>()({
       label: "Cluster",
       sort: (c) => c.display_name,
       search: (c) => c.display_name,
-      // The toolbar's own "Cluster contains ..." reads the SORT accessor through fromSort, so it
-      // was blind to the id in the same way. Declared explicitly over both values instead.
+      // fromSort would give the toolbar's "Cluster contains ..." only the display name, so the
+      // filter is declared over both values.
       filter: { kind: "text", value: (c) => [c.display_name, c.cluster_id] } },
     { field: "endpoint", label: "Endpoint", sort: (c) => c.endpoint, search: (c) => c.endpoint, filter: fromSort("text") },
     {
@@ -96,8 +95,8 @@ const CLUSTERS = defineTable<any>()({
       facetSpec: {
         primary: true,
         format: formatHypervisorType,
-        // A null type is the empty bucket, which never reaches `format`. Naming it keeps the
-        // chip honest instead of reading "(none)" for a fact that is simply not known yet.
+        // A null type is the empty bucket, which never reaches `format`. The label says the type
+        // is not known yet instead of "(none)".
         emptyLabel: "(not determined)",
       } },
     {
@@ -150,9 +149,9 @@ function ClustersContent() {
     [filters.filteredRows, sortItems],
   );
 
-  // note: clamped on read rather than corrected in an effect. Deleting a cluster and the
-  // background refetch both shrink this list under the operator, and an effect would only
-  // fire after an out-of-range page had already painted an empty table.
+  // Clamped on read instead of corrected in an effect. Deleting a cluster and the background
+  // refetch both shrink this list under the operator, and an effect would fire only after an
+  // out-of-range page had already painted an empty table.
   const totalPages = Math.max(1, Math.ceil(sortedClusters.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pagedClusters = sortedClusters.slice(
@@ -244,7 +243,6 @@ function ClustersContent() {
     }
   };
 
-  // Full-page loading state
   if (isLoading) {
     return <LoadingLottiePage />;
   }
@@ -384,21 +382,17 @@ function ClustersContent() {
                         </TableLink>
                       </TableCell>
                       <TableCell>
-                        {/* important: a value, not a chip. documentation/ui/table-conventions.md
-                            keeps Badge in a data cell for Status and Severity only, and the pill
-                            also inverted the type scale here: it is text-xs font-semibold, so the
-                            Type value rendered smaller and bolder than every other value in the
-                            row while its own qualifier underneath was the same size. As text both
-                            tiers start at the same x, which is what the badge padding broke.
-                            The monitoring and technologies node cards already render this value
-                            as text. */}
+                        {/* A value, not a chip: Badge in a data cell is for Status and Severity
+                            only, and its text-xs font-semibold would set the type smaller and
+                            bolder than every other value in the row. As text, the type and its
+                            qualifier underneath start at the same x. */}
                         <div>
                           {cluster.cluster_type ? (
                             formatHypervisorType(cluster.cluster_type)
                           ) : (
-                            /* The backend refuses to guess this before the certificate is
-                               trusted, so neither do we. formatHypervisorType(null) answers the
-                               literal string "Hypervisor", which reads as a reading. */
+                            /* The backend does not guess this before the certificate is
+                               trusted, and formatHypervisorType(null) answers the literal
+                               string "Hypervisor", which would read as a real value. */
                             <TableEmptyValue label="Hypervisor type not determined" />
                           )}
                           {cluster.clustered && <TableSubText>Clustered</TableSubText>}
@@ -415,10 +409,8 @@ function ClustersContent() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
-                          {/* The most obvious traversal in the product, and the one this row did
-                              not offer: a cluster to the instances running on it. The deep link
-                              was already built and documented on the instances page. Named as well
-                              as titled, unlike its neighbours, so a screen reader reaches it. */}
+                          {/* From a cluster to the instances running on it. Named as well as
+                              titled, unlike its neighbours, so a screen reader reaches it. */}
                           <Button
                             asChild
                             variant="outline"
@@ -523,7 +515,6 @@ function ClustersContent() {
         }}
       />
 
-      {/* Delete Confirmation Modal */}
       <Dialog 
         open={deleteConfirmModal.open} 
         onOpenChange={(open) => {
@@ -602,7 +593,6 @@ function ClustersContent() {
 
       <LeftoverTrustDialog leftover={leftoverTrust} onClose={() => setLeftoverTrust(null)} />
 
-      {/* Location Edit Modal */}
       <ClusterLocationDialog
         open={locationModal.open}
         onOpenChange={(open) => setLocationModal({ open, cluster: locationModal.cluster })}

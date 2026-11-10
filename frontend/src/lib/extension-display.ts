@@ -1,9 +1,8 @@
 /**
- * How add-on state is spelled in the UI. One spelling per idea, in one file.
+ * How add-on state is spelled in the UI, one spelling per idea.
  *
- * Sibling of `integration-display.ts`, and split out for the same reason: a status word or a
- * badge tone invented at a call site is how the same state ends up reading two ways on two
- * screens.
+ * Like `integration-display.ts`: a status word or badge tone invented at a call site lets the
+ * same state read two ways on two screens.
  */
 
 import type {
@@ -15,11 +14,9 @@ import type {
 type Tone = "positive" | "caution" | "neutral" | "negative";
 
 /**
- * important: the solid `--status-*` tones, not success/warning/error.
- *
- * The translucent tints measure as low as 2.73:1 against the card in light mode, under the 4.5:1
- * the badge's own 12px semibold asks for. These four are measured at 4.72:1 or better in both
- * themes.
+ * Use the Badge variants on the solid `--status-*` tones, never success/warning/error.
+ * Those translucent tints measure as low as 2.73:1 against the card in light mode, under the
+ * 4.5:1 a 12px semibold badge needs; these four measure 4.72:1 or better in both themes.
  */
 export const INSTALL_STATUS: Record<ExtensionInstallStatus, { label: string; tone: Tone }> = {
   active: { label: "Active", tone: "positive" },
@@ -43,8 +40,8 @@ export const DELIVERY_STATE: Record<WebhookDeliveryState, { label: string; tone:
   inflight: { label: "Sending", tone: "neutral" },
   failed: { label: "Retrying", tone: "caution" },
   dead: { label: "Gave up", tone: "negative" },
-  // Not a failure. The installation stopped reaching that cluster, so the event was withheld
-  // rather than sent, and an operator reading "Failed" would go looking for a broken endpoint.
+  // Not a failure: the installation's reach excludes that cluster, so the event was withheld.
+  // "Failed" would send an operator looking for a broken endpoint.
   dropped: { label: "Withheld", tone: "neutral" },
 };
 
@@ -56,10 +53,8 @@ export function describeClusterReach(clusterIds: string[]): string {
 }
 
 /**
- * Why a capability is marked, taken from the server.
- *
- * Never a hardcoded sentence. There are five distinct reasons and a single label was wrong for
- * most of them, which is why the field is nullable and per-capability.
+ * Why a capability is marked elevated, as the server words it. The reasons differ per
+ * capability, so no fixed sentence fits; "Elevated" is the fallback when the server gives none.
  */
 export function capabilityNote(
   elevated: boolean,

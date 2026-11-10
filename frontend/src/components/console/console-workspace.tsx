@@ -1,10 +1,9 @@
 /**
- * Console Workspace: tabs, toolbar, panels, the consoles themselves and the resource bar, shared
- * by the floating console window and the full-page console.
+ * Tabs, toolbar, panels, the consoles themselves and the resource bar, shared by the floating
+ * console window and the full-page console.
  *
- * Every console tab the operator opened stays connected while another tab is in front (they used
- * to disconnect and reconnect on every switch), and the Graphics tab asks before taking over a
- * display somebody else is watching.
+ * Every console tab the operator opened stays connected while another tab is in front, and the
+ * Graphics tab asks before taking over a display somebody else is watching.
  */
 
 "use client";
@@ -105,7 +104,7 @@ export function ConsoleWorkspace({
   const graphicsRef = useRef<GraphicsConsoleHandle | null>(null);
   const textRef = useRef<TextConsoleHandle | null>(null);
   const serialRef = useRef<SerialConsoleHandle | null>(null);
-  // Read by the power follow-up timer, which outlives the render it was scheduled in.
+  // Read by the timer onPowerDone schedules, which outlives the render it was scheduled in.
   const liveRef = useRef<{ graphics: boolean; serial: boolean }>({ graphics: false, serial: false });
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -179,7 +178,7 @@ export function ConsoleWorkspace({
     consoleAPI.getActiveSessions(instanceName, host, project).then(
       (sessions) => {
         if (cancelled) return;
-        // Our own serial console is one of them when that tab is open.
+        // This window's own serial console is one of them when that tab is open.
         const others = mounted.has("serial") ? sessions.slice(1) : sessions;
         if (others.length > 0) setConflict(others);
         else setGraphicsCleared(true);
@@ -277,7 +276,7 @@ export function ConsoleWorkspace({
     try {
       localStorage.setItem(RESIZE_PREF_KEY, enabled ? "1" : "0");
     } catch {
-      // per-browser convenience only
+      // A per-browser convenience; nothing to recover.
     }
   };
 

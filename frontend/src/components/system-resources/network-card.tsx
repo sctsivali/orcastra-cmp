@@ -15,8 +15,8 @@ import { ratePerSecond } from "@/components/system-resources/rates";
 
 const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1"]);
 
-// note: loopback traffic never leaves the container (health checks, local calls), so it says
-// nothing about the network an operator is checking.
+// Loopback traffic never leaves the container (health checks, local calls), so it says nothing
+// about the network an operator is checking.
 function isLoopback(iface: NetworkInterfaceInfo): boolean {
   return iface.name === "lo" || (iface.addresses.length > 0 && iface.addresses.every((a) => LOOPBACK_ADDRESSES.has(a)));
 }

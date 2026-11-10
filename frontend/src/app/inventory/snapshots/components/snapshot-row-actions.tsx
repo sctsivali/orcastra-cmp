@@ -23,18 +23,16 @@ interface SnapshotRowActionsProps {
 /**
  * Row actions for one snapshot.
  *
- * A snapshot this console did not create is listed but not actionable, and the menu says why
- * rather than hiding the items. Someone upstream is paying to keep it, and a restore point that
- * silently disappears from a tenant's account is worse than one an operator cannot reach.
+ * Each origin faces its own gate: a hand-taken snapshot asks for its typed name on delete, and an
+ * upstream or billing-linked one asks for a reason and an acknowledgement. A row whose cluster or
+ * origin is unknown keeps its items, disabled with the reason.
  */
 export function SnapshotRowActions({
   snapshot,
   billingLinked = false,
 }: SnapshotRowActionsProps) {
-  // important: the row's own cluster and project, never the page's. The props that used to carry
-  // them are gone rather than corrected: a component that cannot be handed a cluster cannot be
-  // handed the wrong one, which is the same reasoning the unreachable banner records for the
-  // node names it refuses to accept.
+  // important: the row's own cluster and project, never the page's. The component takes no
+  // cluster prop, so it cannot be handed the wrong one.
   const { host, project } = snapshotScope(snapshot);
   const { toast } = useToast();
   const { isReadOnly } = useReadOnlyMode();
@@ -47,10 +45,8 @@ export function SnapshotRowActions({
   const [deleteAcknowledged, setDeleteAcknowledged] = useState(false);
   const submitInFlightRef = useRef(false);
 
-  // important: origin is no longer a refusal. It used to disable both actions for anything
-  // without the `ops-` prefix, which meant an operator was refused their own hand-taken snapshot
-  // and told it was "managed outside this console". What origin decides now is which gate the
-  // action faces, not whether it is offered.
+  // Origin decides which gate an action faces rather than whether it is offered; only an
+  // unknown origin disables the actions.
   const { origin, needsAcknowledgement, needsTypedName } = snapshotGates(snapshot, billingLinked);
 
   const unavailableReason = !snapshot.host
@@ -76,9 +72,7 @@ export function SnapshotRowActions({
       label: `Restore Instance to This Snapshot${billingNote}`,
       icon: RotateCcw,
       onSelect: () => setShowRestore(true),
-      // Same rule as delete. Rolling an instance onto a snapshot this console did not create
-      // discards everything written since a restore point someone upstream is paid to keep, and
-      // the backend refuses it, so offering the item here only produced a 403 after the typing.
+      // Same rule as delete. The restore dialog applies the origin and billing gates itself.
       unavailableReason,
     },
     {
@@ -97,7 +91,7 @@ export function SnapshotRowActions({
   ];
 
   // disabled={pending} is React state and only reaches the DOM on the next render, so two
-  // clicks inside one tick both fire. The ref is what actually blocks the second.
+  // clicks inside one tick both fire. The ref blocks the second.
   const handleDelete = async (reason?: string) => {
     if (submitInFlightRef.current) return;
     submitInFlightRef.current = true;
@@ -108,12 +102,9 @@ export function SnapshotRowActions({
         snapshotName: snapshot.name,
         host,
         project,
-        // important: the reason is typed by the operator, never composed here. Deleting lowers the
-        // storage the external schedule is measured on, but the rule an operator holds is
-        // "anything on a billing-linked instance is acknowledged", and a rule with an exception is
-        // one people have to remember the shape of. This path used to send a canned sentence, so
-        // every forced delete wrote the same machine-authored justification into an audit record
-        // whose whole purpose is attribution.
+        // important: the reason is typed by the operator, never composed here; it lands in an
+        // audit record whose purpose is attribution. Every delete on a billing-linked instance is
+        // acknowledged, with no exception to remember.
         reason: needsAcknowledgement ? reason : undefined,
         acknowledgeBillingImpact: billingLinked || undefined,
         // important: a distinct field. Reusing the billing acknowledgement would let one tick
@@ -162,8 +153,8 @@ export function SnapshotRowActions({
         pending={deleteSnapshot.isPending}
         onConfirm={handleDelete}
         error={deleteError}
-        // The component's own guidance: an acknowledgement belongs where proceeding overrides a
-        // real refusal, never as generic friction. This is that case.
+        // An acknowledgement belongs only where proceeding overrides a real refusal, as here,
+        // never as generic friction.
         acknowledgeLabel={
           needsAcknowledgement ? acknowledgementLabel(origin, billingLinked) : undefined
         }

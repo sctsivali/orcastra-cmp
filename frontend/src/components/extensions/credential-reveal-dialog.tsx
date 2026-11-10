@@ -21,16 +21,11 @@ const MASKED_KEY = "oas_••••••••••••••••••�
 const MASKED_SIGNING = "whsec_••••••••••••••••••••••••";
 
 /**
- * The credential and the signing secret, shown once.
+ * The credential and the webhook signing secret, shown once.
  *
- * Two values, deliberately separate. One authenticates the add-on to Orcastra; the other lets it
- * verify that a delivery came from Orcastra. They have different lifetimes and different blast
- * radii, so merging them into one blob would teach an author to treat them as interchangeable,
- * which is the mistake the platform's own design exists to avoid.
- *
- * Masked by default and copied in full. Hiding is about what a screenshot captures, not about
- * what lands on the clipboard, so a masked field whose copy button produces the mask would be
- * worse than no masking at all.
+ * Kept as two values: one authenticates the add-on to Orcastra, the other verifies that a
+ * delivery came from Orcastra, and they have different lifetimes and blast radii. Masked on
+ * screen and copied in full, because the mask only protects what a screenshot captures.
  */
 export function CredentialRevealDialog({
   result,
@@ -62,8 +57,7 @@ export function CredentialRevealDialog({
     .replace(MASKED_KEY, result.api_key_secret)
     .replace(MASKED_SIGNING, result.webhook_signing_secret);
 
-  // Matches the documented recipe byte for byte, so an operator copying from here and a
-  // developer copying from the docs end up running the same code.
+  // Matches the documented verification recipe byte for byte.
   const verify = `import hmac, hashlib, time
 
 def verify(raw_body: bytes, headers, secret: str) -> bool:

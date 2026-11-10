@@ -14,11 +14,10 @@ import { KernelAdvisoryMembers, KernelAdvisorySummary, UnknownAdvisorySummary } 
 import { KERNEL_STATE_DISPLAY, clusterVerdict, cveCountText, hostsForCluster } from "./kernel-advisory-display";
 import { KernelCveList } from "./kernel-cve-list";
 
-// note: Radix opens a tooltip on focus, and two focuses here are not a reader asking for the
-// preview. Closing the dialog hands focus back to the chip (ui/dialog.tsx restores the opener),
-// and a tap focuses it after its pointerup, so Radix takes it for keyboard focus and flashes the
-// preview over the card just before the dialog covers it. Each arms this window, and the first
-// focus inside it skips the preview. A window rather than a one-shot flag: Safari does not focus a
+// Radix opens a tooltip on focus, and two focuses here are not a request for the preview: closing
+// the dialog hands focus back to the chip (ui/dialog.tsx restores the opener), and a tap focuses
+// it after pointerup, which Radix takes for keyboard focus. Each arms this window, and the first
+// focus inside it skips the preview. A window instead of a one-shot flag: Safari does not focus a
 // clicked button, so the focus may never come, and a flag would then swallow the next Tab.
 const QUIET_FOCUS_MS = 1000;
 
@@ -60,7 +59,7 @@ export function KernelAdvisoryBadge({
   const display = KERNEL_STATE_DISPLAY[verdict.state];
   const displayName = rows[0]?.display_name || clusterId;
   const text = verdict.open.length > 0 ? cveCountText(verdict.open.length) : display.label;
-  // important: the name starts with the visible text (WCAG 2.5.3); an aria-label replaces it.
+  // The accessible name starts with the visible text (WCAG 2.5.3): an aria-label replaces it.
   const spoken = verdict.open.length > 0 ? `${text}, ${display.label.toLowerCase()}` : text;
 
   const chip = (

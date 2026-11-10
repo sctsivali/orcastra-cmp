@@ -19,9 +19,9 @@ const OVER = "over-committed";
 
 /**
  * "25 vCPUs / 12 CPU threads" with the unit "CPU threads" kept whole, so a narrow card never
- * leaves "CPU" on one line and "threads" on the next. Only the unit: a whole "112 CPU threads"
- * held on one line ran into the next column of a 95 px card. CSS rather than non-breaking
- * spaces, so the text stays plain for copy, search and anything that matches it.
+ * leaves "CPU" on one line and "threads" on the next. Only the unit: holding all of
+ * "112 CPU threads" on one line overflows a 95 px card. CSS rather than non-breaking spaces, so
+ * the text stays plain for copy, search and anything that matches it.
  */
 export function CpuAllocationFigure({
   cpu,
@@ -39,8 +39,8 @@ export function CpuAllocationFigure({
 }
 
 /**
- * cpuAllocationText with "over-committed" kept whole: a narrow card used to break it at the
- * hyphen, leaving "over-" on one line.
+ * cpuAllocationText with "over-committed" kept whole, so a narrow card never breaks it at the
+ * hyphen.
  */
 export function CpuAllocationText({ cpu, className }: { cpu: CpuAllocationView; className?: string }) {
   const text = cpuAllocationText(cpu);

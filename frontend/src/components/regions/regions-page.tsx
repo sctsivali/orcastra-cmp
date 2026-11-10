@@ -114,7 +114,7 @@ function fleetHardware(data: RegionsOverviewResponse) {
 }
 
 // Hardware the backend could not read (an offline cluster, a failed read) arrives as null for
-// an operator too. Saying so beats the profile of zeros it used to be, which stated a size.
+// an operator too, and is shown as not read: zeros would state a size.
 const HARDWARE_NOT_READ = "Hardware not read";
 const NOT_READ = "Not read";
 
@@ -133,10 +133,9 @@ function RegionCard({
 }) {
   const onlineClusters = region.nodes.filter((n) => n.status === "online").length;
   // Every cluster with no recorded location is grouped into one synthetic region whose fields
-  // the backend fills with "XX" and "Unknown" (routers/regions.py). Rendering those verbatim
-  // put an "XX" country badge over the line "Unknown, Unknown", which states a place rather
-  // than an absence. The map card beside this list already declines to plot the same row and
-  // says so in these words.
+  // the backend fills with "XX" and "Unknown" (routers/regions.py). Rendered verbatim, an "XX"
+  // country badge over "Unknown, Unknown" would state a place rather than an absence. The map
+  // card beside this list declines to plot the same row.
   const hasCountry = Boolean(region.country_code) && region.country_code.toUpperCase() !== "XX";
 
   return (
@@ -212,7 +211,6 @@ function RegionCard({
               </>
             )}
             
-            {/* Registered clusters */}
             <div className="space-y-2">
               <p className="text-sm font-medium">Clusters in this region:</p>
               <div className="space-y-1">
@@ -254,7 +252,6 @@ function RegionCard({
               </div>
             </div>
             
-            {/* View on map button */}
             <Button variant="outline" size="sm" className="w-full" onClick={onViewOnMap}>
               <MapPin className="h-4 w-4 mr-2" />
               View on Map
@@ -281,8 +278,8 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
   });
   const filteredRegions = filters.filteredRows;
   const fleet = data ? fleetHardware(data) : null;
-  // note: the fleet totals sum the clusters whose hardware was read. When none was, they are 0
-  // by arithmetic, not by measurement, so the tiles say so rather than show an empty fleet.
+  // The fleet totals sum the clusters whose hardware was read. When none was, they are 0 by
+  // arithmetic, not by measurement, so the tiles say so rather than show an empty fleet.
   const nothingRead =
     Boolean(data?.regions.length) && (data?.regions ?? []).every((region) => region.hardware === null);
   const runningInstances = (data?.regions ?? []).reduce(
@@ -308,7 +305,6 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
     pagingRef.current = { regions: filteredRegions, pageSize };
   }, [filteredRegions, pageSize]);
 
-  // Toggle region expansion
   const toggleRegion = (regionId: string) => {
     setExpandedRegions((prev) => {
       const next = new Set(prev);
@@ -321,15 +317,12 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
     });
   };
 
-  // Select region from map marker - scroll to region card and expand it
+  // A map marker selects its region: expand the card, move to its page and scroll to it.
   // important: memoised because the map's marker layer keys its rebuild effect on this
-  // callback. As a plain function it took a new identity on every render, so selecting a
-  // region re-rendered, tore the whole cluster layer down and rebuilt it, and destroyed the
-  // popup the click had just opened. The card promises "click a marker to view region
-  // details" and only the scroll-to-card half of that ever worked.
+  // callback. A new identity on every render would tear the cluster layer down and rebuild it,
+  // destroying the popup the click had just opened.
   const handleSelectRegion = React.useCallback((regionId: string) => {
     setSelectedRegion(regionId);
-    // Expand the selected region
     setExpandedRegions((prev) => {
       const next = new Set(prev);
       next.add(regionId);
@@ -341,12 +334,10 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
     if (index >= 0) {
       setPage(Math.floor(index / size) + 1);
     }
-    // Scroll to the region card
     setTimeout(() => {
       const element = document.getElementById(`region-card-${regionId}`);
       if (element) {
         element.scrollIntoView({ behavior: "smooth", block: "center" });
-        // Add a brief highlight effect
         element.classList.add("ring-2", "ring-primary", "ring-offset-2");
         setTimeout(() => {
           element.classList.remove("ring-2", "ring-primary", "ring-offset-2");
@@ -355,11 +346,11 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
     }, 100);
   }, []);
 
-  // View region on map - scroll to map and zoom to location
+  // "View on Map": scroll up to the map and focus the region there.
   const handleViewOnMap = (regionId: string) => {
     setSelectedRegion(regionId);
     setFocusSignal((n) => n + 1);
-    // Scroll to map section
+    // The map sits at the top of the page.
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -388,7 +379,6 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
 
   return (
     <div className="container py-8 space-y-6">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold">Regions</h1>
@@ -403,10 +393,9 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
         />
       </div>
 
-      {/* Global stats */}
       {data && fleet && (
-        // note: six a row only from 2xl. Beside the sidebar at lg a tile was 93px wide and clipped
-        // "616.06 GB"; two a row until lg and three until 2xl keep every figure whole.
+        // Six a row only from 2xl: beside the sidebar at lg a tile is 93px wide and clips
+        // "616.06 GB". Two a row until lg and three until 2xl keep every figure whole.
         <div className="grid grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-4">
           <StatTile icon={Globe} illustration={RegionsIllustration} label="Regions" value={data.regions.length} />
           <StatTile icon={Server} illustration={ClustersIllustration} label="Clusters" value={data.total_nodes} />
@@ -431,7 +420,6 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
         </div>
       )}
 
-      {/* Map */}
       <RegionsMapCard
         regions={filteredRegions}
         selectedRegion={selectedRegion}
@@ -441,11 +429,9 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
         isLoading={isLoading}
       />
 
-      {/* Region List */}
       <div className="space-y-4">
-        {/* Revived. The controls were commented out with "will enable when more regions
-            exist"; the two-value rule generalises that instinct, so a facet with nothing to
-            choose between hides itself rather than needing a TODO. */}
+        {/* A facet with nothing to choose between hides itself, so the toolbar suits a
+            fleet with few regions. */}
         <TableToolbar filters={filters} noun="regions" />
 
         <div className="space-y-4">

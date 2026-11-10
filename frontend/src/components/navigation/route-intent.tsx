@@ -36,10 +36,10 @@ export function useRouteIntent(): RouteIntent {
 /**
  * App-wide intent-driven route prefetching.
  *
- * Replaces blanket viewport prefetching, which fired one full RSC request per visible link
- * on every page load and starved the click the operator actually made. One provider means
- * one shared debounce timer, so at most one prefetch is ever in flight no matter how many
- * links are on screen, and one shared TTL map, so a warmed route is never re-warmed.
+ * Viewport prefetching would fire one full RSC request per visible link on every page load
+ * and starve the click the operator makes. One provider means one shared debounce timer, so
+ * at most one prefetch is in flight however many links are on screen, and one shared TTL
+ * map, so a warmed route is not re-warmed.
  */
 export function RouteIntentProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -48,13 +48,11 @@ export function RouteIntentProvider({ children }: { children: React.ReactNode })
 
   const run = React.useCallback(
     (href: string, warm?: () => void) => {
-      // important: never warm the route already on screen. It is a guaranteed-wasted RSC
-      // request and a wasted slot in the browser's per-origin connection budget.
-      // note: an href carrying its own query string is a distinct destination, so it compares
-      // against the full URL. The severity cards all point at /inventory/warnings and differ
-      // only by search. A bare href compares against pathname alone, otherwise standing on a
-      // filtered table (use-table-filters writes the filter into the URL) would make the
-      // sidebar entry for that same table look like somewhere else.
+      // Never warm the route already on screen: a wasted RSC request and a wasted slot in the
+      // browser's per-origin connection budget. An href with its own query string compares
+      // against the full URL (the severity cards all point at /inventory/warnings and differ
+      // only by search). A bare href compares against the pathname alone, since
+      // use-table-filters writes filters into the URL of the table being viewed.
       const here = window.location;
       const isHere = href.includes("?")
         ? href === here.pathname + here.search
@@ -63,10 +61,9 @@ export function RouteIntentProvider({ children }: { children: React.ReactNode })
       const previous = lastFiredAt.current.get(href);
       if (previous !== undefined && Date.now() - previous < TTL_MS) return;
       lastFiredAt.current.set(href, Date.now());
-      // note: on the legacy prefetch path (experimental.clientSegmentCache off, which is the
-      // default and what next.config.js uses) router.prefetch defaults to PrefetchKind.FULL,
-      // the same payload the old prefetch={true} produced. If clientSegmentCache is ever
-      // enabled this silently downgrades to a partial prefetch.
+      // important: with experimental.clientSegmentCache off (the default, and what
+      // next.config.js uses) router.prefetch defaults to PrefetchKind.FULL, the payload of
+      // prefetch={true}. Enabling clientSegmentCache would silently make it a partial one.
       router.prefetch(href);
       warm?.();
     },
@@ -116,7 +113,7 @@ export function RouteIntentProvider({ children }: { children: React.ReactNode })
  * touch handlers and this becomes the only prefetch path:
  *  - mouse: pointer enter arms after a debounce, pointer leave disarms;
  *  - touch and pen: pointer down fires immediately, the same head start Next's own
- *    onTouchStart gave (finger-down to click is typically 100-300ms);
+ *    onTouchStart gives (finger-down to click is typically 100-300ms);
  *  - keyboard: focus arms, blur disarms, Enter fires immediately.
  */
 export function linkIntentProps(intent: RouteIntent, href: string, warm?: () => void) {

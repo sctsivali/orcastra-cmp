@@ -9,8 +9,8 @@
 export const DOCK_COOKIE = "orcastra-dock";
 export const DOCK_MIN = 160;
 export const DOCK_DEFAULT = 320;
-// note: the upper clamp only guards the cookie against a nonsense value. The live maximum is
-// 70dvh, which the resize handle enforces against the real viewport.
+// The upper clamp only guards the cookie against a nonsense value. The live maximum is 70dvh,
+// which the resize handle enforces against the real viewport.
 const DOCK_MAX_STORED = 2000;
 
 export type DockTab = "tasks" | "queue" | "log";

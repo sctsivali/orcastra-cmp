@@ -53,8 +53,8 @@ const QUERY_FAMILY_KEYS = {
   userGroups: [["user-groups"]],
   tasks: [["tasks"], ["task"], ["cluster-log"]],
   migrations: [["migrations"]],
-  // note: not ["vault-status"]. A plain re-read there can land on a worker still holding "sealed"
-  // for ten seconds; an unseal hands the notice a fresh read instead (announceUnsealed).
+  // Not ["vault-status"]: a plain re-read there can land on a worker still holding "sealed" for
+  // ten seconds. An unseal hands the notice a fresh read instead (announceUnsealed).
   hostHealth: [["host-health"], ["vault-seal-status"]],
   releaseStatus: [["release-status"]],
   kernelAdvisories: [["kernelAdvisories"], ["kernelCveFeed"]],
@@ -237,7 +237,7 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
   },
   "cluster.auth-check": {
     completion: "response",
-    // a check that turns a pending cluster trusted makes everything on it readable at once
+    // A check that turns a pending cluster trusted makes everything on it readable at once.
     queryFamilies: ["clusters", "clusterDetails", "clusterMembers", "nodes", "nodePicker", "nodeResources", "instances", "instanceDetails", "monitoring", "ipam", "projects", "images", "storagePools", "storagePoolDetails", "storageVolumes", "networks", "networkDetails", "networkAcls", "profiles", "profileDetails", "snapshots", "certificates", "regions", "warnings"],
     apiCalls: ["api.clusters.checkAuth"],
   },
@@ -504,8 +504,8 @@ export interface ExternalMutationContext {
  * Register the active actor's browser query client for writes initiated outside React hooks.
  *
  * Zustand stores such as the break-glass gate cannot call `useQueryClient`. The provider replaces
- * the complete QueryClient at every actor boundary, and the identity-checked disposer prevents an
- * old provider effect from clearing a newer actor's client.
+ * the QueryClient at every actor boundary; the identity-checked disposer keeps an old provider
+ * effect from clearing a newer actor's client.
  */
 export function registerExternalMutationQueryClient(queryClient: QueryClient): () => void {
   externalMutationQueryClient = queryClient;
@@ -529,8 +529,8 @@ export async function reconcileExternalMutation(
 ): Promise<void> {
   const queryClient = context?.queryClient ?? externalMutationQueryClient;
   if (!queryClient) return;
-  // A context captured by A may never invalidate B's replacement QueryClient. Clearing A's
-  // retired client is handled at the auth boundary; this completion is intentionally discarded.
+  // important: a context captured by actor A must never invalidate actor B's replacement
+  // QueryClient. A's retired client is cleared at the auth boundary; this completion is dropped.
   if (context && externalMutationQueryClient !== queryClient) return;
   await reconcileMutationImpact(queryClient, impactId, options);
 }

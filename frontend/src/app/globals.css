@@ -3,19 +3,15 @@
 @tailwind utilities;
 
 @layer base {
-  /* 
-   * Protect body text color from being overridden by external CSS (ex; spice.css).
-   * This rule has higher specificity to ensure theme colors always apply.
-   */
+  /* Extra specificity and !important keep external CSS (ex; spice.css) from overriding the theme
+     text colour. */
   html body {
     color: hsl(var(--foreground)) !important;
     background-color: hsl(var(--background));
   }
 
-  /* note: the task dock is sticky at the bottom of the page, and a browser scrolls a focused
-     control (or one a script scrolls to) only as far as the viewport's bottom edge, which is
-     under the dock: on a phone the last row's action menu could not be reached. The dock sets
-     --dock-height on the root (task-panel.tsx). */
+  /* The task dock is sticky at the bottom, so a focused or scrolled-to control would otherwise
+     stop under it. task-panel.tsx sets --dock-height on the root. */
   html {
     scroll-padding-bottom: var(--dock-height, 0px);
   }
@@ -28,22 +24,15 @@
     --card-foreground: 222 47% 11%;
     --popover: 0 0% 98%;
     --popover-foreground: 222 47% 11%;
-    /* note: reached only when the unlayered personalization binding below is invalid at
-       computed-value time. It names the shipped accent so the last resort is the product
-       colour rather than a third purple nobody chose. Kept in sync by
-       scripts/checks/check-personalization-defaults.mjs. */
+    /* Reached only when the unlayered personalization binding below is invalid, so it names the
+       shipped accent. scripts/checks/check-personalization-defaults.mjs keeps the two equal. */
     --primary: 254 70% 65%;
     --primary-foreground: 0 0% 100%;
     --secondary: 220 13% 91%;
     --secondary-foreground: 222 47% 11%;
     --muted: 220 13% 91%;
-    /* important: 42%, not 47%. Muted text is the most reused colour in the console (777 call
-       sites) and at 47% it failed WCAG AA on every light surface except a Card:
-       4.52:1 on --card, 4.30:1 on --background, and 3.81:1 on --muted itself, which is where
-       a dozen components put muted text on a muted chip. 42% is the lightest value that
-       clears 4.5:1 on all three (5.41, 5.15, 4.57) while staying 3.17:1 apart from body
-       --foreground, so it still reads as secondary rather than flattening the hierarchy that
-       "muted" exists to create. Dark mode already passes (7.77 and 5.81) and is unchanged. */
+    /* important: 42% is the lightest value that clears WCAG AA 4.5:1 on --card, --background and
+       --muted (5.41, 5.15, 4.57:1) while staying 3.17:1 apart from --foreground. */
     --muted-foreground: 215 16% 42%;
     --accent: 220 13% 91%;
     --accent-foreground: 222 47% 11%;
@@ -53,32 +42,17 @@
     --success-foreground: 0 0% 100%;
     --warning: 38 92% 50%;
     --warning-foreground: 0 0% 100%;
-    /* State tone. Cluster reachability first, and inside the Cluster submenu also operation
-       state and warning severity, which run the same urgency ladder. Separate from
-       --success/--warning/--destructive because those are tuned as backgrounds carrying their
-       own foreground, while a status dot is a bare graphic measured against the surface behind
-       it. The separation earned its keep: --destructive in dark used to measure 1.99:1 on
-       --popover, under the 3:1 floor WCAG 1.4.11 sets for a non-text graphic, which is why six
-       files hand-rolled bg-red-500 instead of using the token. That gap is now closed, and it was
-       closed by giving --destructive the same treatment these tokens already had rather than by
-       merging them: a status is reachability, and destructive is an action you cannot undo.
-       Every pair below was measured: worst is 4.52:1, so they are also safe if one ever colours
-       a word.
-
-       The -foreground pairs carry a solid chip, which is the treatment the Cluster submenu
-       uses for a Status cell. Measured against their own token, light then dark: online
-       5.18 and 8.70, pending 5.09 and 9.96, offline 6.40 and 5.51, unknown 4.72 and 7.75.
-       All clear the 4.5:1 AA floor for the 12px semibold components/ui/badge.tsx sets. The
-       --success/--warning/--destructive equivalents do not, which is why they are not used
-       here: bg-warning under text-warning-foreground measures 2.14:1 in light mode. */
+    /* State tone: cluster reachability, operation state and warning severity. Kept apart from
+       --success/--warning/--destructive, which do not all carry 4.5:1 chip text (warning: 2.14:1).
+       Each value measures at least 4.52:1 on the surfaces, above the 3:1 WCAG 1.4.11 floor for a
+       status dot, and each -foreground pair clears 4.5:1 for the components/ui/badge.tsx text. */
     --status-online: 142 76% 28%;
     --status-online-foreground: 0 0% 100%;
     --status-offline: 0 74% 42%;
     --status-offline-foreground: 0 0% 100%;
     --status-pending: 32 90% 34%;
     --status-pending-foreground: 0 0% 100%;
-    /* deliberately identical to --muted-foreground: an unknown status is the same
-       subordinate grey as everything else that is not asserting anything */
+    /* The muted grey hue: an unknown status asserts nothing. */
     --status-unknown: 215 16% 47%;
     --status-unknown-foreground: 0 0% 100%;
     --border: 220 13% 87%;
@@ -87,43 +61,25 @@
     --radius: 0.75rem;
     color-scheme: light;
 
-    /* Terminal and console chrome. Declared here and never in .dark on purpose: this surface does
-       not follow the theme, it paints its own fixed dark device chrome in both themes, which is why
-       a token tuned against --card is the wrong measurement inside app/console and app/terminal.
-       That was already true; what changed is that the palette used to be spelled as ~70 arbitrary
-       Tailwind hex classes across eight files plus four verbatim copies of the same xterm ITheme.
-       The hex twin of these four values lives in src/lib/terminal-theme.ts, because xterm takes
-       hex strings and cannot resolve a CSS variable; scripts/checks/check-terminal-theme.mjs fails
-       the build if the two ever disagree. Stored as HSL triplets rather than hex so Tailwind's
-       <alpha-value> still works, which components/console/resource-bar.tsx relies on.
-       Retinted from Tokyo Night onto the page's hue: at #1a1b26 the terminal panel separated from
-       a #14111c page by 1.09:1 and clashed blue against purple. The ANSI 16 are deliberately NOT
-       in here. They are terminal content an operator reads as meaning, not chrome. */
+    /* Terminal and console chrome: the same fixed dark surface in both themes, so it has no dark
+       override. HSL triplets keep Tailwind's <alpha-value> working (console/resource-bar.tsx).
+       xterm needs hex, so src/lib/terminal-theme.ts holds the twin of these four values, and
+       scripts/checks/check-terminal-theme.mjs fails the build if they disagree. The ANSI colours
+       are terminal content, not chrome, and stay in terminal-theme.ts. */
     --terminal-bg: 256.4 24.4% 8.8%;
     --terminal-deep: 255 22.2% 7.1%;
     --terminal-raised: 257.6 24.6% 13.5%;
     --terminal-border: 256.8 24.3% 20.2%;
-    /* The one exception that is a content colour: components/ui/code-block.tsx paints command
-       text in the terminal's own green so a copyable command reads as terminal output rather
-       than as prose. Same value as TERMINAL_THEME.green, and the drift check holds them equal. */
+    /* The one content colour: components/ui/code-block.tsx paints commands in the terminal green.
+       important: keep equal to TERMINAL_THEME.green in src/lib/terminal-theme.ts; no check
+       compares this pair. */
     --terminal-accent: 88.8 50.5% 61.2%;
 
-    /* Personalization defaults. These are the values an operator sees before any preference
-       loads: the pre-paint script at app/layout.tsx returns early when the hint cookie is
-       absent, so a first visit paints from here and from nowhere else.
-
-       important: each hex and its own -h/-s/-l triplet must describe the SAME colour. They did
-       not until now. --personalization-accent read #8b5cf6 while its triplet read 262 83% 58%,
-       which is #7c3bed, so the app painted one purple before hydration and a different one
-       after, and scripts/checks/check-semantic-colour.mjs scored the triplet and therefore
-       recorded contrast numbers for a colour the browser stops using. Two values for one
-       colour cannot be held in sync by reading them, so
-       scripts/checks/check-personalization-defaults.mjs converts each hex and fails the build
-       if the triplet disagrees, here and in every other copy of these defaults.
-
-       #8467e4 is 254 70% 65%: the sidebar ground's own hue, at the relative luminance where a
-       single accent serving both themes is equally far from AA on a light and a dark surface.
-       Moving it darker buys the light surfaces and loses the dark ones by the same amount. */
+    /* Personalization defaults: a first visit paints from these, because the pre-paint script in
+       app/layout.tsx returns early without the hint cookie. Each hex and its -h/-s/-l triplet must
+       be the same colour; scripts/checks/check-personalization-defaults.mjs enforces that here and
+       in every other copy. #8467e4 is the sidebar hue at the luminance equally far from AA on
+       light and dark surfaces. */
     --personalization-accent: #8467e4;
     --personalization-accent-h: 254;
     --personalization-accent-s: 70%;
@@ -132,41 +88,27 @@
     --personalization-sidebar-bg-h: 254;
     --personalization-sidebar-bg-s: 56%;
     --personalization-sidebar-bg-l: 28%;
-    /* Auto-derived from the ground by the provider, which picks #f8fafc below 0.5 luminance.
-       #321f6f measures 0.028, so these are what that derivation produces: 12.86:1 for the
-       text and 5.54:1 for the muted tier. Written out rather than computed here because the
-       pre-paint script has no ground to derive from until the cookie exists. */
+    /* What the provider derives from the default ground (#f8fafc below 0.5 luminance): 12.86:1
+       for the text, 5.54:1 for the muted tier. Written out because the pre-paint script has no
+       ground to derive from before the cookie exists. */
     --personalization-sidebar-text: #f8fafc;
     --personalization-sidebar-muted: rgba(248,250,252,0.6);
   }
 
-  /* The dark ground is 256.4 24.4% 8.8%, which is exactly #14111c: a purple-tinted near-black
-     sitting in the same hue family as the product primary at 262.1 rather than the stock zinc
-     240. Every sibling below was re-derived onto that family rather than left on 240, because
-     the new ground is lighter than the 3.9% it replaced and a token that keeps its old lightness
-     loses separation against it. Two numbers drove the ladder: --border must hold the 1.34:1
-     separation it had against the old page (19% gives 1.32), and --muted-foreground must not
-     regress on either surface it lands on. Kept at 64.9% it would have fallen to 7.06 on the page
-     and 5.51 on --muted, from 7.77 and 5.81. At 68% it measures 7.78 and 5.90, so the most reused
-     colour in the console comes out level or better instead of quietly worse. */
+  /* Dark ground #14111c, in the primary's purple hue family. --border at 19% separates at 1.32:1
+     from the page; --muted-foreground at 68% measures 7.78:1 on the page and 5.90:1 on --muted. */
   .dark {
     --table-edge-shadow: hsl(0 0% 0% / 0.6);
     --background: 256.4 24.4% 8.8%;
     --foreground: 0 0% 98%;
-    /* important: one step above --background, not equal to it. Dark used to paint card, popover
-       and page the same value, so a Card was a hole rather than a surface, while light mode has
-       always elevated (--card 0 0% 98% over --background 220 13% 96%, 1.05:1). On a tinted ground
-       that missing step reads as a bug. 12% measures 1.07:1 against the page, which is the same
-       elevation light mode already ships, and it is what the default sidebar rides on:
-       components/sidebar/sidebar.tsx falls back to bg-card when no custom colour is set. */
+    /* One step above --background (1.07:1, close to light mode's 1.05:1) so a Card reads as a
+       surface. The default sidebar is bg-card (components/sidebar/sidebar.tsx). */
     --card: 258.5 21.3% 12%;
     --card-foreground: 0 0% 98%;
     --popover: 258.5 21.3% 12%;
     --popover-foreground: 0 0% 98%;
-    /* note: --primary and --ring are deliberately absent here. The personalization block below
-       sets both on a bare :root OUTSIDE @layer base, and an unlayered rule beats a layered one,
-       so a value declared here could never win. This block used to carry 263.4 70% 50.4% for
-       both, which read as a dark-mode decision and was dead the day personalization shipped. */
+    /* No --primary or --ring here: the personalization :root below is outside @layer base, and
+       an unlayered rule beats a layered one, so a value here could never win. */
     --primary-foreground: 0 0% 100%;
     --secondary: 256 15.5% 19%;
     --secondary-foreground: 0 0% 98%;
@@ -174,14 +116,9 @@
     --muted-foreground: 257.6 10.4% 68%;
     --accent: 256 15.5% 19%;
     --accent-foreground: 0 0% 98%;
-    /* important: bright, with a near-black foreground, which is the treatment --status-offline
-       already uses two blocks down. At 0 62.8% 30.6% this measured 1.74:1 against --card and
-       1.86:1 against the page, under the 3:1 floor WCAG 1.4.11 sets for a non-text graphic, so a
-       destructive icon or a text-destructive word was close to invisible in dark. That is the
-       documented reason six files hand-rolled bg-red-500 rather than use the token. At 0 84% 62%
-       it measures 4.84:1 on --card and 5.18:1 under its own foreground, so it clears the 4.5:1
-       text floor in both roles. The value is deliberately identical to --status-offline: one red
-       means one thing, and the alternative is two shades of "bad" in one product. */
+    /* Bright with a near-black foreground, and equal to --status-offline so one red means one
+       thing. Measures 4.84:1 on --card and 5.18:1 under its own foreground, clearing 4.5:1 as
+       text and the 3:1 WCAG 1.4.11 floor as an icon. */
     --destructive: 0 84% 62%;
     --destructive-foreground: 256.4 24.4% 8.8%;
     --success: 142 69% 29%;
@@ -200,18 +137,15 @@
     --status-unknown-foreground: 256.4 24.4% 8.8%;
     --border: 256 15.5% 19%;
     --input: 256 15.5% 19%;
-    /* Native UI the stylesheet cannot reach: the Firefox scrollbar the -webkit- rules below never
-       themed, date and colour pickers, and the default form control chrome. Without this they all
-       render light under .dark, which is how a dark page ends up with a white date picker. */
+    /* Themes native UI the stylesheet cannot reach: the Firefox scrollbar, date and colour pickers,
+       and default form control chrome. */
     color-scheme: dark;
   }
 
-  /* Console and terminal chrome paints a fixed dark ground (--terminal-*) in both themes, so a
-     state chip there has to use the dark-theme status pair whatever the page theme is. The light
-     pair measures 3.30:1 for --status-online on that chrome. Scoped on the chip itself rather
-     than on the chrome root, so nothing else inside the chrome changes.
-     important: these must equal the .dark values above; scripts/checks/check-semantic-colour.mjs
-     fails the build if they drift. */
+  /* Console and terminal chrome is dark in both themes, so a state chip there takes the dark
+     status pair (the light --status-online measures 3.30:1 on it). Scoped to the chip only.
+     These must equal the dark values above; scripts/checks/check-semantic-colour.mjs fails the
+     build if they drift. */
   .terminal-status {
     --status-online: 142 64% 47%;
     --status-online-foreground: 256.4 24.4% 8.8%;
@@ -224,27 +158,20 @@
   }
 }
 
-/* Dynamic color overrides from personalization */
+/* Personalization accent. Unlayered, so it beats layered --primary and --ring in both themes. */
 :root {
   --primary: var(--personalization-accent-h) var(--personalization-accent-s) var(--personalization-accent-l);
   --ring: var(--personalization-accent-h) var(--personalization-accent-s) var(--personalization-accent-l);
 }
 
 /* The sidebar's own colour rules.
-   ------------------------------------------------------------------------------------------
-   Every var() below carries a fallback, and that is load-bearing rather than tidy. These are
-   !important declarations, so they win the cascade outright; if the variable they name is ever
-   unset the declaration becomes invalid at computed-value time and the property computes to
-   its initial value. For a background that is `transparent`, which paints the sidebar as a
-   hole over the page rather than falling back to the inline style on the aside, because the
-   inline style already lost the cascade. The fallbacks are the shipped defaults, so a missing
-   or malformed personalization cookie degrades to the product colours instead of to nothing. */
+   important: keep a fallback (the shipped default) on every var() below. These are !important,
+   so an unset variable makes the property compute to its initial value, a transparent
+   background, instead of falling back to the inline style on the aside. */
 
-/* Active item, default branch. This is what the bg-card sidebar uses, and it is also what the
-   collapsed rail's flyout uses: those rows render in a Radix portal outside the aside, on
-   bg-popover, so they are deliberately not reached by the .sidebar-custom-bg rules below. The
-   accent measures 3.99:1 against the light popover and 4.18:1 against the dark one, clear of
-   the 3:1 floor WCAG 1.4.11 sets for a non-text graphic. */
+/* Active item, default branch: the bg-card sidebar and the collapsed rail's flyout, whose rows
+   render in a Radix portal on bg-popover outside the aside. The accent measures 3.99:1 on the
+   light popover and 4.18:1 on the dark one, above the 3:1 WCAG 1.4.11 floor. */
 .sidebar-active,
 .sidebar-active:hover {
   background-color: var(--personalization-accent, #8467e4) !important;
@@ -257,24 +184,17 @@
   color: white !important;
 }
 
-/* Sidebar with custom background - apply text colors to all descendants */
+/* Sidebar with a custom background: text colour for every descendant. */
 .sidebar-custom-bg {
   background-color: var(--personalization-sidebar-bg, #321f6f) !important;
   color: var(--personalization-sidebar-text, #f8fafc) !important;
 }
 
-/* Active item, custom-ground branch. The pill inverts rather than taking the accent, because
-   the accent cannot do both jobs on a dark ground: standing 3:1 clear of the sidebar and
-   carrying 4.5:1 text are contradictory requirements for one mid-tone colour, and they cross
-   at almost exactly the same luminance. Deriving the pill from the sidebar's own pair instead
-   of naming a colour makes it self-correcting: on #321f6f it resolves to #eae8f9 at 11.15:1
-   both against the ground and under its own text, and on a white sidebar the same expression
-   resolves to #2a304f with white text at 12.85:1.
-
-   important: :hover is written out rather than left to the unscoped rule above. That rule's
-   `.sidebar-active:hover` is already (0,2,0), the same specificity this selector would have on
-   its own, so which one wins would come down to source order. On touch, :hover sticks after a
-   tap, so losing that race is a permanently wrong pill rather than a flicker. */
+/* Active item, custom-ground branch. The pill is mixed from the sidebar's text and accent, since
+   one mid-tone accent cannot stand 3:1 off a dark ground and carry 4.5:1 text at once. On #321f6f
+   it resolves to #eae8f9 at 11.15:1; on a white sidebar, to #2a304f with white text at 12.85:1.
+   important: keep :hover listed. Without it this ties with the unscoped `.sidebar-active:hover`
+   at (0,2,0), source order decides, and a :hover that sticks after a tap leaves the wrong pill. */
 .sidebar-custom-bg .sidebar-active,
 .sidebar-custom-bg .sidebar-active:hover {
   background-color: color-mix(
@@ -291,91 +211,77 @@
   color: var(--personalization-sidebar-bg, #321f6f) !important;
 }
 
-/* Apply text color to all text elements in sidebar (not buttons/links - handled separately) */
+/* Text elements in the sidebar; buttons and links are handled below. */
 .sidebar-custom-bg span:not(.sidebar-active span):not(.sidebar-count):not(.sidebar-count-solid),
 .sidebar-custom-bg p {
   color: var(--personalization-sidebar-text, #f8fafc) !important;
 }
 
-/* Override muted text in sidebar */
 .sidebar-custom-bg .text-muted-foreground {
   color: var(--personalization-sidebar-muted, rgba(248,250,252,0.6)) !important;
 }
 
-/* Sidebar menu item - ghost variant text color (non-active) */
+/* Inactive menu items (ghost button variant). */
 .sidebar-custom-bg button:not(.sidebar-active):not(:hover),
 .sidebar-custom-bg a:not(.sidebar-active):not(:hover) {
   color: var(--personalization-sidebar-text, #f8fafc) !important;
   background-color: transparent !important;
 }
 
-/* Sidebar menu item hover states - subtle overlay effect */
+/* Hover on inactive items: a subtle overlay. */
 .sidebar-custom-bg button:not(.sidebar-active):hover,
 .sidebar-custom-bg a:not(.sidebar-active):hover {
   background-color: color-mix(in srgb, var(--personalization-sidebar-text, #f8fafc) 10%, transparent) !important;
   color: var(--personalization-sidebar-text, #f8fafc) !important;
 }
 
-/* Icons inside sidebar buttons should inherit parent color */
 .sidebar-custom-bg button svg,
 .sidebar-custom-bg a svg {
   color: inherit !important;
 }
 
-/* Count chips in the sidebar tree. One rule for every context because it mixes currentColor:
-   the chip takes whatever colour its row already established, which is the sidebar text on the
-   ground, the pill's foreground inside an active item, and --foreground in the bg-card branch.
-   It therefore cannot fall out of contrast at a sidebar colour nobody has picked yet. On
-   #321f6f it resolves to #564688 under #f8fafc, 7.64:1. What it replaced was
-   bg-blue-500/20 under text-blue-500, which measured 3.66:1 on that ground and was the
-   tint-under-same-hue-text shape scripts/checks/check-semantic-colour.mjs exists to ban. */
+/* Count chips in the sidebar tree. Mixed from currentColor, so one rule follows the row's colour
+   in every branch and on any sidebar colour. On #321f6f it is #564688 under #f8fafc, 7.64:1. */
 .sidebar-count {
   background-color: color-mix(in srgb, currentColor 18%, transparent) !important;
   color: inherit !important;
 }
 
-/* The one chip that is not subordinate: the open-session count on the collapsed rail, whose
-   whole job is to be noticed on an icon with no label beside it. It stays a solid accent fill
-   and keeps its own foreground, which the sidebar text override would otherwise repaint. */
+/* The open-session count on the collapsed rail stays a solid accent chip so it is noticed on an
+   unlabelled icon. !important keeps its foreground from the sidebar text override. */
 .sidebar-count-solid {
   background-color: var(--personalization-accent, #8467e4) !important;
   color: hsl(var(--primary-foreground)) !important;
 }
 
-/* Inside a selected row it stops being solid, because the row is already the loudest thing on
-   the rail and an accent chip on an accent pill is the same colour twice. Falling back to the
-   subordinate treatment keeps it readable in both branches: currentColor is white on the
-   default accent pill and the sidebar ground on the inverted one. */
+/* Inside a selected row it takes the subordinate tint instead of doubling the accent pill.
+   currentColor keeps it readable in both branches. */
 .sidebar-active .sidebar-count-solid {
   background-color: color-mix(in srgb, currentColor 22%, transparent) !important;
   color: inherit !important;
 }
 
-/* Border styling in sidebar - subtle and thin */
 .sidebar-custom-bg .border-border {
   border-color: color-mix(in srgb, var(--personalization-sidebar-text, #f8fafc) 15%, transparent) !important;
 }
 
-/* The scrollbar thumb on the nav is a background, not a border, so the .border-border rule
-   above never reached it. Left on --border it is #2d2938 against #321f6f in dark, which is a
-   scrollbar an operator cannot see on a list that scrolls. */
+/* The nav scrollbar thumb is a background, so the .border-border rule above misses it. On
+   --border it is nearly invisible against a dark sidebar. */
 .sidebar-custom-bg .bg-border {
   background-color: color-mix(in srgb, var(--personalization-sidebar-text, #f8fafc) 30%, transparent) !important;
 }
 
-/* Submenu left border - keep thin */
+/* Submenu left border. */
 .sidebar-custom-bg .border-l-2 {
   border-left-width: 1px !important;
   border-color: color-mix(in srgb, var(--personalization-sidebar-text, #f8fafc) 20%, transparent) !important;
 }
 
-/* Top/bottom borders in sidebar - keep thin */
 .sidebar-custom-bg .border-t,
 .sidebar-custom-bg .border-b {
   border-color: color-mix(in srgb, var(--personalization-sidebar-text, #f8fafc) 12%, transparent) !important;
 }
 
-/* Right border (sidebar edge) */
 .sidebar-custom-bg.border-r {
   border-color: color-mix(in srgb, var(--personalization-sidebar-text, #f8fafc) 10%, transparent) !important;
 }
@@ -390,15 +296,9 @@
   }
 }
 
-/* A table that scrolls sideways says so at the edge it can still travel towards.
-   data-scroll-x is written by components/ui/table.tsx.
-
-   Painted as an inset shadow on the scroll container, which stays on the border box while the
-   rows move underneath it. A pseudo-element would have been positioned against the padding box
-   and scrolled away with the content, which is the same class of mistake as putting a scrollbar
-   on a box that is taller than the viewport. The colour is --table-edge-shadow, so it stays a
-   shadow in both themes instead of turning into a pale glow on the dark ground. No keyframes, so
-   there is nothing here for prefers-reduced-motion to guard. */
+/* A table that scrolls sideways shows a shadow at each edge it can still scroll towards
+   (data-scroll-x comes from components/ui/table.tsx). An inset shadow on the container stays put
+   while rows scroll; a pseudo-element would scroll away with the content. */
 [data-slot="table-container"]:has([data-pinned="end"]) {
   /* Keyboard focus moved to a cell must not land under the pinned column. */
   scroll-padding-inline-end: 4rem;
@@ -419,13 +319,9 @@
 }
 
 /* A column pinned to the trailing edge (TableHead and TableCell `pinned="end"`) covers the
-   container's own trailing shadow, so it marks the rows sliding under it itself, on its tint
-   layer: above the ground and the hover tint, below the control.
-
-   It casts outward, onto the rows, with a hairline on the edge. It used to be an inset shadow,
-   which painted inside the column and made the column read as sunken rather than raised above
-   what slides beneath it. clip-path cuts the blur at the row, so stacked cells draw one continuous
-   strip with no scallop at each row line; the -1px keeps the collapsed border line covered. */
+   container's trailing shadow, so it casts its own outward onto the rows, with a hairline, on its
+   tint layer (above the ground and hover tint, below the control). clip-path cuts the blur at the
+   row so stacked cells draw one strip; the -1px keeps the collapsed border line covered. */
 [data-slot="table-container"][data-scroll-x="start"] [data-pinned="end"]::after,
 [data-slot="table-container"][data-scroll-x="middle"] [data-pinned="end"]::after {
   box-shadow:
@@ -434,10 +330,8 @@
   clip-path: inset(-1px 0 -1px -16px);
 }
 
-/* With a pinned end column the cells draw the trailing hint, so the container keeps only its
-   leading edge. Otherwise a row without a pinned cell (the empty row spans every column)
-   shows the container's shadow at the right edge while the header's pinned cell shows its
-   own a column to the left, and the two read as a step. */
+/* With a pinned end column the cells draw the trailing hint and the container keeps only its
+   leading one. Otherwise the empty row, which has no pinned cell, shows a second, offset shadow. */
 [data-slot="table-container"][data-scroll-x="start"]:has([data-pinned="end"]) {
   box-shadow: none;
 }
@@ -466,13 +360,11 @@
   background: hsl(var(--muted-foreground) / 0.5);
 }
 
-/* Selection */
 ::selection {
   background: hsl(var(--primary) / 0.2);
   color: hsl(var(--primary));
 }
 
-/* Grid pattern background */
 .bg-grid-pattern {
   background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%239C92AC' fill-opacity='0.05'%3E%3Ccircle cx='1' cy='1' r='1'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
 }
@@ -521,17 +413,14 @@
   animation: scale-in 0.2s ease-out forwards;
 }
 
-/* Focus visible improvements */
 *:focus-visible {
   @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
 }
 
-/* Table row hover effect */
 tbody tr {
   @apply transition-colors duration-150;
 }
 
-/* Card hover effect */
 .card-hover:hover {
   @apply shadow-md border-primary/20;
 }
@@ -570,7 +459,6 @@ tbody tr {
     -webkit-overflow-scrolling: touch;
   }
   
-  /* Better input handling */
   input, textarea, select {
     font-size: 16px; /* Prevents zoom on iOS */
   }
@@ -606,27 +494,25 @@ tbody tr {
   }
 }
 
-/* Better scrollbar for mobile */
+/* Thinner scrollbar on mobile */
 @media (max-width: 768px) {
   ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
   }
-  
-  /* Prevent excessive vertical space on mobile */
+
+  /* dvh follows the visible viewport on mobile browsers; vh is the fallback. */
   body {
     min-height: 100vh;
     min-height: 100dvh;
   }
-  
-  /* Constrain main content area */
+
   main {
     min-height: auto;
   }
 }
 
-/* ===== MOBILE SIDEBAR FIX ===== */
-/* Ensure sidebar always uses viewport height, not document height */
+/* The fixed sidebar takes the viewport height, not the document height. */
 @supports (height: 100dvh) {
   aside[class*="fixed"][class*="left-0"] {
     height: 100dvh !important;
@@ -634,7 +520,6 @@ tbody tr {
   }
 }
 
-/* Fallback for browsers without dvh support */
 @supports not (height: 100dvh) {
   aside[class*="fixed"][class*="left-0"] {
     height: 100vh !important;
@@ -643,24 +528,14 @@ tbody tr {
   }
 }
 
-/* Fix for desktop-site mode on mobile - ensure fixed elements work properly */
 @media screen {
-  /* Ensure overlays and modals are viewport-relative.
+  /* Overlays and modals stay viewport-relative on every screen.
    *
-   * important: the :not() is load-bearing. Radix gives role="dialog" to Popover.Content as well
-   * as Dialog.Content, and forcing position:fixed on a popover takes it out of its popper
-   * wrapper's flow. The wrapper then measures 0x0, so floating-ui positions every popover as
-   * though its content had no height: with side="top" the list is placed at
-   * anchorTop - sideOffset and draws downward off the bottom of the screen, leaving every option
-   * after the first unclickable, with nothing logged. Measured on a node picker at a 620px
-   * viewport: wrapper 0x0 at y=576 while the content was 511x106, so options sat at y=613 and
-   * y=645, outside the viewport and unreachable by any scroll because the wrapper is fixed.
-   * @media screen matches every screen, so this was never mobile-only.
-   *
-   * Real modals still need the override, so the exclusion is by marker class rather than by
-   * dropping the role: ui/dialog.tsx and ui/alert-dialog.tsx carry their own positioning, but
-   * a caller passing conflicting classes through cn() can strip it, and this rule is the
-   * backstop that keeps a modal on screen when that happens.
+   * important: keep the :not(). Radix gives Popover.Content role="dialog" too, and a fixed
+   * popover leaves its popper wrapper at 0x0, so floating-ui places it as if it had no height
+   * and a side="top" list draws off the bottom of the screen, out of reach. The exclusion is by
+   * marker class, not role, because a modal whose positioning a caller's cn() classes strip
+   * still needs this backstop (ui/dialog.tsx, ui/alert-dialog.tsx).
    */
   [data-radix-portal],
   [role="dialog"]:not(.orcastra-popover-content),
@@ -669,13 +544,10 @@ tbody tr {
   }
 }
 
-/* ===== MODAL/DIALOG MOBILE FIX ===== */
-/* Ensure dialogs are always visible in viewport on mobile */
+/* Dialogs stay inside the viewport on mobile. */
 @media (max-width: 768px) {
-  /* Dialog content - ensure it's within viewport.
-   * important: popovers carry role="dialog" too. Without the marker exclusion this centred
-   * every combobox list on a phone relative to its 0-wide popper wrapper, so a list opened
-   * under a field sat half off the left edge (measured: content at x=-106 on a 390px screen). */
+  /* important: keep the :not(). Popovers carry role="dialog" too, and centring one against its
+   * 0-wide popper wrapper puts a combobox list half off the left edge of a phone screen. */
   [role="dialog"][data-state="open"]:not(.orcastra-popover-content) {
     position: fixed !important;
     top: 50% !important;
@@ -686,8 +558,7 @@ tbody tr {
     width: calc(100vw - 2rem) !important;
     max-width: calc(100vw - 2rem) !important;
   }
-  
-  /* Alert dialog content */
+
   [role="alertdialog"][data-state="open"] {
     position: fixed !important;
     top: 50% !important;
@@ -700,41 +571,34 @@ tbody tr {
   }
 }
 
-/* ===== DROPDOWN MENU MOBILE FIX ===== */
-/* Ensure dropdown menus are positioned within viewport */
+/* Dropdown menus stay inside the viewport on mobile. */
 @media (max-width: 768px) {
   [data-radix-popper-content-wrapper] {
-    /* Use viewport-relative positioning */
     position: fixed !important;
-    /* Allow the popper to reposition within viewport bounds */
     max-width: calc(100vw - 1rem) !important;
     max-height: calc(100dvh - 1rem) !important;
   }
-  
-  /* Dropdown menu content adjustments */
+
   [role="menu"] {
     max-height: 50dvh !important;
     overflow-y: auto !important;
   }
 }
 
-/* ===== COLLAPSED SIDEBAR DESKTOP SITE MODE FIX ===== */
-/* When viewing desktop site on mobile, ensure collapsed sidebar is proper */
+/* Collapsed sidebar width, also in desktop-site mode on mobile. */
 @media (min-width: 768px) {
   aside[class*="fixed"][class*="left-0"][class*="w-16"] {
-    /* Ensure proper collapsed state */
     width: 4rem !important;
     min-width: 4rem !important;
   }
   
   aside[class*="fixed"][class*="left-0"][class*="w-16"] .flex-1.text-left,
   aside[class*="fixed"][class*="left-0"][class*="w-16"] span:not([class*="sr-only"]) {
-    /* Hide text in collapsed mode but keep icons */
+    /* Empty: the collapsed rail (sidebar/collapsed-flyout.tsx) renders icons only. */
   }
 }
 
-/* ===== ACCESSIBILITY: SLOW PULSE ANIMATION ===== */
-/* Slower animation for epilepsy-friendly UI (3 flashes per second max per WCAG) */
+/* Slow pulse, well within the WCAG 2.3.1 limit of three flashes per second. */
 @keyframes pulse-slow {
   0%, 100% {
     opacity: 1;
@@ -748,7 +612,7 @@ tbody tr {
   animation: pulse-slow 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
-/* Status dot gentle pulse - even slower for small indicators */
+/* Gentle pulse with a slight scale, for small status dots. */
 @keyframes pulse-gentle {
   0%, 100% {
     opacity: 1;
@@ -765,11 +629,10 @@ tbody tr {
 }
 
 /* Honour the OS reduced-motion preference for the house animations.
-   important: fade-in and scale-in start at opacity 0 with `forwards`, so cancelling the
-   animation alone leaves the element invisible. The opacity and transform resets below are
-   load-bearing, not cosmetic.
-   note: Tailwind's own animate-spin is deliberately left running. A frozen spinner reads as
-   a hung request, and a loading indicator is an essential animation under WCAG 2.3.3. */
+   important: keep the opacity and transform resets. fade-in and scale-in start at opacity 0
+   with `forwards`, so cancelling the animation alone leaves the element invisible.
+   Tailwind's animate-spin keeps running: a frozen spinner reads as a hung request, and a
+   loading indicator is essential motion under WCAG 2.3.3. */
 @media (prefers-reduced-motion: reduce) {
   .animate-shimmer,
   .animate-pulse-dot,

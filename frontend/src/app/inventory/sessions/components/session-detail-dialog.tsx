@@ -33,11 +33,9 @@ export function SessionDetailDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  // important: usePermissions, NOT useRequireRole. useRequireRole is a page-level GATE: it
-  // redirects to "/" on a positive denial. Calling it here ran it on every render of this
-  // dialog, including while closed, so every tenant who opened /inventory/sessions was thrown
-  // to the home page and the sessions list became unreachable for the exact audience it is
-  // built for. A display decision needs a question, not a gate.
+  // important: usePermissions, NOT useRequireRole. useRequireRole is a page-level gate that
+  // redirects to "/" on a denial; called here it would run on every render, even while the
+  // dialog is closed, and throw every Tenant off /inventory/sessions.
   const { hasRole } = usePermissions();
   const isPartner = hasRole(Role.PARTNER);
 

@@ -27,7 +27,7 @@ export interface CredentialsPanelProps {
   host: string;
   project: string;
   instanceName: string;
-  /** False while hidden: no reads run for a pane nobody is looking at. */
+  /** False while hidden, so a hidden pane runs no reads. */
   active?: boolean;
   /** Reachable from the states that point at another console tab. */
   onOpenConsoleTab?: (tab: "serial" | "graphics") => void;
@@ -66,8 +66,8 @@ export function CredentialsPanel({ host, project, instanceName, active = true, o
     if (granted) void overview.refetch();
   };
 
-  // important: refetch, not invalidate. An invalidation swallows a failed read, which the button
-  // would report as a success. Only the views on screen are read again.
+  // important: refetch rather than invalidate. An invalidation swallows a failed read, which the
+  // button would then report as a success. Only the views on screen are read again.
   const refresh = () =>
     queryClient.refetchQueries({ queryKey: credentialsScope(scopeKey, target), type: "active" }, { throwOnError: true });
 

@@ -2,9 +2,7 @@ import type * as React from "react";
 
 // What the dialog knows about the row it was opened from.
 //
-// note: this is built on click, never on render. A page renders one of these adapters per row
-// only when a human asks for it, so the cost of assembling a subject never enters the table's
-// render path.
+// Built on click, never on render, so assembling a subject stays out of the table's render path.
 export interface UsedBySubject {
   /** The row's own kind, ex; "networks". Names the noun in the header. */
   kind: string;
@@ -24,10 +22,9 @@ export interface UsedBySubject {
 export interface SubjectFact {
   label: string;
   /**
-   * important: a ReactNode, not a string. The six pages that feed this format their values with
-   * three different rules: formatLabel for a real API enum, formatBytes for a size, and raw for
-   * a user-authored name that must never be re-cased. A string prop would force the dialog to
-   * pick one of the three, and the architecture/x86_64 precedent shows how that ends.
+   * A ReactNode because pages format values with different rules (formatLabel for an API enum,
+   * formatBytes for a size, raw for a user-authored name that must never be re-cased), and a
+   * string prop would force the dialog to pick one.
    */
   value: React.ReactNode;
 }
@@ -52,12 +49,8 @@ export interface AclRule {
 }
 
 /**
- * A discriminated union over PANELS rather than over pages.
- *
- * important: the difference matters for how this file ages. A union over subjects would carry
- * one member per inventory page, so every new page would edit this shared type and grow it.
- * These five are shared across pages instead: `config` appears on five of six, and `custom` is
- * the escape hatch so a genuine one-off never forces a seventh member.
+ * A discriminated union over panels rather than over pages, so a new inventory page reuses these
+ * members instead of growing the type. `custom` covers a one-off.
  */
 export type SubjectPanel =
   | { id: string; label: string; kind: "config"; entries?: Record<string, string> }

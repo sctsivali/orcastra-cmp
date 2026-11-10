@@ -25,12 +25,11 @@ const LEVEL_RANK: Record<string, number> = {
   Admin: 3,
 };
 
-// important: absent and empty are opposites here, and one line used to print the same words for
-// both. Every enforcement site reads `perm.get("projects", ["default"])` and then denies unless
-// the project is listed or "*" is, so a missing key means the single project named `default`
-// while an empty list matches nothing and denies every project-scoped call. Printing
-// "All projects" for the empty case was wrong in the permissive direction on a surface whose
-// whole job is to say what a credential can reach.
+// important: absent and empty are opposites. Every enforcement site reads
+// `perm.get("projects", ["default"])` and denies unless the project or "*" is listed, so a
+// missing key means the single project `default` while an empty list denies every
+// project-scoped call. Showing "All projects" for the empty case would overstate what the
+// credential can reach.
 function formatProjectsLabel(projects: string[] | null | undefined): string {
   if (projects == null) return "Project: default";
   const projectNames = projects.filter(Boolean);
@@ -43,14 +42,10 @@ function formatProjectsLabel(projects: string[] | null | undefined): string {
 // The one access level a key carries, or its ceiling plus a spread marker when its clusters
 // disagree.
 //
-// important: not a bare "Mixed". A key holding `read` on twelve clusters and `admin` on one
-// would then advertise "Mixed" and hide the admin grant from whoever is auditing the key. On a
-// credentials surface under-reporting is the unsafe direction, so the ceiling stays visible and
-// the marker says the rows below it are not uniform. It replaces a flatten-and-take-the-max that
-// dropped the spread entirely.
-//
-// note: it reads the rendered rows rather than the raw permission arrays, so the header cannot
-// disagree with the list two inches beneath it.
+// important: never a bare "Mixed". A key holding `read` on twelve clusters and `admin` on one
+// would hide the admin grant from whoever audits the key, and on a credentials surface
+// under-reporting is the unsafe direction. It reads the rendered rows rather than the raw
+// permission arrays, so the header cannot disagree with the list beneath it.
 export function summarizeClusterAccessLevel(clusters: ClusterAccessDisplay[]): string {
   if (clusters.length === 0) return "None";
   const levels = new Set(clusters.map((cluster) => cluster.permissionLabel));
@@ -74,17 +69,16 @@ export function getClusterAccessDisplay(
       name: cluster?.name || permission.cluster_id,
       typeLabel: cluster?.server_type ? formatHypervisorType(cluster.server_type) : "Cluster",
       permissionLabel: formatClusterPermissionLabel(permission.permissions || []),
-      // note: no `|| []` here. That collapsed absent into empty before the formatter could tell
-      // them apart, so fixing only the formatter would have left the second half of the bug.
+      // No `|| []` here: it would turn absent into empty before the formatter can tell them
+      // apart.
       projectsLabel: formatProjectsLabel(permission.projects),
       paused: permission.registered === false,
     };
   });
 }
 
-// The application type identifiers the API serves, in operator language. formatLabel would
-// render "mcp" as "Mcp", so the known ones are spelled out here and anything the API adds later
-// falls back to a readable form rather than showing a raw identifier.
+// Operator-facing names for the application types the API serves. formatLabel would render
+// "mcp" as "Mcp", so the known ones are spelled out; any other type falls back to formatLabel.
 const APP_TYPE_LABELS: Record<string, string> = {
   orcahub: "Orcahub",
   mcp: "MCP Server",
@@ -98,10 +92,9 @@ export function formatApplicationType(appType: string | null | undefined): strin
   return APP_TYPE_LABELS[appType] ?? formatLabel(appType);
 }
 
-// important: null and empty are opposites, exactly as they are for `projects` above. A key whose
-// `capabilities` field is absent predates capabilities and retains unrestricted access to the
-// external router, so rendering it as "no capabilities" would understate a credential on the one
-// surface that exists to say what a credential can do.
+// important: null and empty are opposites, as they are for `projects` above. A key without a
+// `capabilities` field predates capabilities and keeps unrestricted access to the external
+// router; showing it as "no capabilities" would understate what the credential can do.
 export function isLegacyUnscopedKey(capabilities: string[] | null | undefined): boolean {
   return capabilities == null;
 }
@@ -109,9 +102,8 @@ export function isLegacyUnscopedKey(capabilities: string[] | null | undefined): 
 /**
  * What a key's status badge says, as a value.
  *
- * important: the branch order mirrors the badge exactly, and both read this rather than each
- * deciding for themselves. A status facet that disagreed with the chip beside it would send an
- * operator looking for a key the filter had already ruled out.
+ * The badge and the status facet both read this, so a filter can never rule out a key whose
+ * chip says otherwise.
  */
 export type APIKeyStatusLabel = "Active" | "Expired" | "Revoked" | "Inactive";
 

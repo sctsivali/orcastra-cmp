@@ -5,10 +5,9 @@
 // column once and this module derives the sort accessors, the facet option lists and the
 // search predicate from that one description.
 //
-// note: every facet is an enum. Numerics and timestamps are deliberately not faceted (a
-// value list over byte sizes means nothing), and two-value dimensions such as "Managed" or
-// "In use" read better as a named pair than as a boolean widget. One kind keeps the engine
-// and the URL format small.
+// Every facet is an enum. Numbers and timestamps are not faceted (a value list over byte
+// sizes means nothing), and two-value dimensions such as "Managed" or "In use" read better
+// as a named pair than as a boolean widget.
 
 import type { SortDirection } from "@/lib/sort";
 import {
@@ -23,20 +22,18 @@ import {
 import { FUTURE_PRESETS, PAST_PRESETS, EMPTY_FACET } from "@/lib/filter-url";
 
 /**
- * Bucket for a row whose facet value is missing or empty.
- *
- * note: a control character, so it cannot collide with a real node, project or type name.
+ * EMPTY_FACET buckets a row whose facet value is missing or empty. It starts with a control
+ * character, so it cannot collide with a real node, project or type name.
  */
 export { EMPTY_FACET, EMPTY_FACET_PARAM, serialiseFacet, parseFacet } from "@/lib/filter-url";
 
 /**
  * Query keys the toolbar owns. A column field may not collide with one, because the
- * collision would silently corrupt a shared link rather than fail loudly.
+ * collision would silently corrupt a shared link.
  *
- * note: deliberately narrow. `q`, `show` and `tab` are written today, and `sort`/`dir` are
- * held for the day sorting becomes URL-backed. `page` and `size` are NOT reserved: the page
- * number is deliberately kept out of the URL, and `size` is an ordinary column name on both
- * images and storage pools. Reserving a key nothing writes only blocks honest columns.
+ * `q`, `show` and `tab` are written today; `sort` and `dir` are held for URL-backed sorting.
+ * `page` and `size` are not reserved: the page number stays out of the URL, and `size` is an
+ * ordinary column name on images and storage pools.
  */
 export const RESERVED_QUERY_KEYS = ["q", "sort", "dir", "show", "tab"] as const;
 
@@ -61,7 +58,7 @@ export interface NumberFilterOptions extends KindSpecBase {
   unit?: NumberUnit;
   /** Defaults to true for counts and days. */
   integer?: boolean;
-  /** One-click shortcuts. On a count column this is where most of the value is. */
+  /** One-click shortcuts, most useful on a count column. */
   presets?: readonly NumberPreset[];
 }
 
@@ -78,10 +75,9 @@ export interface TextFilterOptions extends KindSpecBase {
 /**
  * Reuse the column's own `sort` accessor as the filter value.
  *
- * important: this saves the duplicate lambda, never the decision. The kind is always named,
- * because a sort accessor's return type does not determine it: `size ?? 0`,
- * `is_expired ? 1 : 0` and `new Date(created_at).getTime()` are all `(row) => number` and want
- * a range, an enum and a date respectively.
+ * The kind is always named, because a sort accessor's return type does not determine it:
+ * `size ?? 0`, `is_expired ? 1 : 0` and `new Date(created_at).getTime()` are all
+ * `(row) => number` and want a range, an enum and a date respectively.
  */
 export interface FromSortMarker {
   readonly __fromSort: true;
@@ -120,13 +116,11 @@ export type FacetValue =
   | readonly (string | number)[];
 
 /**
- * A dimension this column represents across the whole console, independent of what this table
- * happens to call it.
+ * A dimension this column represents across the whole console, whatever this table calls it.
  *
- * important: every rule keys off the role, never off the field name, because no name-based rule
- * can work here. Node is spelled `node` on 13 tables, `host` on two and `cluster` on four, and
- * `clusters.cluster` is the row's own identity while `certificates.cluster` is the node
- * dimension. Project is `project` on four tables and `projects` on five.
+ * important: rules key off the role, never the field name. Node is spelled `node`, `host` or
+ * `cluster` depending on the table, `clusters.cluster` is the row's own identity while
+ * `certificates.cluster` is the node dimension, and project is `project` or `projects`.
  */
 export type FilterRole = "node" | "project";
 
@@ -156,7 +150,7 @@ export interface FacetSpec {
 }
 
 export interface TableColumn<T, F extends string = string, C = void> {
-  /** Sort field and URL key. Never change it once shipped: it travels in shared links. */
+  /** Sort field and URL key. Keep it stable: it travels in shared links. */
   field: F;
   label: string;
   /**
@@ -206,8 +200,8 @@ export interface CompiledTable<T, F extends string = string, C = void>
 /**
  * Two-step call so T and C are given while F is inferred from the column literals.
  *
- * important: call this at module scope. The result is frozen and stable, which is what
- * useTableSort's accessor map has always needed and previously asked each page to remember.
+ * important: call this at module scope. The result is frozen and stable, which useTableSort's
+ * accessor map relies on.
  */
 export function defineTable<T, C = void>() {
   return <const F extends string>(
@@ -230,9 +224,8 @@ export function defineTable<T, C = void>() {
           `Table column "${column.field}" collides with a reserved query key. Rename the field.`,
         );
       }
-      // important: reservedParams was declared and never read until now, so a page that owns a
-      // query key for something else (the cluster selector on clustering members) was protected
-      // by nothing but the accidental absence of a column with that name.
+      // important: a page that owns a query key for something else (ex; the cluster selector on
+      // clustering members) lists it in reservedParams, and a column with that name is refused.
       if (reserved.has(column.field)) {
         throw new Error(
           `Table column "${column.field}" collides with a reserved query param on this page. Rename the field.`,
@@ -325,9 +318,9 @@ export function optionLabel(value: string, spec?: FacetSpec): string {
 /**
  * Build the option list for one facet over the given rows.
  *
- * important: callers pass the rows already narrowed by the search and by every OTHER
- * facet, never the raw set. A count taken over the raw set offers options that yield zero
- * rows once another filter is on, which reads as a bug.
+ * important: callers pass the rows already narrowed by the search and by every other
+ * facet, never the raw set. Counts over the raw set offer options that yield zero rows once
+ * another filter is on.
  */
 export function buildFacetOptions<T, F extends string, C>(
   column: TableColumn<T, F, C>,
@@ -360,7 +353,7 @@ export function buildFacetOptions<T, F extends string, C>(
     return options;
   }
 
-  // The empty bucket always sorts last: it is the absence of a value, not a value.
+  // The empty bucket always sorts last.
   options.sort((a, b) => {
     if (a.value === EMPTY_FACET) return 1;
     if (b.value === EMPTY_FACET) return -1;
@@ -448,8 +441,8 @@ export type FilterState =
 /**
  * Does this row pass this filter?
  *
- * note: `now` is passed in rather than read here, so a date preset resolves against one stable
- * reference for the whole pass instead of drifting mid-loop.
+ * `now` is passed in rather than read here, so a date preset resolves against one reference
+ * for the whole pass.
  */
 export function matchesFilter<T, C>(
   spec: ResolvedFilter<T, C>,

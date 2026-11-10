@@ -28,18 +28,16 @@ import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
 import { formatHypervisorType, plural, singular } from "@/lib/utils";
 
-// important: the certificate keys stay excluded. They were filtered out of the inline list on
-// purpose, and moving the data into a dialog must not quietly widen what the page discloses.
+// important: keep the certificate keys out. The dialog shows each map untruncated, so this
+// filter is what stops the page from disclosing them.
 function environmentWithoutCertificates(environment: Record<string, any>): Record<string, any> {
   return Object.fromEntries(
     Object.entries(environment ?? {}).filter(([key]) => !key.includes("certificate")),
   );
 }
 
-// note: one component for both key/value maps on this page. The Environment block used to
-// render inline with .slice(0, 10) on the entries and .slice(0, 80) on each value, so an
-// operator could neither see the eleventh key nor read a long one. Both maps now show a count
-// that opens the whole thing untruncated.
+// One component for both key/value maps on this page: a count that opens every entry,
+// untruncated, in a dialog.
 function ConfigMapLink({
   data,
   title,
@@ -127,8 +125,8 @@ export default function ServerPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(GRID_PAGE_SIZE);
 
-  // note: clamped on read rather than corrected in an effect. An effect would paint one wrong
-  // frame first and then snap the operator back a page.
+  // Clamped on read rather than corrected in an effect, which would paint one wrong frame first
+  // and then snap the operator back a page.
   const totalPages = Math.max(1, Math.ceil(servers.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pagedServers = servers.slice((currentPage - 1) * pageSize, currentPage * pageSize);
@@ -167,8 +165,8 @@ export default function ServerPage() {
       />
 
       {isError ? (
-        // a request that failed is not a fleet with nothing: say which, so "No cluster
-        // answered" is only ever reached on a successful response with zero rows
+        // A failed request is not an empty fleet: "No cluster answered" is only ever shown for
+        // a successful response with zero rows.
         <Card>
           <CardContent>
             <EmptyState
@@ -180,8 +178,8 @@ export default function ServerPage() {
           </CardContent>
         </Card>
       ) : servers.length === 0 ? (
-        // note: an empty grid said nothing at all. With every cluster named in a banner above,
-        // this tells the operator the page itself is fine and the fleet is what it is.
+        // An explicit empty state: with the unreadable clusters named in the banner above, it
+        // tells the operator the page itself loaded.
         <Card>
           <CardContent>
             <EmptyState

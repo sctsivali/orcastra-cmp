@@ -12,9 +12,7 @@ import { formatDateTime, plural } from "@/lib/utils";
 /**
  * The cluster's client certificate as the certificate itself describes it.
  *
- * note: this tab used to show `has_certificate`, which is true on every path that reaches it, and a
- * common name read from metadata that never stores one, so it said "Yes" and nothing. It now reads
- * the certificate, and only once the tab is opened: Radix unmounts an inactive tab's content.
+ * Read only once the tab is opened: Radix unmounts an inactive tab's content.
  */
 export function ClusterCertificatePanel({ clusterId }: { clusterId: string }) {
   const { data, isLoading, isError } = useCertificate(clusterId);

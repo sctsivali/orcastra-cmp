@@ -18,9 +18,8 @@ export interface CpuUsageReading {
 /**
  * CPU utilisation as busy CPU threads, with its state spelled out.
  *
- * note: utilisation only. The allocation line beside it (vCPUs allocated per CPU thread)
- * stays with the caller; this gauge used to show allocation for one Cluster and average usage
- * for several, under the same label.
+ * Utilisation only. The allocation line beside it (vCPUs allocated per CPU thread) stays with
+ * the caller, so one label never mixes allocation and usage.
  */
 export function CpuUsageGauge({
   reading,

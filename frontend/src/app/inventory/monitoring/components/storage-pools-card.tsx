@@ -22,12 +22,9 @@ interface StoragePoolsCardProps {
 }
 
 /**
- * The members a pool row covers, behind a count.
- *
- * note: only when there is more than one. A standalone host lists itself as its one member
- * (services/lxd/storage_model.py), and printing the cluster's own id beside its name said
- * nothing. Names are behind a control rather than inline: a MicroCloud row listing every
- * member's hostname set the width of the card.
+ * The members a pool row covers, behind a count. Rendered only for more than one member: a
+ * standalone host lists itself as its one member (services/lxd/storage_model.py). The names sit
+ * behind a control because a MicroCloud row listing every hostname would set the card's width.
  */
 function PoolMembers({ pool, clusterLabel }: { pool: StoragePoolMetrics; clusterLabel: string }) {
   const [open, setOpen] = useState(false);
@@ -136,8 +133,8 @@ export function StoragePoolsCard({ pools, selectedNode, labelOf }: StoragePoolsC
                     <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                       <span className="font-medium">{pool.name}</span>
                       <Badge variant="outline">{formatLabel(pool.driver)}</Badge>
-                      {/* note: `node` is the registered cluster, named as the Clusters page names
-                          it. The bytes of a MicroCloud pool live on its members. */}
+                      {/* `node` is the registered cluster, named as the Clusters page names it.
+                          The bytes of a MicroCloud pool live on its members. */}
                       <span className="text-muted-foreground">{clusterLabel}</span>
                       {(pool.members?.length ?? 0) > 1 ? (
                         <span className="text-muted-foreground">

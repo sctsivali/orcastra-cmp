@@ -161,24 +161,22 @@ interface PendingDelete {
   identity: InstanceIdentity;
   /** Which delete owns the entry, so a failed second delete cannot clear the first one's. */
   token: number;
-  /** Reads that started before this may not show the row; undefined while the delete runs. */
+  /** Reads that started earlier than this may not show the row; undefined while the delete runs. */
   settledAt?: number;
   expiresAt: number;
 }
 
 // The backend holds a DELETE open until LXD has finished (up to 300 s) and clears its caches
-// before answering, so a read that STARTED after the answer is the truth. Anything that started
-// earlier (a lifecycle event's exact read during the force stop, a fleet poll, a stale
-// follow-up, a hover prefetch) can still carry the row and must not put it back.
+// before answering, so a read that started after the answer is authoritative. A read that started
+// earlier (an event's exact read during the force stop, a fleet poll, a late refetch, a hover
+// prefetch) can still carry the row and must not put it back.
 const PENDING_DELETE_RUNNING_MS = 10 * 60_000;
 const PENDING_DELETE_SETTLED_MS = 2 * 60_000;
 // An instance-deleted event can arrive before the server has cleared the cached list (the
 // route clears after LXD answers; another operator, OrcaHub or the CLI may be the writer), so
-// reads that start within this window after the event are still treated as predating it.
-// note: it covers the backend's 10 s instance-list clearance window. The backend clears the
-// instance lists from the event stream at most once per 10 s (services/task_journal/
-// cache_clearance.py), so after a delete made outside the console a row can stay in the server's
-// cache that long; the extra 2 s is for the clear itself and the read that follows it.
+// reads that start within this window after the event still count as predating it. The backend
+// clears instance lists from the event stream at most once per 10 s (services/task_journal/
+// cache_clearance.py); the extra 2 s covers the clear itself and the read that follows it.
 const DELETED_EVENT_GRACE_MS = 12_000;
 const pendingDeletes = new WeakMap<QueryClient, Map<string, PendingDelete>>();
 let nextDeleteToken = 0;
@@ -375,8 +373,8 @@ function patchLists(
     queryClient.setQueryData<VMListResponse>(queryKey, next);
   }
   // important: ask the cancelled reads again. One of them can be the refetch a mutation asked
-  // for (a delete's reconcile), and a lifecycle event for any other instance used to cancel it
-  // for good, leaving the pre-delete list on screen until the next safety read.
+  // for (a delete's reconcile); cancelled for good, it leaves the pre-delete list on screen until
+  // the next safety read.
   for (const query of cancelled) rereadLater(queryClient, query.queryKey, query.queryHash);
 }
 
@@ -477,10 +475,9 @@ export function upsertExactInstance(
 /**
  * Read one instance on its own cluster and patch it into the lists that hold it.
  *
- * important: for a create's verdict. The fleet read answers only when its slowest cluster does
- * (up to the 30 s inventory wall), so a new row that waited for it sat behind "Created,
- * refreshing inventory" whenever any other cluster was slow. A failed read changes nothing; the
- * fleet reconcile that follows still runs.
+ * Gives a create its verdict without waiting for the fleet read, which answers only when its
+ * slowest cluster does (up to the 30 s inventory wall). A failed read changes nothing; the fleet
+ * reconcile that follows still runs.
  */
 export async function upsertInstanceFromItsCluster(
   queryClient: QueryClient,
@@ -495,7 +492,7 @@ export async function upsertInstanceFromItsCluster(
   }
 }
 
-/** Remove only the exact identity. A project-less event is deliberately not accepted here. */
+/** Remove only the exact identity. A project-less event is not accepted here. */
 export function removeExactInstance(
   queryClient: QueryClient,
   identity: InstanceIdentity,
@@ -527,9 +524,8 @@ export async function reconcileInstanceFleet(
   const epoch = advanceFleetWriteEpoch(queryClient, actorScope);
   const published = ["instances", actorScope, "*", "*"] as const;
   // important: every read cancelled here is asked again unless this reconcile publishes for its
-  // key. A cancelled read reverts its query, and a query that had no data yet (the Instances page
-  // a moment after navigating to it) reverts to empty and idle: when this reconcile then gave up
-  // to a newer writer, the page sat on its full-page loader until something else fetched.
+  // key. A cancelled read reverts its query, and a query with no data yet reverts to empty and
+  // idle: if this reconcile then yields to a newer writer, the page stays on its full-page loader.
   const cancelled = new Map<string, QueryKey>();
   const cancelLists = async (keepFirstAnswers: boolean) => {
     const cancelling: QueryKey[] = [];
@@ -537,10 +533,9 @@ export async function reconcileInstanceFleet(
       queryKey: ["instances", actorScope],
       fetchStatus: "fetching",
     })) {
-      // important: a list with nothing on screen keeps its first read. Cancelling it left the
-      // page on its loader until this fleet read answered, which is the slowest cluster's answer
-      // (up to the 30 s inventory wall). It can only land before publication: the second pass
-      // below cancels whatever is still in flight.
+      // important: a list with nothing on screen keeps its first read; cancelling it holds the
+      // page on its loader until the slowest cluster answers (up to the 30 s inventory wall). It
+      // can only land before publication: the second pass below cancels whatever is in flight.
       if (keepFirstAnswers && query.state.data === undefined) continue;
       cancelled.set(query.queryHash, query.queryKey);
       cancelling.push(query.queryKey);

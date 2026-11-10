@@ -5,18 +5,17 @@ import { APIError } from "@/types/api";
 /**
  * The one read of `/system/settings`, shared by every caller through its query key.
  *
- * The endpoint answers both a mode (read-only) and a capability (whether the schedule routes are
- * mounted), and both are already polled on the same minute. A second hook with its own `useQuery`
- * would share the cache but not the options, so the two would drift apart on the next edit.
+ * The endpoint answers a mode (read-only) and capabilities (ex; whether the schedule routes are
+ * mounted). A second hook with its own `useQuery` would share the cache but not the options.
  */
 function useSystemSettings() {
   return useQuery({
     queryKey: ["system-settings"],
     queryFn: api.system.getSettings,
-    staleTime: 30000, // cache for 30 seconds
-    refetchInterval: 60000, // refetch every minute
-    retry: 3, // retry 3 times on failure before marking as error
-    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10000), // exponential backoff
+    staleTime: 30000,
+    refetchInterval: 60000,
+    retry: 3,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10000),
   });
 }
 
@@ -44,9 +43,8 @@ export function useReadOnlyMode() {
   // missing settings verdict blocks writes without falsely claiming that read-only mode is on.
   const isReadOnly = data?.read_only_mode ?? false;
   // important: the last good verdict answers until it is five minutes old. Deriving this from
-  // isFetching or isError flipped every write control to "checking" on each minute's refetch
-  // and to "unavailable" on one failed poll, which Migration Center showed as "Execution is
-  // unavailable" while the deployment was fine.
+  // isFetching or isError would flip every write control to "checking" on each minute's refetch
+  // and to "unavailable" on one failed poll.
   const verdictIsFresh =
     data !== undefined && Date.now() - dataUpdatedAt < WRITE_VERDICT_MAX_AGE_MS;
   const writeAvailability: WriteAvailability = verdictIsFresh
@@ -72,9 +70,9 @@ export function useReadOnlyMode() {
 /**
  * Whether this deployment mounted the snapshot schedule routes.
  *
- * important: three states, not two. `undefined` means not yet read, or read from a backend that
- * predates the field, and a control must stay as it was in that case rather than disable itself on
- * a page load. Only an explicit `false` is a deployment saying the routes are not there.
+ * important: three states. `undefined` means not yet read, or read from a backend without the
+ * field; a control then stays as it was rather than disabling itself on a page load. Only an
+ * explicit `false` means the routes are not there.
  */
 export function useSnapshotSchedulesEnabled(): boolean | undefined {
   return useSystemSettings().data?.snapshot_schedules_enabled;

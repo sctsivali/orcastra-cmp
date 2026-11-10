@@ -6,24 +6,12 @@ import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { useSnapshotProjectOptions } from "@/hooks/use-snapshot-project-options";
 
 /**
- * Cluster and project narrow a fleet-wide listing. They are a filter, not a precondition.
+ * Cluster and project narrow a fleet-wide listing; neither has to be chosen first.
  *
- * They used to be the read's scope, so the page showed nothing until both were chosen and the
- * Project select sat disabled through a live per-cluster read. Two defects came out of that
- * shape and both are fixed here rather than patched:
- *
- * Nothing is ever disabled for loading. This is a scope picker, and the house rule for one is
- * written in components/monitoring/node-filter-select.tsx: an operator opens a page for the
- * broken cluster more often than for the healthy one, so putting it out of reach defeats the
- * page. Under the fleet-wide default there is also always a valid choice available before any
- * request resolves, so a disabled control would be asserting something untrue. Disabled is kept
- * for a genuine read failure, where there really is nothing to choose from.
- *
- * The old "Loading projects" placeholder was unreachable, because SearchableSelect renders a
- * placeholder only when nothing is selected and the value was never empty. It is deleted rather
- * than repaired: repairing it means clearing the selection, which brings back the
- * nothing-chosen state this page exists to remove. A muted line under the field says the same
- * thing where it can actually be seen.
+ * Nothing is disabled while loading (the scope-picker rule in node-filter-select.tsx): an
+ * operator often opens the page for a broken cluster, and the fleet-wide default is valid before
+ * any request resolves. Only a read failure disables a picker. SearchableSelect shows a
+ * placeholder only when nothing is selected, so a muted line says when projects are being read.
  */
 
 /** The absence of a value, which is also how the URL spells it: no key at all. */
@@ -57,7 +45,7 @@ export function SnapshotScopePicker({
   const projectPicker = useSnapshotProjectOptions(host);
 
   const projectOptions = [ALL_PROJECTS_OPTION, ...projectPicker.options];
-  // Only while the list is genuinely still just the "All" row, so a warm cache never flashes it.
+  // Only while the list still holds just the "All" row, so a warm cache never flashes it.
   const readingProjects = projectPicker.isLoading && projectOptions.length === 1;
 
   return (
@@ -90,9 +78,8 @@ export function SnapshotScopePicker({
           id="snapshot-project"
           value={project}
           onValueChange={onProjectChange}
-          // important: on a failed read the list is empty rather than falling back to a single
-          // option. Offering one project as though it were the only one states something the
-          // console does not know.
+          // On a failed read the list is empty rather than falling back to a single option,
+          // which would claim the cluster has only that one project.
           options={projectPicker.isError ? [] : projectOptions}
           placeholder={projectPicker.isError ? "Projects unavailable" : "All Projects"}
           searchPlaceholder="Search projects"

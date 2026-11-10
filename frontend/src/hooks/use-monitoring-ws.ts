@@ -1,9 +1,8 @@
 /**
- * WebSocket-backed monitoring hook.
- * Receives real-time dashboard pushes from the backend metrics collector.
- * Falls back to REST polling when WS is unavailable.
+ * Monitoring dashboard pushes over WebSocket from the backend metrics collector. Callers fall
+ * back to REST polling while it is not connected.
  *
- * note: every connect mints its own single-use ticket. A failed mint backs off like a failed
+ * Every connect mints its own single-use ticket. A failed mint backs off like a failed
  * handshake, and a 4401 (the session ended) reconnects at the base delay under the new session.
  */
 
@@ -19,11 +18,9 @@ const WS_RECONNECT_BASE_MS = 2000;
 const WS_RECONNECT_MAX_MS = 30000;
 
 /**
- * Hook that subscribes to the monitoring WebSocket.
- * When data arrives it injects it into the React Query cache under
- * the current actor's monitoring dashboard key, keeping the existing query consumers in sync.
- *
- * Returns { connected } so callers know when to enable polling fallback.
+ * Writes each push into the React Query cache under the actor's monitoring dashboard key, so
+ * every useMonitoringDashboard consumer stays in sync. Returns { connected } so callers know
+ * when to poll instead.
  */
 export function useMonitoringWebSocket(enabled: boolean = true) {
   const queryClient = useQueryClient();
@@ -98,10 +95,9 @@ export function useMonitoringWebSocket(enabled: boolean = true) {
           if (!active || socket !== ws) return;
           try {
             const data: MonitoringDashboardResponse = JSON.parse(event.data);
-            // Inject into React Query cache - all useMonitoringDashboard consumers update instantly
             queryClient.setQueryData(["monitoring", "dashboard", scopeKey], data);
           } catch {
-            // ignore malformed messages
+            // Ignore malformed messages.
           }
         };
 

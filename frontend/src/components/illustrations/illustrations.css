@@ -1,21 +1,16 @@
 /* Card illustrations.
 
-   The palette is orcastra.io's own, read from the live site on 2026-11-08: indigo #321D71
-   (--orca-indigo), its lavender accent #B7A6FF used on dark panels, and the lavender tints between
-   them. It is fixed on purpose and does not follow the personalization accent: an illustration is
-   brand artwork, and the accent picker has no contrast clamp.
+   The palette is the orcastra.io brand: indigo #321D71, its lavender accent #B7A6FF for dark
+   panels, and the tints between them. It is brand artwork, so it does not follow the
+   personalization accent, which has no contrast clamp.
 
-   The look is shaded (owner decision 2026-11-09): each object has three tonal faces lit from the
-   top left (top lightest, left middle, right darkest) and a hairline one step past its darkest
-   face, in its own hue. The hairline is what keeps a near-white top face from dissolving into a
-   #fafafa card, and a dark object from reading as a hole in a #1c1825 one. Measured against the
-   card: the paper hairline separates at 2.37:1 in light and 3.06:1 in dark, and neighbouring faces
-   stay at least 1.19:1 apart, so the volume reads at 64px.
+   Each object has three faces lit from the top left (top lightest, right darkest) and a hairline
+   one step past its darkest face, so a pale face does not dissolve into the card and a dark object
+   does not read as a hole. The paper hairline separates at 2.37:1 in light and 3.06:1 in dark, and
+   neighbouring faces stay at least 1.19:1 apart.
 
-   Primitives in iso/primitives.tsx emit class names, never colours, so every value lives here, per
-   theme. A face picks its fill through --illo-f and its hairline through --illo-e, so a wall can
-   paint its seam in its own fill colour. Values are HSL triplets like the rest of the token set;
-   the hex each came from is beside it. */
+   iso/primitives.tsx emits class names, never colours: a face picks its fill through --illo-f and
+   its hairline through --illo-e. Values are HSL triplets, with the source hex beside each. */
 
 :root {
   --illo-paper-top: 256.4 64.7% 96.7%; /* #F4F1FC */
@@ -39,9 +34,8 @@
   --illo-shadow: 256.4 28.2% 92.4%; /* #E9E6F1 */
 }
 
-/* Dark: every face sits above --card (#1c1825) so an object reads as a solid, the hairline is a
-   step lighter than the face instead of darker, and the hero turns lavender, the colour
-   orcastra.io itself uses for emphasis on dark panels. A mark cut into that lavender turns dark. */
+/* Dark: every face is lighter than --card so an object reads as solid, the hairline is a step
+   lighter than its face, and the hero turns the brand lavender. A mark cut into it turns dark. */
 .dark {
   --illo-paper-top: 253.3 20.7% 34.1%; /* #4D4569 */
   --illo-paper-left: 252.4 24.6% 27.1%; /* #3B3456 */
@@ -80,8 +74,7 @@
 [data-slot="card-illustration"][data-size="xl"] {
   --illo-sw: 1.2px;
 }
-/* Strokes keep their pixel width at every size, so a 64px scene is not drawn in hairlines and a
-   160px one not in marker pen. Set here once rather than on every shape. */
+/* Strokes keep their pixel width at every scene size. Set once here instead of on every shape. */
 [data-slot="card-illustration"] * {
   vector-effect: non-scaling-stroke;
 }
@@ -172,9 +165,8 @@
 html[data-illustrations="hide"] [data-slot="card-illustration"] {
   display: none !important;
 }
-/* What a surface showed before it had a scene (its icon) comes back when scenes are hidden, so
-   hiding them restores the classic card instead of leaving a bare one. Both are in the first
-   byte of HTML and the attribute picks one, so nothing shifts on hydration. */
+/* When scenes are hidden, a surface shows its fallback icon instead. Both are in the server HTML
+   and the attribute picks one, so nothing shifts on hydration. */
 [data-slot="illustration-fallback"] {
   display: none;
 }
@@ -182,8 +174,8 @@ html[data-illustrations="hide"] [data-slot="illustration-fallback"] {
   display: contents;
 }
 
-/* The one motion: a clickable card nudges its scene up 2px. Feedback for a pointer or focus on a
-   control, never on a live-data surface, and absent under reduced motion. */
+/* The only motion: a clickable card nudges its scene up 2px on hover or focus. Never on a
+   live-data surface, and not under reduced motion. */
 .illo-host .illo-scene {
   transform-box: fill-box;
   transition: transform 200ms ease-out;
@@ -195,20 +187,15 @@ html[data-illustrations="hide"] [data-slot="illustration-fallback"] {
   }
 }
 
-/* A card kind that holds a scene is a size container, so the scene steps down or aside by the card's
-   own width at every breakpoint and in every grid, resolved before first paint.
-
-   illo-launch: a card with its scene at the side (Home features, Settings, footers). Below 440px the
-   scene steps down to 96px wide; below 300px it would squeeze the text, so it steps aside and the
-   card's classic icon returns.
-   illo-kpi: a KPI tile with the scene in its top right corner. Below 300px it steps down to 72px wide
-   so the figures keep at least about 85px; below 220px the number keeps the tile.
-   illo-card: a data card with the scene beside its title; below 260px the icon tile returns.
-   illo-stat: a counter in the house stat style (Regions, Sessions) whose value can run to about
-   135px (`999.9 MB/s`), so its scene shows only from a 300px tile, at 72px, and below that the
-   label's icon returns.
-   Where a tile had an icon before it had a scene, the icon is its fallback and comes back wherever
-   the scene steps aside. */
+/* Each card kind that holds a scene is a size container, so the scene steps down or aside by the
+   card's own width in any grid, resolved before first paint. Where a tile has a fallback icon, it
+   returns wherever the scene steps aside.
+   illo-launch: scene at the side. Below 440px it shrinks to 96px; below 300px the icon returns.
+   illo-kpi: scene top right. Below 300px it shrinks to 72px so the figures keep about 85px; below
+   220px the number keeps the tile.
+   illo-card: scene beside the title; below 260px the icon returns.
+   illo-stat: a stat value can run to about 135px (`999.9 MB/s`), so the 72px scene shows only
+   from a 300px tile. */
 .illo-launch,
 .illo-kpi,
 .illo-card,

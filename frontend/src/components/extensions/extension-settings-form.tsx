@@ -18,17 +18,12 @@ import { Switch } from "@/components/ui/switch";
 import type { ExtensionSettingField } from "@/types/api";
 
 /**
- * The add-on's own configuration, rendered by us from what its manifest declared.
+ * The add-on's own configuration form, drawn from the fields its manifest declares. Add-ons ship
+ * no UI, and the closed vocabulary of six field types keeps every declared form consistent.
  *
- * The add-on ships no UI, so this form is drawn from a closed vocabulary of six field types. That
- * is the whole reason it is closed: an open schema language would let an author describe a form
- * this dashboard cannot render consistently, and the first time that happens is in front of an
- * operator.
- *
- * important: a secret is write-only. The server returns the NAMES of the secret fields that hold
- * a value, never the values, so a configured secret shows as configured and its input starts
- * empty. Leaving it empty on save keeps what is stored; typing replaces it. Without that, saving
- * an unrelated field would blank every credential nobody retyped.
+ * important: secrets are write-only. The server returns the names of the secret fields that hold
+ * a value, never the values, so a configured secret shows as configured with an empty input.
+ * Leaving it empty on save keeps the stored value, so saving one field never blanks a secret.
  */
 export function ExtensionSettingsForm({
   schema,

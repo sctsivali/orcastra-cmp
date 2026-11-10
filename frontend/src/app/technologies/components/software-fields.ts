@@ -3,17 +3,16 @@ import type { NodeEnvironment, NodeStatus } from "@/types/api";
 /**
  * Pure readers for the LXD environment block.
  *
- * No JSX, because every one of these encodes a fact about the payload that is easy to get
- * wrong and worth testing on its own.
+ * No JSX: each one encodes a fact about the payload that is easy to get wrong and worth testing
+ * on its own.
  */
 
 /**
  * A runtime the node reports, paired with its version.
  *
- * important: `driver` and `driver_version` are parallel pipe-separated lists, "lxc | qemu" and
- * "6.0.6 | 8.2.2". The helper this replaces split on the pipe and kept the LAST segment, so
- * LXC's version was dropped, and on a node reporting `driver: "lxc"` alone it displayed LXC's
- * version under a card hardcoded as QEMU/KVM. Zip by index and name each runtime.
+ * important: `driver` and `driver_version` are parallel pipe-separated lists, ex; "lxc | qemu"
+ * and "6.0.6 | 8.2.2". Zip them by index and name each runtime; keeping a single segment drops
+ * one runtime's version or shows it under the other's name.
  */
 export interface DetectedRuntime {
   name: string;
@@ -31,9 +30,8 @@ export function detectedRuntimes(env?: NodeEnvironment | null): DetectedRuntime[
   const names = splitPiped(env?.driver);
   const versions = splitPiped(env?.driver_version);
   if (names.length === 0) return [];
-  // note: when the two lists disagree in length the pairing is unknowable, so names are
-  // reported without versions rather than mis-paired. Guessing here would attribute one
-  // runtime's version to another, which is the defect this replaces.
+  // When the two lists differ in length the pairing is unknowable, so names are reported
+  // without versions rather than mis-paired.
   if (names.length !== versions.length) return names.map((name) => ({ name }));
   return names.map((name, i) => ({ name, version: versions[i] }));
 }
@@ -48,7 +46,7 @@ export function detectedStorage(env?: NodeEnvironment | null): DetectedRuntime[]
 }
 
 /**
- * important: LXD reports feature flags as the STRINGS "true" and "false", not as booleans.
+ * important: LXD reports feature flags as the strings "true" and "false", not as booleans.
  * `Boolean("false")` is `true`, so every flag would read as enabled.
  */
 export function isFlagEnabled(value: unknown): boolean {
@@ -84,10 +82,8 @@ export function supportedDriverLabels(env?: NodeEnvironment | null): string[] {
 /**
  * What the fleet disagrees about.
  *
- * The page used to read connectedNodes[0] and label the result as the platform, so a fleet of
- * Ubuntu 24.04 on x86_64 and Ubuntu 22.04 on aarch64 was reported as 24.04 throughout. Naming
- * the divergence is the point of the per-node view, so it is stated rather than merely implied
- * by two cards the reader has to compare themselves.
+ * Stated outright, so a mixed fleet (ex; Ubuntu 24.04 on x86_64 beside 22.04 on aarch64) is
+ * never read as one platform, and the reader need not compare per-node cards to find it.
  */
 export function fleetDivergence(nodes: NodeStatus[]): string[] {
   const distinct = (pick: (env: NodeEnvironment) => unknown) =>

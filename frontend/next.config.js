@@ -16,15 +16,14 @@ const nextConfig = {
       '@radix-ui/react-icons',
       'date-fns',
     ],
-    // Client router cache. `dynamic` is how long an already-rendered segment is reused on a
-    // return visit (Next default 0, so every back-and-forth refetched the RSC payload and
-    // re-ran the auth middleware). `static` is how long a full prefetch stays reusable.
-    // important: safe only because no page fetches on the server. Every app/**/page.tsx is a
-    // client component or a thin shim around one, so the cached payload is chrome and never
-    // cluster data, and React Query stays the single freshness authority (lib/query-config.ts).
-    // The one server read is the public deployment branding (lib/server/public-branding.ts):
-    // the same for every viewer and itself cached for 60 s, so reusing it here changes nothing.
-    // If any other data fetching moves into a server component, revisit this.
+    // Client router cache. `dynamic` is how long a rendered segment is reused on a return visit
+    // (Next's default 0 refetches the RSC payload and re-runs the auth middleware every time).
+    // `static` is how long a full prefetch stays reusable.
+    // important: safe only while no page fetches on the server. Every app/**/page.tsx is a client
+    // component or a thin shim around one, so the cached payload never holds cluster data and
+    // React Query stays the freshness authority (lib/query-config.ts). The one server read, public
+    // branding (lib/server/public-branding.ts), is the same for every viewer and cached for 60 s.
+    // Revisit this if any other data fetching moves into a server component.
     staleTimes: {
       dynamic: 30,
       static: 180,
@@ -37,7 +36,8 @@ const nextConfig = {
       port: '',
     }],
     formats: ['image/avif', 'image/webp'],
-    // Allow base64 data URLs for user-uploaded images in personalization
+    // Lets next/image serve SVG; the attachment disposition and sandboxed CSP below keep an SVG
+    // from running script.
     dangerouslyAllowSVG: true,
     contentDispositionType: 'attachment',
     contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
@@ -47,9 +47,9 @@ const nextConfig = {
   compress: true,
   // Expose environment variables to the client and server
   env: {
-    // NEXT_PUBLIC_API_URL is REQUIRED - set via .env or build args
+    // Required; set through .env or build args.
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
-    NEXT_PUBLIC_APP_VERSION: appVersion, // Priority: APP_VERSION env > package.json
+    NEXT_PUBLIC_APP_VERSION: appVersion,
   },
   // Server-side environment variables (not exposed to client)
   // These are automatically available via process.env on the server
@@ -93,31 +93,23 @@ const nextConfig = {
             key: 'Permissions-Policy',
             value: 'camera=(), microphone=(), geolocation=()'
           },
-          // Content-Security-Policy, staged.
+          // Content-Security-Policy, staged. The access token is readable by client JavaScript
+          // (auth.ts) and the console renders untrusted guest framebuffer and terminal output
+          // through spice-html5 and xterm, so any script that lands in this origin gets an
+          // operator's bearer.
           //
-          // There was none at all, which matters more here than on most apps: the access token
-          // is readable by client JavaScript (auth.ts), and the console renders untrusted guest
-          // framebuffer and terminal output through spice-html5 and xterm. Any script that lands
-          // in this origin gets an operator's bearer.
+          // The enforcing policy carries only directives that cannot break a working page: nothing
+          // here embeds objects, sets a <base>, is meant to be framed, or posts a form off-origin.
           //
-          // The enforcing policy below carries only directives that cannot break a working page:
-          // nothing here embeds objects, sets a <base>, is meant to be framed, or posts a form
-          // off-origin. Those are real protections and they are free.
-          //
-          // script-src is deliberately NOT in the enforcing policy. Tightening it needs
-          // per-request nonces threaded through middleware and the root layout, because Next
-          // emits inline bootstrap scripts, and shipping a strict script-src blind to an app
-          // whose console is xterm and SPICE is how the console breaks for operators. It is in
-          // the report-only policy instead, so the violations arrive as reports and the
-          // enforcing switch is flipped once they are clean rather than guessed at.
+          // script-src is report-only for now. Next emits inline bootstrap scripts, so enforcing it
+          // needs per-request nonces threaded through middleware and the root layout; the reports
+          // show what a strict policy would break in the xterm and SPICE consoles first.
           {
             key: 'Content-Security-Policy',
-            // important: NO default-src here, deliberately. default-src is the fallback for every
-            // directive not listed, so `default-src 'self'` would silently become the script-src
-            // and style-src too, block Next's inline bootstrap and every inline style Radix and
-            // Tailwind emit, and take the whole frontend down. Listing only the directives that
-            // are safe to enforce leaves the rest as unrestricted as they are today, which is
-            // the definition of a change that cannot break a working page.
+            // important: no default-src here. It is the fallback for every directive not listed,
+            // so `default-src 'self'` would silently become script-src and style-src too, block
+            // Next's inline bootstrap and every inline style Radix and Tailwind emit, and take the
+            // whole frontend down.
             value: [
               "object-src 'none'",
               "base-uri 'self'",
@@ -129,7 +121,7 @@ const nextConfig = {
             key: 'Content-Security-Policy-Report-Only',
             value: [
               "default-src 'self'",
-              // The shape being aimed at. Everything it would break shows up as a report first.
+              // The target policy. Everything it would break shows up as a report first.
               "script-src 'self'",
               "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
               "img-src 'self' data: blob: https://*.cloudinary.com",
@@ -157,8 +149,8 @@ const nextConfig = {
       },
       {
         // The basemap filename carries its own version, so a change ships as a new path and
-        // the old one can be cached hard. Without this Next serves public/ with max-age=0
-        // and every navigation revalidates a file that never changes.
+        // each path can be cached hard. Without this Next serves public/ with max-age=0 and
+        // every navigation revalidates a file that never changes.
         source: '/geo/:path*',
         headers: [
           {
@@ -176,8 +168,8 @@ const nextConfig = {
       fallback: [],
     };
   },
-  // Create Network moved from its own page into a dialog on the Networks page. The old route
-  // was public for a few weeks, so a bookmark to it lands on the list rather than a 404.
+  // Create Network is a dialog on the Networks page, so a bookmarked create URL lands on the list
+  // instead of a 404.
   async redirects() {
     return [
       {

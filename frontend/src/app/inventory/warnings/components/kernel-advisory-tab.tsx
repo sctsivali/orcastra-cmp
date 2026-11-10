@@ -32,7 +32,7 @@ const STATE_ORDER: KernelAdvisoryState[] = ["exposed", "unverified", "patched"];
 const KERNEL_WARNINGS = defineTable<KernelAdvisoryWarning>()({
   id: "kernel",
   searchPlaceholder: "Search kernel CVEs",
-  // the cluster id, the member and the kernel string are what an operator copies from a shell
+  // The cluster id, the member and the kernel string are what an operator copies from a shell.
   searchExtra: (w) => [w.cluster_id, w.member, w.kernel_version ?? ""],
   defaultSort: { field: "state", direction: "asc" },
   columns: [
@@ -44,7 +44,7 @@ const KERNEL_WARNINGS = defineTable<KernelAdvisoryWarning>()({
       facet: (w) => warningClusterValue(w),
       facetSpec: { role: "node" } },
     { field: "member", label: "Cluster Member", sort: (w) => w.member, search: (w) => w.member, filter: fromSort("text") },
-    // one row per member and CVE, so the id is what tells two rows of one member apart
+    // One row per member and CVE, so the id is what tells two rows of one member apart.
     { field: "cve", label: "CVE", sort: (w) => w.advisory_id, search: (w) => w.advisory_id, facet: (w) => w.advisory_id },
     { field: "kernel", label: "Kernel", sort: (w) => w.kernel_version ?? "", search: (w) => w.kernel_version ?? "", filter: fromSort("text") },
     {
@@ -75,8 +75,8 @@ interface KernelAdvisoryTabProps {
 
 /** The Kernel CVEs tab: one row per member and CVE that is affected or cannot be confirmed patched. */
 export function KernelAdvisoryTab(props: KernelAdvisoryTabProps) {
-  // note: the filters live in the query string. The page already sits in a Suspense boundary,
-  // but the boundary belongs beside the reader so this tab stays correct wherever it is mounted.
+  // The filters live in the query string. The page already has a Suspense boundary, but one
+  // beside the reader keeps this tab correct wherever it is mounted.
   return (
     <Suspense fallback={null}>
       <KernelAdvisoryTable {...props} />

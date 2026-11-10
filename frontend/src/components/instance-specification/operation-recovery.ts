@@ -96,7 +96,7 @@ export function readSpecificationJob(
 ): SpecificationJobIdentity | null {
   if (typeof window === "undefined") return null;
   try {
-    // v1 stored retry bodies, ETags, and idempotency keys. Purge it on first access.
+    // A legacy v1 entry holds retry bodies, ETags and idempotency keys: purge it on read.
     window.sessionStorage.removeItem(
       storageKey(LEGACY_STORAGE_PREFIX, actorScope, instanceName, host, project),
     );

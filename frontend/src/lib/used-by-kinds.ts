@@ -17,9 +17,8 @@ import { inventoryLinks, type NodeSearchLink } from "@/lib/inventory-links";
 
 // Display vocabulary for the resource kinds an LXD used_by reference can name.
 //
-// note: the icons are the sidebar's own (components/sidebar/nav-config.tsx), so a network
-// listed inside a dialog wears the same glyph as the nav entry it links to. Picking a second
-// set here would teach the operator two vocabularies for one set of things.
+// The icons are the sidebar's own (components/sidebar/nav-config.tsx), so a network listed
+// inside a dialog wears the same glyph as the nav entry it links to.
 
 export interface KindDescriptor {
   /** Human label for the kind, ex; "Instance". */
@@ -33,10 +32,10 @@ export interface KindDescriptor {
 }
 
 /**
- * A filtered list view. Honest about being a search preset rather than a record link.
+ * A filtered list view: a search preset rather than a record link.
  *
- * note: the node travels too. A profile named `default` exists on every cluster, and the
- * dialog knows which cluster the used_by list came from, so the list opens narrowed to it.
+ * The node travels too. A profile named `default` exists on every cluster, so the list opens
+ * narrowed to the cluster the used_by list came from.
  */
 function searchOn(target: (link: NodeSearchLink) => string) {
   return (reference: LxdReference, node?: string) =>
@@ -53,16 +52,15 @@ function instanceHref(reference: LxdReference, node?: string): string {
   });
 }
 
-// important: every href below points at a route that exists today. Do not add an entry for a
-// destination you intend to build later: a link that lands nowhere is worse than plain text,
-// and `projects` is deliberately absent because there is no /inventory/projects route.
+// Every href below must point at a route that exists; a link that lands nowhere is worse than
+// plain text. `projects` has no href because there is no /inventory/projects route.
 const KINDS: Record<string, KindDescriptor> = {
   instances: { label: "Instance", icon: Box, href: instanceHref },
   profiles: { label: "Profile", icon: SlidersHorizontal, href: searchOn(inventoryLinks.profiles) },
   networks: {
     label: "Network",
     icon: Network,
-    // The one true detail route in the app. It renders "Missing host parameter" without a
+    // The only detail route among these kinds. It renders "Missing host parameter" without a
     // host, and a reference carries none, so it takes the node the used_by list came from.
     // The project travels with it: without one the page reads the default project and a
     // network held by another project fails to load.
@@ -83,8 +81,8 @@ const KINDS: Record<string, KindDescriptor> = {
   custom: { label: "Volume", icon: HardDrive, href: searchOn(inventoryLinks.storageVolumes) },
   block: { label: "Block Volume", icon: HardDrive, href: searchOn(inventoryLinks.storageVolumes) },
   iso: { label: "ISO Image", icon: Disc, href: searchOn(inventoryLinks.isoImages) },
-  // An instance-backed volume IS an instance's own disk, so the useful destination is the
-  // instance, not the volume list.
+  // An instance-backed volume is the instance's own disk, so it links to the instance rather
+  // than the volume list.
   container: { label: "Instance", icon: Box, href: instanceHref },
   "virtual-machine": { label: "Instance", icon: Box, href: instanceHref },
   projects: { label: "Project", icon: FolderOpen, href: null },
@@ -95,17 +93,15 @@ const UNKNOWN: KindDescriptor = { label: "Unknown", icon: HelpCircle, href: null
 export function referenceKind(reference: LxdReference): KindDescriptor {
   const kind = reference.kind;
   if (!kind) return UNKNOWN;
-  // note: KINDS carries the volume-type words (custom, block, iso, container, virtual-machine)
-  // as first-class entries. parseLxdReference's fallthrough takes the last two path segments,
-  // and a volume path ends `/volumes/<type>/<name>`, so those words are what land in `kind`.
-  // Normalising them here rather than in the parser is deliberate: that function is a faithful
-  // port of the backend's tenant-visibility parser and must not drift for a cosmetic reason.
+  // KINDS also carries the volume-type words (custom, block, iso, container, virtual-machine).
+  // parseLxdReference's fallthrough takes the last two path segments, and a volume path ends
+  // `/volumes/<type>/<name>`, so those words land in `kind`. They are mapped here, not in the
+  // parser, which must stay a faithful port of the backend's tenant-visibility parser.
   const known = KINDS[kind];
   if (known) return known;
-  // A degenerate reference such as "/1.0/instances" leaves the API version in `kind`. Naming it
-  // "1.0" as though it were a resource type would be worse than admitting we do not know.
+  // A degenerate reference such as "/1.0/instances" leaves the API version in `kind`.
   if (kind === "1.0") return UNKNOWN;
-  // Anything else is a path segment, which IS a lowercase API enum, so formatLabel is right.
+  // Anything else is a path segment, a lowercase API enum, which formatLabel handles.
   return { label: formatLabel(kind), icon: Box, href: null };
 }
 
@@ -121,11 +117,10 @@ export interface KindCount {
 }
 
 /**
- * Count references by DISPLAY kind, descending by count then label.
+ * Count references by display kind, descending by count then label.
  *
- * note: keyed on the label rather than the raw kind on purpose. A custom volume parses as
- * "custom" and a block volume as "block", and an operator reading "3 volumes" does not want
- * those split into two rows over a path-segment distinction the UI does not otherwise make.
+ * Keyed on the label rather than the raw kind, so `instances`, `container` and
+ * `virtual-machine` references count as one Instance row.
  */
 export function countsByKind(references: readonly LxdReference[]): readonly KindCount[] {
   const counts = new Map<string, KindCount>();

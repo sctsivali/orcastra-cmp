@@ -26,10 +26,9 @@ const RegionsMap = dynamic<RegionsMapProps>(
 /**
  * A region the backend could not place.
  *
- * A cluster registered without location metadata comes back at latitude and longitude 0,
- * which is a real coordinate in the Gulf of Guinea rather than a null. Plotting it puts a
- * marker in the Atlantic, thousands of kilometres from anything, and fitting the map to the
- * clusters would then frame half the planet to include it.
+ * A cluster registered without location metadata comes back at latitude and longitude 0, a
+ * real coordinate in the Gulf of Guinea rather than a null. Plotting it would put a marker in
+ * the Atlantic and make fitting the map to the clusters frame half the planet.
  */
 function isUnplaceable(region: RegionSummary): boolean {
   const { latitude, longitude } = region;
@@ -57,7 +56,7 @@ interface RegionsMapCardProps {
   regions: RegionSummary[];
   selectedRegion: string | null;
   onSelectRegion: (regionId: string) => void;
-  // bumped by a region card's "View on Map"
+  // Bumped by a region card's "View on Map".
   focusSignal: number;
   basemap: BasemapConfig;
   isLoading: boolean;
@@ -121,7 +120,7 @@ export function RegionsMapCard({
 
         {!isLoading && hasCountries && <MapLegend />}
 
-        {/* Saying what the map is not showing, rather than dropping it in silence. */}
+        {/* Say what the map leaves out instead of dropping it silently. */}
         {!isLoading && unplaceableCount > 0 && (
           <p className="text-xs text-muted-foreground mt-3">
             {unplaceableCount === 1

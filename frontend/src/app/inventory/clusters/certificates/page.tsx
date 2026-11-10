@@ -61,15 +61,14 @@ function CertificatesContent() {
     [filters.filteredRows, sortItems],
   );
 
-  // Clamped on read rather than corrected in an effect. A renewal drops a certificate out of
+  // Clamped on read instead of corrected in an effect. A renewal drops a certificate out of
   // the Expiring facet while the operator sits on the last page, so the page count shrinks
   // underneath them. An effect would fire only after the empty frame had already painted.
   const totalPages = Math.max(1, Math.ceil(sortedCerts.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pagedCerts = sortedCerts.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
-  // The summary cards and the Status facet are one piece of state rendered twice, not two
-  // controls. Two controls for one state is the failure this whole change exists to remove.
+  // The summary cards and the Status facet render one piece of state twice; neither keeps its own.
   const statusSelected = filters.selectedValues("status");
 
   // A row's object is replaced on every refetch; the dialog follows the fresh one by id.
@@ -121,7 +120,7 @@ function CertificatesContent() {
       {isReadOnly && <ReadOnlyBanner />}
 
       {/* The heading and the refresh control share a row only from lg: at md the sidebar leaves the
-          header 448px and the row ran 450px past the page. */}
+          header 448px and the row would run 450px past the page. */}
       <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4">
           <BackLink href="/inventory/clusters" label="Clusters" />

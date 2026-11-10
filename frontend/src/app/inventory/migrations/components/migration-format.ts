@@ -235,7 +235,7 @@ export const RETAINED_PHASES = new Set<MigrationJobPhase>(["source_retained", "c
 
 /**
  * The retention deadline while the source is still retained. The server never clears the field,
- * so a rolled-back or finalized move would otherwise keep showing a deadline that no longer applies.
+ * so a rolled-back or finalized move would otherwise keep showing a deadline that has lapsed.
  */
 export function activeRetentionDeadline(job: Pick<MigrationJob, "phase" | "retention_deadline">): string | null {
   return RETAINED_PHASES.has(job.phase) ? job.retention_deadline ?? null : null;

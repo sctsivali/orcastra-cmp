@@ -4,13 +4,10 @@ import { Terminal, Monitor, Box, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
-// note: the two count chips carry `sidebar-count` rather than a colour of their own.
-// They used to be bg-blue-500/20 under text-blue-500 and bg-green-500/20 under
-// text-green-500, which is the tint-under-same-hue-text shape
-// scripts/checks/check-semantic-colour.mjs bans, and the blue one measured 3.66:1 on the
-// shipped sidebar ground. The rule in app/globals.css mixes currentColor, so a chip is
-// legible at whatever sidebar colour an operator picks instead of at one we tested. The
-// labels next to them already say which is which, so no meaning moves with the colour.
+// The two count chips carry `sidebar-count` rather than a colour of their own; a tint under
+// same-hue text is the shape scripts/checks/check-semantic-colour.mjs bans. The rule in
+// app/globals.css mixes currentColor, so a chip stays legible at whatever sidebar colour an
+// operator picks, and the labels beside them already say which is which.
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,9 +18,9 @@ import { cn } from "@/lib/utils";
 import { useTerminalStore } from "@/lib/terminal-store";
 import { useConsoleStore } from "@/lib/console-store";
 
-// Live Terminal/Console rows. These are store-driven rather than routes: the count and the
-// menu contents come from the open session windows, so they cannot live in the nav config.
-// note: the counter Badge stays a pill on purpose. It is sidebar chrome, not table data.
+// Live Terminal/Console rows. They are store-driven: the count and the menu contents come
+// from the open session windows, so they cannot live in the nav config. The counter Badge
+// stays a pill because it is sidebar chrome, not table data.
 
 interface SessionMenuProps {
   indent?: boolean;

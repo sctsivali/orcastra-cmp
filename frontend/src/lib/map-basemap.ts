@@ -1,16 +1,13 @@
 /**
  * Basemap resolution for the regions map.
  *
- * The map ships with a vendored landmass (public/geo) and draws it locally, so a fresh
- * self-hosted install renders a working map with no outbound request, no API key and no
- * third-party terms attached. Operators who want street-level detail point MAP_TILE_URL at
- * a provider they control; that path is opt-in and validated rather than assumed.
+ * The map draws a vendored landmass (public/geo) locally, so a fresh self-hosted install
+ * renders with no outbound request, API key or third-party terms. For street-level detail
+ * an operator points MAP_TILE_URL at a provider they control; that is opt-in and validated.
  *
  * The values are read from the server process at request time (see app/regions/page.tsx),
- * deliberately NOT via NEXT_PUBLIC_*. Those are baked into the bundle at build time and
- * swapped on container start by `sed -i "s|placeholder|value|g"` in entrypoint.sh, which
- * corrupts the bundle for any value containing & or |, which is exactly what a tile URL
- * carrying query parameters looks like.
+ * not via NEXT_PUBLIC_*. Those are baked into the bundle at build time and only replaced on
+ * container start for the placeholders entrypoint.sh knows about.
  */
 
 export type OfflineBasemapConfig = {
@@ -35,9 +32,8 @@ const geoAssets = new Map<string, Promise<unknown>>();
 /**
  * Fetches a bundled geometry file from public/geo once per page load.
  *
- * Cached at module scope so moving between pages in the SPA does not refetch, and so two
- * mounted maps share one request rather than racing. A failure clears the entry, so a later
- * mount retries instead of latching the failure for the rest of the session.
+ * Cached at module scope, so client-side navigation does not refetch and two mounted maps
+ * share one request. A failure clears the entry, so a later mount retries.
  */
 export function loadGeoAsset<T>(url: string, parse: (data: unknown) => T): Promise<T> {
   let request = geoAssets.get(url) as Promise<T> | undefined;
@@ -89,8 +85,8 @@ function readTrimmed(value: string | undefined): string | null {
 
 /**
  * A usable XYZ template: an absolute http(s) URL carrying all three tile placeholders.
- * Rejecting here rather than at render time is what keeps a typo in .env from producing a
- * map of broken image icons with no explanation.
+ * Rejecting here, with a warning, keeps a typo in .env from rendering a map of broken
+ * images.
  */
 function isValidTileTemplate(url: string): boolean {
   let parsed: URL;
@@ -113,10 +109,8 @@ function resolveMaxZoom(raw: string | null): number {
 /**
  * Builds the attribution markup from plain-text configuration.
  *
- * The text is escaped and the optional link is validated rather than passing operator
- * input through as raw HTML. An operator who can set environment variables is already
- * trusted, but config that reaches innerHTML untouched is the kind of shortcut that
- * outlives the person who understood why it was safe.
+ * The text is escaped and the optional link must be http(s), so operator configuration
+ * never reaches Leaflet's innerHTML as raw HTML.
  */
 function buildAttribution(text: string | null, href: string | null): string {
   if (text === null) return "";

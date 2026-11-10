@@ -7,7 +7,7 @@ import type { Transfer } from "./transfer-store";
  * cancel fires on `pagehide`, or the reload would destroy what could have resumed. An abandoned temp
  * expires on its own.
  *
- * note: sessionStorage, so it ends with the tab. It holds a signed upload token, which is useless
+ * Kept in sessionStorage, so it ends with the tab. It holds a signed upload token, which is useless
  * without the same signed-in person's bearer.
  */
 export type ManifestEntry = Transfer & { lastModified: number; actor?: string };
@@ -37,7 +37,7 @@ function write(entries: ManifestEntry[]): void {
   try {
     window.sessionStorage.setItem(KEY, JSON.stringify(entries));
   } catch {
-    // Storage blocked or full: a reload simply cannot resume.
+    // Storage blocked or full: a reload cannot resume.
   }
 }
 

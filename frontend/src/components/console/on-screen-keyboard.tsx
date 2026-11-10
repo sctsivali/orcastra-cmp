@@ -1,12 +1,9 @@
 /**
- * On-Screen Keyboard - Virtual keyboard for console interaction.
- * Uses CSS with explicit pixel-based sizing calculated from container width.
- * 
- * KEY FIX for sizing: Uses ResizeObserver to measure actual container width
- * and calculates key sizes as exact pixels.
- * 
- * KEY FIX for mobile keyboard: Uses a stable input that doesn't lose focus
- * on parent re-renders by using refs and avoiding state in critical paths.
+ * On-screen keyboard for the console, with a native mode that opens the device keyboard.
+ *
+ * Key sizes are exact pixels computed from the container width, measured by a ResizeObserver.
+ * The native mode types into an element that never re-renders, so the device keyboard keeps
+ * focus while the parent updates.
  */
 
 "use client";
@@ -32,7 +29,7 @@ interface KeyConfig {
   special?: boolean;
 }
 
-// Layouts with consistent total width per row (14.5 units for main keyboard)
+// Key widths are in standard-key units; each row is scaled to fill the width.
 const MAIN_LAYOUT: KeyConfig[][] = [
   [
     { key: '`' }, { key: '1' }, { key: '2' }, { key: '3' }, { key: '4' }, { key: '5' },
@@ -117,8 +114,8 @@ const SYMBOLS_LAYOUT: KeyConfig[][] = [
   ],
 ];
 
-// Stable native input component - uses contentEditable for better mobile keyboard stability
-// The key insight: contentEditable doesn't lose focus on value changes like input does
+// The device keyboard's target. A contentEditable element keeps focus where an <input> loses
+// it on value changes.
 const NativeKeyboardInput = memo(function NativeKeyboardInput({
   onKeyPress,
   onToggleOff,
@@ -131,18 +128,16 @@ const NativeKeyboardInput = memo(function NativeKeyboardInput({
   const isProcessingRef = useRef(false);
   const lastTextRef = useRef('');
   
-  // Store callbacks in refs - this prevents re-renders when props change
+  // Callbacks live in refs, since this component never re-renders.
   const onKeyPressRef = useRef(onKeyPress);
   const onToggleOffRef = useRef(onToggleOff);
   
-  // Update refs when props change (sync update, no re-render triggered)
   useEffect(() => {
     onKeyPressRef.current = onKeyPress;
     onToggleOffRef.current = onToggleOff;
   });
 
-  // Focus on mount and cleanup on unmount
-  // Also attach beforeinput listener for mobile backspace handling
+  // Focus on mount; deletions are caught in beforeinput.
   useEffect(() => {
     isMountedRef.current = true;
     const timer = setTimeout(() => {
@@ -151,15 +146,13 @@ const NativeKeyboardInput = memo(function NativeKeyboardInput({
       }
     }, 100);
     
-    // beforeinput event is more reliable for mobile keyboards
-    // It fires BEFORE the browser modifies content
+    // beforeinput fires before the browser edits the content and is more reliable on mobile
+    // keyboards than reading the result.
     const handleBeforeInput = (e: InputEvent) => {
       if (e.inputType === 'deleteContentBackward') {
         e.preventDefault();
         e.stopPropagation();
-        // Send backspace directly to VM
         onKeyPressRef.current('Backspace', undefined, true);
-        // Clear any remaining content
         if (editorRef.current) {
           editorRef.current.textContent = '';
           lastTextRef.current = '';
@@ -167,7 +160,6 @@ const NativeKeyboardInput = memo(function NativeKeyboardInput({
       } else if (e.inputType === 'deleteContentForward') {
         e.preventDefault();
         e.stopPropagation();
-        // Send delete directly to VM
         onKeyPressRef.current('Delete', undefined, true);
         if (editorRef.current) {
           editorRef.current.textContent = '';
@@ -190,8 +182,8 @@ const NativeKeyboardInput = memo(function NativeKeyboardInput({
     };
   }, []);
 
-  // Handle input - track both additions AND deletions
-  // Mobile keyboards with autocomplete don't fire beforeinput for prediction deletions
+  // Diffs the text against the last read: keyboards with autocomplete fire no beforeinput when
+  // they delete a prediction.
   const handleInput = useCallback(() => {
     if (isProcessingRef.current || !editorRef.current) return;
     
@@ -201,26 +193,23 @@ const NativeKeyboardInput = memo(function NativeKeyboardInput({
     isProcessingRef.current = true;
     
     if (currentText.length > prevText.length) {
-      // Text was added - send new characters
       const newChars = currentText.slice(prevText.length);
       for (const char of newChars) {
         onKeyPressRef.current(char, undefined, true);
       }
     } else if (currentText.length < prevText.length) {
-      // Text was deleted - send backspaces for each deleted char
       const deletedCount = prevText.length - currentText.length;
       for (let i = 0; i < deletedCount; i++) {
         onKeyPressRef.current('Backspace', undefined, true);
       }
     }
-    // Note: if lengths are equal, it might be a replacement - handle if needed
+    // An equal length (a replaced character) sends nothing.
     
-    // Update tracked text (don't clear - we need to track for deletions)
+    // Kept, not cleared: the next diff needs it to count deletions.
     lastTextRef.current = currentText;
     isProcessingRef.current = false;
   }, []);
 
-  // Handle special keys
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     const specialKeys: Record<string, boolean> = {
       'Enter': true, 'Tab': true, 'Escape': true, 'Backspace': true, 'Delete': true,
@@ -231,16 +220,14 @@ const NativeKeyboardInput = memo(function NativeKeyboardInput({
       e.preventDefault();
       e.stopPropagation();
       
-      // For backspace/delete: clear any remaining content in field first
-      // Mobile browsers can have internal buffers that aren't synced with textContent
+      // Mobile browsers can buffer text that textContent does not show, so the field is
+      // cleared before the key is sent.
       if ((e.key === 'Backspace' || e.key === 'Delete') && editorRef.current) {
-        // Force clear any content before sending to VM
         editorRef.current.textContent = '';
         lastTextRef.current = '';
       }
       
-      // Always send special keys directly to VM
-      // Pass skipFocus: true for native keyboard
+      // skipFocus keeps focus, and the device keyboard, on this field.
       onKeyPressRef.current(e.key, undefined, true);
     }
   }, []);
@@ -297,7 +284,7 @@ const NativeKeyboardInput = memo(function NativeKeyboardInput({
       </div>
     </div>
   );
-}, () => true); // Custom areEqual - ALWAYS return true to never re-render
+}, () => true); // never re-renders; props are read through refs
 
 export function OnScreenKeyboard({ onKeyPress, onClose, className }: OnScreenKeyboardProps) {
   const [activeLayout, setActiveLayout] = useState<KeyboardLayout>('main');
@@ -313,7 +300,6 @@ export function OnScreenKeyboard({ onKeyPress, onClose, className }: OnScreenKey
     capsLock: false,
   });
 
-  // Measure container width using ResizeObserver
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -325,7 +311,6 @@ export function OnScreenKeyboard({ onKeyPress, onClose, className }: OnScreenKey
     });
 
     observer.observe(container);
-    // Initial measurement
     setContainerWidth(container.clientWidth);
 
     return () => observer.disconnect();
@@ -348,15 +333,13 @@ export function OnScreenKeyboard({ onKeyPress, onClose, className }: OnScreenKey
     setModifiers(m => ({ ...m, ctrl: false, alt: false, shift: false, meta: false }));
   }, [modifiers, onKeyPress]);
 
-  // Calculate key sizes based on container width
+  // Key sizes in pixels, from the container width.
   const renderLayout = useCallback((layout: KeyConfig[][]) => {
     if (containerWidth === 0) return null;
 
-    // Find max row width
     const rowWidths = layout.map(row => row.reduce((sum, k) => sum + (k.width || 1), 0));
     const maxRowWidth = Math.max(...rowWidths);
     
-    // Calculate available width (container - padding - gaps)
     const padding = 8; // 4px on each side
     const gap = 2;
     const availableWidth = containerWidth - padding;
@@ -380,7 +363,6 @@ export function OnScreenKeyboard({ onKeyPress, onClose, className }: OnScreenKey
             >
               {row.map((config, keyIndex) => {
                 const keyWidth = config.width || 1;
-                // Calculate pixel width proportionally
                 const pixelWidth = (keyWidth / rowWidth) * keyAreaWidth;
                 
                 const isModifierActive = 
@@ -414,7 +396,6 @@ export function OnScreenKeyboard({ onKeyPress, onClose, className }: OnScreenKey
                       "touch-manipulation select-none",
                       "flex items-center justify-center",
                       "overflow-hidden whitespace-nowrap",
-                      // Regular keys: dark background with light text for visibility
                       config.special 
                         ? "bg-zinc-700 text-zinc-200 border-zinc-600" 
                         : "bg-zinc-800 text-zinc-100 border-zinc-600",
@@ -458,7 +439,6 @@ export function OnScreenKeyboard({ onKeyPress, onClose, className }: OnScreenKey
       onMouseDown={(e) => e.stopPropagation()}
       onTouchStart={(e) => e.stopPropagation()}
     >
-      {/* Layout tabs */}
       <div className="flex items-center justify-between mb-1 gap-1 flex-wrap">
         <div className="flex items-center gap-1 flex-wrap">
           <Button
@@ -488,7 +468,6 @@ export function OnScreenKeyboard({ onKeyPress, onClose, className }: OnScreenKey
               )}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
-                // When clicking a layout button, hide native keyboard and show selected layout
                 setShowNativeKeyboard(false);
                 setActiveLayout(layout);
               }}
@@ -511,7 +490,7 @@ export function OnScreenKeyboard({ onKeyPress, onClose, className }: OnScreenKey
         )}
       </div>
 
-      {/* Native keyboard input - isolated component to prevent focus issues */}
+      {/* A separate memoized component, so a re-render here never takes its focus. */}
       {showNativeKeyboard && (
         <NativeKeyboardInput 
           onKeyPress={onKeyPress}
@@ -519,7 +498,6 @@ export function OnScreenKeyboard({ onKeyPress, onClose, className }: OnScreenKey
         />
       )}
 
-      {/* Keyboard - only show when native keyboard is OFF and we have container width */}
       {!showNativeKeyboard && containerWidth > 0 && (
         <div style={{ width: '100%', overflow: 'hidden' }}>
           {activeLayout === 'main' && renderLayout(MAIN_LAYOUT)}
@@ -529,7 +507,6 @@ export function OnScreenKeyboard({ onKeyPress, onClose, className }: OnScreenKey
         </div>
       )}
 
-      {/* Modifier status */}
       {(modifiers.ctrl || modifiers.alt || modifiers.shift || modifiers.meta) && (
         <div className="flex items-center justify-center gap-1 mt-1 text-[10px] text-zinc-400">
           <span>Active:</span>

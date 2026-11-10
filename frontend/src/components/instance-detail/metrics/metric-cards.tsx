@@ -90,8 +90,8 @@ export function MemoryCard({ metrics }: { metrics: InstanceMetrics }) {
         <p className="text-sm text-muted-foreground">Memory usage was not reported by the cluster.</p>
       ) : reading.total > 0 && !reading.unlimited ? (
         <>
-          {/* important: UsageMeter, not Progress. Progress paints the product accent and ships
-              no accessible name, so a bar announced only "progress bar, 92 percent". */}
+          {/* UsageMeter instead of Progress: Progress paints the product accent and has no
+              accessible name. */}
           <UsageMeter
             label="Used"
             total={reading.total}
@@ -172,8 +172,8 @@ export function DiskCard({ metrics }: { metrics: InstanceMetrics }) {
 export function NetworkCard({ metrics }: { metrics: InstanceMetrics }) {
   const interfaces = Object.keys(metrics.network_rx_bytes ?? {});
   if (interfaces.length === 0) return null;
-  // note: a backend from before per-second rates sends no rate maps at all; it gets totals,
-  // never a "next sample" promise it will not keep.
+  // A backend without per-second rates sends no rate maps at all; show totals instead of a
+  // "next sample" promise it will not keep.
   const ratesReported = metrics.network_rx_bytes_per_second !== undefined;
   const rx = metrics.network_rx_bytes_per_second ?? {};
   const tx = metrics.network_tx_bytes_per_second ?? {};

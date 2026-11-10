@@ -23,12 +23,11 @@ import { MetricsErrorAlert, MetricsToolbar } from "./metrics/metrics-toolbar";
 const AGENT_SECTIONS: readonly InstanceMetricSection[] = ["cpu", "memory", "processes"];
 
 // The live-metrics half of the instance dialog. The query keeps the last successful sample while
-// a refresh is failing, so this panel must present freshness and failure separately rather than
-// replacing useful readings with a generic error screen.
+// a refresh is failing, so this panel shows freshness and failure separately instead of replacing
+// useful readings with a generic error screen.
 //
-// note: `instance.status` is already the live runtime state. The dialog prefers a metrics reading
-// taken since it opened over the row it was opened from, so this panel never has to reconcile
-// two statuses itself.
+// `instance.status` is already the live runtime state: the dialog prefers a metrics reading taken
+// since it opened over the row it was opened from, so this panel never reconciles two statuses.
 export function InstanceMetricsTab({
   instance,
   metrics,
@@ -48,7 +47,7 @@ export function InstanceMetricsTab({
   onRefresh: () => Promise<unknown> | unknown;
   updatedAt: number | null;
 }) {
-  // note: before any early return (rules of hooks). The host PID is Partner and Admin detail; a
+  // Before any early return (rules of hooks). The host PID is Partner and Admin detail; a
   // Tenant's metrics arrive without it.
   const { isPartner } = usePermissions();
   const errorState = isError ? describeMetricsError(error) : null;

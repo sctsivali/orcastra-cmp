@@ -9,12 +9,11 @@ import type { CPUSocketInfo, StorageDeviceInfo } from "@/types/api";
 /**
  * Sockets and disks as description lists.
  *
- * Deliberately not tables. check-table-filters.mjs is at its ratchet, so a TableBody outside
- * components/ui without a defineTable contract fails the frontend gate, and config-panel.tsx
- * already records the house answer: a dl, not a Table.
+ * Not tables: check-table-filters.mjs fails a TableBody outside components/ui without a
+ * defineTable contract, and config-panel.tsx uses a dl for the same reason.
  *
- * Nothing here re-cases a value. A product name, a driver name and an architecture are all
- * registry-authored, and formatLabel turns x86_64 into "X86 64".
+ * Nothing here re-cases a value. Product, driver and architecture names are registry-authored,
+ * and formatLabel turns x86_64 into "X86 64".
  */
 
 /** One bordered row inside a section. Sections may hold several of these. */
@@ -113,8 +112,8 @@ export function StorageDeviceList({ devices }: { devices: StorageDeviceInfo[] })
         >
           <DetailGrid cols={4}>
             <DetailField label="Capacity" value={disk.size ? formatBytes(disk.size) : undefined} />
-            {/* note: rpm, not a boolean. 0 is the node saying solid state, which is a fact worth
-                printing rather than a missing value. */}
+            {/* rpm, not a boolean: 0 means solid state, which is printed rather than treated
+                as a missing value. */}
             <DetailField
               label="Rotation"
               value={

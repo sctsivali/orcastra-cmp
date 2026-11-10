@@ -9,7 +9,7 @@ function remainingMs(deadline: number | null): number | null {
 /**
  * Milliseconds left until a deadline, refreshed while the tab is visible.
  *
- * note: same cadence rule as useRelativeTime: every second in the last minute, otherwise every
+ * Same cadence rule as useRelativeTime: every second in the last minute, otherwise every
  * 30 seconds, and nothing while the tab is hidden.
  */
 export function useCountdown(deadline: string | null | undefined): number | null {

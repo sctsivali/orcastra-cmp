@@ -1,9 +1,8 @@
 /**
- * Console Window: the floating (or full-page) frame around a ConsoleWorkspace.
+ * The floating (or full-page) frame around a ConsoleWorkspace.
  *
- * important: the element tree is the same whether the window floats, fills the page or is
- * minimized, so React never remounts the workspace and its consoles stay connected. Minimizing or
- * toggling full page used to unmount it, which dropped the shell and the display every time.
+ * important: keep the element tree the same whether the window floats, fills the page or is
+ * minimized, so React never remounts the workspace and its consoles stay connected.
  */
 
 "use client";
@@ -97,16 +96,16 @@ export function ConsoleWindow({ consoleId, onClose, onMinimize, onMaximize, isFu
       continuation: "1",
     });
     // Closing unmounts this window, whose sockets close and end its own LXD operations; the new
-    // tab opens its own. Nobody else's session is touched.
+    // tab opens its own. Other sessions are untouched.
     closeConsole(consoleId);
     window.open(`/console/${consoleInstance.id}?${params.toString()}`, "_blank", "noopener");
   };
 
   const width = Math.min(size.width, viewport.width - 16);
   const height = Math.min(size.height, viewport.height - 16);
-  // note: the stored position is where the window sat on the screen it was opened on. Draggable's
-  // bounds apply only while dragging, so on a narrower screen (a phone) the window rendered
-  // mostly off screen with its title bar out of reach; it is clamped here instead.
+  // The stored position is from the screen the window was opened on, and Draggable's bounds
+  // apply only while dragging, so it is clamped here to keep the title bar reachable on a
+  // narrower screen.
   const maxX = Math.max(0, viewport.width - width);
   const maxY = Math.max(0, viewport.height - height - 48);
   const x = Math.min(Math.max(0, consoleInstance.position.x), maxX);

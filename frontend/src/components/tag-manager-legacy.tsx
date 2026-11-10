@@ -45,7 +45,6 @@ export function TagManager({
   const [newTag, setNewTag] = React.useState("");
   const [editingTags, setEditingTags] = React.useState<string[]>([]);
 
-  // Initialize editing tags when dialog opens
   React.useEffect(() => {
     if (isDialogOpen) {
       setEditingTags([...tags]);
@@ -104,14 +103,13 @@ export function TagManager({
     return null;
   }
 
-  // important: same defect as tag-manager.tsx. The "+N more" control is a DialogTrigger for
-  // the tag editor, which is gated behind !readonly, so slicing for a read-only operator hid
+  // important: a read-only operator gets the whole list inline. The "+N more" control is a
+  // DialogTrigger for the tag editor, which is gated behind !readonly, so slicing would hide
   // tags with nothing left to reach them.
   const visibleTags = readonly ? tags : tags.slice(0, maxVisible);
   const hiddenCount = tags.length - visibleTags.length;
   const hasMoreTags = hiddenCount > 0;
 
-  // Reusable Dialog Content
   const dialogContent = (
     <DialogContent className="sm:max-w-[500px]">
       <DialogHeader>
@@ -121,7 +119,6 @@ export function TagManager({
         </DialogDescription>
       </DialogHeader>
       <div className="space-y-4 py-4">
-        {/* Current tags */}
         <div className="space-y-2">
           <p className="text-sm font-medium">Current Tags ({editingTags.length}/{maxTags})</p>
           <div className="flex flex-wrap gap-2 min-h-[40px] p-3 border rounded-md bg-muted/30">
@@ -149,7 +146,6 @@ export function TagManager({
           </div>
         </div>
 
-        {/* Add new tag */}
         {editingTags.length < maxTags && (
           <div className="space-y-2">
             <p className="text-sm font-medium">Add New Tag</p>
@@ -172,7 +168,6 @@ export function TagManager({
           </div>
         )}
 
-        {/* Info */}
         <div className="text-xs text-muted-foreground space-y-1 bg-muted/50 p-3 rounded-md">
           <p>• Tags are automatically converted to lowercase</p>
           <p>• Maximum {maxTags} tags allowed</p>
@@ -180,7 +175,6 @@ export function TagManager({
         </div>
       </div>
 
-      {/* Actions */}
       <div className="flex justify-end gap-2">
         <Button variant="outline" onClick={handleCancel}>
           Cancel
@@ -194,7 +188,6 @@ export function TagManager({
 
   return (
     <div className={cn("flex items-center gap-1.5 flex-wrap", className)}>
-      {/* Display first N tags */}
       {visibleTags.map((tag, index) => (
         <React.Fragment key={tag}>
           <Badge
@@ -210,12 +203,9 @@ export function TagManager({
         </React.Fragment>
       ))}
 
-      {/* Single Dialog for all cases */}
       {!readonly && (
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          {/* Conditional trigger based on state */}
           {hasMoreTags ? (
-            // Show "more tags..." when there are hidden tags
             <>
               <span className="text-xs text-muted-foreground">,</span>
               <DialogTrigger asChild>
@@ -229,7 +219,6 @@ export function TagManager({
               </DialogTrigger>
             </>
           ) : tags.length < maxTags && (
-            // Show "add tag" when under limit and no hidden tags
             <>
               {tags.length > 0 && <span className="text-xs text-muted-foreground">,</span>}
               <DialogTrigger asChild>

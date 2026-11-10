@@ -25,7 +25,7 @@ import { Fact, FactList, Tile, formatUptime } from "@/components/system-resource
 export function WorkersCard({ workers, python }: { workers: WorkersInfo | null; python: PythonInfo }) {
   const w = workers;
   const missing = w && w.expected !== null ? Math.max(w.expected - w.count, 0) : 0;
-  // without a uvicorn master the single worker is the backend, so its age is the backend's
+  // Without a uvicorn master the single worker is the backend, so its age is the backend's.
   const uptime = w?.master_uptime_seconds ?? (w && w.workers.length === 1 ? w.workers[0].uptime_seconds : null);
   return (
     <Card>

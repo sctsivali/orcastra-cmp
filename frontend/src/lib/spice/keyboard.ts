@@ -1,15 +1,13 @@
 /**
  * The graphical console's keyboard: physical keys to PC/XT set 1 scancodes.
  *
- * important: keys are mapped by `KeyboardEvent.code`, the physical key, not by `keyCode`. A remote
- * console sends what a real keyboard would and lets the guest apply its own layout, which is how
- * an AZERTY or German keyboard types the right characters and AltGr works. The vendored mapping
- * went by `keyCode`, which depends on the host's layout, folded right Ctrl/Alt into the left
- * ones, and encoded extended keys with a stray third byte (Print Screen sent a backtick).
+ * important: keys are mapped by `KeyboardEvent.code` (the physical key) rather than `keyCode`.
+ * A remote console sends what a real keyboard would and lets the guest apply its own layout,
+ * which is how an AZERTY or German keyboard types the right characters and AltGr works.
+ * `keyCode` depends on the host's layout and does not tell right Ctrl/Alt from the left ones.
  *
- * important: only the console whose canvas has focus sends keys. Each console used to listen on
- * `window` and forward anything typed outside its own canvas, so with two consoles open, keys
- * typed into one (passwords included) also reached the other VM.
+ * important: only the console whose canvas has focus sends keys. A listener on `window` would
+ * forward keys typed into one console (passwords included) to every other open VM.
  */
 
 /** [set 1 make code, extended (0xE0 prefixed)] per KeyboardEvent.code. */
@@ -126,7 +124,7 @@ export type SendScancode = (code: number, down: boolean) => boolean;
 
 /**
  * Forwards one canvas's keyboard to the guest while it has focus, and releases every key it
- * pressed when focus leaves (Alt+Tab away used to leave Alt held in the guest).
+ * pressed when focus leaves, so Alt+Tab away does not leave Alt held in the guest.
  */
 export class KeyboardBridge {
   private readonly pressed = new Set<string>();
@@ -176,8 +174,8 @@ export class KeyboardBridge {
     if (down === null) return;
     event.preventDefault();
     event.stopPropagation();
-    // note: auto-repeat is forwarded. A held key's repeated make codes are what PS/2 guests
-    // repeat on, and evdev-backed guests ignore a press of a key already down.
+    // Auto-repeat is forwarded: PS/2 guests repeat on a held key's repeated make codes, and
+    // evdev-backed guests ignore a press of a key already down.
     if (this.send(down, true)) this.pressed.add(event.code);
   };
 

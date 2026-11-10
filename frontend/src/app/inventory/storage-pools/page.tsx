@@ -51,15 +51,15 @@ interface PoolInfo {
   node?: string;
 }
 
-// note: a pool is shared by every party on its cluster, so its driver, state and capacity are
-// the provider's, not a Tenant's (owner decision 2026-10-26). The backend sends a Tenant none
-// of them and refuses it the capacity read; these fields and their columns are operator-only.
+// A pool is shared by every party on its cluster, so its driver, state and capacity belong to
+// the provider. The backend sends a Tenant none of them and refuses it the capacity read; these
+// fields and their columns are operator-only.
 const OPERATOR_POOL_FIELDS = ["driver", "status", "utilisation"];
 
-// note: /storage/pools and /storage/pools/resources-all are two calls merged by useStoragePools,
-// so usage reaches the page on a blob keyed "{node}-{name}" rather than on the pool. A sort
-// accessor is only ever handed the row (see TableColumn.sort in lib/table-filter.ts), so the
-// reading is folded onto the row before the table is built rather than looked up per cell.
+// /storage/pools and /storage/pools/resources-all are two calls merged by useStoragePools, so
+// usage reaches the page on a blob keyed "{node}-{name}" rather than on the pool. A sort accessor
+// is only handed the row (TableColumn.sort in lib/table-filter.ts), so the reading is folded onto
+// the row before the table is built.
 interface PoolRow extends PoolInfo {
   capacity: PoolCapacity;
 }
@@ -75,7 +75,7 @@ const POOLS = defineTable<PoolRow>()({
       label: "Driver",
       sort: (p) => p.driver,
       facet: (p) => p.driver,
-      // note: storage drivers are LXD enums, so formatLabel gives zfs its acronym casing.
+      // Storage drivers are LXD enums, so formatLabel gives zfs its acronym casing.
       // GPU drivers elsewhere are kernel module names and must not go through it.
       facetSpec: { primary: true, format: formatLabel },
     },
@@ -97,21 +97,17 @@ const POOLS = defineTable<PoolRow>()({
     {
       field: "projects",
       label: "Projects",
-      // Was a copy of the used_by accessor, so the header sorted by volume count while the
-      // cell displayed a project count. It now sorts by what it displays.
+      // Sorts by the project count the cell displays, not the volume count.
       sort: (p) => projectsFromUsedBy(p.used_by).length,
       facet: (p) => projectsFromUsedBy(p.used_by),
       facetSpec: { role: "project", emptyLabel: "(no project)" },
     },
     {
-      // The size column was rendered but never declared, so it was the one column on this page
-      // that could be neither sorted nor filtered. It shows used of total with a bar, so a click
-      // on the header orders by how full a pool is rather than by how large it is: "which one is
-      // about to fill up" is the question the column exists to answer.
+      // Sorts by how full a pool is rather than by how large it is: the column answers "which
+      // one is about to fill up".
       field: "utilisation",
-      // note: "Capacity Used", not "Utilisation", because this page already carries a "Usage"
-      // facet meaning "has volumes attached". Two controls one letter apart in the same menu,
-      // measuring different things, is a worse answer than a longer label.
+      // Not "Utilisation": this page already has a "Usage" facet meaning "has volumes
+      // attached", and the two would sit next to each other in the same menu.
       label: "Capacity Used",
       sort: (p) => p.capacity.percent,
       filter: fromSort("number", {
@@ -142,22 +138,22 @@ function StoragePoolsContent() {
   const reach = reachabilityOf(data);
 
   // The capacity read fans out to every cluster and is the likelier of the two calls to fail.
-  // It no longer takes the list with it, so the rows are here and every reading is absent, which
-  // looks exactly like a fleet that reports nothing. Say which one it is.
+  // When it fails the rows are still here with every reading absent, which looks like a fleet
+  // that reports nothing, so the page says which it is.
   const capacityFailed: boolean = Boolean((data as any)?.capacityFailed);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const resetPage = () => setCurrentPage(1);
 
-  // note: derived from the rows, not from the fleet. It is empty exactly when the scope
-  // returns nothing, which is the state that used to leave the empty row one column too wide.
+  // Derived from the rows, not from the fleet, so it is empty exactly when the scope returns
+  // nothing and the empty row's colSpan drops the Cluster column with it.
   const nodes = useMemo(() => {
     const nodeSet = new Set(pools.map((p: any) => p.node).filter((n: any): n is string => Boolean(n)));
     return Array.from(nodeSet).sort();
   }, [pools]);
 
   // The column appears once any node is known, the facet once there are two to choose
-  // between. The thresholds differ on purpose: one option filters nothing.
+  // between: one option filters nothing.
   const availableFields = useMemo(
     () =>
       POOLS.facetFields.filter(
@@ -379,10 +375,9 @@ export default function StoragePoolsPage() {
   );
 }
 
-// note: the capacity panel reads the resources blob the page already fetches from
-// /storage/pools/resources-all. Only space.used and space.total were ever displayed, so the
-// whole inodes dict was paid for on every page load and thrown away. A pool can sit at 20% on
-// bytes and be completely full on inodes, and until now the UI could not say so.
+// The capacity panel reads the resources blob the page already fetches from
+// /storage/pools/resources-all, inodes included: a pool can sit at 20% on bytes and be full on
+// inodes.
 function poolSubject(
   pool: StoragePoolInfo,
   resources: Record<string, any>,

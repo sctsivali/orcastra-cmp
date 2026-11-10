@@ -39,9 +39,9 @@ export function NavItemRow({ item, ctx }: NavItemRowProps) {
     >
       <Link
         href={href}
-        // note: no viewport prefetch. Every sidebar leaf prefetching on sight fired one full
-        // RSC request per link on each page load, which saturated the connection budget and
-        // delayed the click the operator actually made. Warming moved to intent below.
+        // No viewport prefetch: every sidebar leaf prefetching on sight would fire one full RSC
+        // request per link on each page load, saturating the connection budget and delaying the
+        // click the operator made. Warming happens on intent below.
         prefetch={false}
         {...linkIntentProps(ctx.intent, href, ctx.warmFor(item.prefetchKey ?? href))}
         aria-current={active ? "page" : undefined}

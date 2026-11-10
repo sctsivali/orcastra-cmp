@@ -18,11 +18,7 @@ interface ApiKeyCapabilitySelectorProps {
 
 // Which endpoint families a key may use, as opposed to which clusters it may reach. The two
 // compose: a key needs lxd.proxy to use the proxy at all, and still needs the right per-cluster
-// level once it is there.
-//
-// Selection is tracked by name and mirrors the cluster picker's idiom next to it, including the
-// label-wraps-input pattern, so the whole row is a hit target for a pointer and the checkbox is
-// reachable by keyboard.
+// level once it is there. The label wraps the input, so the whole row is a pointer target.
 export function ApiKeyCapabilitySelector({
   capabilities,
   selected,
@@ -31,9 +27,8 @@ export function ApiKeyCapabilitySelector({
 }: ApiKeyCapabilitySelectorProps) {
   const safeList = Array.isArray(capabilities) ? capabilities : [];
 
-  // The server already marks the capabilities that reach inside a running guest, so this reads
-  // that flag rather than keeping a second copy of the list. Ticking one here is only half of
-  // what they need: without it, the first call meets a 403 nothing on this form warned about.
+  // The server flags the capabilities that reach inside a running guest. Ticking one here is
+  // not enough on its own: without the organization's consent, the first call answers 403.
   const needsOrgConsent = safeList.some(
     (capability) => capability?.never_inherited && selected.includes(capability.name),
   );

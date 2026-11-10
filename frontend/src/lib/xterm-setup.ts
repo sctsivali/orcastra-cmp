@@ -1,15 +1,15 @@
 /**
  * One xterm factory for every terminal surface: the console's Text and Serial tabs, the floating
- * terminal and both full pages. They used to carry four copies of the setup, which drifted.
+ * terminal and both full pages.
  *
  * - Renderer: WebGL, falling back to xterm's DOM renderer when WebGL2 is missing or its context is
- *   lost. Heavy output (logs, `top`) costs a fraction of the main-thread time it did on the DOM.
+ *   lost. Heavy output (logs, `top`) costs a fraction of the DOM renderer's main-thread time.
  * - Unicode 11 cell widths, so emoji and wide CJK glyphs take the cells the program expects.
- * - `convertEol` stays off: the PTY already turns LF into CRLF, and translating again moved the
- *   cursor to column 0 on every line feed a full-screen program (vim, htop, less) used to move
+ * - `convertEol` stays off: the PTY already turns LF into CRLF, and translating again would move
+ *   the cursor to column 0 on every line feed a full-screen program (vim, htop, less) uses to move
  *   down a row.
- * - Zoom changes the font size, so glyphs stay crisp and the grid refits (CSS zoom blurred them
- *   and put the mouse selection off by the zoom factor).
+ * - Zoom changes the font size, so glyphs stay crisp and the grid refits; CSS zoom blurs them and
+ *   offsets mouse selection by the zoom factor.
  * - The font is Geist Mono, the product's monospace face, already loaded through next/font.
  */
 
@@ -95,8 +95,8 @@ export function createXterm(container: HTMLElement, options: { fontSize?: number
   term.unicode.activeVersion = "11";
   term.open(container);
   const renderer = attachRenderer(term);
-  // note: with the WebGL renderer the text is not in the DOM; this lets the QA harness read the
-  // buffer. Not enumerable, so nothing that walks the element picks it up.
+  // With the WebGL renderer the text is not in the DOM; this lets browser tests read the buffer.
+  // Not enumerable, so nothing that walks the element picks it up.
   Object.defineProperty(container, "__xterm", { value: term, configurable: true });
 
   const fitNow = () => {

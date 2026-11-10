@@ -5,12 +5,10 @@ import { WARNING_SEVERITY_BUCKETS, type SeverityBucket } from "@/lib/warning-fac
 //
 // important: a list page reads its filters from the URL: one key per column, namespaced by
 // the table's id where a page holds several tables (`all.severity`, `nodes.cluster`), and the
-// value compared with exact equality against what the column's facet accessor returns. A link
-// written by hand at the source therefore breaks in three quiet ways: the key is spelled for
-// the wrong table, the value is the display name where the accessor returns the id, or the
-// encoding differs from the one the filter engine expects. Each of the three had shipped at
-// least once ("No warning matches the current filters." on a cluster with five warnings).
-// `scripts/checks/check-inventory-links.mjs` proves every key below against the target page's
+// value compared with exact equality against what the column's facet accessor returns. A
+// hand-written link can spell the key for the wrong table, pass a display name where the
+// accessor returns an id, or encode the value differently; each silently empties the list.
+// `scripts/checks/check-inventory-links.mjs` checks every key below against the target page's
 // source and refuses a hand-built inventory href anywhere else.
 
 /**
@@ -59,7 +57,7 @@ function build<T extends TargetName>(target: T, parts: Parts<T>): string {
     ? spec.path.replace("[name]", encodeURIComponent(parts.segment))
     : spec.path;
   const params = new URLSearchParams();
-  // note: `q` is the raw substring the search box holds, so it takes URLSearchParams' own
+  // `q` is the raw substring the search box holds, so it takes URLSearchParams' own
   // encoding. Facet values go through serialiseFacet, which is what the filter hook writes
   // and parseFacet undoes: a value with a comma or a percent sign survives only that way.
   if (parts.q) params.set("q", parts.q);
@@ -138,7 +136,7 @@ export const inventoryLinks = {
   instances: (link: InstancesLink) =>
     build("instances", { q: link.q, facets: { host: link.host, project: link.project } }),
 
-  // note: the only cell-level caller is components/ui/node-link.tsx, which owns the Partner
+  // The only cell-level caller is components/ui/node-link.tsx, which owns the Partner
   // gate (Clusters is Partner-tier). scripts/checks/check-node-link.mjs refuses any other.
   clusters: (link: { q?: string | null }) => build("clusters", { q: link.q }),
 
@@ -170,7 +168,7 @@ export const inventoryLinks = {
     build("profiles", { q: link.q, facets: { node: link.node, project: link.project } }),
 
   // `task` opens that task's detail dialog on load; `since` is the page's time range
-  // (`1h|24h|7d|30d`). Both are read raw by the page, so they are reserved, not facets.
+  // (`1h|24h|7d|30d`). The page reads both raw, so they are reserved keys.
   operations: (link: NodeSearchLink & { task?: string | null; since?: string | null }) =>
     build("operations", {
       q: link.q,

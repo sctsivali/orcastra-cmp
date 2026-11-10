@@ -172,34 +172,27 @@ function SnapshotsContent() {
   const scopeHost = onlyValue(parseFacet(searchParams.get("host")));
   const scopeProject = onlyValue(parseFacet(searchParams.get("project")));
 
-  // important: the request narrows only when BOTH narrow. That read is the cheaper one and the
-  // only path the backend runs its per-scope snapshot access check on; sizes do not depend on
-  // it, every read measures them. Picking a cluster alone costs no request at all: the fleet
-  // read is already in hand and the Cluster facet filters it.
+  // The request narrows only when both facets narrow: that read is the cheaper one and the only
+  // path the backend runs its per-scope snapshot access check on. Every read measures sizes.
+  // Picking a cluster alone needs no request: the Cluster facet filters the fleet read in hand.
   const narrowed = Boolean(scopeHost && scopeProject);
   const { data, isLoading, isFetching, isError, error, refreshNow, dataUpdatedAt } =
     useFleetSnapshots(narrowed ? scopeHost : undefined, narrowed ? scopeProject : undefined);
 
   const items: SnapshotInfo[] = useMemo(() => data?.items ?? [], [data]);
 
-  // important: the page subscribes to the cluster names itself rather than lifting the picker's
-  // hook. check-node-picker-status registers snapshot-scope-picker.tsx and fails the build if it
-  // stops calling useNodePickerOptions, and its own comment records that splitting a picker
-  // across two files is how this surface slipped that guard once already. Same query key, so
-  // React Query serves both subscriptions from one request.
+  // The page subscribes to the cluster names itself instead of lifting the picker's hook:
+  // check-node-picker-status requires snapshot-scope-picker.tsx to call useNodePickerOptions.
+  // Same query key, so React Query serves both subscriptions from one request.
   //
-  // Gated on the cluster names and NOT on the project list, deliberately. useNodeNames is a
-  // cheap list with a three minute staleTime, usually already warm, and without it the Cluster
-  // select renders its single "All Clusters" row and reads as a one-cluster fleet. useAllProjects
-  // is itself a fleet-wide fan-out; gating on it would lengthen the blank window and make the
-  // picker's own "Reading projects" line unreachable, which is the exact defect that file
-  // records having already fixed once.
+  // Gated on the cluster names only: without them the Cluster select reads as a one-cluster
+  // fleet. useAllProjects is a fleet-wide fan-out, and gating on it would lengthen the blank
+  // window and hide the picker's own "Reading projects" line.
   const nodeNames = useNodeNames();
 
-  // The select writes this state and the chip records and undoes it: one piece of state rendered
-  // twice, not two controls. The toolbar's own multi-select for these two is suppressed through
-  // availableFields, because a single-select cannot faithfully render a two-value state, and
-  // roles are pinned and exempt from the two-value threshold so this is the only lever.
+  // The select writes this state and the chip shows and undoes it. The toolbar's own multi-select
+  // for these two is suppressed through availableFields, because a single-select cannot render a
+  // two-value state; pinned roles are exempt from the two-value threshold, so this is the only way.
   const filters = useTableFilters(SNAPSHOTS, items, {
     onFilterChange: resetPage,
     availableFields: SNAPSHOTS.facetFields.filter((f) => f !== "host" && f !== "project"),
@@ -207,9 +200,8 @@ function SnapshotsContent() {
 
   const unreachableNodes: string[] = data?.unreachable_nodes ?? [];
   const queriedNodes: string[] = data?.queried_nodes ?? [];
-  // A cluster that answered for only some of its projects is deliberately NOT in
-  // unreachable_nodes, because its rows ARE here. Saying nothing would present an incomplete
-  // list as a complete one, which is the whole failure this response shape exists to describe.
+  // A cluster that answered for only some of its projects is not in unreachable_nodes, because
+  // its rows are here. The banner still has to say the list is incomplete.
   const partialNodes: string[] = data?.partial_nodes ?? [];
   const truncated = data?.truncated ?? false;
 
@@ -225,8 +217,7 @@ function SnapshotsContent() {
   const paginated = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   // Ordered so the table never contradicts the banner above it. An unreachable cluster answers
-  // 200 with no rows, so the ordinary create guidance used to render directly
-  // under an amber notice saying clusters could not be read.
+  // 200 with no rows, which must not read as an empty fleet.
   const empty =
     queriedNodes.length === 0 && unreachableNodes.length > 0
       ? {
@@ -317,20 +308,13 @@ function SnapshotsContent() {
     />
   );
 
-  // important: above every piece of chrome, which is what the other eighteen console pages do
-  // and what this page stopped doing when the read became fleet-wide. The loader used to sit
-  // inside the Card, which was harmless while nothing was fetched until a cluster was chosen and
-  // became the first paint the moment that precondition went away. What rendered around it was
-  // not merely early, it was untrue: the toolbar announced "0 snapshots" into a live region, the
-  // size note stated a measurement decision the backend had not made, and an empty banner
-  // asserted that every cluster had answered.
+  // The loader replaces the whole page, chrome included. Chrome rendered before the first read is
+  // untrue: the toolbar announces "0 snapshots" into a live region, the size note states a
+  // measurement decision the backend has not made, and the banner claims every cluster answered.
   //
-  // note: no `hasLoadedOnce` ref. Every refetch it was written for keeps `data` and sets only
-  // `isFetching`, so `isLoading` was already false for those; the one case it did change, a scope
-  // change to a new query key, it made worse by rendering those same claims with no data. The
-  // cost of dropping it is that narrowing to one cluster and one project blanks the page briefly.
-  // That is the only interaction that refetches at all, it is the fast read rather than the
-  // fan-out, and the URL holds the scope so the selects come back showing it.
+  // No `hasLoadedOnce` ref: a refetch keeps `data`, so `isLoading` is already false. Only a scope
+  // change to a new query key blanks the page, briefly; it is the fast read, and the URL holds the
+  // scope so the selects come back showing it.
   if (isLoading || nodeNames.isLoading) return <LoadingLottiePage />;
 
   // Only when there is nothing to show. A refetch can fail while the previous answer is still
@@ -467,10 +451,9 @@ function SnapshotsContent() {
   );
 }
 
-// important: the role gate sits ABOVE the content component, not inside it. The fleet read is no
-// longer gated on a cluster having been chosen, so a tenant deep-linking here would otherwise fan
-// out across every cluster before the redirect landed. check-role-gates.mjs reads this file's
-// text and does not follow imports, so the literal has to stay here anyway.
+// important: the role gate sits above the content component. Inside it, a tenant deep link would
+// fan the fleet read out across every cluster before the redirect lands. check-role-gates.mjs
+// reads this file's text and does not follow imports, so the call has to stay in this file.
 export default function SnapshotsPage() {
   const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
 

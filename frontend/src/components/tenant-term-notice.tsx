@@ -4,10 +4,9 @@ import { Clock, Lock } from "lucide-react";
 import type { TenantAccessSummary, TenantTermItem } from "@/lib/access-api";
 import { cn, formatDateTime, plural } from "@/lib/utils";
 
-// The paid term behind a Tenant's own access (backend core/tenant_term.py). After the term the
-// instances are read-only (owner decision 2026-10-27) and after the retention window they are
-// gone; this says so on every page instead of letting a disabled Start button be the only clue.
-// It reads the access verdict the shell already fetched, so it costs no request of its own.
+// Shows the paid term behind a Tenant's access (backend core/tenant_term.py) on every page: after
+// the term, instances are read-only; after the retention window, the project is deleted. Uses the
+// access summary the shell already fetched.
 
 const SHOWN = 3;
 

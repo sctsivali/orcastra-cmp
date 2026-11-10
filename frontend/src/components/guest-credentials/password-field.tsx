@@ -27,11 +27,10 @@ export interface PasswordFieldProps {
 /**
  * The one password input of the Credentials panel.
  *
- * important: a text field masked with CSS, not type="password", for the reason the unseal dialog
- * gives (components/host-health/unseal-vault-dialog.tsx): browsers offer to save a password field
- * into a synced store whatever autocomplete says, and a guest's root password does not belong in
- * the operator's browser profile. The value lives only in the caller's state; nothing here copies
- * it anywhere but the clipboard, and only when asked.
+ * important: a text field masked with CSS rather than type="password". Browsers offer to save a
+ * password field into a synced store whatever autocomplete says, and a guest's root password does
+ * not belong in the operator's browser profile. The value lives only in the caller's state and is
+ * copied only to the clipboard, on request.
  */
 export function PasswordField({ id, label, value, onChange, policy, error, optional, disabled, inputRef }: PasswordFieldProps) {
   const [reveal, setReveal] = React.useState(false);
@@ -117,7 +116,7 @@ export function PasswordField({ id, label, value, onChange, policy, error, optio
       </div>
 
       {reveal && generated && value && (
-        // note: groups are drawn with margins, not spaces, so selecting and copying them by hand
+        // Groups are drawn with margins rather than spaces, so selecting and copying them by hand
         // still gives the password exactly as it will be set.
         <p className="text-sm">
           <span className="text-muted-foreground">Reads as </span>
@@ -151,11 +150,9 @@ export interface MustChangeCheckboxProps {
 }
 
 /**
- * "Change at next login", with what it does to SSH spelled out.
- *
- * note: measured on real guests. Under PAM the expiry applies to key logins too: the first SSH
- * login asks for a new password, and a login with no terminal (a script, scp, `ssh host command`)
- * fails until one is chosen. A person who reads only the label would not expect that.
+ * "Change at next login", with its effect on SSH spelled out. Under PAM the expiry applies to key
+ * logins too: the first SSH login asks for a new password, and a login with no terminal (a
+ * script, scp, `ssh host command`) fails until one is chosen.
  */
 export function MustChangeCheckbox({ id, checked, onCheckedChange, disabled }: MustChangeCheckboxProps) {
   return (

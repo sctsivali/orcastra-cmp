@@ -3,11 +3,8 @@
  *
  * LXD auth-group permissions are granted against a path, and a project-scoped resource is only
  * addressable with its project on the query string. Two projects can each hold a `default`
- * profile or a `br0` network, so a bare path is ambiguous the moment the console can see past
- * one project.
- *
- * The edit dialog already built paths this way against a `project` field the API had never
- * sent, while the create dialog built bare ones. Both now share this.
+ * profile or a `br0` network, so a bare path is ambiguous once the console sees more than one
+ * project.
  */
 
 export const DEFAULT_PROJECT = "default";

@@ -3,11 +3,11 @@
 /**
  * React Query hooks for the task panel and the Operations page.
  *
- * Every key nests under one of two prefixes, `["tasks"]` and `["cluster-log"]`, so a single
- * invalidateQueries per prefix reaches everything (the feed does that on a late `hello` and on
- * `resync`). Polling is a fallback: each list polls at its POLL_MS tier only while the feed is
- * not connected, and never in a background tab. The summary and queue also poll source
- * health while connected, because per-cluster collector health is not a WebSocket frame.
+ * Every key nests under `["tasks"]` or `["cluster-log"]`, so one invalidateQueries per prefix
+ * reaches everything (the feed does that on a late `hello` and on `resync`). Lists poll at their
+ * POLL_MS tier only while the feed is not connected, and never in a background tab. The summary
+ * and queue also poll while connected, because per-cluster collector health is not a WebSocket
+ * frame.
  */
 
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
@@ -59,7 +59,7 @@ const INVALIDATE_DEBOUNCE_MS = 1000;
 const isOpen = (status: TaskRecord["status"]): boolean =>
   status === "pending" || status === "running";
 
-// note: the dock's counts leave LXD's own background work out, so a live frame must too. A row
+// The dock's counts leave LXD's own background work out, so a live frame must too. A row
 // whose actor is attached later (system to user) starts counting on that frame, as the server's
 // next summary will.
 const countsOpen = (task: TaskRecord): boolean => isOpen(task.status) && !isLxdHousekeeping(task);
@@ -71,9 +71,9 @@ export interface ActorMutationGuard {
 /**
  * Identity guard for a mutation started by the current authenticated actor.
  *
- * The object is replaced for every auth or role scope transition, rather than comparing only
- * the scope string. That also rejects a late response across an A -> B -> A transition. The
- * request already sent is deliberately left alone; only browser-side effects are suppressed.
+ * The object is replaced on every auth or role scope transition and compared by identity, so a
+ * late response across an A -> B -> A transition is rejected too, which a scope-string check would
+ * accept. The request already sent is left alone; only browser-side effects are suppressed.
  */
 export function useActorMutationGuard(): MutableRefObject<ActorMutationGuard> {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
@@ -455,8 +455,8 @@ export function upsertTaskInCaches(
     }
   }
 
-  // The summary is counts only. With the old row in hand the running delta is exact; without
-  // it the count could be anything, so a debounced refetch is the honest move.
+  // The summary is counts only. With the previous row in hand the running delta is exact;
+  // without it the delta is unknown, so the summary is refetched (debounced).
   const summaryKey = taskKeys.summary(scopeKey);
   const summary = queryClient.getQueryData<TaskListResponse>(summaryKey);
   if (summary && previous !== null) {

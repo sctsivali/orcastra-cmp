@@ -82,29 +82,25 @@ export function InstanceDistributionDialog({
   const [pageSize, setPageSize] = useState(PANEL_PAGE_SIZE);
   const contentRef = useRef<HTMLDivElement>(null);
 
-  // important: this dialog stays mounted between openings, so its page survives a close. The
-  // parent reopens it with a different filter (running, then containers), which is a different
-  // list entirely, and without this an operator who was on page 3 lands on page 3 of a list they
-  // have not seen. Compared during render rather than in an effect, which would paint the wrong
-  // page once before correcting it.
-  // note: filter only. Keying on the row count too would reset the page every time the poll saw
-  // an instance start or stop, throwing the operator back to page 1 mid-read. A list that merely
-  // shrank is what the clamp below is for.
+  // The dialog stays mounted between openings, so its page survives a close, and a new filter is
+  // a different list: the page resets when the filter changes. Compared during render, since an
+  // effect would paint the wrong page once. Filter only: keying on the row count would reset the
+  // page whenever an instance starts or stops. The clamp below handles a list that shrank.
   const [lastFilter, setLastFilter] = useState(filter);
   if (lastFilter !== filter) {
     setLastFilter(filter);
     setPage(1);
   }
 
-  // important: the list behind this dialog is live, so instances appear and vanish under the
-  // operator. Clamp the page on read rather than correcting it in an effect, or a shrinking list
-  // leaves them parked past the end painting nothing.
+  // The list behind this dialog updates while it is open, so instances appear and vanish. The
+  // page is clamped on read rather than corrected in an effect, so a shrinking list never leaves
+  // the operator on an empty page past the end.
   const totalPages = Math.max(1, Math.ceil(instances.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pagedInstances = instances.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
-  // important: no count until there is a list to count. The previous dialog rendered
-  // "0 instances found" over its skeleton, and a failed read as "No instances found".
+  // No count until there is a list to count: a skeleton must not say "0 instances found", nor a
+  // failed read "No instances found".
   const failed = !isLoading && !!error;
   const description = isLoading
     ? "Loading instances…"
@@ -117,9 +113,9 @@ export function InstanceDistributionDialog({
       <DialogContent
         ref={contentRef}
         className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col"
-        // important: focus the dialog itself, not its first control. Radix focuses the first
-        // tabbable element, which is the Refresh button; its tooltip opened with the dialog and
-        // took the first Escape, so a keyboard user needed two to close the list.
+        // Focus the dialog itself. Radix would focus the first tabbable element, the Refresh
+        // button, whose tooltip then takes the first Escape, so a keyboard user would need two
+        // to close the list.
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           contentRef.current?.focus();
@@ -172,8 +168,7 @@ export function InstanceDistributionDialog({
                       )}
                     </div>
                     <div className="min-w-0 break-words">
-                      {/* The hover tint on this row promised something for as long as it existed
-                          and never delivered it. The name is now a real control. */}
+                      {/* The name, not the row, is the control that opens the instance. */}
                       <p className="font-medium">
                         <TableLink
                           onClick={() => onSelectInstance(instance)}

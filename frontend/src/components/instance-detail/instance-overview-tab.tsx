@@ -12,8 +12,8 @@ import { inventoryLinks } from "@/lib/inventory-links";
 import { NodeLink } from "@/components/ui/node-link";
 import { usePermissions } from "@/hooks/use-permissions";
 
-// Everything the row already knew and the old modal never showed: description, architecture,
-// project, timestamps, profiles, tags, the cluster member, and the image the instance came from.
+// What the row already carries: description, architecture, project, timestamps, profiles, tags,
+// the cluster member, and the image the instance came from.
 export function InstanceOverviewTab({ instance }: { instance: VMInfo }) {
   const baseImage = instance.config?.["volatile.base_image"];
   const statusDisplay = instanceStatusDisplay(instance.status);
@@ -25,7 +25,7 @@ export function InstanceOverviewTab({ instance }: { instance: VMInfo }) {
       <DetailSection title="Identity">
         <DetailGrid cols={3}>
           <DetailField label="Type" value={formatInstanceType(instance.type)} />
-          {/* important: raw. formatLabel would render x86_64 as "X86 64". */}
+          {/* Raw: formatLabel would render x86_64 as "X86 64". */}
           <DetailField label="Architecture" value={instance.architecture} mono />
           <DetailField
             label="Status"
@@ -42,9 +42,7 @@ export function InstanceOverviewTab({ instance }: { instance: VMInfo }) {
         <DetailGrid cols={3}>
           <DetailField label="Created" value={formatDateTime(instance.created_at)} />
           <DetailField label="Last Used" value={formatDateTime(instance.last_used_at)} />
-          {/* important: the whole fingerprint. This rendered 12 of its 64 characters with no
-              ellipsis at all, so nothing told the operator the value had been cut, and the title
-              named the action rather than the value. */}
+          {/* The whole fingerprint, wrapped rather than cut. */}
           <DetailField
             label="Base Image"
             mono

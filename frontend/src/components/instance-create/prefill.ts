@@ -1,9 +1,7 @@
 /**
- * The deep-link contract between a row action and the instance create form.
- *
- * Both halves live here so the parameter names cannot drift: the Images and ISO Images tables
- * build the URL, the form reads it back. A row action that opens the wizard with nothing
- * filled in is the same amount of typing as the global New menu, so the seed is the feature.
+ * The deep-link contract between a row action and the instance create form. Both halves live
+ * here so the parameter names cannot drift: the Images and ISO Images tables build the URL,
+ * and the form reads it back.
  */
 
 export const CREATE_PARAM = {
@@ -43,17 +41,10 @@ const PROJECT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 /**
  * LXD image type as the API reports it, mapped onto the form's own two-value enum.
  *
- * important: the fallback here must match `ImageInfo.type`'s default in
- * `backend/app/models/schemas.py`, and `test_the_image_type_fallback_agrees_across_layers`
- * fails if it stops matching. The two used to disagree, this side answering "container" and
- * the schema answering "virtual-machine" for the same unknown. Neither branch can fire today,
- * because `services/lxd/images.py` always passes the value through and `ImageInfo.type` is a
- * required string on this side, so the contradiction was invisible and would have been
- * inherited by whoever edited one of them.
- *
- * Container is the right fallback for both: it is what the overwhelming majority of images in
- * an LXD store are. A wrong guess costs a create the daemon refuses, not a silent success,
- * and the seeded type stays editable in the form either way.
+ * important: the fallback must match `ImageInfo.type`'s default in
+ * `backend/app/models/schemas.py`; `test_the_image_type_fallback_agrees_across_layers` fails
+ * if the two drift apart. Container is the safe guess: most LXD images are containers, a wrong
+ * guess costs a create the daemon refuses, and the seeded type stays editable.
  */
 export const SEED_TYPE_FALLBACK: SeedInstanceType = "container";
 
@@ -96,13 +87,12 @@ export interface SeededFields {
 /**
  * Read a deep link into the fields the form understands, or null when there is nothing usable.
  *
- * important: everything is whitelisted rather than trusted. These parameters are ordinary
- * navigation and the backend validates the eventual create, but a half-applied seed is worse
- * than none: it produces a form that looks ready and submits something the operator did not
- * choose. So an incoherent combination drops the boot source and keeps only the node.
+ * important: everything is whitelisted rather than trusted. A half-applied seed would produce
+ * a form that looks ready and submits something the operator did not choose, so an incoherent
+ * combination drops the boot source and keeps only the node, type and project.
  *
- * The label is deliberately not read from the URL. It is display text, and the form resolves
- * the real one from the image list once it loads.
+ * The label is not read from the URL. It is display text, and the form resolves the real one
+ * from the image list once it loads.
  */
 export function readCreateSeed(params: URLSearchParams | null): Partial<SeededFields> | null {
   if (!params) return null;

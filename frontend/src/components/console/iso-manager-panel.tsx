@@ -1,7 +1,4 @@
-/**
- * ISO Manager Panel - Manage ISO/image attachments for VMs.
- * Allows attaching, detaching, and browsing available ISO files.
- */
+/** Attaches, detaches and browses the ISO images a VM can boot from. */
 
 "use client";
 
@@ -91,7 +88,6 @@ export function ISOManagerPanel({
     [scopeKey, target],
   );
 
-  // Fetch attached ISO
   const fetchAttachedISO = useCallback(async () => {
     try {
       const data = await consoleAPI.getAttachedISO(instanceName, host, project);
@@ -116,7 +112,6 @@ export function ISOManagerPanel({
     }
   }, [consoleId, host, instanceName, project, isCurrent, setAttachedISO]);
 
-  // Fetch available ISOs
   const fetchAvailableISOs = useCallback(async () => {
     try {
       const data = await consoleAPI.listISOs(host, project);
@@ -130,8 +125,8 @@ export function ISOManagerPanel({
       }
     } catch (err) {
       if (!isCurrent()) return;
-      // important: rethrow. Swallowing this made a failed fetch render as an
-      // empty ISO library, which reads as "this pool has no ISOs".
+      // important: rethrow. Swallowing the error would render a failed fetch as
+      // an empty ISO library.
       console.error('Error fetching ISOs:', err);
       throw err;
     }
@@ -150,7 +145,6 @@ export function ISOManagerPanel({
     }
   }, [fetchAttachedISO, fetchAvailableISOs, isCurrent]);
 
-  // Initial load
   useEffect(() => {
     targetRef.current = target;
     setAvailableISOs([]);
@@ -200,7 +194,6 @@ export function ISOManagerPanel({
     }
   };
 
-  // Attach ISO
   const handleAttach = async () => {
     if (!selectedISO) return;
 
@@ -236,7 +229,6 @@ export function ISOManagerPanel({
     }
   };
 
-  // Eject ISO
   const handleEject = async () => {
     if (!attachedISO) return;
 
@@ -273,7 +265,6 @@ export function ISOManagerPanel({
     }
   };
 
-  // Filter ISOs by search
   const filteredISOs = availableISOs.filter(iso =>
     iso.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     iso.pool.toLowerCase().includes(searchQuery.toLowerCase())
@@ -302,7 +293,6 @@ export function ISOManagerPanel({
 
   return (
     <div className={cn("flex flex-col h-full", className)}>
-      {/* Currently attached */}
       <div className="p-4 border-b">
         <h3 className="text-sm font-medium mb-3">Current CD-ROM</h3>
         
@@ -363,7 +353,6 @@ export function ISOManagerPanel({
         )}
       </div>
 
-      {/* Available ISOs */}
       <div className="flex-1 flex flex-col min-h-0">
         <div className="p-4 pb-2">
           <div className="flex items-center justify-between mb-3">
@@ -425,7 +414,6 @@ export function ISOManagerPanel({
         </ScrollArea>
       </div>
 
-      {/* Attach controls */}
       {selectedISO && (
         <div className="p-4 border-t bg-muted/20">
           <div className="flex items-center gap-4 mb-3">
@@ -469,7 +457,6 @@ export function ISOManagerPanel({
         </div>
       )}
 
-      {/* Eject confirmation */}
       <AlertDialog open={confirmEject} onOpenChange={setConfirmEject}>
         <AlertDialogContent>
           <AlertDialogHeader>

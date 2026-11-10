@@ -9,11 +9,10 @@ import { classifyTag, getTagColor, getTagDisplayName } from "@/types/api";
 /**
  * A tag's category hue as a small square, the only place that hue appears.
  *
- * note: the category colours (types/api.ts TAG_CATEGORY_PREFIXES) were also the chip's text over an
- * 8% tint of themselves, which measured near 2:1 for the amber and green categories and is the
- * tinted-pill shape the status-chip sweep fails. A square rather than a dot because a round 8px
- * colour reads as a status light (documentation/ui/frontend-design-language.md); `rounded-[2px]`
- * because `rounded-sm` is 8px in this theme and would draw a circle again.
+ * The category colours (types/api.ts TAG_CATEGORY_PREFIXES) as chip text over an 8% tint of
+ * themselves fall near 2:1 for the amber and green categories, so the hue lives here instead. A
+ * square rather than a dot because a round 8px colour reads as a status light; `rounded-[2px]`
+ * because `rounded-sm` is 8px in this theme and would draw a circle.
  */
 export function TagSwatch({ color }: { color: string }) {
   return (
@@ -62,9 +61,9 @@ export function TagBadge({ tag, onRemove, showCategory = false, size = "default"
 /**
  * A tag or tag category that can be switched on and off, as a real toggle button.
  *
- * important: these were `<Badge onClick>` divs, which Tab never reaches, so a keyboard user could
- * not filter by a tag or pick a prefix at all. Off is an outline chip with the category swatch; on
- * is a filled neutral chip with a check, so the state never rides on the hue alone.
+ * A button, so Tab reaches it and a keyboard user can filter by a tag or pick a prefix. Off is an
+ * outline chip with the category swatch; on is a filled neutral chip with a check, so the state
+ * never rides on the hue alone.
  */
 export function TagToggle({
   label,

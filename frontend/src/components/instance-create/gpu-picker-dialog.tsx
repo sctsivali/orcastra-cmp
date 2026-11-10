@@ -35,17 +35,12 @@ interface GpuPickerDialogProps {
 }
 
 /**
- * Pick the GPU to pass through.
+ * Pick the GPU to pass through. Compute cards sort first, so the top row is the
+ * recommendation. A display controller stays selectable (LXD passes one through, and some VMs
+ * want the framebuffer), but it sorts last, reads muted and says that it cannot be allocated.
  *
- * Sorting is the recommendation: compute cards come first, so the top row is the right answer
- * without a "Recommended" column to read. A display controller stays selectable, because LXD
- * will pass one through and some VMs want the framebuffer, but it sorts last, reads muted and
- * says plainly that it cannot be allocated.
- *
- * The identifier is the point of the redesign. On hardware with no PCI address (a Tegra iGPU)
- * the old table showed two rows of dashes and a 0 and a 1, and picking the wrong one silently
- * attached the display controller. Every row now names the card, its class, and the exact
- * selector that will be written into the device.
+ * Every row names the card, its class and the exact selector written into the device, so
+ * cards without a PCI address (ex; a Tegra iGPU) can still be told apart.
  */
 export function GpuPickerDialog({
   open,

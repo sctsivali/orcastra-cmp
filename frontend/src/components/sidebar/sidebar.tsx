@@ -56,8 +56,8 @@ export function Sidebar({ className }: SidebarProps) {
   const activeHref = resolveActiveHref([...allHrefs, "/settings"], pathname);
 
   // important: close the mobile drawer when the route commits, not when the link is clicked.
-  // Closing on click unmounted the <Link> and with it the pending spinner, so a tap gave no
-  // feedback at all for the whole navigation.
+  // Closing on click would unmount the <Link> and its pending spinner, so a tap would give no
+  // feedback for the whole navigation.
   React.useEffect(() => {
     setSidebarOpen(false);
   }, [pathname, setSidebarOpen]);
@@ -102,16 +102,12 @@ export function Sidebar({ className }: SidebarProps) {
           !sidebarOpen && !isCollapsed && "md:w-64",
           className
         )}
-        // note: no inline backgroundColor here. `.sidebar-custom-bg` in app/globals.css paints
-        // the ground with an !important declaration, and an important author rule beats a
-        // normal inline style outright, so this element's `style` never reached the screen. It
-        // read as a fallback for a missing CSS variable and was not one: an unresolvable var()
-        // makes the important declaration invalid at computed-value time, which computes to
-        // `transparent` rather than deferring to the loser of the cascade. The real fallback is
-        // the second argument to var() in that rule.
+        // No inline backgroundColor here. `.sidebar-custom-bg` in app/globals.css paints the
+        // ground with an !important declaration, which beats an inline style outright. Nor
+        // would it act as a fallback: an unresolvable var() makes the declaration compute to
+        // `transparent`. The real fallback is the second argument to var() in that rule.
       >
         <div className="flex flex-col h-full overflow-hidden overscroll-contain">
-          {/* Header: logo + collapse/close */}
           <div className="flex h-16 md:h-20 items-center justify-between border-b px-3 md:px-2 shrink-0">
             <Link
               href="/"
@@ -169,11 +165,10 @@ export function Sidebar({ className }: SidebarProps) {
             )}
           </div>
 
-          {/* Navigation */}
           <ScrollArea className="flex-1">
             <nav aria-label="Primary">
-              {/* key re-mounts on mode change so the incoming rail/tree fades in over the same
-                  200ms the width animates, softening the collapse swap. */}
+              {/* The key re-mounts on mode change so the incoming rail or tree fades in over
+                  the same 200ms the width animates. */}
               <div
                 key={showRail ? "rail" : "tree"}
                 className="animate-in fade-in-0 duration-200 motion-reduce:animate-none"

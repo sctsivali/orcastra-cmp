@@ -3,18 +3,13 @@
 /**
  * Create or edit a network ACL.
  *
- * The page has been a reader since it shipped: the routes, the API client and the hooks all
- * existed, with no call site anywhere, so an administrator had to drop to `lxc network acl
- * create` on the hypervisor to define a rule and then come back here to look at it. That is
- * the gap operators reported and repeated as a feature request.
- *
  * An ACL is a name plus two ordered rule lists. LXD validates the rule bodies itself and its
  * errors are specific, so this form checks the things the operator can fix without a round
  * trip (a name LXD will reject, a rule with no action) and lets the daemon answer the rest.
  *
  * An edit seeds from a fresh read, not from the list row: the row can be minutes old and
- * carries no version. The read's etag travels back as If-Match, so two operators editing one
- * ACL no longer end with the later save winning whole; the second one is told to reload.
+ * carries no version. The read's etag travels back as If-Match, so when two operators edit one
+ * ACL the second save is refused and told to reload instead of overwriting the first.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -86,9 +81,8 @@ export function AclFormDialog({
   const updateACL = useUpdateNetworkACL();
   const isEdit = !!existing;
 
-  // important: the node list comes from the fleet, not from the rows on the page. Deriving it
-  // from the rows fails exactly when there are none to derive it from, which is the state an
-  // operator is in the first time they open this.
+  // The node list comes from the fleet, not from the rows on the page: with no ACLs yet there
+  // would be no rows to derive it from.
   const nodePicker = useNodePickerOptions();
   const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;
 
@@ -144,7 +138,7 @@ export function AclFormDialog({
   }, [open, isEdit, editRead.data]);
 
   // isPending, not isFetching: only the first read (and a Reload, which changes the key)
-  // replaces the form; a background fetch must never swap it out from under an edit
+  // replaces the form; a background fetch must never swap it out from under an edit.
   const reading = isEdit && editRead.isPending;
   const readFailed = isEdit && editRead.isError;
   const reload = () => setNonce((n) => n + 1);
@@ -194,9 +188,9 @@ export function AclFormDialog({
       : setEgress((r) => r.filter((_, i) => i !== index));
 
   // important: `submitting` is React state, so it only reaches `canSubmit` on the next render.
-  // Two clicks inside one tick both pass the disabled check and both fire a create, which is
-  // two ACLs on the cluster. The ref is claimed synchronously, before any await, so the second
-  // click has something to lose against. Same guard as networks/network-create-dialog.tsx.
+  // Two clicks inside one tick both pass the disabled check and would create two ACLs. The ref
+  // is claimed synchronously, before any await, so the second click loses. Same guard as
+  // networks/network-create-dialog.tsx.
   const submitInFlightRef = useRef(false);
 
   const submit = async () => {
@@ -210,9 +204,9 @@ export function AclFormDialog({
         description: description.trim(),
         ingress: ingress.map(cleanRule),
         egress: egress.map(cleanRule),
-        // important: omit config on an edit. Sending {} replaces whatever LXD holds, so an
-        // edit that only touched a rule silently dropped the ACL's config keys. Leaving the
-        // key out lets the backend's read-modify-write carry the live value through.
+        // important: omit config on an edit. Sending {} replaces whatever LXD holds and would
+        // silently drop the ACL's config keys. Leaving the key out lets the backend's
+        // read-modify-write carry the live value through.
         ...(isEdit ? {} : { config: {} }),
       };
       if (isEdit) {

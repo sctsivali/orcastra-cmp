@@ -95,7 +95,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
   const addIdentityMutation = useAddIdentityToGroup();
   const removeIdentityMutation = useRemoveIdentityFromGroup();
   
-  // Track active tab to delay resource fetching
+  // Resource reads wait until the Permissions tab is first visited.
   const [activeTab, setActiveTab] = useState("basic");
   const [permissionsTabVisited, setPermissionsTabVisited] = useState(false);
   
@@ -113,7 +113,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
   const [allResources, setAllResources] = useState(false);
   const [resourceSearchQuery, setResourceSearchQuery] = useState("");
 
-  // Identity management
   const [newIdentity, setNewIdentity] = useState({
     auth_type: "tls" as "tls" | "oidc",
     identity_id: "",
@@ -124,7 +123,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
   const [identityToRemove, setIdentityToRemove] = useState<{authType: string, id: string} | null>(null);
 
-  // Helper: Extract resource name from permission URL for better display
   const getResourceNameFromUrl = (url: string): string => {
     if (url === "/1.0") return "Server";
     if (url.endsWith("/*")) return "All Resources";
@@ -132,7 +130,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
     return parts[parts.length - 1] || url;
   };
 
-  // Helper: Check if permission already exists
   const isDuplicatePermission = (newPerm: Permission): boolean => {
     return permissions.some(
       p => p.entity_type === newPerm.entity_type && 
@@ -141,36 +138,33 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
     );
   };
   
-  // Get first available node as fallback if group.node is missing
+  // Falls back to the first cluster when the group carries no node.
   const { data: clustersData } = useClusters();
   const availableClusters = (clustersData as any)?.clusters || [];
   const fallbackNode = availableClusters[0]?.name || "";
   
-  // Use group.node if available, otherwise fallback to first node
   const workingNode = group?.node || fallbackNode;
   
-  // Fetch group data directly to get real-time updates
+  // Read the group directly so saved changes show without reopening the dialog.
   const { data: groupData, refetch: refetchGroup } = useGroup(
     group?.name || "", 
     workingNode
   );
   
-  // Use fetched group data if available, otherwise fallback to prop
-  // Ensure node is set
   const currentGroup = groupData 
     ? { ...(groupData as GroupInfo), node: (groupData as GroupInfo).node || workingNode }
     : group 
     ? { ...group, node: group.node || workingNode }
     : null;
   
-  // Lazy load resources based on selected entity type (only fetch when permissions tab is visited)
+  // Only the selected entity type is read, and only once the Permissions tab has been visited.
   const entityType = newPermission.entity_type;
   const shouldFetchResources = permissionsTabVisited;
   const { data: projectsData, isLoading: loadingProjects } = useProjects(
     shouldFetchResources && entityType === "project" ? workingNode : ""
   );
-  // An undefined host used to mean "read the whole fleet"; the dialog only ever needs the
-  // working node's rows of one entity type, so anything else is gated off.
+  // The dialog needs only the working node's rows of one entity type, so every other read is
+  // disabled.
   const instanceHost = shouldFetchResources && entityType === "instance" ? workingNode : undefined;
   const imageHost = shouldFetchResources && entityType === "image" ? workingNode : undefined;
   const { data: instancesData, isLoading: loadingInstances } = useInstances(instanceHost, {
@@ -188,39 +182,33 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
   });
   const { data: poolsData, isLoading: loadingPools } = useStoragePools(poolHost, { enabled: !!poolHost });
   
-  // Fetch all identities using the same hook as identities page
   const { data: identitiesData, isLoading: loadingIdentities } = useIdentities(workingNode);
   const allIdentities = (identitiesData as IdentityListResponse)?.identities || [];
 
-  // Track if dialog was just opened (to distinguish from data refetches)
   const [dialogJustOpened, setDialogJustOpened] = useState(false);
   
-  // Track when dialog opens
   useEffect(() => {
     if (open) {
       setDialogJustOpened(true);
     } else {
-      // Reset dirty flag and tab state when dialog closes
       setIsPermissionsDirty(false);
       setActiveTab("basic");
       setPermissionsTabVisited(false);
-      // note: the dialog stays mounted between groups, so the page has to be released here.
-      // This is a lifecycle reset on close, not a clamp: the clamp lives on the read path.
+      // The dialog stays mounted between groups, so the page is reset on close.
       setPage(1);
     }
   }, [open]);
 
-  // Reset state ONLY when dialog first opens (not on every refetch)
+  // Seed the form once per opening, so a refetch never overwrites edits in progress.
   useEffect(() => {
     if (dialogJustOpened && currentGroup) {
       setDescription(currentGroup.description || "");
       setPermissions((currentGroup.permissions || []) as Permission[]);
       setIsPermissionsDirty(false);
-      setDialogJustOpened(false); // Mark as handled
+      setDialogJustOpened(false);
     }
   }, [dialogJustOpened, currentGroup]);
   
-  // Get available resources based on entity type
   const getAvailableResources = (): Resource[] =>
     permissionResources(newPermission.entity_type, {
       projects: projectsData,
@@ -232,7 +220,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
     });
 
   const isLoadingResources = (): boolean => {
-    // If workingNode is not available yet, show loading
     if (!workingNode) return true;
     
     switch (newPermission.entity_type) {
@@ -267,8 +254,8 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
     );
   };
 
-  // note: clamped on read rather than corrected in an effect. Removing the last permission on a
-  // page would otherwise paint an empty list for a frame before snapping back.
+  // Clamped on read rather than corrected in an effect. Removing the last permission on a page
+  // would otherwise paint an empty list for a frame before snapping back.
   const totalPages = Math.max(1, Math.ceil(permissions.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   // important: every paged row carries its index into the full permissions array, never into the
@@ -280,12 +267,10 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
 
   if (!group) return null;
 
-  // Save Basic Info (description only)
   const handleUpdateBasicInfo = async (e?: React.FormEvent | React.MouseEvent) => {
     if (e) e.preventDefault();
 
     try {
-      // Only send description for Basic Info update
       await updateGroupMutation.mutateAsync({
         name: currentGroup?.name || group?.name || "",
         data: {
@@ -298,10 +283,9 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
         title: "Group description updated",
       });
       
-      // Wait a bit for LXD to persist changes before refetching
+      // Give LXD a moment to persist the change before the refetch.
       await new Promise(resolve => setTimeout(resolve, 500));
       
-      // Refetch group data to get updated state from server
       await refetchGroup();
       onRefresh();
     } catch (error: any) {
@@ -313,7 +297,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
     }
   };
 
-  // Save Permissions
   const handleSavePermissions = async () => {
     try {
       await updateGroupMutation.mutateAsync({
@@ -328,16 +311,13 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
         title: "Group permissions updated",
       });
 
-      // Reset dirty flag
       setIsPermissionsDirty(false);
       
-      // Wait a bit for LXD to persist changes before refetching
+      // Give LXD a moment to persist the change before the refetch.
       await new Promise(resolve => setTimeout(resolve, 500));
       
-      // Refetch group data to get updated state from server
       const result = await refetchGroup();
       
-      // Sync permissions from the refetched data
       if (result.data) {
         const refreshedGroup = result.data as GroupInfo;
         setPermissions((refreshedGroup.permissions || []) as Permission[]);
@@ -393,7 +373,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
     }
 
     if (newPerms.length > 0) {
-      // Filter out duplicates
       const uniquePerms = newPerms.filter(p => !isDuplicatePermission(p));
       const duplicateCount = newPerms.length - uniquePerms.length;
       
@@ -472,11 +451,9 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
         identity_id: "",
       });
 
-      // Invalidate queries to refresh data
       await queryClient.invalidateQueries({ queryKey: ["groups"] });
       await queryClient.invalidateQueries({ queryKey: ["group"] });
       
-      // Refetch this specific group to update UI immediately
       await refetchGroup();
       
       onRefresh();
@@ -489,7 +466,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
     }
   };
 
-  // Show confirmation dialog before removing identity
   const confirmRemoveIdentity = (authType: string, identityId: string) => {
     setIdentityToRemove({ authType, id: identityId });
   };
@@ -522,11 +498,9 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
         description: `Identity removed from group "${currentGroup.name}".`,
       });
 
-      // Invalidate queries to refresh data
       await queryClient.invalidateQueries({ queryKey: ["groups"] });
       await queryClient.invalidateQueries({ queryKey: ["group"] });
       
-      // Refetch this specific group to update UI immediately
       await refetchGroup();
       
       onRefresh();
@@ -541,7 +515,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
     }
   };
 
-  // Get identities from currentGroup - now properly structured as {tls: [], oidc: []}
   const groupedIdentities: GroupedIdentities = {
     tls: currentGroup?.identities?.tls || [],
     oidc: currentGroup?.identities?.oidc || [],
@@ -549,7 +522,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
 
   if (!currentGroup) return null;
 
-  // Handle dialog close with unsaved changes check
   const handleDialogChange = (isOpen: boolean) => {
     if (!isOpen && isPermissionsDirty) {
       setShowUnsavedWarning(true);
@@ -592,7 +564,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
             <TabsTrigger value="identities" className="text-[10px] sm:text-xs px-1.5 sm:px-3 py-1.5 truncate">Identities</TabsTrigger>
           </TabsList>
 
-          {/* Basic Info Tab */}
           <TabsContent value="basic" className="space-y-4 overflow-y-auto flex-1 min-h-0 pr-2">
             <form onSubmit={handleUpdateBasicInfo} className="space-y-4">
               <div className="space-y-2">
@@ -635,7 +606,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
             </form>
           </TabsContent>
 
-          {/* Permissions Tab */}
           <TabsContent value="permissions" className="space-y-3 overflow-y-auto flex-1 min-h-0 pr-2">
             <div>
               <Label className="text-sm font-semibold">Group Permissions</Label>
@@ -644,7 +614,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
               </p>
             </div>
 
-            {/* Existing Permissions */}
             {permissions.length > 0 && (
               <div className="space-y-2">
                 {pagedPermissions.map(({ permission, index }) => (
@@ -707,11 +676,9 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
               </div>
             )}
 
-            {/* Add New Permission */}
             <div className="border rounded-lg p-4 space-y-4">
               <Label className="text-sm font-medium">Add Permission</Label>
               
-              {/* Step 1: Select Resource Type */}
               <div className="space-y-2">
                 <Label className="text-xs text-muted-foreground">1. Select Resource Type</Label>
                 <Select
@@ -733,7 +700,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                 </Select>
               </div>
 
-              {/* Step 2: Select Resources */}
               {newPermission.entity_type !== "server" && (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
@@ -748,7 +714,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                     )}
                   </div>
 
-                  {/* All Resources Checkbox */}
                   <div className="flex items-center gap-2 p-2 bg-muted/50 rounded border">
                     <Checkbox
                       id="all-resources-edit"
@@ -768,10 +733,8 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                     </Label>
                   </div>
 
-                  {/* Resource List */}
                   {!allResources && (
                     <div className="space-y-2">
-                      {/* Search Input */}
                       <div className="relative">
                         <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                         <input
@@ -849,7 +812,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                 </div>
               )}
 
-              {/* Step 3: Permission Level */}
               <div className="space-y-2">
                 <Label className="text-xs text-muted-foreground">
                   {newPermission.entity_type === "server" ? "2" : "3"}. Set Permission Level
@@ -904,7 +866,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
             </DialogFooter>
           </TabsContent>
 
-          {/* Identities Tab */}
           <TabsContent value="identities" className="space-y-3 overflow-y-auto flex-1 min-h-0 pr-2">
             <div>
               <Label className="text-base font-semibold">Group Members (Identities)</Label>
@@ -913,7 +874,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
               </p>
             </div>
 
-            {/* TLS Identities */}
             <div className="space-y-2">
               <Label className="text-sm font-semibold">
                 TLS Identities ({groupedIdentities.tls.length})
@@ -921,7 +881,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
               {groupedIdentities.tls.length > 0 ? (
                 <div className="space-y-2">
                   {groupedIdentities.tls.map((identityId, index) => {
-                    // Find the identity details to get the name
                     const identityDetails = allIdentities.find(i => i.id === identityId);
                     const identityName = identityDetails?.name || '';
                     
@@ -963,7 +922,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
               )}
             </div>
 
-            {/* OIDC Identities */}
             <div className="space-y-2">
               <Label className="text-sm font-semibold">
                 OIDC Identities ({groupedIdentities.oidc.length})
@@ -971,7 +929,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
               {groupedIdentities.oidc.length > 0 ? (
                 <div className="space-y-2">
                   {groupedIdentities.oidc.map((identityId, index) => {
-                    // Find the identity details to get the name
                     const identityDetails = allIdentities.find(i => i.id === identityId);
                     const identityName = identityDetails?.name || '';
                     
@@ -1013,7 +970,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
               )}
             </div>
 
-            {/* Add New Identity */}
             <div className="border rounded-lg p-4 space-y-3">
               <Label className="text-sm font-medium">Add Identity</Label>
               
@@ -1024,7 +980,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                 </div>
               ) : (
                 <>
-                  {/* Filter by Auth Type */}
                   <div className="space-y-2">
                     <Label className="text-xs text-muted-foreground">Filter by Type</Label>
                     <Select
@@ -1044,7 +999,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                     </Select>
                   </div>
 
-                  {/* Searchable Identity List */}
                   <div className="space-y-2">
                     <Label className="text-xs text-muted-foreground">
                       Select Identity from {workingNode}
@@ -1081,9 +1035,8 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                             <CommandGroup>
                               {(allIdentities || [])
                                 .filter(identity => {
-                                  // Map API types to auth_type
-                                  // TLS: "Client certificate", "Client certificate (pending)", etc.
-                                  // OIDC: "OIDC client"
+                                  // LXD identity types: TLS is "Client certificate" (also
+                                  // "Client certificate (pending)"), OIDC is "OIDC client".
                                   const isTLS = identity.type?.toLowerCase().includes('certificate');
                                   const isOIDC = identity.type?.toLowerCase().includes('oidc');
                                   
@@ -1095,14 +1048,13 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                                   return false;
                                 })
                                 .filter(identity => {
-                                  // Don't show identities already in this group
                                   const tlsIdentities = currentGroup?.identities?.tls || [];
                                   const oidcIdentities = currentGroup?.identities?.oidc || [];
                                   const allGroupIdentities = [...tlsIdentities, ...oidcIdentities];
                                   return !allGroupIdentities.includes(identity.id);
                                 })
                                 .filter(identity => {
-                                  // Custom search filter - only search in name and ID
+                                  // cmdk filtering is off; match on name and ID only.
                                   if (!identitySearchValue) return true;
                                   
                                   const searchLower = identitySearchValue.toLowerCase();
@@ -1152,7 +1104,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                     </Popover>
                   </div>
 
-                  {/* Add Button */}
                   <Button
                     type="button"
                     onClick={handleAddIdentity}
@@ -1169,7 +1120,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                     )}
                   </Button>
 
-                  {/* Info Text */}
                   <div className="bg-muted/50 rounded p-3 space-y-1">
                     <p className="text-xs text-muted-foreground">
                       <strong>Tip:</strong> Use the search box to quickly find identities by name or ID.
@@ -1185,7 +1135,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
         </Tabs>
       </DialogContent>
 
-      {/* Unsaved Changes Warning Dialog */}
       <Dialog open={showUnsavedWarning} onOpenChange={setShowUnsavedWarning}>
         <DialogContent className="max-w-md">
           <DialogHeader className="pb-4">
@@ -1207,7 +1156,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
         </DialogContent>
       </Dialog>
 
-      {/* Remove Identity Confirmation Dialog */}
       <Dialog open={!!identityToRemove} onOpenChange={(open) => !open && setIdentityToRemove(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader className="pb-4">
@@ -1216,9 +1164,8 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
             </DialogTitle>
             <DialogDescription className="space-y-2">
               <span>Are you sure you want to remove this identity from the group?</span>
-              {/* important: printed whole, and not behind a reveal. This is the identity the
-                  operator is about to remove, and asking them to click something to see what they
-                  are confirming is how the wrong one gets removed. */}
+              {/* important: printed whole, not behind a reveal, so the operator sees exactly
+                  which identity they are about to remove. */}
               <span className="block max-w-full break-all rounded bg-muted px-2 py-1.5 font-mono text-xs font-medium">
                 {identityToRemove?.id}
               </span>

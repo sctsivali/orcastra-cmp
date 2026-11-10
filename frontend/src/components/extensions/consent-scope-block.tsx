@@ -3,16 +3,13 @@
 import { EMPTY_VALUE } from "@/components/ui/table-text";
 
 /**
- * Which clusters the add-on will actually reach, and which it asked for and will not get.
+ * Which clusters the add-on will reach, and which it asked for and will not get.
  *
- * important: the granted set is the server's answer, passed in, never recomputed here. A browser
- * that works out its own intersection can disagree with the server, and it would do so at the
- * exact moment an operator is approving something. Refused clusters are shown rather than quietly
- * omitted, because a shorter list with no explanation reads as a mistake.
+ * important: the granted set is the server's answer, passed in and never recomputed here; an
+ * intersection worked out in the browser can disagree with the server at the moment of approval.
+ * Refused clusters are listed so a shorter list does not read as a mistake.
  *
- * note: deliberately not a Table. This is a fixed consent summary of a handful of rows, not a
- * data surface an operator filters or sorts, and the table contract in this repo exists for the
- * latter. Borrowing the markup would claim a contract this does not need and cannot honour.
+ * A plain list rather than a Table: a fixed summary of a few rows, never filtered or sorted.
  */
 export function ConsentScopeBlock({
   requested,

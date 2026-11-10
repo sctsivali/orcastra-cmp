@@ -1,10 +1,6 @@
 "use client";
 
-/**
- * Authentication Error Page
- *
- * Displays user-friendly error messages for authentication failures.
- */
+/** Explains an Auth.js sign-in error and links back to sign-in. */
 
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
@@ -23,7 +19,6 @@ import { AuthBrandMark } from "@/components/branding/auth-brand-mark";
 import { IllustrationFallback } from "@/components/illustrations/illustration-frame";
 import { AccessGateIllustration } from "@/components/illustrations/scenes/states";
 
-// Error details mapping
 const errorDetails: Record<string, { title: string; description: string }> = {
   Configuration: {
     title: "Authentication Configuration Error",
@@ -75,7 +70,7 @@ function ErrorContent() {
   const searchParams = useSearchParams();
   const error = searchParams.get("error") || "Default";
   const { title, description } = errorDetails[error] || errorDetails.Default;
-  // note: read after mount, because the server render has no tab storage to agree with.
+  // Read after mount, because the server render has no tab storage to agree with.
   const [signInHref, setSignInHref] = useState("/auth/signin");
   useEffect(() => {
     const returnPath = recallReturnPath();
@@ -103,7 +98,6 @@ function ErrorContent() {
         </CardHeader>
 
         <CardContent className="space-y-4">
-          {/* Action Buttons */}
           <div className="flex flex-col gap-3">
             <Link href={signInHref} className="w-full">
               <Button className="w-full" size="lg">
@@ -120,7 +114,6 @@ function ErrorContent() {
             </Link>
           </div>
 
-          {/* Error Code */}
           <div className="text-center text-xs text-muted-foreground pt-4 border-t">
             <p>Error Code: {error}</p>
             <p className="mt-1">

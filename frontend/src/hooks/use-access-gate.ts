@@ -15,16 +15,15 @@ const BLOCKED_POLL_MS = 60_000;
 const ALLOWED_POLL_MS = 5 * 60_000;
 
 /**
- * Whether the signed-in caller may see the dashboard (issue #17).
+ * Whether the signed-in caller may see the dashboard.
  *
  * A caller whose groups map to no role is known from the session alone. A Tenant asks the backend,
  * because "no cluster access yet" is decided by the same scope the API enforces. Admin and
  * Partner never ask and are never blocked.
  *
  * important: only a known denial blocks, so a failed read and an unreadable session render the
- * dashboard. A Tenant's first verdict is "checking" rather than "allowed": rendering the shell
- * while it loaded let Home, Instances and Projects read the empty scope of a Tenant with no access,
- * and those zeros were still cached, and shown, after access was granted.
+ * dashboard. A Tenant's first verdict is "checking": rendering the shell before it lands lets pages
+ * cache the empty scope of a Tenant with no access and keep showing it after access is granted.
  */
 export function useAccessGate({ enabled }: { enabled: boolean }) {
   const { data: session, status, update } = useSession();
@@ -32,9 +31,8 @@ export function useAccessGate({ enabled }: { enabled: boolean }) {
   const [rechecking, setRechecking] = useState(false);
   const groups = session?.user?.groups;
   // important: a session refresh (the 4 minute poll, or Check again itself) reports "loading" while
-  // it keeps the session. Reading that as "not known" let the shell render for a moment and
-  // unmounted the notice with its Check again result, so the retained session counts, as it does
-  // for useActorQueryScope.
+  // it keeps the session. The retained session counts, as it does for useActorQueryScope; reading
+  // it as "not known" flashes the shell and unmounts the notice with its Check again result.
   const known = enabled && Boolean(session) && status !== "unauthenticated" && Array.isArray(groups);
   const noRole = known && !hasMappedRole(groups);
   const isTenant = known && !noRole && getHighestRole(resolveMappedRoles(groups)) === Role.TENANT;
@@ -52,9 +50,9 @@ export function useAccessGate({ enabled }: { enabled: boolean }) {
       query.state.data?.blocked_reason ? BLOCKED_POLL_MS : ALLOWED_POLL_MS,
   });
 
-  // note: the last verdict for this same actor outlives a reset of the query cache (Settings >
-  // Clear Browser Cache empties it). Without it the gate fell back to "checking" and swapped the
-  // page for the loader in the middle of the action that cleared it.
+  // The last verdict for this same actor outlives a reset of the query cache (Settings > Clear
+  // Browser Cache empties it), so the gate does not fall back to "checking" and swap the page for
+  // the loader in the middle of the action that cleared it.
   const lastVerdictRef = useRef<{ scope: string; value: MyAccessVerdict } | null>(null);
   if (verdict.data) lastVerdictRef.current = { scope: actorScope, value: verdict.data };
   const knownVerdict =

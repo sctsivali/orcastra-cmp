@@ -21,9 +21,8 @@ const VM_STATUS_DISPLAY: Record<VMStatusKey, ControlledStatusDisplay> = {
 /**
  * Display metadata for an instance status.
  *
- * The API contract currently uses Title Case, but runtime payloads can outlive a frontend build.
- * Normalising at this boundary keeps a future lowercase enum from leaking into the UI while the
- * raw value remains available to filters and requests.
+ * The API sends Title Case, but payloads can outlive a frontend build, so the lookup ignores
+ * case. The raw value stays available to filters and requests.
  */
 export function instanceStatusDisplay(status: VMStatus | string | null | undefined) {
   const raw = String(status ?? "").trim();

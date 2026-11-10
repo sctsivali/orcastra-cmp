@@ -8,12 +8,8 @@ import type { SearchableSelectOption } from "@/components/ui/searchable-select";
 import { ClusterStatus, type ClusterAvailability } from "@/types/api";
 
 /**
- * The one place node-picker options are built.
- *
- * Six create and upload forms each carried their own `(nodeNames || []).map(n => ({value: n,
- * label: n}))`, so none of them could say which clusters would actually answer. On the dev
- * fleet fourteen of sixteen clusters are unusable, and the picker offered all sixteen as
- * identical rows.
+ * The one place node-picker options are built. Each option carries its cluster's status, so a
+ * form shows which clusters will answer instead of offering every cluster as an identical row.
  */
 
 export interface UseNodePickerOptionsParams {
@@ -24,10 +20,9 @@ export interface UseNodePickerOptionsParams {
   /**
    * Disable clusters whose trust handshake never completed. Default true.
    *
-   * That is a durable fact with no staleness risk, unlike reachability, and every create
-   * against such a cluster fails with certainty. Offline clusters stay selectable: their
-   * status is a claim about the recent past, and an operator often has to work on the one
-   * that is broken.
+   * Unlike reachability, an incomplete trust handshake is a durable fact, and every create
+   * against such a cluster fails. Offline clusters stay selectable: their status describes the
+   * recent past, and an operator often has to work on the one that is broken.
    */
   disableUntrusted?: boolean;
   /** Disable every cluster that is known not to be online. Create mutations use this. */
@@ -58,7 +53,7 @@ export interface UseNodePickerOptionsResult {
   statusUpdatedAt: number | null;
   reachableCount: number;
   totalCount: number;
-  /** Options an operator can actually pick. Zero is a state the form has to explain. */
+  /** Options an operator can pick. Zero is a state the form has to explain. */
   selectableCount: number;
   refreshNow: () => Promise<unknown>;
   /** Why the names read failed, for the notice under the picker. */
@@ -84,8 +79,8 @@ function useAvailabilityByName() {
   return { availability, byName };
 }
 
-// note: the trigger shows the display name, so a warning that names the cluster id instead
-// reads as being about a different cluster. blitzkrieg renders as "Hetzner".
+// The trigger shows the display name, so a warning that names the cluster id instead reads as
+// being about a different cluster.
 function useLabelOf(byName: Map<string, ClusterAvailability>) {
   return useCallback(
     (nodeName: string) => byName.get(nodeName)?.display_name || nodeName,
@@ -97,8 +92,8 @@ function useLabelOf(byName: Map<string, ClusterAvailability>) {
  * What the console calls a cluster, its display name or else its id, for a surface that names
  * clusters without offering a choice between them (the Monitoring cards and pools).
  *
- * note: availability only. The names list behind useNodePickerOptions is Partner-only, and
- * Monitoring is a Tenant page too; availability is Tenant-readable and keeps display_name.
+ * Availability only: the names list behind useNodePickerOptions is Partner-only, and
+ * Monitoring is a Tenant page too; availability is Tenant-readable and carries display_name.
  */
 export function useClusterLabel(): (nodeName: string) => string {
   const { byName } = useAvailabilityByName();
@@ -120,9 +115,9 @@ export function useNodePickerOptions(
   const names = useNodeNames();
   const { availability, byName } = useAvailabilityByName();
 
-  // Reachability failing must not look like the fleet failing. With no status we render the
-  // names plainly rather than painting every cluster Offline, which would turn a monitoring
-  // outage into an apparent total outage across six forms at once.
+  // Reachability failing must not look like the fleet failing. With no status the names render
+  // plainly; painting every cluster Offline would turn a monitoring outage into an apparent
+  // total outage across every picker.
   const statusUnavailable = !availability.isLoading && !availability.data;
 
   const options = useMemo(() => {
@@ -130,8 +125,8 @@ export function useNodePickerOptions(
     // reverse. If availability drove the list, one 500 would empty every node picker.
     const wanted = clusterType?.toLowerCase();
     const rows = (names.data ?? [])
-      // A cluster we have no availability row for is not evidence of the wrong type, so it
-      // stays: filtering it out would hide a cluster because a status probe was slow.
+      // A cluster with no availability row is not evidence of the wrong type, so it stays:
+      // filtering it out would hide a cluster because a status probe was slow.
       .filter((name) => {
         if (!wanted) return true;
         const row = byName.get(name);
@@ -147,10 +142,9 @@ export function useNodePickerOptions(
         disableTypes && row?.node_type && disableTypes.types.includes(row.node_type.toLowerCase()),
       );
 
-      // The label is the display name, which is what an operator named the cluster. The id is
-      // what a create request sends and what every table and URL uses, so it has to stay
-      // visible: blitz001 and blitz01 are called "BSD Lab" and "VDC" and share one endpoint,
-      // so with the id hidden the endpoint could not tell them apart either.
+      // The label is the display name an operator gave the cluster. The id is what a create
+      // request sends and what every table and URL uses, so it stays visible: two clusters can
+      // share one endpoint, and with the id hidden nothing would tell them apart.
       const label = row?.display_name || name;
       const sublabel = clusterSublabel(
         name,
@@ -170,17 +164,15 @@ export function useNodePickerOptions(
           wrongType ||
           (disableUntrusted && untrusted) ||
           (disableUnreachable && Boolean(meta && !meta.reachable)),
-        // kept out of the option so the sort below can read it without a second lookup
+        // Stripped before returning; lets the sort below read the rank without a second lookup.
         _rank: meta?.toneRank ?? 2,
       };
     });
 
 
-    // Reachable clusters lead. With two usable clusters in sixteen, alphabetical order buries
-    // both of them mid-list.
-    //
-    // note: cmdk re-sorts by match score once a query is typed, which overrides this. That is
-    // correct, not a bug: relevance should beat status the moment the operator is searching.
+    // Reachable clusters lead; in alphabetical order a few usable clusters would sit buried
+    // mid-list. cmdk re-sorts by match score once a query is typed, so relevance beats status
+    // while the operator is searching.
     rows.sort((a, b) => a._rank - b._rank || a.label.localeCompare(b.label));
 
     const cleaned: SearchableSelectOption[] = rows.map(({ _rank, ...opt }) => opt);

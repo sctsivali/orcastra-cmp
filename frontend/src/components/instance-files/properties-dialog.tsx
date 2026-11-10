@@ -79,8 +79,8 @@ export function PropertiesDialog({ entry, path, writeReason, onSave, onClose }: 
     const nextMode = parseInt(modeText, 8);
     const nextUid = Number(uid);
     const nextGid = Number(gid);
-    // important: two ticks, not one. A single "everything inside" stamped the folder's owner and
-    // mode on every child, whichever of the two the person meant to change.
+    // important: recursion is chosen separately for mode and owner. One shared "everything
+    // inside" would stamp the folder's owner and mode on every child, whichever was meant.
     const newOwner = nextUid !== entry.uid || nextGid !== entry.gid;
     const change = {
       mode: nextMode !== entry.mode || deepMode ? nextMode : undefined,

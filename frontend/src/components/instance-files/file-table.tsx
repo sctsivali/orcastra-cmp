@@ -25,8 +25,8 @@ import { actionsFor, isDirectoryLike, type FileActionId } from "./file-actions";
 import type { SessionState, SortField } from "./use-explorer-session";
 import { useFixedRowWindow } from "./use-fixed-row-window";
 
-// note: rows filter through the one search box above the table. Facets would ask for a toolbar this
-// window has no room for, and a folder is browsed, not reported on.
+// Rows filter through the one search box above the table; this window has no room for a facet
+// toolbar.
 export const FILE_TABLE = defineTable<GuestEntry>()({
   id: "instancefiles",
   searchPlaceholder: "Filter this folder",

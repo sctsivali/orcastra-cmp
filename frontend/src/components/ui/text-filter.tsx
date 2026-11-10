@@ -16,7 +16,7 @@ export interface TextFilterProps {
   onChange: (next: TextState) => void;
   placeholder?: string;
   emptyLabel?: string;
-  /** Match count over the co-filtered rows. Honest here because a typed query is a predicate. */
+  /** Match count over the co-filtered rows. Exact here because a typed query is a predicate. */
   facts?: { emptyCount: number; matched: number; scoped: number };
   disabled?: boolean;
 }
@@ -30,14 +30,12 @@ const EMPTY_MODES: { id: EmptyMode; label: string }[] = [
 /**
  * Contains-text for one column.
  *
- * note: this is not a duplicate of the toolbar search. The search box spans several columns at
- * once; this scopes to one, which is a different question. Where a table's search covers this
- * column and no other, the column is kept out of the "Add filter" menu so there is still one
- * control per piece of state.
+ * The toolbar search spans several columns; this scopes to one. Where a table's search covers
+ * this column and no other, the column stays out of the "Add filter" menu so each piece of state
+ * has one control.
  *
- * The matching rule is deliberately identical to the toolbar search: case-insensitive
- * substring over every string the accessor returns, so there is one rule in the product
- * rather than two that drift.
+ * Matching is the same as the toolbar search: case-insensitive substring over every string the
+ * accessor returns.
  */
 export function TextFilter({
   label,

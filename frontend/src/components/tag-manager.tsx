@@ -32,10 +32,6 @@ import {
 // TagBadge lives in tag-chips.tsx; re-exported so existing imports from here keep working.
 export { TagBadge } from "./tag-chips";
 
-// ============================================
-// Main Tag Manager Component (Enterprise-Grade)
-// ============================================
-
 interface TagManagerProps {
   tags: string[];
   onTagsChange?: (tags: string[]) => void;
@@ -64,7 +60,6 @@ export function TagManager({
   const [newTagInput, setNewTagInput] = React.useState("");
   const [selectedPrefix, setSelectedPrefix] = React.useState<string | null>(null);
 
-  // Initialize editing tags when dialog opens
   React.useEffect(() => {
     if (isDialogOpen) {
       setEditingTags([...tags]);
@@ -75,7 +70,6 @@ export function TagManager({
     let tagValue = newTagInput.trim().toLowerCase();
     if (!tagValue) return;
 
-    // Add prefix if selected
     if (selectedPrefix && !tagValue.startsWith(selectedPrefix)) {
       tagValue = `${selectedPrefix}${tagValue}`;
     }
@@ -142,12 +136,11 @@ export function TagManager({
 
   // important: a read-only operator gets the whole list inline. The "+N more" control that
   // reveals the rest is a DialogTrigger for the tag editor, and that editor is gated behind
-  // !readonly, so slicing here removed tags 4..N from the page with nothing left to reach them.
+  // !readonly, so slicing here would hide the rest with nothing left to reach them.
   const visibleTags = readonly ? tags : tags.slice(0, maxVisible);
   const hiddenCount = tags.length - visibleTags.length;
   const hasMoreTags = hiddenCount > 0;
 
-  // Dialog content
   const dialogContent = (
     <DialogContent className="sm:max-w-[600px]">
       <DialogHeader>
@@ -161,7 +154,6 @@ export function TagManager({
       </DialogHeader>
 
       <div className="space-y-4 py-4">
-        {/* Current tags grouped */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <p className="text-sm font-medium">
@@ -175,7 +167,6 @@ export function TagManager({
             </div>
           ) : (
             <div className="space-y-3">
-              {/* Group tags by category */}
               {(() => {
                 const grouped = groupTags(editingTags);
                 const categoryOrder = [
@@ -223,12 +214,10 @@ export function TagManager({
           )}
         </div>
 
-        {/* Add new tag */}
         {editingTags.length < maxTags && !readonly && (
           <div className="space-y-2">
             <p className="text-sm font-medium">Add New Tag</p>
             
-            {/* Prefix selector */}
             <div className="flex flex-wrap gap-1.5">
               {Object.entries(TAG_CATEGORY_PREFIXES).map(([prefix, info]) => (
                 <TagToggle
@@ -241,7 +230,6 @@ export function TagManager({
               ))}
             </div>
 
-            {/* Input field */}
             <div className="flex gap-2">
               <div className="flex-1 relative">
                 {selectedPrefix && (
@@ -268,7 +256,6 @@ export function TagManager({
           </div>
         )}
 
-        {/* Category legend */}
         <div className="text-xs text-muted-foreground space-y-2 bg-muted/50 p-3 rounded-md">
           <p className="font-medium">Tag Prefixes:</p>
           <div className="grid grid-cols-2 gap-1.5">
@@ -283,7 +270,6 @@ export function TagManager({
         </div>
       </div>
 
-      {/* Actions */}
       <div className="flex justify-end gap-2">
         <Button variant="outline" onClick={handleCancel}>
           Cancel
@@ -295,16 +281,14 @@ export function TagManager({
 
   return (
     <div className={cn("flex items-center gap-1.5 flex-wrap", className)}>
-      {/* Display visible tags */}
       {visibleTags.map((tag, index) => (
         <React.Fragment key={tag}>
           <TagBadge tag={tag} size="sm" />
-          {/* the gap separates the chips on screen; the comma still separates them when read aloud */}
+          {/* The gap separates the chips on screen; the comma separates them when read aloud. */}
           {index < visibleTags.length - 1 && <span className="sr-only">,</span>}
         </React.Fragment>
       ))}
 
-      {/* Dialog trigger */}
       {!readonly && (
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           {hasMoreTags ? (
@@ -343,10 +327,6 @@ export function TagManager({
     </div>
   );
 }
-
-// ============================================
-// Tag Filter Component (Enhanced)
-// ============================================
 
 interface TagFilterProps {
   availableTags: string[];
@@ -462,7 +442,6 @@ export function TagFilter({
                 );
               })}
 
-              {/* Other tags */}
               {groupedAvailableTags.other.length > 0 && (
                 <div className="space-y-1.5">
                   <div className="text-xs font-medium flex items-center gap-1.5 text-muted-foreground">

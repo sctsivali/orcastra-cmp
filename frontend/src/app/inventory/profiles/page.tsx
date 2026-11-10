@@ -84,12 +84,11 @@ const PROFILES = defineTable<ProfileInfo>()({
     },
     {
       // filter-coverage: this is not the project dimension. It answers which projects
-      // CONSUME the record, derived from used_by, while the "project" column above answers
-      // which one holds it, and that is the column carrying the project role.
+      // CONSUME the record, derived from used_by; the "project" column above answers which
+      // one holds it and carries the project role.
       field: "projects",
       label: "Used By Projects",
-      // Was a copy of the used_by accessor, so the header sorted by instance count while the
-      // cell displayed a project count. It now sorts by what it displays.
+      // Sorts by the project count the cell displays rather than the used_by instance count.
       sort: (p) => projectsFromUsedBy(p.used_by).length,
       facet: (p) => projectsFromUsedBy(p.used_by),
       facetSpec: { primary: true, emptyLabel: "(no project)" },
@@ -123,11 +122,11 @@ function ProfilesContent() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<ProfileInfo | undefined>(undefined);
   const [deleteTarget, setDeleteTarget] = useState<ProfileInfo | null>(null);
-  // held one render longer than deleteTarget so the dialog body does not blank while it fades
+  // Held one render longer than deleteTarget so the dialog body does not blank while it fades.
   const [deleteDisplay, setDeleteDisplay] = useState<ProfileInfo | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
-  // the confirm is a click handler, so `deleting` alone cannot stop two clicks in one tick
+  // The confirm is a click handler, so `deleting` alone cannot stop two clicks in one tick.
   const deleteInFlightRef = useRef(false);
 
   const openCreate = () => {
@@ -158,7 +157,7 @@ function ProfilesContent() {
       setDeleteTarget(null);
       refreshNow();
     } catch (e) {
-      // the dialog stays open with the reason (a 409 names the instances still using it)
+      // The dialog stays open with the reason (a 409 names the instances still using it).
       setDeleteError(e instanceof Error ? e.message : "Failed to delete the profile");
     } finally {
       deleteInFlightRef.current = false;
@@ -167,9 +166,9 @@ function ProfilesContent() {
   };
 
 
-  // note: derived from the rows, not from the fleet, matching the five sibling used_by pages.
-  // A pinned role is exempt from the two-value threshold, so without this gate the Node control
-  // renders on a scope with no node at all and offers nothing but the empty bucket.
+  // Derived from the rows, like the other used_by pages. A pinned role is exempt from the
+  // two-value threshold, so without this gate the Cluster control would render on a scope with
+  // no node and offer nothing but the empty bucket.
   const nodes = useMemo(
     () => Array.from(new Set(profiles.map((p: any) => p.node).filter(Boolean))).sort(),
     [profiles],
@@ -320,11 +319,9 @@ function ProfilesContent() {
                   }
                 />
               ) : (
-                // key: the project is part of a profile's identity, not decoration. Every
-                // LXD project carries its own `default` profile, so once this list spans
-                // projects rather than one, node+name collides on 26 of the 36 rows and React
-                // reuses the wrong row: sorting appended rows instead of reordering them,
-                // 25 -> 47 -> 61 -> 83 over three presses of the Name header.
+                // The key includes the project: every LXD project carries its own `default`
+                // profile, so across projects node+name collides and React would reuse the
+                // wrong row, appending rows on sort instead of reordering them.
                 paginatedProfiles.map((profile: any) => (
                   <TableRow key={profileRowKey(profile)} {...focus.rowProps(profileRowKey(profile))}>
                     <TableCell className="font-medium">{profile.name}</TableCell>
@@ -417,7 +414,7 @@ function ProfilesContent() {
             existing={editing}
             onSaved={(saved) => {
               if (saved.created) requestRowFocus("profiles", profileRowKey(saved), saved.name);
-              // the write already succeeded; a refresh that fails is the list's own error state
+              // The write already succeeded; a failed refresh shows as the list's own error state.
               void Promise.resolve(refreshNow()).catch(() => undefined);
             }}
           />
@@ -447,9 +444,8 @@ export default function ProfilesPage() {
   );
 }
 
-// note: built on click, for the one row the operator chose. profile.config is rendered here for
-// the first time anywhere in the app: limits.cpu, limits.memory, security.* and cloud-init.*
-// have always been on the wire and never on screen.
+// Built on click, for the one row the operator chose. The Configuration panel is where
+// profile.config shows: limits.cpu, limits.memory, security.* and cloud-init.*.
 function profileSubject(profile: ProfileInfo): UsedBySubject {
   const devices = profile.devices ?? {};
   const config = profile.config ?? {};

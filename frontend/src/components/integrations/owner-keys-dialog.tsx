@@ -39,7 +39,7 @@ interface OwnerKeysDialogProps {
 }
 
 function describeError(error: Error): string {
-  // note: the owner-set routes answer 404 while INTEGRATION_MULTI_OWNER_ENABLED is off
+  // The owner-set routes answer 404 while INTEGRATION_MULTI_OWNER_ENABLED is off.
   if (/not found/i.test(error.message) && !/organization/i.test(error.message)) {
     return "Several owner keys per organization are turned off on this control plane.";
   }
@@ -105,7 +105,7 @@ export function OwnerKeysDialog({ organization, keys, onOpenChange }: OwnerKeysD
   if (!organization) return null;
   const hasReason = reason.trim().length > 0;
   const busy = mutation.isPending;
-  // note: the change in flight, so only its own button spins; Add used to spin for a Remove too.
+  // The change in flight, so only its own button spins.
   const pending = busy ? mutation.variables : undefined;
 
   const run = async (change: OwnerChange) => {
@@ -157,8 +157,8 @@ export function OwnerKeysDialog({ organization, keys, onOpenChange }: OwnerKeysD
                       {pending?.kind === "primary" && pending.apiKeyId === owner.api_key_id && (
                         <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden />
                       )}
-                      {/* note: the key in the name, after the visible words, so a repeated
-                          "Make Primary" says which key and the name still starts with what is shown */}
+                      {/* The key goes in the name after the visible words, so a repeated
+                          "Make Primary" says which key and the name starts with what is shown. */}
                       Make Primary<span className="sr-only">: {owner.name || owner.api_key_id}</span>
                     </Button>
                   )}

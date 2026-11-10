@@ -32,9 +32,8 @@ interface APIKeySecretDialogProps {
 
 // The one time a key's secret is shown, on create and on rotate.
 //
-// note: two columns from `lg`. Stacked, the connection guide (the MCP snippets an operator came
-// for) sat below the fold of a narrow dialog. The credentials column stays in view while the
-// guide scrolls, so the secret and its warning are never scrolled away from.
+// Two columns from `lg`, so the connection guide is not below the fold. The credentials column
+// stays in view while the guide scrolls, keeping the secret and its warning on screen.
 export function APIKeySecretDialog({
   open,
   onClose,
@@ -137,9 +136,8 @@ export function APIKeySecretDialog({
                 </AlertDescription>
               </Alert>
             </div>
-            {/* The credentials alone were the whole dialog, and a key holder had no way to learn
-                the base URL, the header names, or which endpoints the key reaches. The obvious
-                first call is a JWT route and answers 401, which reads as "this needs a login". */}
+            {/* The base URL, header names and the endpoints the key reaches. Without them the
+                obvious first call is a JWT route, which answers 401 like a login problem. */}
             <div className="min-w-0">
               <ApiKeyConnectionGuide response={response} />
             </div>

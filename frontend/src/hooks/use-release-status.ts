@@ -11,9 +11,8 @@ export const RELEASE_STATUS_KEY = "release-status";
 const POLL_MS = 30 * 60 * 1000;
 
 /**
- * What the release manifest says about the running version. Administrators only: nobody else is
- * asked, so a Partner or a Tenant never sends the request. The backend reads the feed twice a day;
- * this only reads the backend's last answer.
+ * What the release manifest says about the running version. Administrators only; no other role
+ * sends the request. The backend reads the feed twice a day; this only reads its last answer.
  */
 export function useReleaseStatus() {
   const { isAdmin, isLoading } = usePermissions();

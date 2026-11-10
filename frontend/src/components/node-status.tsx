@@ -30,11 +30,9 @@ import { collectedAtMs } from "@/lib/utils";
 
 const nodeId = (node: NodeStatus) => node.name;
 
-// Shaped like the section it stands in for: heading, toolbar, then cards with a real card's
-// blocks. The fleet read takes seconds on a fleet with a WAN member, and a placeholder a third
-// of the height pushed the Projects grid down by a few hundred pixels when the cards landed,
-// under an operator who had already started reading it. The chrome here is the fixed-height
-// part; the card blocks are the ones a NodeStatusCard renders, in order.
+// Shaped like the section it stands in for (heading, toolbar, then the blocks a NodeStatusCard
+// renders, in order), so the Projects grid below does not jump when the cards land. The fleet
+// read can take seconds when a member sits across a WAN.
 function LoadingSkeleton() {
   const headingId = useId();
   return (
@@ -120,18 +118,16 @@ function NodeStatusCardsContent({ onRefresh }: NodeStatusCardsProps) {
   const { navigate } = useNavigationProgress();
   const { isPartner } = usePermissions();
   const headingId = useId();
-  // important: the id, not the row. Storing the clicked NodeStatus object here meant the open
-  // dialog rendered a photograph taken at click time: the list kept polling underneath and the
-  // numbers behind the dialog moved while the ones inside it did not.
+  // important: store the id, not the row. The dialog re-derives the row from the polled list;
+  // a stored object would freeze its numbers at click time.
   const [selectedNodeName, setSelectedNodeName] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(GRID_PAGE_SIZE);
   const resetPage = useCallback(() => setPage(1), []);
 
-  // note: data.nodes, not the online subset. The grid filters to connected && server_version, so
-  // a cluster dropping offline would vanish from the filtered list and blank the open dialog.
-  // Selecting from the raw list keeps it alive and lets it report that the cluster went
-  // offline, which is the thing an operator opened it to find out.
+  // Select from data.nodes, not the online subset. The grid filters to connected &&
+  // server_version, so a cluster dropping offline would vanish from it and blank the open
+  // dialog. The raw list keeps the dialog alive so it can report that the cluster went offline.
   const { record: selectedNode, isOrphaned } = useLiveRecord(
     data?.nodes,
     selectedNodeName,
@@ -165,10 +161,9 @@ function NodeStatusCardsContent({ onRefresh }: NodeStatusCardsProps) {
 
   const filters = useTableFilters(CLUSTER_CARDS, onlineNodes, {
     extraSearch: searchEndpoint,
-    // One line covers every way the result set can change: the toolbar search, chip removal,
-    // Clear all, and the TagFilter, which reaches setFacet and therefore the same callback.
-    // Without it a filter applied from page three keeps that page number, and the clamp then
-    // paints the last page of the new result instead of its first.
+    // Covers every way the result set can change: the toolbar search, chip removal, Clear all,
+    // and the TagFilter, which reaches setFacet. Without it a filter applied from page three
+    // keeps that page number and the clamp paints the last page of the new result.
     onFilterChange: resetPage,
     // Tags render through TagFilter rather than the toolbar, so keep the facet out of the
     // toolbar's own controls. It still applies, and it still shows as a removable chip.
@@ -183,14 +178,14 @@ function NodeStatusCardsContent({ onRefresh }: NodeStatusCardsProps) {
     resetPage,
   );
 
-  // Filter, then sort, then slice, the contract use-table-filters.ts states: the sort covers the
-  // whole filtered set rather than the page an operator happens to be looking at.
+  // Filter, then sort, then slice, as use-table-filters.ts states: the sort covers the whole
+  // filtered set, not only the visible page.
   const sortedNodes = useMemo(
     () => sortItems(filters.filteredRows),
     [filters.filteredRows, sortItems],
   );
 
-  // note: clamped on read rather than corrected in an effect, which would snap the operator back a
+  // Clamped on read rather than corrected in an effect, which would snap the operator back a
   // page mid-task and still paint one wrong frame first.
   const totalPages = Math.max(1, Math.ceil(sortedNodes.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -217,8 +212,8 @@ function NodeStatusCardsContent({ onRefresh }: NodeStatusCardsProps) {
             <h2 id={headingId} className="text-lg font-semibold">Clusters</h2>
             <NodeConnectionSummary nodes={data?.nodes} allConnected={data?.all_connected} />
           </div>
-          {/* important: when the cluster data was collected. This showed the instance list's
-              fetch time, so cards behind a 180 s cache read "10s ago" while minutes old. */}
+          {/* important: the age of the cluster data itself. The query's fetch time would read
+              "10s ago" for cards served minutes old from the backend cache. */}
           <RefreshButton
             label="Refresh overview"
             lastUpdatedAt={collectedAtMs(data?.collected_at) || dataUpdatedAt}
@@ -262,8 +257,7 @@ function NodeStatusCardsContent({ onRefresh }: NodeStatusCardsProps) {
             description="Every registered cluster is offline or still pending. The summary above says why."
           />
         ) : sortedNodes.length === 0 && filters.activeFilterCount > 0 ? (
-          // A filter that matches nothing is not the same as having no clusters, so it says so
-          // and offers the way back out.
+          // A filter that matches nothing gets its own state, with a way back out.
           <EmptyState
             icon={Server}
             title="No cluster matches the current filters"
@@ -275,8 +269,8 @@ function NodeStatusCardsContent({ onRefresh }: NodeStatusCardsProps) {
             }
           />
         ) : (
-          // Same breakpoints as the Projects grid beside it, for the reason recorded there: a
-          // two-up card at md is 224px wide and cannot hold its own header.
+          // Same breakpoints as the Projects grid beside it: a two-up card at md is 224px wide
+          // and cannot hold its own header.
           <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
             {pagedNodes.map((node) => (
               <NodeStatusCard

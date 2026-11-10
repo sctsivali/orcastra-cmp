@@ -6,7 +6,7 @@ import * as ContextMenuPrimitive from "@radix-ui/react-context-menu";
 import { cn } from "@/lib/utils";
 
 // Right-click, styled and layered like dropdown-menu.tsx so the two read as one menu family.
-// note: z-[100002] matches that file: a console window sits at a very high z-index.
+// z-[100002] matches that file: a console window sits at a very high z-index.
 
 const ContextMenu = ContextMenuPrimitive.Root;
 const ContextMenuTrigger = ContextMenuPrimitive.Trigger;

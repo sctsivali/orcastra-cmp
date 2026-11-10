@@ -30,8 +30,8 @@ const AUTHORITY_READ_ERRORS = {
     kind: "failed",
     reason: "the sign-in service could not be reached to verify this session; retry shortly",
   },
-  // A sealed or unreachable Vault with no cluster list known from before (issue #15). Not
-  // "no clusters": the clusters are still registered and come back once Vault is unsealed.
+  // A sealed or unreachable Vault with no cluster list known from before. The clusters are still
+  // registered and come back once Vault is unsealed.
   vault_unavailable: {
     status: 503,
     kind: "failed",
@@ -85,8 +85,8 @@ export function describeReadError(error: unknown): ReadError {
     if (error.status === 0) {
       return { kind: "unreachable", reason: "the console cannot reach the API" };
     }
-    // note: a 401 only reaches a page after lib/api.ts tried to renew the session, so it is the
-    // session, not a permission. It shows next to the re-login banner and must say the same thing.
+    // A 401 only reaches a page after lib/api.ts tried to renew the session, so the session has
+    // ended. It shows next to the re-login banner and must say the same thing.
     if (error.status === 401) {
       return { kind: "unauthenticated", reason: "your session is no longer valid; sign in again to continue" };
     }
@@ -105,14 +105,6 @@ export function describeReadError(error: unknown): ReadError {
 }
 
 /**
- * Whether a failed request means Vault is not available, as opposed to any other 503.
- *
- * important: every 503 used to read as "Vault is not configured", so an identity-provider outage
- * replaced the Integrations page with Vault setup instructions. Every Vault 503 the backend writes
- * names Vault in its detail; nothing else does. Duck-typed, because `instanceof` breaks across
- * Next chunks.
- */
-/**
  * The retry rule for a read whose 503 will not clear within a retry (Vault missing, or the sign-in
  * service down). Every observer of one query key must pass the same rule, because react-query runs
  * a shared query with whichever observer's options it holds.
@@ -122,6 +114,12 @@ export function retryUnlessUnavailable(failureCount: number, error: unknown): bo
   return failureCount < 2;
 }
 
+/**
+ * Whether a failed request means Vault is not available, as opposed to any other 503.
+ *
+ * Every Vault 503 the backend writes names Vault in its detail; nothing else does. Duck-typed
+ * rather than `instanceof APIError`, which breaks across Next chunks.
+ */
 export function isVaultUnavailable(error: unknown): boolean {
   if (!(error instanceof Error) || !("status" in error)) return false;
   const { status, detail } = error as unknown as { status?: unknown; detail?: unknown };

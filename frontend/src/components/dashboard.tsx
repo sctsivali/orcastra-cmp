@@ -34,21 +34,18 @@ export function Dashboard() {
   const { isPartner } = usePermissions();
   const { scopeKey } = useActorQueryScope();
 
-  // pre-fetch alarm & node data in parallel with primary queries (eliminates waterfall)
+  // Read alongside the primary queries rather than after them.
   const { data: warningsData } = useWarnings();
   const { data: systemWarnings } = useSystemWarnings();
 
-  // note: no success toast. The refresh control reports its own outcome inline
-  // (spinner, tick, "Updated just now"), and a toast here would evict whatever
-  // the operator was actually reading, since TOAST_LIMIT is 1.
-  // important: the fleet read and the cluster status read go past the backend cache, like the
-  // Refresh on the Instances page. A plain refetch answered from that cache, so after a change
-  // made elsewhere (OrcaHub, the LXD CLI) the button reported "Updated" over the old rows, and the
-  // Clusters region it sits in still read "Updated 2m ago" a moment after the click (owner
-  // decision 2026-11-05). Only these two are forced: each forced read spends the per-operator
-  // budget the delete and create reconciles also draw on.
-  // note: fetchQuery with its own queryFn, not another observer's refreshNow, so the forced
-  // read cannot fall back to whichever observer's queryFn the shared key last registered.
+  // No success toast: the refresh control reports its own outcome inline, and with TOAST_LIMIT 1
+  // a toast would evict whatever the operator was reading.
+  // important: the fleet read and the cluster status read bypass the backend cache, like the
+  // Instances page Refresh; a cached answer would report "Updated" over rows changed elsewhere
+  // (ex; through the LXD CLI). Only these two are forced: each forced read spends the
+  // per-operator budget the delete and create reconciles also draw on.
+  // fetchQuery carries its own queryFn, so the forced read cannot fall back to whichever
+  // observer's queryFn the shared key last registered.
   const handleOverviewRefresh = React.useCallback(async () => {
     await Promise.all([
       refreshInstances(),
@@ -65,13 +62,11 @@ export function Dashboard() {
   }, [queryClient, refreshInstances, scopeKey]);
 
   // important: the page waits for the cluster and project reads only. The instance list waits for
-  // the slowest cluster, up to the backend's 30 s inventory wall, and one slow cluster used to hold
-  // the whole Overview behind the loader and then the retry panel. The instance figures and the
-  // project counts carry their own loading state instead.
+  // the slowest cluster, up to the backend's 30 s inventory wall, and would hold the whole
+  // Overview behind the loader; the instance figures and project counts carry their own loading
+  // state.
   const isPrimaryLoading = projectsLoading || clustersLoading;
-  // important: never hard-block the dashboard forever on a slow/stuck query.
-  // After a grace period, surface a retry panel instead of an infinite 95%
-  // loader (the backend now responds fast; this is a defensive safety net).
+  // A primary read stuck past 25 seconds shows a retry panel instead of an endless loader.
   const [loaderTimedOut, setLoaderTimedOut] = React.useState(false);
   React.useEffect(() => {
     if (!isPrimaryLoading) {
@@ -109,8 +104,8 @@ export function Dashboard() {
     );
   }
 
-  // important: a failed fleet read with nothing from before rendered every counter as 0, which a
-  // sealed Vault turned into "this deployment is empty" (issue #15). Say that it could not be read.
+  // important: a failed fleet read with no earlier data says it could not be read. Counters of 0
+  // would claim the deployment is empty (ex; while Vault is sealed).
   if (vmsFailed && !vmsData) {
     return (
       <ReadErrorState
@@ -123,22 +118,19 @@ export function Dashboard() {
 
   return (
     <div key={scopeKey} className="space-y-8">
-      {/* Stats Overview - shows its own loading state */}
       <StatsOverview data={vmsData} clustersData={clustersData} isLoading={vmsLoading} clustersLoading={clustersLoading} />
 
-      {/* Alarm Statistics - Only shows when there are warnings (data already prefetched above) */}
       <AlarmStatistics prefetchedWarnings={warningsData} prefetchedSystemWarnings={systemWarnings} />
 
-      {/* Nodes Status */}
       {isPartner ? (
         <NodeStatusCards onRefresh={handleOverviewRefresh} />
       ) : (
         <TenantClusterStatusCards />
       )}
 
-      {/* Projects Overview. A Tenant whose access reaches nothing is told so instead of reading
-          an empty grid, and pointed at the one party who can change it. Only on a complete read:
-          an unreachable cluster or a failed list is not "nothing". */}
+      {/* A Tenant whose access reaches nothing is told so instead of seeing an empty grid, and
+          pointed at the one party who can change it. Only on a complete read: an unreachable
+          cluster or a failed list is not "nothing". */}
       {!isPartner && tenantReachesNothing(projectsData, vmsData) ? (
         <EmptyState
           icon={KeyRound}
@@ -171,7 +163,7 @@ function tenantReachesNothing(
   if (!projects || !vms) return false;
   if (projects.some((host) => host.reachable === false)) return false;
   if ((vms.unreachable_nodes?.length ?? 0) > 0) return false;
-  // note: `default` is listed for every cluster in scope, so it alone is not a workload.
+  // `default` is listed for every cluster in scope, so it alone is not a workload.
   const named = projects.some((host) => host.projects.some((project) => project.name !== "default"));
   return !named && vms.vms.length === 0;
 }

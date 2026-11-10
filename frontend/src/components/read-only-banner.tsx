@@ -14,7 +14,7 @@ export function ReadOnlyBanner() {
   if (isError && !isReadOnly) {
     return (
       // The icon carries the caution tone and the prose stays --foreground: amber text on the
-      // page measured below AA in light mode.
+      // page falls below AA in light mode.
       <Alert variant="default" className="mb-4 border-status-pending/40 [&>svg]:text-status-pending">
         <WifiOff className="h-4 w-4" />
         <AlertTitle>Connection Issue</AlertTitle>

@@ -1,12 +1,11 @@
 // Checks on a pasted SSH key that run in the browser, before anything is sent.
 //
-// important: the private-key test is the one that matters. A private key pasted here must never
-// leave the page, so it is recognised on the raw text before any request, the field is cleared and
-// the submit is blocked. The markers are the backend's own (services/guest_credentials/ssh_keys.py
-// _PRIVATE_MARKERS), so the two can never disagree about what a private key looks like.
+// important: a private key pasted here must never leave the page. It is recognised on the raw text
+// before any request, the field is cleared and the submit is blocked. The markers mirror the
+// backend's (services/guest_credentials/ssh_keys.py _PRIVATE_MARKERS); keep the two in step.
 //
-// The rest are hints only. The server parses the key strictly and stays the authority; these exist
-// so a novice hears "this is two lines" while typing rather than after a round trip.
+// The other checks are hints shown while typing. The server parses the key strictly and stays the
+// authority.
 
 const PRIVATE_MARKERS: readonly RegExp[] = [
   /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/,

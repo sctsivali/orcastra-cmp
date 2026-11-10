@@ -116,7 +116,7 @@ export function LiveIndicator({ feed, apiDown = false, disconnected = 0 }: {
           data-live-state={state}
           className="inline-flex shrink-0 items-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          {/* The strip has no room for a word on a phone: the chip pushed the refresh and
+          {/* The strip has no room for a word on a phone: the chip would push the refresh and
               expand controls off screen at 390px. Below md the state is a toned icon. */}
           <Activity className={cn("h-4 w-4 md:hidden", TONE_ICON[tone])} aria-hidden="true" />
           <span className={cn(badgeVariants({ variant: tone }), "hidden px-2 md:inline-flex")}>{text}</span>

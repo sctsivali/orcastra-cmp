@@ -72,7 +72,6 @@ const toVmInfoFromMonitoringSummary = (instance: InstanceMonitoringSummary): VMI
   tags: [],
 });
 
-// Metric Card Component
 interface MetricCardProps {
   title: string;
   value: string | number;
@@ -83,8 +82,7 @@ interface MetricCardProps {
   illustration: ComponentType<IllustrationProps>;
 }
 
-// note: no trend arrow. It rendered only with a trendValue no caller ever passed, and painted a
-// rise in critical warnings green.
+// No trend arrow: on some tiles a rise is bad news (critical warnings), so a green arrow misleads.
 const MetricCard = memo(function MetricCard({ 
   title, 
   value, 
@@ -114,7 +112,6 @@ const MetricCard = memo(function MetricCard({
   );
 });
 
-// Chart Statistics Component
 interface ChartStatsProps {
   min: number;
   max: number;
@@ -145,7 +142,7 @@ const ChartStats = memo(function ChartStats({ min, max, avg, unit = "%", color }
   );
 });
 
-// Loading Component - lightweight skeleton instead of heavy Lottie animation
+// A lightweight skeleton rather than the Lottie animation.
 function LoadingSkeleton() {
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
@@ -163,7 +160,6 @@ function LoadingSkeleton() {
   );
 }
 
-// Colors for charts
 import type { CpuUsageReading } from "@/components/monitoring/cpu-usage-gauge";
 import { TopConsumersCard, consumerPool } from "@/components/monitoring/top-consumers-card";
 import { LiveTimestamp } from "@/components/ui/live-timestamp";
@@ -181,22 +177,22 @@ import { ResourceUtilizationCard, capacityScope } from "./components/resource-ut
 import { StoragePoolsCard } from "./components/storage-pools-card";
 
 const CHART_COLORS = {
-  cpu: "#3b82f6",    // blue
-  memory: "#10b981", // green
-  storage: "#f59e0b", // amber
-  storageRead: "#f59e0b", // amber
-  storageWrite: "#ef4444", // red
-  network: "#8b5cf6", // purple (RX/In)
-  networkTx: "#ec4899", // pink (TX/Out)
+  cpu: "#3b82f6",
+  memory: "#10b981",
+  storage: "#f59e0b",
+  storageRead: "#f59e0b",
+  storageWrite: "#ef4444",
+  network: "#8b5cf6", // RX (in)
+  networkTx: "#ec4899", // TX (out)
 };
 
 const PIE_COLORS = ["#10b981", "#ef4444", "#6b7280"];
 
-// important: lift recharts tooltips above the chart Legend - the Legend is a sibling div
-// rendered after the tooltip wrapper, so without this it paints over a tall tooltip
+// Lifts recharts tooltips above the chart Legend. The Legend is a sibling div rendered after
+// the tooltip wrapper, so without this it paints over a tall tooltip.
 const CHART_TOOLTIP_STYLE = { zIndex: 50 };
 
-// Custom tooltip for pie chart - moved outside component for performance
+// The chart tooltips live at module level so their identity is stable across renders.
 const PieChartTooltip = ({ active, payload }: { active?: boolean; payload?: any[] }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
@@ -210,7 +206,6 @@ const PieChartTooltip = ({ active, payload }: { active?: boolean; payload?: any[
   return null;
 };
 
-// Custom tooltip for Memory chart - moved outside component for performance
 const MemoryChartTooltip = ({ active, payload, label }: { active?: boolean; payload?: any[]; label?: string }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
@@ -231,7 +226,6 @@ const MemoryChartTooltip = ({ active, payload, label }: { active?: boolean; payl
   return null;
 };
 
-// Custom tooltip for Storage chart - moved outside component for performance
 const StorageChartTooltip = ({ active, payload, label, totalStorageBytes }: { active?: boolean; payload?: any[]; label?: string; totalStorageBytes?: number }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
@@ -264,8 +258,7 @@ const StorageChartTooltip = ({ active, payload, label, totalStorageBytes }: { ac
   return null;
 };
 
-// Custom tooltip for Resource Metrics chart with cluster status for 0% values
-// Memoized to prevent unnecessary re-renders
+// Resource chart tooltip. A cluster with no reading at a point shows as offline rather than 0%.
 interface ResourceMetricsTooltipProps {
   active?: boolean;
   payload?: any[];
@@ -302,8 +295,8 @@ const ResourceMetricsTooltip = memo(function ResourceMetricsTooltip({
     storage: "Storage Usage",
   };
 
-  // important: infer historical connectivity from the data point - a node with no value for
-  // any metric at this timestamp was offline/disconnected then (vs a genuine 0% reading)
+  // Connectivity at a point in the past is inferred from the data point: a node with no
+  // non-zero value for any metric at this timestamp was offline then rather than at 0%.
   const isNodeOffline = (nodeName: string, value: number, dataPoint?: any): boolean => {
     if (value !== undefined && value > 0) return false;
     const otherMetricValue = dataPoint?.[`cpu_${nodeName}`] ?? dataPoint?.[`memory_${nodeName}`] ?? dataPoint?.[`storage_${nodeName}`];
@@ -323,8 +316,8 @@ const ResourceMetricsTooltip = memo(function ResourceMetricsTooltip({
   // Multi-node view (when "All Nodes" selected)
   if (selectedNode === "all" && payload.length > 1) {
     const dataPoint = payload[0]?.payload;
-    // Many registered nodes make this tooltip very tall - switch to a compact 2-column grid
-    // and bound the height so it never sprawls over the legend below the chart
+    // Many clusters make this tooltip tall: past eight it switches to a two-column grid, and the
+    // height is bounded so it never covers the legend below the chart.
     const dense = payload.length > 8;
     return (
       <div className={cn(
@@ -388,8 +381,7 @@ const ResourceMetricsTooltip = memo(function ResourceMetricsTooltip({
   );
 });
 
-// Downsample data for better performance with large datasets
-// Uses LTTB (Largest-Triangle-Three-Buckets) inspired algorithm
+// Downsamples to targetPoints: the first and last point, plus each bucket's peak point.
 function downsampleData<T extends Record<string, any>>(
   data: T[], 
   targetPoints: number, 
@@ -399,16 +391,14 @@ function downsampleData<T extends Record<string, any>>(
   const result: T[] = [];
   const bucketSize = (data.length - 2) / (targetPoints - 2);
   
-  // Always include first point
   result.push(data[0]);
   
   for (let i = 0; i < targetPoints - 2; i++) {
     const bucketStart = Math.floor((i) * bucketSize) + 1;
     const bucketEnd = Math.min(Math.floor((i + 1) * bucketSize) + 1, data.length - 1);
     
-    // Multi-metric peak preservation: select the point with the highest
-    // peak across ALL metrics so peaks are preserved regardless of active tab.
-    // Uses Math.max to ensure any single metric spike gets captured.
+    // The point with the highest value across ALL metrics, so a spike in any one of them
+    // survives whichever chart tab is active.
     let maxIdx = bucketStart;
     let maxScore = -Infinity;
     
@@ -429,13 +419,11 @@ function downsampleData<T extends Record<string, any>>(
     result.push(data[maxIdx]);
   }
   
-  // Always include last point
   result.push(data[data.length - 1]);
   
   return result;
 }
 
-// Alarm severity colors
 const ALARM_COLORS = {
   critical: "#dc2626",
   major: "#ea580c",
@@ -445,22 +433,22 @@ const ALARM_COLORS = {
 
 // Node colors for multi-line chart (when "All Nodes" selected)
 const NODE_COLORS = [
-  "#8b5cf6", // violet
-  "#06b6d4", // cyan
-  "#10b981", // emerald
-  "#f59e0b", // amber
-  "#ef4444", // red
-  "#ec4899", // pink
-  "#6366f1", // indigo
-  "#84cc16", // lime
+  "#8b5cf6",
+  "#06b6d4",
+  "#10b981",
+  "#f59e0b",
+  "#ef4444",
+  "#ec4899",
+  "#6366f1",
+  "#84cc16",
 ];
 
 export default function MonitoringContent() {
   // important: this page has no role gate, but a Tenant reads only its own instances and the
-  // clusters' status (owner decision 2026-10-26). The backend sends it every host figure as null
-  // (core/host_detail.py monitoring_dashboard_for_tier) and refuses it the host history, so the
-  // utilization gauges, the history charts and the warnings tile are operator content here,
-  // along with status_message (the backend exception verbatim, see monitoring.py).
+  // clusters' status. The backend sends it every host figure as null (core/host_detail.py
+  // monitoring_dashboard_for_tier) and refuses it the host history, so the utilization gauges,
+  // the history charts and the warnings tile are operator content here, along with
+  // status_message (the backend exception verbatim, see monitoring.py).
   const { isPartner } = usePermissions();
   const { scopeKey: actorScope } = useActorQueryScope();
   // Display names, as the Clusters page shows them; the id stays the value every filter uses.
@@ -470,8 +458,7 @@ export default function MonitoringContent() {
   const [pausedSnapshot, setPausedSnapshot] = useState<MonitoringDisplaySnapshot | null>(null);
   const [timeRange, setTimeRange] = useState<number>(DEFAULT_HISTORY_WINDOW_SECONDS);
   const [chartTab, setChartTab] = useState<"cpu" | "memory" | "storage" | "network">("cpu");
-  
-  // Instance dialog state
+
   const [instanceDialogOpen, setInstanceDialogOpen] = useState(false);
   const [instanceFilterType, setInstanceFilterType] = useState<DistributionFilter | null>(null);
   const [selectedTopConsumer, setSelectedTopConsumer] = useState<InstanceMonitoringSummary | null>(null);
@@ -488,21 +475,16 @@ export default function MonitoringContent() {
   // state is gated during render, then cleared after the change so prior organization rows or
   // node names cannot flash before the new actor's queries settle.
   const monitoringUiIsCurrent = monitoringUiActorScope === actorScope;
-  
-  // Sort order for top consumers (true = highest first, false = lowest first)
-  
-  // Node selection for filtering
+
   const [selectedNodeState, setSelectedNode] = useState<string>("all");
   const selectedNode = monitoringUiIsCurrent ? selectedNodeState : "all";
-  
-  // Top N consumers count
-  
+
   // Visible nodes for multi-line graph (when "all" is selected)
   const [visibleNodesState, setVisibleNodes] = useState<Record<string, boolean>>({});
   const visibleNodes = monitoringUiIsCurrent ? visibleNodesState : {};
   
-  // Zoom and pan state for charts
-  // brushStart/EndIndex: always explicit numbers (never undefined) so Recharts Brush stays controlled
+  // Chart zoom and pan. The brush indices are always numbers, never undefined, so the Recharts
+  // Brush stays controlled.
   const [zoomLevelState, setZoomLevel] = useState(1); // 1 = 100%, 2 = 50% of data (zoomed in), etc.
   const [brushStartIndexState, setBrushStartIndex] = useState(0);
   const [brushEndIndexState, setBrushEndIndex] = useState(0);
@@ -534,8 +516,7 @@ export default function MonitoringContent() {
   // Transition for non-blocking time range switches
   const [isTimeRangePending, startTimeRangeTransition] = useTransition();
   
-  // Ref to track display data length for zoom calculations
-  // (handlers reference this to compute valid brush indices on the downsampled data array)
+  // Length of the downsampled chart data; the zoom handlers compute brush indices against it.
   const displayDataLengthRef = useRef(0);
   
   // WebSocket-first: receive push updates from the backend metrics collector.
@@ -591,9 +572,9 @@ export default function MonitoringContent() {
 
   const toggleMonitoringPause = useCallback(() => {
     if (isPaused) {
-      // note: marked stale, not refetched here. The observers are still disabled at this
-      // point; once Resume re-enables them a stale query reads at once instead of waiting out
-      // the 30 s cadence, which left a resumed page on the paused snapshot for half a minute.
+      // Marked stale rather than refetched: the observers are still disabled at this point.
+      // Once Resume re-enables them, a stale query reads at once instead of waiting out the
+      // 30 s interval on the paused snapshot.
       void queryClient.invalidateQueries({
         queryKey: ["monitoring"],
         refetchType: "none",
@@ -665,9 +646,8 @@ export default function MonitoringContent() {
       ]);
       setPausedSnapshot({
         actorScope,
-        // A paused screen is an operator snapshot, not an all-or-nothing transaction.
-        // Keep each last-good section when another endpoint fails, while still surfacing
-        // the rejected refresh through RefreshButton below.
+        // Each section keeps its last good data when another endpoint fails; the rejected
+        // refresh still surfaces through RefreshButton below.
         dashboard: dashboardState?.data ?? previous?.dashboard,
         history:
           queryClient.getQueryData<MetricsHistoryPoint[]>([
@@ -732,16 +712,10 @@ export default function MonitoringContent() {
   }, [actorScope, queryClient]);
 
 
-  // The list behind the distribution card reads the shared instance cache, the same key the
-  // Overview and Instances pages keep warm, so a click shows rows at once and the server's
-  // stale-while-revalidate cache refreshes behind it.
-  // important: this used to force `fresh=true` on every click, a live read of every cluster that
-  // waited for the slowest one (3.5-6 s on dev) and spent the forced-read budget. The dialog's
-  // Refresh button is the live read now, on demand.
-  // note: read while the page is open, not only once the dialog opens. A server cache nobody had
-  // read for 3.5 minutes still cost the first click a 4-8 s fan-out (dev access log, 2026-11-03);
-  // polling it like Overview does keeps the click on the cached path. Pause stops it with the
-  // rest of the page.
+  // The distribution list reads the shared instance cache that Overview and Instances keep warm,
+  // so a click shows rows at once. A forced live read waits for the slowest cluster, so only the
+  // dialog's Refresh does one. The query runs while the page is open, which keeps the server
+  // cache warm for the first click; Pause stops it with the rest of the page.
   const instanceList = useInstances(undefined, {
     enabled: monitoringUiIsCurrent && (!isPaused || instanceDialogOpen),
   });
@@ -762,7 +736,7 @@ export default function MonitoringContent() {
 
   const closeInstanceList = () => setInstanceDialogOpen(false);
 
-  // Get unique node names for dropdown - MUST be before any code using selectedNode
+  // Node names in dashboard order, for the per-cluster chart lines and legends.
   const nodeNames = useMemo(() => {
     if (!dashboardData?.nodes) return [];
     return dashboardData.nodes.map(n => n.node_name);
@@ -784,7 +758,6 @@ export default function MonitoringContent() {
     }
   }, [nodeNames]);
   
-  // Toggle node visibility in multi-line chart
   const toggleNodeVisibility = (nodeName: string) => {
     setVisibleNodes(prev => ({
       ...prev,
@@ -792,7 +765,7 @@ export default function MonitoringContent() {
     }));
   };
   
-  // Node status map for tooltip - shows cluster status when hovering on 0% metrics
+  // Per-node status, handed to the chart tooltips.
   const nodeStatusMap = useMemo(() => {
     if (!dashboardData?.nodes) return {};
     const map: Record<string, { status: string; statusMessage?: string; isOnline: boolean }> = {};
@@ -806,9 +779,8 @@ export default function MonitoringContent() {
     return map;
   }, [dashboardData?.nodes]);
   
-  // Zoom and pan helper functions
-  // NOTE: These use displayDataLengthRef (not chartData.length) because the Brush component
-  // operates on displayChartData (downsampled to ~200 points), not the full chartData array.
+  // The zoom and pan handlers read displayDataLengthRef, since the Brush works on
+  // displayChartData (downsampled to at most 200 points) rather than on chartData.
   const handleZoomIn = useCallback(() => {
     const totalPoints = displayDataLengthRef.current;
     if (totalPoints === 0) return;
@@ -892,14 +864,14 @@ export default function MonitoringContent() {
     }
   }, []);
   
-  // Filtered nodes for Node Status section
+  // Nodes for the Cluster Status cards.
   const filteredNodes = useMemo(() => {
     if (!dashboardData?.nodes) return [];
     if (selectedNode === "all") return dashboardData.nodes;
     return dashboardData.nodes.filter(n => n.node_name === selectedNode);
   }, [dashboardData?.nodes, selectedNode]);
   
-  // Filtered stats based on selected node - MUST be before chartData
+  // Stats for the selected node, or for every node. chartData reads its totals, so it comes first.
   const filteredStats = useMemo(() => {
     if (!dashboardData) return null;
     if (selectedNode === "all") {
@@ -915,9 +887,9 @@ export default function MonitoringContent() {
         online_nodes: dashboardData.online_nodes,
         inactive_nodes: dashboardData.inactive_nodes,
         total_nodes: dashboardData.total_nodes,
-        // note: the ?? 0 below never reaches a screen. A Tenant's host figures are null and
-        // hostVisible is false, so every section that shows them is not rendered. The two
-        // percentages stay null: no total reported is not 0%, and the gauges say so.
+        // The ?? 0 fallbacks below never reach a screen: a Tenant's host figures are null and
+        // hostVisible is false, so no section that shows them renders. The two percentages
+        // stay null, since a missing total is not 0%, and the gauges say so.
         hostVisible: dashboardData.total_cpu !== null,
         cpu_usage_percent: singleNode?.cpu_usage_percent ?? dashboardData.cpu_usage_percent ?? 0,
         cpu_reading: {
@@ -947,7 +919,6 @@ export default function MonitoringContent() {
       };
     }
     
-    // Find the selected node's data
     const node = dashboardData.nodes?.find(n => n.node_name === selectedNode);
     if (!node) return null;
     
@@ -991,8 +962,7 @@ export default function MonitoringContent() {
     };
   }, [dashboardData, selectedNode]);
 
-  // Format history data for charts - filter by selected node
-  // Extract stable memory/storage totals so chartData doesn't recompute on every dashboard poll
+  // Stable memory and storage totals, so chartData does not recompute on every dashboard poll.
   const totalMemoryBytes = useMemo(
     () => filteredStats?.total_memory_bytes || dashboardData?.total_memory_bytes || 0,
     [filteredStats?.total_memory_bytes, dashboardData?.total_memory_bytes]
@@ -1013,9 +983,8 @@ export default function MonitoringContent() {
     [historyData, selectedNode, totalMemoryBytes, totalStorageBytes, timeRange],
   );
   
-  // Downsample chart data for performance - limit to ~200 points for smooth rendering
-  // This significantly improves hover/tooltip performance for large time ranges (6h, 24h)
-  // Multi-metric downsampling: no dependency on chartTab so tab switches don't re-downsample
+  // At most 200 points keeps hover and tooltips smooth over long ranges. Independent of
+  // chartTab, so a tab switch does not downsample again.
   const MAX_DISPLAY_POINTS = 200;
   const displayChartData = useMemo(() => {
     if (chartData.length <= MAX_DISPLAY_POINTS) return chartData;
@@ -1034,7 +1003,6 @@ export default function MonitoringContent() {
       setIsZoomed(false);
       return;
     }
-    // Clamp brush indices to valid range
     if (brushEndIndex >= len) {
       setBrushEndIndex(len - 1);
       const visiblePoints = Math.max(1, Math.ceil(len / zoomLevel));
@@ -1060,14 +1028,11 @@ export default function MonitoringContent() {
     const maxValue = Math.max(...values);
     const minValue = Math.min(...values);
     
-    // Determine appropriate max based on data range
-    // Use nice round numbers: 5, 10, 15, 20, 25, 50, 75, 100
+    // Round axis ceilings, in percent.
     const thresholds = [5, 10, 15, 20, 25, 30, 40, 50, 60, 75, 100];
     
-    // Add padding to max value
     const paddedMax = maxValue * (1 + padding);
     
-    // Find the smallest threshold that fits the data
     let niceCeiling = 100;
     for (const threshold of thresholds) {
       if (paddedMax <= threshold) {
@@ -1084,7 +1049,6 @@ export default function MonitoringContent() {
     return [0, niceCeiling];
   };
 
-  // Memoized chart domains for each metric type
   const cpuDomain = useMemo((): [number, number] => {
     if (!chartData.length) return [0, 100];
     const values = chartData.map(d => d.cpu).filter(v => typeof v === 'number');
@@ -1175,7 +1139,6 @@ export default function MonitoringContent() {
       return { min, max, avg: sum / values.length };
     };
 
-    // Get visible node names for per-node stats
     const activeNodeNames = nodeNames.filter(name => visibleNodes[name]);
     
     // When "All Nodes" is selected, extract per-node values from chartData
@@ -1211,7 +1174,7 @@ export default function MonitoringContent() {
       };
     }
 
-    // Single node selected - use aggregate values
+    // Single node selected: aggregate values.
     const cpuValues = chartData.map(d => d.cpu).filter(v => typeof v === 'number');
     const memoryValues = chartData.map(d => d.memory).filter(v => typeof v === 'number');
     const storageValues = chartData.map(d => d.storage).filter(v => typeof v === 'number');
@@ -1227,9 +1190,7 @@ export default function MonitoringContent() {
     };
   }, [chartData, selectedNode, nodeNames, visibleNodes]);
 
-  // Last updated time
-
-  // Instance distribution for pie chart - uses filteredStats to respect node selection
+  // Pie chart slices, from filteredStats so they follow the node selection.
   const instanceDistribution = useMemo(() => {
     if (!filteredStats) return [];
     const total = filteredStats.running_instances + filteredStats.stopped_instances + filteredStats.other_instances;
@@ -1272,7 +1233,6 @@ export default function MonitoringContent() {
 
   return (
     <div className="space-y-6 p-4 md:p-6">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Monitoring</h1>
@@ -1310,7 +1270,6 @@ export default function MonitoringContent() {
                 : "Pause automatic monitoring updates. Workloads will keep running."}
             </TooltipContent>
           </UITooltip>
-          {/* Node Selection - at the end (rightmost) */}
           <NodeFilterSelect
             nodes={dashboardData?.nodes ?? []}
             value={selectedNode}
@@ -1320,9 +1279,8 @@ export default function MonitoringContent() {
         </div>
       </div>
 
-      {/* Overview Stats - use filteredStats for node-filtered view */}
-      {/* note: two a row until there is room for all of them. At md the sidebar left four tiles about
-          92px wide, which clipped "Instances" before any scene was involved. */}
+      {/* Two a row until there is room for all of them: at md the sidebar would leave four tiles
+          about 92px wide, which clips "Instances". */}
       {filteredStats && (
       <div className={`grid grid-cols-2 gap-4 ${isPartner ? "xl:grid-cols-4" : "lg:grid-cols-3"}`}>
         <MetricCard
@@ -1355,7 +1313,6 @@ export default function MonitoringContent() {
       </div>
       )}
 
-      {/* Resource Utilization Gauges */}
       {filteredStats?.hostVisible && (
         <ResourceUtilizationCard
           stats={filteredStats}
@@ -1365,7 +1322,7 @@ export default function MonitoringContent() {
         />
       )}
 
-      {/* Live Charts: the hosts' load over time, operator content (see the note above). */}
+      {/* The hosts' load over time is operator content (see the top of MonitoringContent). */}
       {isPartner && (
       <Card>
         <CardHeader>
@@ -1377,7 +1334,6 @@ export default function MonitoringContent() {
               <CardDescription>Usage over time, one point per collection</CardDescription>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              {/* Zoom/Pan Controls */}
               <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
                 <UITooltip>
                   <TooltipTrigger asChild>
@@ -1460,7 +1416,6 @@ export default function MonitoringContent() {
                 )}
               </div>
               
-              {/* Time Range Selector */}
               <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
                 {HISTORY_WINDOWS.map((range) => (
                   <Button
@@ -1480,7 +1435,7 @@ export default function MonitoringContent() {
                       startTimeRangeTransition(() => {
                         setTimeRange(range.seconds);
                       });
-                      handleResetZoom(); // Reset zoom when changing time range
+                      handleResetZoom();
                     }}
                   >
                     {range.label}
@@ -1491,9 +1446,7 @@ export default function MonitoringContent() {
           </div>
         </CardHeader>
         <CardContent>
-          {/* Chart Type Tabs */}
           <Tabs value={chartTab} onValueChange={(v) => setChartTab(v as "cpu" | "memory" | "storage" | "network")} className="mb-4">
-            {/* Updating indicator inline with tabs */}
             {(isTimeRangePending || historyFetching) && (
               <div className="inline-flex items-center gap-1.5 ml-3 align-middle">
                 <RefreshCw className="h-3 w-3 animate-spin text-primary" />
@@ -1519,7 +1472,6 @@ export default function MonitoringContent() {
               </TabsTrigger>
             </TabsList>
             
-            {/* CPU Chart */}
             <TabsContent value="cpu" className="mt-4">
               <ChartStats 
                 min={chartStats.cpu.min} 
@@ -1528,7 +1480,6 @@ export default function MonitoringContent() {
                 unit="%" 
                 color={CHART_COLORS.cpu} 
               />
-              {/* Node toggle buttons when "All Nodes" is selected */}
               {selectedNode === "all" && nodeNames.length > 1 && (
                 <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mb-3">
                   <span className="text-[10px] sm:text-xs text-muted-foreground">Show:</span>
@@ -1560,7 +1511,6 @@ export default function MonitoringContent() {
                       <stop offset="5%" stopColor={CHART_COLORS.cpu} stopOpacity={0.3}/>
                       <stop offset="95%" stopColor={CHART_COLORS.cpu} stopOpacity={0}/>
                     </linearGradient>
-                    {/* Gradients for each node */}
                     {nodeNames.map((nodeName, idx) => (
                       <linearGradient key={nodeName} id={`cpuGradient_${nodeName}`} x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor={NODE_COLORS[idx % NODE_COLORS.length]} stopOpacity={0.2}/>
@@ -1631,7 +1581,6 @@ export default function MonitoringContent() {
                       wrapperStyle={{ paddingTop: "10px" }}
                     />
                   )}
-                  {/* Brush for pan/zoom */}
                   <Brush
                     dataKey="time"
                     height={30}
@@ -1647,7 +1596,6 @@ export default function MonitoringContent() {
               </ResponsiveContainer>
             </TabsContent>
             
-            {/* Memory Chart */}
             <TabsContent value="memory" className="mt-4">
               <ChartStats 
                 min={chartStats.memory.min} 
@@ -1656,7 +1604,6 @@ export default function MonitoringContent() {
                 unit="%" 
                 color={CHART_COLORS.memory} 
               />
-              {/* Node toggle buttons when "All Nodes" is selected */}
               {selectedNode === "all" && nodeNames.length > 1 && (
                 <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mb-3">
                   <span className="text-[10px] sm:text-xs text-muted-foreground">Show:</span>
@@ -1688,7 +1635,6 @@ export default function MonitoringContent() {
                       <stop offset="5%" stopColor={CHART_COLORS.memory} stopOpacity={0.3}/>
                       <stop offset="95%" stopColor={CHART_COLORS.memory} stopOpacity={0}/>
                     </linearGradient>
-                    {/* Gradients for each node */}
                     {nodeNames.map((nodeName, idx) => (
                       <linearGradient key={nodeName} id={`memoryGradient_${nodeName}`} x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor={NODE_COLORS[idx % NODE_COLORS.length]} stopOpacity={0.2}/>
@@ -1757,7 +1703,6 @@ export default function MonitoringContent() {
                       wrapperStyle={{ paddingTop: "10px" }}
                     />
                   )}
-                  {/* Brush for pan/zoom */}
                   <Brush
                     dataKey="time"
                     height={30}
@@ -1773,7 +1718,6 @@ export default function MonitoringContent() {
               </ResponsiveContainer>
             </TabsContent>
             
-            {/* Storage Chart */}
             <TabsContent value="storage" className="mt-4">
               <ChartStats 
                 min={chartStats.storage.min} 
@@ -1782,7 +1726,6 @@ export default function MonitoringContent() {
                 unit="%" 
                 color={CHART_COLORS.storage} 
               />
-              {/* Node toggle buttons when "All Nodes" is selected */}
               {selectedNode === "all" && nodeNames.length > 1 && (
                 <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mb-3">
                   <span className="text-[10px] sm:text-xs text-muted-foreground">Show:</span>
@@ -1814,7 +1757,6 @@ export default function MonitoringContent() {
                       <stop offset="5%" stopColor={CHART_COLORS.storage} stopOpacity={0.3}/>
                       <stop offset="95%" stopColor={CHART_COLORS.storage} stopOpacity={0}/>
                     </linearGradient>
-                    {/* Gradients for each node */}
                     {nodeNames.map((nodeName, idx) => (
                       <linearGradient key={nodeName} id={`storageGradient_${nodeName}`} x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor={NODE_COLORS[idx % NODE_COLORS.length]} stopOpacity={0.2}/>
@@ -1883,7 +1825,6 @@ export default function MonitoringContent() {
                       wrapperStyle={{ paddingTop: "10px" }}
                     />
                   )}
-                  {/* Brush for pan/zoom */}
                   <Brush
                     dataKey="time"
                     height={30}
@@ -1899,9 +1840,7 @@ export default function MonitoringContent() {
               </ResponsiveContainer>
             </TabsContent>
             
-            {/* Network Chart */}
             <TabsContent value="network" className="mt-4">
-              {/* Network Stats - RX and TX */}
               <div className="flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-8 mb-3 py-2 px-2 sm:px-4 bg-muted/50 rounded-lg">
                 <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-4">
                   <span className="text-[10px] sm:text-xs font-medium" style={{ color: CHART_COLORS.network }}>↓ Inbound (RX)</span>
@@ -1998,7 +1937,6 @@ export default function MonitoringContent() {
                     name="networkTxRate"
                     isAnimationActive={false}
                   />
-                  {/* Brush for pan/zoom */}
                   <Brush
                     dataKey="time"
                     height={30}
@@ -2018,7 +1956,6 @@ export default function MonitoringContent() {
       </Card>
       )}
 
-      {/* Instance Distribution & Top Consumers */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card>
           <CardHeader>
@@ -2047,7 +1984,6 @@ export default function MonitoringContent() {
                   <Tooltip wrapperStyle={CHART_TOOLTIP_STYLE} content={<PieChartTooltip />} />
                 </PieChart>
               </ResponsiveContainer>
-              {/* Clickable Legend */}
               <div className="flex flex-col justify-center min-w-[140px] space-y-1">
                 {instanceDistribution.map((item) => (
                   <button
@@ -2057,9 +1993,9 @@ export default function MonitoringContent() {
                   >
                     <div className="flex items-center gap-2">
                       {/* A legend key for the chart slice, so it takes the slice's own colour.
-                          Square rather than round: a round swatch beside a state word reads as a
-                          status dot, which this console does not use. note: not rounded-sm, which
-                          tailwind.config.ts maps to 8px and renders a 12px square as a circle. */}
+                          Square, because a round swatch beside a state word reads as a status dot.
+                          Not rounded-sm: tailwind.config.ts maps it to 8px, which turns a 12px
+                          square into a circle. */}
                       <div
                         aria-hidden="true"
                         className="h-3 w-3 shrink-0 rounded-[2px]"
@@ -2099,9 +2035,9 @@ export default function MonitoringContent() {
         />
       </div>
 
-      {/* Alarm Statistics. Partner+ only: every tile below navigates to /inventory/warnings or
-          /inventory/clusters/certificates, both of which useRequireRole(Role.PARTNER) bounces a
-          tenant away from, so for a tenant this card is a wall of dead ends. */}
+      {/* Partner+ only: every tile navigates to /inventory/warnings or
+          /inventory/clusters/certificates, and useRequireRole(Role.PARTNER) bounces a Tenant
+          away from both. */}
       {isPartner && (
         <AlarmStatisticsCard
           warnings={platformWarnings(warningsData)}
@@ -2111,7 +2047,6 @@ export default function MonitoringContent() {
         />
       )}
 
-      {/* Cluster status cards */}
       <Card>
         <CardHeader>
           <CardTitle>
@@ -2142,7 +2077,6 @@ export default function MonitoringContent() {
         <StoragePoolsCard pools={data.storage_pools} selectedNode={selectedNode} labelOf={labelOf} />
       )}
 
-      {/* Collection Time Footer */}
       <div className="text-center text-xs text-muted-foreground">
         <Clock className="inline-block h-3 w-3 mr-1" />
         Data collection took {(data.collection_time_ms / 1000).toFixed(2)}s
@@ -2154,7 +2088,7 @@ export default function MonitoringContent() {
         filter={instanceFilterType}
         instances={distributionRows}
         clusterLabel={selectedNode === "all" ? null : labelOf(selectedNode)}
-        // A retry after a failure is loading again, not still failed.
+        // A retry after a failure shows as loading again.
         isLoading={!instanceListData && (!instanceList.isError || instanceList.isFetching)}
         error={!instanceListData && !instanceList.isFetching ? instanceList.error : null}
         onRetry={() => void instanceList.refetch()}
@@ -2163,8 +2097,7 @@ export default function MonitoringContent() {
         unreachableNodes={instanceListData?.unreachable_nodes}
         nodeErrors={instanceListData?.node_errors}
         onSelectInstance={(instance) => {
-          // Close the list before opening the detail. Stacking one modal on another is the
-          // pattern being removed from member-resource-modal, not one to copy.
+          // Close the list before opening the detail; modals do not stack.
           closeInstanceList();
           setMonitoringUiActorScope(actorScope);
           setSelectedListInstance(instance);

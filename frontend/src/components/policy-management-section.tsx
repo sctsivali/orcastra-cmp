@@ -42,23 +42,18 @@ import type {
 import { PoliciesIllustration } from "@/components/illustrations/scenes/onboarding";
 import { plural } from "@/lib/utils";
 
-// ============================================
-// Main Exported Component
-// ============================================
-
 /** Resolved once in the component, where the organization list is in scope. */
 interface PolicyContext {
   orgName: (organizationId: number) => string;
 }
 
 /**
- * A policy list is mostly `auto:cust-*` rows minted per customer project, so the names differ
- * by a hash and nothing else. Search is what makes one findable; sorting alone is not enough
- * once the list is longer than a screen.
+ * A policy list is mostly `auto:cust-*` rows minted per customer project, whose names differ
+ * only by a hash, so search is how one is found.
  *
- * important: an id. This section renders inside the user-groups settings screen, which carries
- * its own filtered table, and without a namespace both would write `q` into the same key and
- * narrow each other on every keystroke.
+ * important: the id namespaces the query keys. This section renders inside the user-groups
+ * settings screen, which has its own filtered table; without it both would write `q` and narrow
+ * each other on every keystroke.
  */
 const POLICIES = defineTable<AccessPolicy, PolicyContext>()({
   id: "policies",
@@ -74,10 +69,9 @@ const POLICIES = defineTable<AccessPolicy, PolicyContext>()({
       filter: fromSort("text"),
     },
     {
-      // The resolved display name rather than the id, because that is what the row shows and
-      // what an operator would pick from a list. The sort side is merged in at the call site:
-      // a declared sort accessor is handed the row and nothing else, and the name lives in a
-      // separate query.
+      // The resolved display name rather than the id, since that is what the row shows. The
+      // sort side is merged in at the call site: a declared sort accessor gets only the row, and
+      // the name lives in a separate query.
       field: "organization",
       label: "Organization",
       facet: (policy, ctx) => ctx.orgName(policy.organization_id),
@@ -101,8 +95,8 @@ const POLICIES = defineTable<AccessPolicy, PolicyContext>()({
       sort: (policy) => policy.assignments_count,
       filter: fromSort("number", {
         unit: "count",
-        // "Which policies are minted but reaching nobody" is the question this list is worst
-        // at answering by eye, and the one that finds provisioning left half-done.
+        // Unassigned finds policies minted but reaching nobody, which is hard to spot by eye and
+        // usually means provisioning was left half-done.
         presets: [
           { label: "Unassigned", min: null, max: 0 },
           { label: "Assigned", min: 1, max: null },
@@ -122,7 +116,6 @@ function PolicyManagementSectionContent() {
   const [editPolicy, setEditPolicy] = useState<AccessPolicy | null>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
 
-  // data
   const {
     data: policiesData,
     isLoading: policiesLoading,
@@ -139,7 +132,7 @@ function PolicyManagementSectionContent() {
     queryFn: () => integrationsAPI.listOrganizations(),
   });
 
-  // fetch user's accessible orgs (filtered by membership on backend)
+  // The caller's own organizations; the backend filters by membership.
   const { data: myOrgs } = useQuery({
     queryKey: ["organizations"],
     queryFn: () => api.organizations.list(),
@@ -155,7 +148,7 @@ function PolicyManagementSectionContent() {
     }));
   }, [clustersData]);
 
-  // filter orgs to only those the user has access to
+  // Only the integration organizations the caller belongs to.
   const myOrgIds = useMemo(
     () => new Set((myOrgs || []).map((o) => Number(o.id))),
     [myOrgs],
@@ -164,8 +157,8 @@ function PolicyManagementSectionContent() {
     () => (orgs || []).filter((o) => myOrgIds.has(o.id)),
     [orgs, myOrgIds],
   );
-  // note: memoised. A fresh array every render hands the filter engine a new identity each
-  // time and re-runs the whole pass over rows that did not change.
+  // Memoised: a fresh array every render would hand the filter engine a new identity and re-run
+  // the whole pass over rows that did not change.
   const policies: AccessPolicy[] = useMemo(
     () => policiesData?.policies ?? [],
     [policiesData],
@@ -186,8 +179,9 @@ function PolicyManagementSectionContent() {
   const filterContext = useMemo<PolicyContext>(() => ({ orgName }), [orgName]);
   const filters = useTableFilters(POLICIES, policies, {
     context: filterContext,
-    // Covers every seam at once: the search box, the Organization facet, both count ranges,
-    // chip removal and Clear all. Without it a search lands on page 3 of 1 and paints nothing.
+    // Covers every way the result set changes: the search box, the Organization facet, both
+    // count ranges, chip removal and Clear all. Without it a search lands on page 3 of 1 and
+    // paints nothing.
     onFilterChange: resetPage,
     // This section lives inside a settings card, not on a route of its own, so its filters
     // would outlive the screen in the address bar.
@@ -230,7 +224,6 @@ function PolicyManagementSectionContent() {
     currentPage * pageSize,
   );
 
-  // mutations
   const createMutation = useMutation({
     mutationFn: (data: PolicyCreateRequest) => api.tenantAccess.createPolicy(data),
     onSuccess: (policy) => {
@@ -269,7 +262,7 @@ function PolicyManagementSectionContent() {
   });
 
   // important: claimed synchronously; isPending disables the buttons only on the next render, so a
-  // double click created two policies or sent two deletes.
+  // double click would create two policies or send two deletes.
   const submitInFlightRef = useRef(false);
   const deleteInFlightRef = useRef(false);
 
@@ -283,7 +276,7 @@ function PolicyManagementSectionContent() {
         await createMutation.mutateAsync(data as PolicyCreateRequest);
       }
     } catch {
-      // the mutation's onError toasts why
+      // The mutation's onError reports why.
     } finally {
       submitInFlightRef.current = false;
     }
@@ -295,7 +288,7 @@ function PolicyManagementSectionContent() {
     try {
       await deleteMutation.mutateAsync(id);
     } catch {
-      // the mutation's onError toasts why
+      // The mutation's onError reports why.
     } finally {
       deleteInFlightRef.current = false;
     }
@@ -307,8 +300,6 @@ function PolicyManagementSectionContent() {
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <div>
-              {/* note: always open. The collapse existed because this card sat between the
-                  identity provider card and Assigned Users; it has its own section now. */}
               <CardTitle>Access Policies</CardTitle>
               <CardDescription className="mt-1.5">
                 Manage reusable access policy templates. Assign them to tenant users through the
@@ -332,8 +323,8 @@ function PolicyManagementSectionContent() {
                 <span className="ml-2 text-sm text-muted-foreground">Loading policies…</span>
               </div>
             ) : policiesError && !policiesData ? (
-              // A failed read is not an empty list: "No access policies yet" here once told an
-              // operator to create policies that already existed.
+              // A failed read must not show "No access policies yet", which would invite creating
+              // policies that already exist.
               <ReadErrorState noun="access policies" error={policiesError} onRetry={() => void refetchPolicies()} />
             ) : policies.length === 0 ? (
               <EmptyState
@@ -345,9 +336,8 @@ function PolicyManagementSectionContent() {
             ) : (
               <>
                 <TableToolbar filters={filters} noun="policies" pageSize={pageSize} className="mb-4" />
-                {/* note: named because Assigned Users carries a table under the same tab, so "the
-                    table on this page" is ambiguous to anything reading the DOM. Same device as
-                    data-slot="projects-pagination" on the project grid. */}
+                {/* Named because Assigned Users carries a table under the same tab, so "the
+                    table on this page" is ambiguous to anything reading the DOM. */}
                 <div className="rounded-md border" data-slot="policies-table">
                 <Table density="compact">
                   <TableHeader>
@@ -397,7 +387,6 @@ function PolicyManagementSectionContent() {
                         }
                       />
                     ) : pagedPolicies.map((policy) => {
-                      // find org name
                       const org = organizations.find(o => o.id === policy.organization_id);
                       return (
                         <TableRow key={policy.id}>
@@ -472,7 +461,7 @@ function PolicyManagementSectionContent() {
                                   <AlertDialogFooter>
                                     <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
                                     <AlertDialogAction
-                                      // note: held open until the answer, so a refusal is read in context
+                                      // Held open until the answer, so a refusal is read in context.
                                       onClick={(event) => {
                                         event.preventDefault();
                                         void handleDelete(policy.id);
@@ -518,7 +507,6 @@ function PolicyManagementSectionContent() {
         </CardContent>
       </Card>
 
-      {/* Create Policy Dialog */}
       <PolicyEditorDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
@@ -529,7 +517,6 @@ function PolicyManagementSectionContent() {
         isPending={createMutation.isPending}
       />
 
-      {/* Edit Policy Dialog */}
       {editPolicy && (
         <PolicyEditorDialog
           open={!!editPolicy}
@@ -547,11 +534,8 @@ function PolicyManagementSectionContent() {
 }
 
 /**
- * The boundary the filter hook requires.
- *
- * useTableFilters reads the query string even with syncUrl off, which opts a client component
- * out of prerendering, and Next then fails the build on the route unless a boundary sits above
- * it. Carrying its own means this can be dropped anywhere without the caller knowing that.
+ * Carries the Suspense boundary the filter hook requires. useTableFilters reads the query string
+ * even with syncUrl off, and Next fails the build on a route without a boundary above it.
  */
 export function PolicyManagementSection() {
   return (

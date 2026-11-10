@@ -26,7 +26,6 @@ import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { KeyCreateRequest } from "@/types/api";
 
-// Generate Key Dialog Component
 export function CreateKeyDialog({
   projects,
   projectsLoading,
@@ -42,8 +41,8 @@ export function CreateKeyDialog({
 
   const [formData, setFormData] = useState<KeyCreateRequest>({
     name: "",
-    node: "",  // Don't auto-select - let user choose
-    project: "",  // Don't auto-select - let user choose
+    node: "",  // Nothing is preselected: the user chooses.
+    project: "",
     auth_level: "standard",
     expire_days: 365 });
 
@@ -58,12 +57,12 @@ export function CreateKeyDialog({
   const engine = capability.data?.engine ?? null;
   const refused = capability.data ? !capability.data.allowed : false;
 
-  // Get unique projects for the selected node
+  // Projects on the selected cluster; a project with no host is offered on every cluster.
   const filteredProjects = formData.node 
     ? projects.filter((p: any) => !p.host || p.host === formData.node)
     : [];
   
-  // Get unique project names to avoid duplicates
+  // One entry per project name.
   const uniqueProjects = filteredProjects.reduce((acc: any[], project: any) => {
     if (!acc.find(p => p.name === project.name)) {
       acc.push(project);
@@ -74,10 +73,10 @@ export function CreateKeyDialog({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.node) {
-      return; // Don't submit without node
+      return;
     }
     if (formData.auth_level === "standard" && !formData.project) {
-      return; // Don't submit without project for standard auth
+      return;
     }
     if (refused) {
       return; // The capability notice says why
@@ -85,7 +84,7 @@ export function CreateKeyDialog({
     onSubmit(formData);
   };
 
-  // Reset project when node changes
+  // A project belongs to one cluster, so changing the cluster clears it.
   const handleNodeChange = (value: string) => {
     setFormData({ ...formData, node: value, project: "" });
   };
@@ -234,7 +233,6 @@ export function CreateKeyDialog({
                 }
               }}
               onBlur={(e) => {
-                // Set to 365 if empty on blur
                 if (e.target.value === '' || parseInt(e.target.value) < 1) {
                   setFormData({
                     ...formData,

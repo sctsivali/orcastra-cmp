@@ -1,12 +1,10 @@
 /**
  * The box at the start of a text session, and the rule for anything else this app writes to xterm.
  *
- * important: the box is a DOM element over four blank rows, not box characters in the stream. It
- * used to be characters, and it went crooked three ways: its width came from string length, so a
- * long name pushed the right border out; a window under 50 columns wrapped it; and xterm re-wraps
- * old lines when a window narrows, which no width calculation can undo. CSS lays this one out, and
- * a blank row has nothing to re-wrap. The cost is that its text is not in the buffer, so select-all
- * copies blank rows there and search does not find it.
+ * The box is a DOM element over four blank rows instead of box characters in the stream. Drawn
+ * characters take their width from string length, wrap in a narrow window, and get re-wrapped by
+ * xterm when the window narrows; CSS lays the element out and a blank row has nothing to re-wrap.
+ * The cost: its text is not in the buffer, so select-all copies blank rows and search misses it.
  */
 
 import type { IDisposable, Terminal } from "@xterm/xterm";
@@ -34,7 +32,7 @@ export function terminalSafe(text: string): string {
 function textLine(text: string): HTMLDivElement {
   const line = document.createElement("div");
   line.textContent = text;
-  // note: CSS clips, so the whole name stays in the DOM; the page header shows it in full.
+  // CSS clips, so the whole name stays in the DOM; the page header shows it in full.
   line.style.cssText = "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0";
   return line;
 }
@@ -42,7 +40,7 @@ function textLine(text: string): HTMLDivElement {
 function buildBox(title: string, detail: string): HTMLDivElement {
   const box = document.createElement("div");
   box.dataset.slot = "terminal-connect-box";
-  // important: anchored to the bottom of the decoration, which sits on the LAST reserved row. xterm
+  // important: anchored to the bottom of the decoration, which sits on the last reserved row. xterm
   // hides a decoration as soon as its own row leaves the viewport, so on the first row one scrolled
   // line would take the whole box away.
   box.style.cssText =
@@ -70,7 +68,7 @@ export function drawConnectBox(term: Terminal, title: string, detail: string): I
 
   const subscriptions: IDisposable[] = [];
   let closed = false;
-  // note: a marker taken right after write() lands on the old row, because writes are asynchronous.
+  // In the callback: writes are asynchronous, so right after write() the cursor has not moved yet.
   term.write("\r\n".repeat(BOX_ROWS), () => {
     if (closed) return;
     const marker = term.registerMarker(-1);
@@ -83,7 +81,7 @@ export function drawConnectBox(term: Terminal, title: string, detail: string): I
     let box: HTMLDivElement | null = null;
     subscriptions.push(
       decoration.onRender((element) => {
-        // note: xterm puts the option width back on every refresh, so this has to run each time.
+        // xterm puts the option width back on every refresh, so this has to run each time.
         element.style.width = "100%";
         element.style.pointerEvents = "none";
         if (!box) {

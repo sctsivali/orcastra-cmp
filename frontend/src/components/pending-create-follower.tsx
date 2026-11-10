@@ -8,10 +8,8 @@ import { usePendingCreateJobs } from "@/hooks/use-pending-create-jobs";
 import { getPendingSnapshot, subscribePending } from "@/lib/pending-creates";
 
 /**
- * Follows every durable create job to its verdict on whichever page is open.
- *
- * It used to run inside the Instances page only, so a create started there and left for the
- * Overview finished without anyone reconciling it: the new row waited for the next poll.
+ * Follows every durable create job to its verdict on whichever page is open, so a create left
+ * running when the operator navigates away still reconciles its new row.
  */
 export function PendingCreateFollower(): null {
   const { scopeKey } = useActorQueryScope();

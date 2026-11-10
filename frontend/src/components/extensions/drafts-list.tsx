@@ -16,7 +16,7 @@ const PAGE_SIZE = 10;
 interface DraftsListProps {
   rows: ExtensionDetail[];
   loading: boolean;
-  /** The catalogue read these come from. A failure here is not an author with no drafts. */
+  /** Error from the catalogue read these come from; shown as an error, never as no drafts. */
   error: Error | null;
   onRetry: () => void;
   onPublish: (slug: string) => void;
@@ -26,15 +26,10 @@ interface DraftsListProps {
 }
 
 /**
- * Drafts an author has not published yet.
- *
- * The section used to be gated on there being at least one, so it had no loading, empty or error
- * state and simply popped into existence. An author who had just discarded their last draft got no
- * confirmation that the list was now empty rather than still loading.
+ * Drafts an author has not published yet, with loading and error states.
  *
  * A feed rather than a table: there is nothing here to filter by, and the table contract requires
- * every visible column to be filterable. It takes a pager because an author working through a
- * backlog is the one person who will have many.
+ * every visible column to be filterable. Paged, because an author with a backlog can have many.
  */
 export function DraftsList({
   rows,
@@ -54,8 +49,7 @@ export function DraftsList({
 
   if (loading) return <Skeleton className="h-24 rounded-lg" />;
 
-  // Same distinction the other two lists make: telling an author they have no drafts when the read
-  // failed is a wrong statement, and it is the reassuring kind.
+  // A failed read renders an error with Retry rather than claiming the author has no drafts.
   if (error) {
     return (
       <EmptyState
@@ -71,8 +65,8 @@ export function DraftsList({
     );
   }
 
-  // The caller does not render this section with nothing to show, so this is a guard rather than a
-  // state an operator reaches. An empty list here would paint a bordered box around no rows.
+  // A guard: the caller hides this section when there is nothing to show. An empty list here would
+  // paint a bordered box around no rows.
   if (rows.length === 0) return null;
 
   return (

@@ -1,17 +1,9 @@
 /**
- * Console Store - Zustand state management for console windows.
- * Handles console state, positions, capabilities, and persistence.
- * 
- * Supports:
- * - Text console (xterm.js) - for containers and VMs
- * - Graphics console (SPICE via spice-html5) - for VMs only
- * 
- * LXD/Incus uses SPICE protocol for VM graphics console.
- * 
- * Storage Notes:
- * - Uses localStorage with safe error handling and quota management
- * - Only persists the most recent N console sessions (configurable)
- * - Cleans up stale sessions on load
+ * Console windows: their state, positions, capabilities and persistence.
+ *
+ * A window holds the text console (xterm.js, containers and VMs) and, for a VM, the graphics
+ * console (SPICE through spice-html5). Windows persist to localStorage through a quota-aware
+ * wrapper; only the most recent sessions are kept and stale ones are dropped on load.
  */
 
 import { create } from 'zustand';
@@ -24,7 +16,6 @@ import {
 } from './storage-utils';
 import { useBreakGlassStore } from './break-glass-store';
 
-// Console window position and size
 export interface ConsolePosition {
   x: number;
   y: number;
@@ -32,36 +23,30 @@ export interface ConsolePosition {
   height: number;
 }
 
-// Console connection state
 export type ConsoleConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 
-// Console types
 export type ConsoleType = 'text' | 'graphics';
 
-// Graphics protocol type
-// LXD/Incus uses SPICE for VM graphics console
+// LXD/Incus VMs use SPICE.
 export type GraphicsType = 'spice' | 'vnc' | 'none';
 
-// Active tab in console window
 export type ConsoleTab = 'text' | 'graphics' | 'serial' | 'boot' | 'iso' | 'files' | 'credentials';
 
-// LXD instance status
 export type InstanceStatus = 'Running' | 'Stopped' | 'Frozen' | 'Error' | 'Unknown' | 'Starting' | 'Stopping' | 'Restarting';
 
-// Console capabilities (detected from backend)
+/** What the backend reports the instance's console supports. */
 export interface ConsoleCapabilities {
   textConsole: boolean;
-  graphicsConsole: boolean;  // True for VMs, uses SPICE protocol
-  graphicsType: GraphicsType;  // 'spice' for LXD/Incus VMs
+  graphicsConsole: boolean;  // VMs only
+  graphicsType: GraphicsType;
   graphicsAddress?: string;
   graphicsPort?: number;
   audioEnabled: boolean;  // SPICE audio passthrough
   usbRedirect: boolean;   // SPICE USB redirect
-  isVM: boolean;          // Helper flag
-  state?: string;         // Instance state
+  isVM: boolean;
+  state?: string;
 }
 
-// Startup order entry
 export interface StartupOrderEntry {
   instanceName: string;
   host: string;
@@ -73,7 +58,6 @@ export interface StartupOrderEntry {
   status: string;
 }
 
-// ISO info
 export interface ISOInfo {
   name: string;
   pool: string;
@@ -83,7 +67,6 @@ export interface ISOInfo {
   createdAt?: string;
 }
 
-// Attached ISO
 export interface AttachedISO {
   deviceName: string;
   source: string;
@@ -91,7 +74,7 @@ export interface AttachedISO {
   bootPriority: number;
 }
 
-// Single console instance
+/** One console window. */
 export interface ConsoleInstance {
   id: string;
   instanceName: string;
@@ -105,7 +88,7 @@ export interface ConsoleInstance {
   capabilities: ConsoleCapabilities | null;
   minimized: boolean;
   maximized: boolean;
-  fullPage: boolean; // Full page mode
+  fullPage: boolean;
   focused: boolean;
   position: ConsolePosition;
   preMaximizePosition?: ConsolePosition;
@@ -113,30 +96,21 @@ export interface ConsoleInstance {
   lastActiveAt: number;
   errorMessage?: string;
   sessionId?: string;
-  operationId?: string;  // LXD operation ID for cleanup
-  // Graphics specific
+  operationId?: string;  // LXD operation ID of the console session
   graphicsWidth: number;
   graphicsHeight: number;
-  // ISO info
   attachedISO?: AttachedISO;
 }
 
-// Store state
 interface ConsoleState {
-  // Console instances
   consoles: ConsoleInstance[];
-  // Currently focused console
   focusedConsoleId: string | null;
-  // Z-index ordering
+  // Window ids, back to front.
   zIndexOrder: string[];
-  // Maximum consoles allowed
   maxConsoles: number;
-  // Default console size
   defaultSize: { width: number; height: number };
-  // Default graphics size
   defaultGraphicsSize: { width: number; height: number };
-  
-  // Actions
+
   openConsole: (params: {
     instanceName: string;
     instanceType: string;
@@ -176,25 +150,22 @@ function readDockHeight(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
-// Generate unique console ID
 function generateConsoleId(): string {
   return `console_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
 
-// Calculate viewport-centered position for new windows
+// Centred in the viewport, each further window offset by 30px, kept 50px inside the edges.
 function getViewportCenteredPosition(
   index: number, 
   defaultSize: { width: number; height: number }
 ): ConsolePosition {
   const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1200;
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
-  
-  // Start from center, cascade for multiple windows
+
   const cascadeOffset = index * 30;
   const centerX = (viewportWidth - defaultSize.width) / 2 + cascadeOffset;
   const centerY = (viewportHeight - defaultSize.height) / 2 + cascadeOffset;
-  
-  // Ensure window stays within viewport bounds
+
   const x = Math.max(50, Math.min(centerX, viewportWidth - defaultSize.width - 50));
   const y = Math.max(50, Math.min(centerY, viewportHeight - defaultSize.height - 50));
   
@@ -206,30 +177,26 @@ function getViewportCenteredPosition(
   };
 }
 
-// Create console store
 export const useConsoleStore = create<ConsoleState>()(
   persist(
     (set, get) => ({
-      // Initial state
       consoles: [],
       focusedConsoleId: null,
       zIndexOrder: [],
       maxConsoles: 8,
       defaultSize: { width: 900, height: 650 },
       defaultGraphicsSize: { width: 1024, height: 768 },
-      
-      // Open new console
+
+      // An instance already open in a window is focused and restored, never opened twice.
       openConsole: async (params) => {
         const { instanceName, instanceType, host, project = 'default', fullPage = false } = params;
         const state = get();
-        
-        // Check if console for this instance already exists
+
         const existing = state.consoles.find(
           c => c.instanceName === instanceName && c.host === host && c.project === project
         );
         
         if (existing) {
-          // Focus and restore existing console
           set((s) => ({
             consoles: s.consoles.map(c => 
               c.id === existing.id 
@@ -241,8 +208,7 @@ export const useConsoleStore = create<ConsoleState>()(
           }));
           return existing;
         }
-        
-        // Check max limit
+
         if (state.consoles.length >= state.maxConsoles) {
           if (process.env.NODE_ENV !== 'production') {
             console.warn(`Maximum console limit (${state.maxConsoles}) reached`);
@@ -251,11 +217,10 @@ export const useConsoleStore = create<ConsoleState>()(
         }
 
         // Break-glass pre-flight: an admin opening a tenant cluster they do not own must
-        // justify the access first. Owned/in-scope access resolves immediately.
+        // justify the access first. Owned or in-scope access resolves immediately.
         const bgAllowed = await useBreakGlassStore.getState().request(host, instanceName);
         if (!bgAllowed) return null;
 
-        // Create new console instance
         const id = generateConsoleId();
         const position = getViewportCenteredPosition(state.consoles.length, state.defaultSize);
         
@@ -290,9 +255,9 @@ export const useConsoleStore = create<ConsoleState>()(
         return newConsole;
       },
       
-      // Close a console window. Its sockets close as it unmounts, which ends its own LXD
-      // operations. important: closing used to cancel every websocket operation on the
-      // instance, other people's shells and consoles included.
+      // important: closing only removes the window. Its sockets close as it unmounts,
+      // which ends its own LXD operations. Never cancel every websocket operation on the
+      // instance: that would end other people's shells and consoles too.
       closeConsole: (id) => {
         set((s) => {
           const newConsoles = s.consoles.filter(c => c.id !== id);
@@ -312,7 +277,6 @@ export const useConsoleStore = create<ConsoleState>()(
         });
       },
       
-      // Close all consoles
       closeAllConsoles: () => {
         set({
           consoles: [],
@@ -321,7 +285,6 @@ export const useConsoleStore = create<ConsoleState>()(
         });
       },
       
-      // Minimize console
       minimizeConsole: (id) => {
         set((s) => {
           const newZOrder = s.zIndexOrder.filter(zid => zid !== id);
@@ -340,7 +303,6 @@ export const useConsoleStore = create<ConsoleState>()(
         });
       },
       
-      // Restore console from minimized
       restoreConsole: (id) => {
         set((s) => ({
           consoles: s.consoles.map(c => 
@@ -353,7 +315,6 @@ export const useConsoleStore = create<ConsoleState>()(
         }));
       },
       
-      // Focus console
       focusConsole: (id) => {
         set((s) => ({
           consoles: s.consoles.map(c => ({
@@ -366,7 +327,6 @@ export const useConsoleStore = create<ConsoleState>()(
         }));
       },
       
-      // Update position
       updateConsolePosition: (id, position) => {
         set((s) => ({
           consoles: s.consoles.map(c => 
@@ -377,7 +337,6 @@ export const useConsoleStore = create<ConsoleState>()(
         }));
       },
       
-      // Update connection status
       updateConnectionStatus: (id, status, errorMessage) => {
         set((s) => ({
           consoles: s.consoles.map(c => 
@@ -388,7 +347,6 @@ export const useConsoleStore = create<ConsoleState>()(
         }));
       },
       
-      // Set session ID
       setConsoleSessionId: (id, sessionId) => {
         set((s) => ({
           consoles: s.consoles.map(c => 
@@ -397,7 +355,6 @@ export const useConsoleStore = create<ConsoleState>()(
         }));
       },
       
-      // Set operation ID for cleanup when console closes
       setConsoleOperationId: (id, operationId) => {
         set((s) => ({
           consoles: s.consoles.map(c => 
@@ -406,7 +363,6 @@ export const useConsoleStore = create<ConsoleState>()(
         }));
       },
       
-      // Set active tab
       setActiveTab: (id, tab) => {
         set((s) => ({
           consoles: s.consoles.map(c => 
@@ -415,7 +371,6 @@ export const useConsoleStore = create<ConsoleState>()(
         }));
       },
       
-      // Set capabilities
       setCapabilities: (id, caps) => {
         set((s) => ({
           consoles: s.consoles.map(c => 
@@ -424,7 +379,6 @@ export const useConsoleStore = create<ConsoleState>()(
         }));
       },
       
-      // Maximize console
       maximizeConsole: (id) => {
         set((s) => ({
           consoles: s.consoles.map(c => 
@@ -445,7 +399,6 @@ export const useConsoleStore = create<ConsoleState>()(
         }));
       },
       
-      // Restore from maximize
       restoreFromMaximize: (id) => {
         set((s) => ({
           consoles: s.consoles.map(c => 
@@ -458,7 +411,6 @@ export const useConsoleStore = create<ConsoleState>()(
         }));
       },
       
-      // Toggle full page mode
       toggleFullPage: (id) => {
         set((s) => ({
           consoles: s.consoles.map(c => 
@@ -467,7 +419,6 @@ export const useConsoleStore = create<ConsoleState>()(
         }));
       },
       
-      // Bring to front
       bringToFront: (id) => {
         const state = get();
         if (state.zIndexOrder[state.zIndexOrder.length - 1] === id) return;
@@ -477,19 +428,16 @@ export const useConsoleStore = create<ConsoleState>()(
         }));
       },
       
-      // Get console by ID
       getConsole: (id) => {
         return get().consoles.find(c => c.id === id);
       },
       
-      // Get console by instance
       getConsoleByInstance: (instanceName, host) => {
         return get().consoles.find(
           c => c.instanceName === instanceName && c.host === host
         );
       },
       
-      // Update instance status
       updateInstanceStatus: (id, instanceStatus) => {
         set((s) => ({
           consoles: s.consoles.map(c => 
@@ -498,7 +446,6 @@ export const useConsoleStore = create<ConsoleState>()(
         }));
       },
       
-      // Set attached ISO
       setAttachedISO: (id, iso) => {
         set((s) => ({
           consoles: s.consoles.map(c => 
@@ -507,7 +454,6 @@ export const useConsoleStore = create<ConsoleState>()(
         }));
       },
       
-      // Set graphics size
       setGraphicsSize: (id, width, height) => {
         set((s) => ({
           consoles: s.consoles.map(c => 
@@ -515,7 +461,7 @@ export const useConsoleStore = create<ConsoleState>()(
           ),
         }));
       },
-      // Ensure all consoles are within viewport after resize/rotation
+      // Pulls every window back into the viewport after a resize or rotation.
       ensureWithinViewport: () => {
         const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1200;
         const viewportHeight = (typeof window !== 'undefined' ? window.innerHeight : 800) - readDockHeight();
@@ -528,21 +474,20 @@ export const useConsoleStore = create<ConsoleState>()(
 
             let { x, y, width, height } = c.position;
             
-            // On mobile (small screens), resize window to fit viewport
+            // Below 768px wide, shrink the window to fit.
             const isMobileViewport = viewportWidth < 768;
             if (isMobileViewport) {
               width = Math.min(width, viewportWidth - padding * 2);
               height = Math.min(height, viewportHeight - 80);
             }
 
-            // Ensure window is not positioned beyond viewport
+            // Keep at least `minVisible` pixels of the window on screen.
             const maxX = viewportWidth - minVisible;
             const maxY = viewportHeight - minVisible;
             
             x = Math.max(padding, Math.min(x, maxX));
             y = Math.max(60, Math.min(y, maxY));
 
-            // If window extends beyond viewport, adjust size
             if (x + width > viewportWidth - padding) {
               width = Math.max(300, viewportWidth - x - padding);
             }
@@ -550,7 +495,7 @@ export const useConsoleStore = create<ConsoleState>()(
               height = Math.max(200, viewportHeight - y - padding);
             }
 
-            // Check if position changed
+            // Keep the same object for a window that did not move.
             if (x === c.position.x && y === c.position.y && 
                 width === c.position.width && height === c.position.height) {
               return c;
@@ -572,11 +517,9 @@ export const useConsoleStore = create<ConsoleState>()(
           console.warn('[ConsoleStore] Storage quota exceeded, some sessions may not be persisted');
         },
         cleanupFn: (data) => {
-          // clean up and limit console sessions before persisting
+          // Drop stale sessions (storage-utils MAX_STALE_AGE) and keep the 5 most recent.
           if (data?.state?.consoles) {
-            // remove stale sessions (older than 24h)
             let consoles = cleanupStaleSessions(data.state.consoles);
-            // keep only most recent 5 sessions
             consoles = limitSessionCount(consoles, 5);
             return {
               ...data,
@@ -593,8 +536,7 @@ export const useConsoleStore = create<ConsoleState>()(
         },
       })),
       partialize: (state) => ({
-        // Only persist basic info, not connection state
-        // Also limit to 5 most recent sessions to prevent storage bloat
+        // Window layout only, never connection state, for the 5 most recent sessions.
         consoles: limitSessionCount(
           cleanupStaleSessions(state.consoles),
           5
@@ -604,14 +546,12 @@ export const useConsoleStore = create<ConsoleState>()(
           sessionId: undefined,
           operationId: undefined,
           errorMessage: undefined,
-          capabilities: null, // don't persist capabilities (will be refreshed)
+          capabilities: null, // re-read from the backend on reopen
         })),
         zIndexOrder: state.zIndexOrder,
       }),
-      // clean up on rehydration
       onRehydrateStorage: () => (state) => {
         if (state) {
-          // clean up stale consoles on load
           const cleaned = cleanupStaleSessions(state.consoles);
           const limited = limitSessionCount(cleaned, 5);
           if (limited.length !== state.consoles.length) {
@@ -626,7 +566,6 @@ export const useConsoleStore = create<ConsoleState>()(
   )
 );
 
-// Hook for console operations
 export function useConsole() {
   const store = useConsoleStore();
   

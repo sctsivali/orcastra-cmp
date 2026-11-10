@@ -24,11 +24,10 @@ import type { APIKeyCreateResponse } from "@/types/api";
 /**
  * Issue a new secret for the same key id, once its name is typed.
  *
- * note: the key id is what every synced organization records as its owner, so a rotation keeps
- * the organizations, the member push and provisioning working and replaces only the secret. It
- * also stops whatever uses the key until it has the new secret, so the name is typed first, as a
- * transfer types the slug. Two rotations in one tick would each show a secret while only the last
- * one works, so the in-flight flag is claimed synchronously rather than read from isPending.
+ * Synced organizations record the key id as their owner, so a rotation keeps them working and
+ * replaces only the secret. It does stop whatever uses the key until it has the new secret, so
+ * the name is typed first. Two rotations in one tick would each show a secret while only the
+ * last one works, so the in-flight flag is claimed synchronously instead of read from isPending.
  */
 export function RotateSecretButton({
   keyId,

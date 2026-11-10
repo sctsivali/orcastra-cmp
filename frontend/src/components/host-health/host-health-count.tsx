@@ -13,9 +13,9 @@ export function HostHealthCount() {
   const { data } = useHostHealth({ poll: "badge" });
   if (!data || data.attention === 0) return null;
   const down = data.checks.some((check) => check.status === "down");
-  // note: the number is the Badge's own text, not a <span>. The sidebar's custom-colour rules
-  // repaint every span to the sidebar text colour, which would put that colour on the chip's
-  // red or amber fill. The spoken form sits beside it, where its colour does not matter.
+  // The number is the Badge's own text rather than a <span>: the sidebar's custom-colour
+  // rules repaint every span to the sidebar text colour, which would land on the chip's red
+  // or amber fill. The spoken form sits beside it, where its colour does not matter.
   return (
     <>
       <Badge

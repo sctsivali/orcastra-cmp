@@ -1,8 +1,3 @@
-/**
- * Console Components - Barrel export file.
- * Exports all console-related components.
- */
-
 export { ConsoleManager } from "./console-manager";
 export { ConsoleWindow } from "./console-window";
 export { ConsoleTabs } from "./console-tabs";

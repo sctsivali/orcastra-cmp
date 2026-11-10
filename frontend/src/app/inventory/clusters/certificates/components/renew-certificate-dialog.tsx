@@ -209,12 +209,10 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
               </Select>
             </div>
 
-            {/* Offered for every renewal, not only an expired certificate. A certificate can be
-                valid and still rejected by the cluster, which is what happens once its trust
-                entry is replaced or dropped on the LXD side. In that state the backend cannot
-                authenticate with the existing certificate, so the trust password is the only
-                way to re-add trust without shell access to the host. Not on Incus, which has no
-                trust password. */}
+            {/* Offered for every renewal. A valid certificate is still rejected once its trust
+                entry is replaced or dropped on the LXD side; the backend then cannot
+                authenticate with it, and the trust password is the only way to re-add trust
+                without shell access to the host. Not on Incus, which has no trust password. */}
             {offersTrustPassword && <div className="space-y-2">
               <Label htmlFor="renew-trust-password">Trust Password (Optional)</Label>
               <Input

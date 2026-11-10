@@ -6,9 +6,9 @@ import { formatRelativeTime } from "@/lib/utils";
 /**
  * Live-updating relative age of a timestamp ("just now", "42s ago", "3m ago").
  *
- * note: ticks every second only while the value is under a minute old, then
- * backs off to 30s. Pauses entirely while the tab is hidden, matching the
- * refetchIntervalInBackground: false convention the query layer already uses.
+ * Ticks every second while the value is under a minute old, then every 30s.
+ * Pauses while the tab is hidden, like refetchIntervalInBackground: false in
+ * the query layer.
  */
 export function useRelativeTime(timestamp: number | null | undefined): string {
   const [label, setLabel] = useState(() => formatRelativeTime(timestamp));

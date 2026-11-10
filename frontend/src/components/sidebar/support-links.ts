@@ -3,11 +3,10 @@
 // a fork can point them at their own tracker and forum.
 //
 // important: the literal defaults below are also the build-time ENV values in
-// frontend/Dockerfile and the patterns frontend/entrypoint.sh swaps at container start. That
-// pairing is load-bearing. The Dockerfile sets these variables before `npm run build`, and a
-// non-empty string is truthy, so inside an image `process.env.X || DEFAULT` can never reach
-// DEFAULT. Keeping the two in step is what makes an unset variable degrade to a working link
-// instead of shipping a dead host. The `||` here is what a bare `npm run dev` uses.
+// frontend/Dockerfile and the patterns frontend/entrypoint.sh swaps at container start, so
+// keep the three in step. The Dockerfile sets these variables before `npm run build`, so
+// inside an image `process.env.X || DEFAULT` never reaches DEFAULT; the `||` serves a bare
+// `npm run dev`.
 const DEFAULT_BUG_REPORT_URL = "https://github.com/sctsivali/orcastra-cmp/issues/new";
 const DEFAULT_COMMUNITY_URL = "https://discourse.orca.id";
 
@@ -22,8 +21,8 @@ const ISSUE_FORM = "bug_report.yml";
 const VERSION_FIELD = "version";
 const ENVIRONMENT_FIELD = "environment";
 
-// www included because a copied address often carries it. A GitHub Enterprise host is
-// deliberately not matched: it may serve a different set of forms.
+// www included because a copied address often carries it. A GitHub Enterprise host is not
+// matched: it may serve a different set of forms.
 const GITHUB_HOSTS = new Set(["github.com", "www.github.com"]);
 
 // Same build-time value the footer prints, from next.config.js `env`.

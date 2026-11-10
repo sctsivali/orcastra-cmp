@@ -3,15 +3,12 @@
  * around it. No React; the component renders what this reports.
  *
  * - "connected" means the guest is on screen (the first frame drawn), not that the main channel
- *   linked, which used to lift the overlay onto a blank canvas.
- * - How a session ends decides what happens next: 1000 and 4409 (another viewer took the display
- *   over; reconnecting would take it back and start a loop) end it, and 4404 is final. After the
- *   instance powered down (1012, a stop or a restart), or a drop of a session that was on screen,
- *   "not running" means "not yet": it tries every few seconds until the instance is back, for up
- *   to three minutes. Everything else goes through lib/socket-recovery.ts: a refused ticket or a
- *   4401 refreshes the session once (or signs in again), 4403 / 4428 / 4423 stop and say why, and
- *   a dropped connection (1006, 1011) reconnects with backoff, at once when the network or the tab
- *   comes back.
+ *   linked.
+ * - 1000 and 4409 (another viewer took the display; reconnecting would take it back in a loop)
+ *   end the session, and 4404 is final. After a power-down (1012, a stop or a restart) or a drop
+ *   of a session that was on screen, "not running" means "not yet": it retries every few seconds
+ *   for up to three minutes. Everything else goes through lib/socket-recovery.ts, and a dropped
+ *   connection reconnects at once when the network or the tab comes back.
  * - With the guest agent running, the guest's resolution follows the console's size, and the
  *   clipboard and file drops work both ways. Without it the console scales the picture instead.
  */
@@ -242,7 +239,7 @@ export class SpiceSession {
         this.onError(error);
       },
       onsuccess: () => {
-        // The main channel linked; "connected" waits for the first frame. note: not yet proof the
+        // The main channel linked; "connected" waits for the first frame. This does not prove the
         // session works: the other channels present their own tickets and may still be refused.
       },
       onagent: () => {
@@ -300,7 +297,7 @@ export class SpiceSession {
       try {
         sc.stop();
       } catch {
-        // already closed
+        // Already closed.
       }
     }
   }
@@ -510,7 +507,7 @@ export class SpiceSession {
     try {
       sc.resize_window(0, width, height, 32, 0, 0);
     } catch {
-      // the agent went away; the picture is scaled instead
+      // The agent went away; the picture is scaled instead.
     }
   }
 
@@ -539,7 +536,7 @@ export class SpiceSession {
     this.events.onGuestClipboard?.(text);
     if (navigator.clipboard?.writeText && document.hasFocus()) {
       navigator.clipboard.writeText(text).catch(() => {
-        // the browser refused (no permission, or the page is not focused); the panel still has it
+        // The browser refused (no permission, or the page is not focused); the panel still has it.
       });
     }
   }
@@ -553,7 +550,7 @@ export class SpiceSession {
       this.hostClipboard = text;
       sc.clipboard_grab?.();
     }).catch(() => {
-      // permission denied or not focused; typed paste remains
+      // Permission denied or not focused; typed paste remains.
     });
   };
 
@@ -570,7 +567,7 @@ export class SpiceSession {
     if (!sc?.agent_connected || !sc.file_xfer_start) return 0;
     let started = 0;
     for (const file of Array.from(files)) {
-      if (!file.size && !file.type) continue; // a directory
+      if (!file.size && !file.type) continue; // A directory.
       sc.file_xfer_start(file);
       started += 1;
     }

@@ -8,18 +8,14 @@ import { defineTable } from "@/lib/table-filter";
 import type { SortDirection } from "@/lib/sort";
 import { NodeStatus } from "@/types";
 
-// The Overview Clusters card grid on the shared filter engine, the same way the Projects grid
-// beside it is wired. A .tsx file rather than .ts because check-table-filters.mjs walks only
-// .tsx/.jsx, so a definition in a .ts file would sit outside the guard.
+// The Overview Clusters card grid on the shared filter engine, wired like the Projects grid
+// beside it. A .tsx file because check-table-filters.mjs walks only .tsx/.jsx. The name column
+// is search-only: a text filter would duplicate the search box, and a filterable column with no
+// role trips check-table-filters.mjs Rule 2.
 //
 // important: `id: "clusters"` namespaces the query keys (clusters.q, clusters.tags). PROJECTS on
-// the same page declares no id and writes bare q/tags/show, so without this id the two toolbars
-// would silently share keys and a search typed into one would narrow the other.
-//
-// note: the name column is search-only, no `filter:`. On a two-column definition a text filter
-// would duplicate the search box, and a filterable column labelled Cluster with no role trips
-// check-table-filters.mjs Rule 2 unless this file is added to ROLE_EXEMPT, which is not worth a
-// guard edit for a redundant control. The card row IS the node, so no column declares a role.
+// the same page writes bare q/tags/show, so without it a search typed into one toolbar would
+// narrow the other.
 export const CLUSTER_CARDS = defineTable<NodeStatus>()({
   id: "clusters",
   searchPlaceholder: "Search clusters by name, id, or tag",
@@ -45,9 +41,8 @@ export const CLUSTER_CARDS = defineTable<NodeStatus>()({
 export type ClusterField = "name" | "tags";
 export type ClusterSortField = "name";
 
-// Name only. CPU and RAM would reorder the cards under the reader on every poll, a host that has
-// not answered carries null resources and would pin to the bottom, and the two ratios measure
-// different things (allocation vs usage) so one "usage" label would lie for one of them.
+// Name only. CPU and RAM would reorder the cards on every poll, a host that has not answered
+// carries null resources, and the two ratios measure different things (allocation vs usage).
 export const CLUSTER_SORT_OPTIONS: readonly { value: ClusterSortField; label: string }[] = [
   { value: "name", label: CLUSTER_CARDS.byField.name.label },
 ];
@@ -71,9 +66,8 @@ export function ClusterGridToolbar({
 }: ClusterGridToolbarProps) {
   return (
     <>
-      {/* "online clusters", not "clusters": the toolbar counts the rows it was handed, which
-          are the online subset, while the summary above it counts the whole registered fleet.
-          "4 of 20 online clusters" beside "20 of 23 connected" cannot contradict each other. */}
+      {/* The toolbar counts the online subset it was handed, while the summary above counts
+          the whole registered fleet, so the noun says "online clusters". */}
       <TableToolbar
         filters={filters}
         noun="online clusters"
@@ -87,8 +81,8 @@ export function ClusterGridToolbar({
         }
       />
 
-      {/* An alternative renderer for the Tags facet, not a second control: its colours come from
-          the tag prefix, which the generic popover cannot show. */}
+      {/* Renders the Tags facet with colours from the tag prefix, which the generic popover
+          cannot show. */}
       {availableTags.length > 0 && (
         <TagFilter
           availableTags={availableTags}

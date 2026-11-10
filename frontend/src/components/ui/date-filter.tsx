@@ -37,15 +37,12 @@ const DAY = 86_400_000;
 /**
  * Presets plus two native date inputs.
  *
- * note: deliberately no calendar component and no new dependency. react-day-picker peers on
- * date-fns v2/v3 while this repo is on v4, so the "free" option is a downgrade across the app,
- * and hand-rolling a keyboard-accessible month grid is roughly 250 lines this team then owns.
- * A native date input is keyboard-operable, locale-aware and labelled for free, and the
- * questions operators actually ask (expiring soon, created today, last 7 days) are answered by
- * a preset in one click.
+ * No calendar component: react-day-picker peers on date-fns v2/v3 while this repo is on v4,
+ * and a keyboard-accessible month grid is a lot of code to own. A native date input is
+ * keyboard-operable, locale-aware and labelled, and the common questions (expiring soon,
+ * created today, last 7 days) are one preset click.
  *
- * note: presets are the one kind here that can carry an honest count, because a preset is a
- * discrete bucket. An uncommitted custom bound is not, so it shows none.
+ * The only count shown is for rows with no date.
  */
 export function DateFilter({
   label,

@@ -9,9 +9,8 @@ import { SearchInput } from "@/components/ui/search-input";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { plural } from "@/lib/utils";
 
-// The panel shows at most this many rows, and every control appears exactly when a cluster can
-// be off-screen. One constant rather than two: the house search threshold of six beside a page
-// of five would give a six-cluster key a pager and no way to search for the row it had hidden.
+// Page size and the threshold for search and pager, as one constant: with separate values a key
+// could get a pager without a way to search for the rows it hides.
 const PAGE_SIZE = 5;
 
 interface IntegrationClusterAccessListProps {
@@ -21,10 +20,9 @@ interface IntegrationClusterAccessListProps {
 }
 
 function haystack(cluster: ClusterAccessDisplay): string {
-  // note: the id is searchable, not only the name. list_api_keys never filters a key's own
-  // permission array while available-clusters drops what the caller cannot reach, so a row whose
-  // name has fallen back to the raw cluster id is the ordinary case here, not an edge one, and
-  // searching by name alone would miss exactly the rows an operator is hunting for.
+  // The id is searchable too. list_api_keys never filters a key's own permission array while
+  // available-clusters drops what the caller cannot reach, so a row named by its raw cluster id
+  // is common here.
   return `${cluster.name} ${cluster.id} ${cluster.typeLabel} ${cluster.permissionLabel} ${cluster.projectsLabel}`.toLowerCase();
 }
 
@@ -36,10 +34,9 @@ export function IntegrationClusterAccessList({
   const [page, setPage] = React.useState(1);
   const query = useDebouncedValue(searchInput, 200);
 
-  // note: the index comes from the full array and is part of the row key. Two permission entries
-  // can carry the same cluster_id, because the permissions endpoint writes the array verbatim
-  // with no dedupe, and a page-local index would let row three of one filtered set reconcile
-  // against row three of another, carrying OverflowText's expanded state onto a different value.
+  // The row key includes the index in the full array. Two permission entries can carry the same
+  // cluster_id (the permissions endpoint does not dedupe), and a page-local index would carry
+  // OverflowText's expanded state onto a different row when the filter changes.
   const keyed = React.useMemo(
     () => clusters.map((cluster, index) => ({ cluster, key: `${cluster.id}-${index}` })),
     [clusters],
@@ -54,10 +51,8 @@ export function IntegrationClusterAccessList({
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
 
   // important: clamped on read, never corrected in an effect. getClusterAccessDisplay builds a
-  // new array on every parent render and useRefreshableQuery re-renders on each isFetching
-  // transition, so an effect keyed on `clusters` would reset every card twice per refresh while
-  // the operator was mid-task, and one keyed on the overflow would still paint an empty frame
-  // before it caught up. Without this the pager reads "Showing 11 to 2 of 2" over no rows.
+  // new array on every parent render, so an effect keyed on `clusters` would reset the page on
+  // every refresh, and one keyed on the overflow would paint an empty frame first.
   const currentPage = Math.min(page, totalPages);
   const rows = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
@@ -69,9 +64,8 @@ export function IntegrationClusterAccessList({
     );
   }
 
-  // note: gated on the full count, never the filtered one. A field that disappears once the
-  // search narrows past the threshold strands a query nobody can then clear, which is the
-  // inverted guard documentation/ui/value-reveal.md records for SearchableSelect.
+  // Gated on the full count, never the filtered one: a search field that disappears once the
+  // query narrows the list would strand a query nobody can clear.
   const showControls = clusters.length > PAGE_SIZE;
 
   const countPart =
@@ -94,8 +88,7 @@ export function IntegrationClusterAccessList({
           value={searchInput}
           onChange={(value) => {
             setSearchInput(value);
-            // The reset-to-first-page contract every table page here follows, applied at the
-            // source of the change so no effect is needed to notice it.
+            // Back to the first page on a new search, set here so no effect is needed.
             setPage(1);
           }}
           placeholder="Search clusters"
@@ -104,9 +97,8 @@ export function IntegrationClusterAccessList({
         />
       )}
 
-      {/* note: outside the pager's gate on purpose. The count sentence left DataTablePagination
-          because that component only renders when totalPages > 1, so the count vanished at
-          exactly the moment a filter made it worth reading. */}
+      {/* Outside the pager's gate: DataTablePagination renders only when totalPages > 1, and the
+          count matters most when a filter has narrowed the list to one page. */}
       {showControls && (
         <p
           role="status"

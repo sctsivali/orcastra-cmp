@@ -33,10 +33,10 @@ import type { ExtensionManifestInput, ExtensionVocabulary } from "@/types/api";
 interface PublishAddonDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Served, never hardcoded: a picker holding its own list eventually offers a refused value. */
+  /** Served by the backend, so the picker never offers a value the server refuses. */
   vocabulary?: ExtensionVocabulary;
   pending: boolean;
-  /** Surfaced verbatim. The author must see the server's own refusal, not our paraphrase. */
+  /** The server's refusal, shown verbatim. */
   error: string | null;
   onSubmit: (manifest: ExtensionManifestInput) => void;
 }
@@ -44,21 +44,15 @@ interface PublishAddonDialogProps {
 const PERMISSIONS = ["read", "write", "admin"] as const;
 const BREADTHS = ["selected", "all"] as const;
 
-/** 16 KB on the server. Refusing here saves a round trip and says the same number. */
+/** The server's 16 KB limit, checked here to save a round trip. */
 const MAX_MANIFEST_BYTES = 16_000;
 
 /**
- * Registering an add-on, which until now had no surface at all.
+ * Registers an add-on from a form or from a pasted or uploaded manifest.
  *
- * Two ways in, because they are two different people. The form is for somebody writing their
- * first manifest, who should not have to know the field names. The paste-or-upload tab is for
- * somebody who keeps the manifest in version control, which is where it belongs, and it is also
- * the only honest way to publish a manifest carrying settings fields or webhook defaults that the
- * form deliberately does not try to build.
- *
- * Both submit the same document to the same endpoint, so validation is the server's either way.
- * A form that validated locally would eventually disagree with the server, and the disagreement
- * would surface as a rejected publish with a message the author cannot act on.
+ * The form covers a first manifest without knowing the field names; the manifest tab accepts every
+ * field, including settings and webhook defaults the form does not build. Both submit the same
+ * document to the same endpoint, so validation is the server's either way.
  */
 export function PublishAddonDialog({
   open,
@@ -82,15 +76,14 @@ export function PublishAddonDialog({
   const [rawError, setRawError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
-  // important: a ref claimed before the mutation, not the pending flag. Pending is React state and
-  // does not reach the DOM until the next render, so two clicks in one tick both get through.
+  // important: claim a ref before the mutation rather than relying on the pending flag. Pending is
+  // React state and does not reach the DOM until the next render, so two clicks in one tick would
+  // both get through.
   const submitting = useRef(false);
 
-  // And released once the request settles, or a refused publish leaves the claim held and every
-  // later attempt returns silently: the author corrects the manifest, presses Publish, and nothing
-  // happens until they close the dialog. Found by a spec that refused three manifests before
-  // sending a good one. Safe against the double click above, because two clicks in one tick both
-  // run before any render, so this effect has not fired between them.
+  // Released once the request settles; otherwise a refused publish keeps the claim and every later
+  // Publish returns silently. Still safe against a double click: two clicks in one tick both run
+  // before any render, so this effect cannot fire between them.
   useEffect(() => {
     if (!pending) submitting.current = false;
   }, [pending]);

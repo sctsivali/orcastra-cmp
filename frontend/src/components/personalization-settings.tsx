@@ -24,9 +24,8 @@ import { personalizationAPI } from "@/lib/personalization-api";
 import { formatBytes, formatDateTime } from "@/lib/utils";
 import { APIError } from "@/types/api";
 
-// The picker fills an empty field with the shipped default, so it has to read the same
-// object everything else does. Retyping the hexes here is how a picker ends up offering to
-// "reset" a colour to a value the product no longer ships.
+// The picker fills an empty field with the built-in default, so it reads the same object
+// everything else does instead of retyping the hexes.
 const DEFAULTS = DEFAULT_PERSONALIZATION.colors;
 import {
   ImageIcon,
@@ -63,7 +62,6 @@ const MAX_BACKGROUND_SIZE = 2 * 1024 * 1024;
 const MAX_FAVICON_SIZE = 64 * 1024;
 const MAX_IMAGE_URL_LENGTH = 2048;
 
-// Convert file to base64
 async function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -79,7 +77,7 @@ async function fetchImageAsBase64(url: string): Promise<string> {
   return data.data; // base64 data URI
 }
 
-// Image upload component with URL support
+// Image field that takes an upload or a URL.
 function ImageUploader({
   label,
   description,
@@ -212,7 +210,6 @@ function ImageUploader({
         )}
       </div>
 
-      {/* Toggle between file upload and URL */}
       <div className="flex items-center gap-2 text-xs">
         <Button
           variant={!showUrlInput ? "secondary" : "ghost"}
@@ -354,7 +351,6 @@ function ImageUploader({
   );
 }
 
-// Slider component for numeric values
 function SliderControl({
   label,
   description,
@@ -396,7 +392,6 @@ function SliderControl({
   );
 }
 
-// Preview Dialog
 function PreviewDialog({ children }: { children: React.ReactNode }) {
   const { settings } = useBrandingEditor();
   const { theme } = useTheme();
@@ -421,7 +416,6 @@ function PreviewDialog({ children }: { children: React.ReactNode }) {
         </DialogHeader>
         
         <div className="space-y-4 mt-4">
-          {/* Landing Page Preview */}
           <div className="border rounded-lg overflow-hidden">
             <div className="relative h-64">
               <div 
@@ -439,9 +433,8 @@ function PreviewDialog({ children }: { children: React.ReactNode }) {
                 <Badge variant="secondary" className="mb-2">Preview</Badge>
                 <h2 className="text-2xl font-bold mb-2">
                   Welcome to{" "}
-                  {/* The real hero in app/page.tsx paints this in the accent, so the preview
-                      has to as well. It carried a fixed violet-to-purple gradient, which meant
-                      changing the accent moved the page and left its own preview behind. */}
+                  {/* The hero in app/page.tsx paints this in the accent, so the preview
+                      does too. */}
                   <span style={{ color: settings.colors.accentColor || DEFAULTS.accentColor }}>
                     {settings.branding.appName}
                   </span>
@@ -453,7 +446,6 @@ function PreviewDialog({ children }: { children: React.ReactNode }) {
             </div>
           </div>
 
-          {/* Sidebar Logo Preview */}
           <div className="flex items-center gap-4">
             <div className="border rounded-lg p-4 bg-card">
               <p className="text-xs text-muted-foreground mb-2">Sidebar Logo</p>
@@ -482,7 +474,6 @@ function PreviewDialog({ children }: { children: React.ReactNode }) {
   );
 }
 
-// Main PersonalizationSettings component
 export function PersonalizationSettings() {
   const { settings, updateLogo, updateBackground, updateBranding, updateColors, updateDefaultTheme, updateDefaultIllustrations, resetToDefaults, resetLabel, undoSettings, redoSettings, canUndo, canRedo, isLoading } = useBrandingEditor();
   const { theme } = useTheme();
@@ -498,7 +489,6 @@ export function PersonalizationSettings() {
 
   return (
     <div className="space-y-6">
-      {/* Header with Preview and Reset */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h3 className="text-lg font-semibold">Personalization</h3>
@@ -569,7 +559,6 @@ export function PersonalizationSettings() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        {/* Logo Settings */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -628,7 +617,6 @@ export function PersonalizationSettings() {
           </CardContent>
         </Card>
 
-        {/* Background Settings */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -672,7 +660,6 @@ export function PersonalizationSettings() {
           </CardContent>
         </Card>
 
-        {/* Branding Settings */}
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -753,7 +740,6 @@ export function PersonalizationSettings() {
           </CardContent>
         </Card>
 
-        {/* Color Settings */}
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -765,7 +751,6 @@ export function PersonalizationSettings() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            {/* Theme Presets - Visual Cards like image 5 */}
             <div className="space-y-3">
               <Label className="text-sm font-medium">Theme Presets</Label>
               <p className="text-xs text-muted-foreground">Quick theme combinations (includes optimized text colors)</p>
@@ -789,18 +774,17 @@ export function PersonalizationSettings() {
                         accentColor: preset.accentColor, 
                         sidebarBgColor: preset.sidebarBgColor,
                         sidebarTextColor: preset.sidebarTextColor,
-                        sidebarLogoColor: "auto", // Auto-detect based on preset bg
+                        sidebarLogoColor: "auto",
                         useCustomAccent: false,
-                        useCustomSidebarBg: true, // Preset applies custom sidebar bg
+                        useCustomSidebarBg: true,
                         useCustomSidebarText: false,
-                        autoTextColor: false // Preset has explicit text color
+                        autoTextColor: false // The preset carries an explicit text colour.
                       })}
                       title={preset.name}
                     >
-                      {/* Mini layout preview */}
                       <div className="aspect-[4/3] rounded border overflow-hidden" style={{ borderColor: preset.accentColor }}>
                         <div className="flex h-full">
-                          {/* Mini sidebar - use preset text color for accurate preview */}
+                          {/* The preset's own text colour, so the preview matches. */}
                           <div 
                             className="w-1/4 border-r flex flex-col items-center pt-1 gap-0.5"
                             style={{ 
@@ -812,7 +796,6 @@ export function PersonalizationSettings() {
                             <div className="w-2 h-1 rounded-sm" style={{ backgroundColor: preset.sidebarTextColor, opacity: 0.4 }} />
                             <div className="w-2 h-1 rounded-sm" style={{ backgroundColor: preset.sidebarTextColor, opacity: 0.4 }} />
                           </div>
-                          {/* Mini content */}
                           <div className="flex-1 bg-background p-1">
                             <div 
                               className="w-full h-2 rounded-sm mb-1"
@@ -835,7 +818,6 @@ export function PersonalizationSettings() {
               </div>
             </div>
 
-            {/* Customize Colors Button - Opens Dialog */}
             <div className="border-t pt-4">
               <Dialog>
                 <DialogTrigger asChild>
@@ -855,7 +837,6 @@ export function PersonalizationSettings() {
                   </DialogHeader>
                   
                   <div className="space-y-6 py-4">
-                    {/* Accent Color */}
                     <div className="space-y-3">
                       <div>
                         <Label className="text-sm font-medium">Accent Color</Label>
@@ -906,7 +887,6 @@ export function PersonalizationSettings() {
                     </div>
 
                     <div className="border-t pt-6">
-                      {/* Sidebar Background */}
                       <div className="space-y-3">
                         <div>
                           <Label className="text-sm font-medium">Sidebar Background</Label>
@@ -977,7 +957,6 @@ export function PersonalizationSettings() {
                     </div>
 
                     <div className="border-t pt-6">
-                      {/* Sidebar Logo Color */}
                       <div className="space-y-3">
                         {(() => {
                           const hasCustomLogo = !!(settings.logo.lightModeLogo || settings.logo.darkModeLogo);
@@ -1050,7 +1029,6 @@ export function PersonalizationSettings() {
                     </div>
 
                     <div className="border-t pt-6">
-                      {/* Sidebar Text Color */}
                       <div className="space-y-3">
                         <div>
                           <Label className="text-sm font-medium">Sidebar Text Color</Label>
@@ -1144,7 +1122,6 @@ export function PersonalizationSettings() {
                       </div>
                     </div>
 
-                    {/* Live Preview */}
                     <div className="border-t pt-6">
                       <div className="p-3 rounded-lg border">
                         <p className="text-xs text-muted-foreground mb-2">Live Preview</p>
@@ -1185,7 +1162,6 @@ export function PersonalizationSettings() {
         </Card>
       </div>
 
-      {/* Last Modified Info */}
       {settings.lastModified && (
         <div className="text-xs text-muted-foreground text-right">
           Last modified: {formatDateTime(settings.lastModified)}

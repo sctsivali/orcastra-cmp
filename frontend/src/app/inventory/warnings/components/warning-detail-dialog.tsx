@@ -17,13 +17,8 @@ import { CodeBlock } from "@/components/ui/code-block";
 import { KERNEL_STATE_DISPLAY, osLabel } from "@/components/kernel-advisory/kernel-advisory-display";
 import { UbuntuCheckText } from "@/components/kernel-advisory/kernel-cve-ubuntu-status";
 
-// One dialog for all three warning tabs.
-//
-// Only the first tab ever had a drill-down, and its card told every reader to click a row while
-// the Certificates and Offline Nodes tabs did nothing at all. They also each dropped the field
-// that matters most: a certificate row never showed its cluster id in full, and an offline node
-// clipped the connection error to two lines behind a tooltip, which is the one place the actual
-// reason lives.
+// One drill-down dialog for every warning tab. Each kind shows in full the field its table row
+// shortens, ex; a certificate's cluster id or an offline node's connection error.
 export type WarningKind = "platform" | "certificate" | "node" | "kernel";
 
 export interface WarningRecord {
@@ -51,8 +46,8 @@ export function WarningDetailDialog({
         open={open}
         onOpenChange={onOpenChange}
         title={formatLabel(record.type)}
-        // The uuid is what correlates this with the cluster's own warning list, and the table
-        // has never shown it.
+        // The uuid correlates this with the cluster's own warning list; the table does not show
+        // it.
         recordId={record.uuid ?? ""}
         recordIdLabel="Warning"
         status={<Badge variant={severity.tone}>{severity.label}</Badge>}
@@ -66,7 +61,7 @@ export function WarningDetailDialog({
           </DetailSection>
           <DetailSection title="Where and When">
             <DetailGrid cols={3}>
-              {/* note: location and source_node are different things, per the type comment. */}
+              {/* location is the cluster member; source_node is the registered cluster. */}
               <DetailField label="Cluster Member" value={record.location} />
               <DetailField label="Cluster" value={record.source_node} />
               <DetailField label="Project" value={record.project} />

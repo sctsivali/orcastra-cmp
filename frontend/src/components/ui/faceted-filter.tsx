@@ -30,9 +30,8 @@ export interface FacetedFilterProps {
 /**
  * Multi-select filter popover with a count beside each value.
  *
- * important: selecting an option must NOT close the popover. Multi-select means several
- * toggles per visit. SearchableSelect closes on select because it is single-select, and
- * copying that line here is the obvious mistake.
+ * important: selecting an option must not close the popover, because multi-select means
+ * several toggles per visit. SearchableSelect closes on select only because it is single-select.
  */
 export function FacetedFilter({
   label,
@@ -60,10 +59,9 @@ export function FacetedFilter({
           disabled={disabled}
         />
       </PopoverTrigger>
-      {/* important: the id goes on the panel, not on CommandList. cmdk's List sets its own
-          `id` after spreading the caller's props, so an id passed there is discarded and the
-          trigger's aria-controls referenced nothing. The three sibling controls already put
-          their panel id here. */}
+      {/* important: the id goes on the panel. cmdk's List sets its own `id` after spreading
+          the caller's props, so an id passed to CommandList is discarded and the trigger's
+          aria-controls would reference nothing. */}
       <PopoverContent id={listboxId} align="start" className="w-56 p-0">
         <Command>
           {showSearch && <CommandInput placeholder={`Search ${label.toLowerCase()}`} />}

@@ -13,8 +13,8 @@ export const TRUST_LIST_CHARS = 12;
  * A certificate fingerprint in a table cell: the trust list's 12 characters at rest, the whole
  * value and a copy button behind the reveal.
  *
- * note: overlay, not inline. 64 monospace characters expanded in place would wrap a narrow
- * column into five lines and push every row below it down; the popover leaves the row alone.
+ * An overlay instead of inline expansion: 64 monospace characters expanded in place would
+ * wrap a narrow column into five lines and push every row below it down.
  */
 export function FingerprintCell({ value, label }: { value?: string | null; label: string }) {
   if (!value) return <TableEmptyValue label={`No ${label}`} />;
@@ -39,7 +39,7 @@ export function FingerprintField({
 }: {
   label: string;
   value?: string | null;
-  /** Names the copy button, ex; "new certificate fingerprint for nuc2". */
+  /** Names the copy button, ex; "new certificate fingerprint for edge-01". */
   copyLabel: string;
   hint?: React.ReactNode;
 }) {

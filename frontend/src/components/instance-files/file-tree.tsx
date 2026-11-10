@@ -26,7 +26,7 @@ interface NodeProps extends TreeProps {
 
 function TreeNode({ target, current, showHidden, onNavigate, path, name, level, open, onToggle }: NodeProps) {
   const expanded = open.has(path);
-  // note: the same query key as the list, so a folder open in the table costs no second read.
+  // The same query key as the list, so a folder open in the table costs no second read.
   const listing = useDirectory(target, path, expanded);
   const children = React.useMemo(
     () =>

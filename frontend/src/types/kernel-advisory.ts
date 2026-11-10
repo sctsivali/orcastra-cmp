@@ -2,7 +2,7 @@
 
 export type KernelAdvisoryState = "patched" | "exposed" | "unverified";
 export type KernelAdvisorySeverity = "critical" | "warning" | "info";
-/** "ubuntu": Ubuntu's record of the CVE decided; "built-in": the data shipped with this version. */
+/** Verdict source: "ubuntu" is Ubuntu's record of the CVE, "built-in" the bundled data. */
 export type KernelAdvisorySource = "ubuntu" | "built-in";
 
 export interface KernelAdvisoryScore {
@@ -22,11 +22,11 @@ export interface KernelAdvisoryInfo {
   introduced: string;
   fixed_upstream: string[];
   fixed_mainline: string;
-  // Optional: absent from responses older than the Ubuntu check.
+  // Optional: a backend without the Ubuntu check omits these.
   source?: KernelAdvisorySource;
   /** The last successful read of Ubuntu's record. */
   checked_at?: string | null;
-  /** The last read is older than the verdicts trust (three days). */
+  /** The last read is too old to trust (more than three days). */
   stale?: boolean;
   /** Why the last read failed, while it is still failing. */
   check_error?: string | null;

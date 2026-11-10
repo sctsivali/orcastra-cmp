@@ -1,11 +1,10 @@
 /**
- * Break-Glass store - drives the pre-flight gate for opening a console/terminal.
+ * Break-glass pre-flight gate for opening a console or terminal.
  *
- * Before a console/terminal opens, the console/terminal stores call `request(clusterId)`.
- * If the backend says a grant is required and the actor has none, a modal is shown; the
- * promise resolves true once a grant is created, or false if the user cancels. Owned/
- * in-scope access (and any check failure) resolves true immediately - the server-side
- * gate (HTTP 403 / WS close 1008) remains the authoritative backstop.
+ * The console and terminal stores call `request(clusterId)` before opening. When the backend
+ * requires a grant the actor lacks, a modal is shown; the promise resolves true once a grant is
+ * created, or false on cancel. Owned or in-scope access, and any check failure, resolves true at
+ * once; the server-side gate (HTTP 403 / WS close 1008) stays authoritative.
  */
 import { create } from 'zustand';
 import { api, onAuthActorChanged, type BreakGlassCheck } from '@/lib/api';
@@ -57,8 +56,8 @@ export const useBreakGlassStore = create<BreakGlassState>((set, get) => ({
       check = await api.breakGlass.check(clusterId, { signal: controller.signal });
     } catch {
       if (controller.signal.aborted || requestEpoch !== actorEpoch) return false;
-      // fail-open: a transient check failure must not block legitimate access; the
-      // backend gate still enforces and would close the connection if truly disallowed.
+      // Fail open: a transient check failure must not block access. The backend gate still
+      // enforces and closes the connection when access is refused.
       return true;
     } finally {
       if (requestController === controller) requestController = null;
@@ -92,7 +91,7 @@ export const useBreakGlassStore = create<BreakGlassState>((set, get) => ({
     // important: the modal's button reads `submitting` through a subscription, so it only goes
     // disabled on the next render. Two clicks inside one tick would both create a grant, and a
     // break-glass grant is an audited privilege escalation. zustand's set is synchronous, so
-    // re-reading it here is a real guard and needs no ref.
+    // re-reading state here guards without a ref.
     if (get().submitting) return;
     set({ submitting: true, error: null });
     const submitEpoch = actorEpoch;

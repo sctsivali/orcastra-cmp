@@ -1,20 +1,16 @@
 import type { ITheme } from "@xterm/xterm";
 
 /**
- * The one xterm colour scheme for every terminal and console surface in the app.
+ * The xterm colour scheme for every terminal and console surface in the app.
  *
- * important: these hex values are the twin of the --terminal-* tokens in src/app/globals.css.
- * xterm paints into a canvas and takes hex strings, so it cannot resolve a CSS variable the way
- * the surrounding Tailwind chrome does, which is why the palette has to exist in both places.
- * scripts/checks/check-terminal-theme.mjs parses both files and fails the build if they drift,
- * because before this module the same 22-key theme object was copy-pasted into four files and
- * the surface classes were spelled ~70 times as arbitrary bg-[#1a1b26] values.
+ * These hex values mirror the --terminal-* tokens in src/app/globals.css: xterm paints into a
+ * canvas and takes hex strings, so it cannot resolve a CSS variable.
+ * scripts/checks/check-terminal-theme.mjs parses both files and fails the build if they drift.
  *
  * The chrome (background, cursor, selection) is tinted onto the app's own hue. The ANSI 16 below
- * are unchanged Tokyo Night: an operator reads red as an error and green as a pass, so they are
- * terminal content rather than decoration and retinting them would change what output means.
- * On this surface they read better than they did on the old one: green measures 10.20:1 and the
- * default foreground 8.83:1.
+ * are unchanged Tokyo Night: an operator reads red as an error and green as a pass, so retinting
+ * them would change what output means. On this surface green measures 10.20:1 and the default
+ * foreground 8.83:1.
  */
 
 /** Chrome surfaces. Mirrors --terminal-bg / -deep / -raised / -border in globals.css. */
@@ -30,9 +26,8 @@ export const TERMINAL_THEME: ITheme = {
   foreground: "#a9b1d6",
   cursor: "#c0caf5",
   cursorAccent: TERMINAL_SURFACE.bg,
-  // Tuned to sit the same distance off the surface as Tokyo Night's #33467c sat off its own
-  // (1.87:1 against the new background, against 1.88:1 before), so selection reads as the same
-  // weight of highlight. Selected text gains a little: 6.17:1 where it used to be 5.64:1.
+  // Sits as far off the surface (1.87:1) as Tokyo Night's #33467c does off its own (1.88:1), so
+  // selection reads as the same weight of highlight. Selected text measures 6.17:1.
   selectionBackground: "#4b357e",
   selectionForeground: "#c0caf5",
   black: "#32344a",

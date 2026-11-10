@@ -1,9 +1,8 @@
 /**
  * The add-on surface.
  *
- * Lives in its own file rather than in `lib/api.ts`, which is already 2097 lines. It uses the
- * same `fetchAPI` and `fetchRead` as everything else, so timeouts, GET deduplication, the 401
- * recovery path and the `?fresh=true` convention all behave identically here.
+ * Uses the same `fetchAPI` and `fetchRead` as `lib/api.ts`, so timeouts, GET deduplication, the
+ * 401 recovery path and the `?fresh=true` convention behave identically here.
  */
 
 import { fetchAPI, fetchRead, type ReadOptions } from "@/lib/api";
@@ -29,11 +28,8 @@ const install = (id: number | string) => `${base}/installations/${encodeURICompo
 
 export const extensionsAPI = {
   /**
-   * Served, never hardcoded.
-   *
-   * The same rule the capability picker already follows: a client holding its own copy of this
-   * list will eventually offer something the server refuses, and the operator sees a form that
-   * lies about what it is granting.
+   * The capability vocabulary, served by the backend. A client-side copy would drift and offer
+   * something the server refuses.
    */
   vocabulary: () => fetchAPI<ExtensionVocabulary>(`${base}/vocabulary`),
 
@@ -46,9 +42,8 @@ export const extensionsAPI = {
   get: (slug: string) => fetchAPI<ExtensionDetail>(`${base}/${encodeURIComponent(slug)}`),
 
   /**
-   * Register a manifest. The add-on starts as a draft, which is the step that used to strand
-   * people: a draft is visible only to its owner, so an operator opening Extensions saw nothing
-   * and neither party got an error. `publish` is what makes it installable.
+   * Register a manifest. The add-on starts as a draft, visible only to its owner, so operators
+   * see nothing in Extensions until it is published.
    */
   create: (manifest: ExtensionManifestInput) =>
     fetchAPI<ExtensionDetail>(base, {
@@ -70,11 +65,11 @@ export const extensionsAPI = {
     }),
 
   /**
-   * A whole manifest under a greater version, not a patch.
+   * Publish a whole manifest under a greater version.
    *
    * Existing installations keep the reach they were granted and stay on the version they
-   * consented to. Their digest stops matching this one, so changing one of them asks its operator
-   * to approve the new manifest first.
+   * consented to. Their digest differs from the new one, so changing one of them asks its
+   * operator to approve the new manifest first.
    */
   publishVersion: (slug: string, manifest: ExtensionManifestInput) =>
     fetchAPI<ExtensionDetail>(`${base}/${encodeURIComponent(slug)}/versions`, {
@@ -87,11 +82,8 @@ export const extensionsAPI = {
     fetchAPI<void>(`${base}/${encodeURIComponent(slug)}`, { method: "DELETE" }),
 
   /**
-   * What installing would actually grant.
-   *
-   * The intersection is computed on the server and echoed back. A browser working it out for
-   * itself can disagree with the server, and the moment it disagrees is the moment somebody is
-   * approving something.
+   * What installing would grant. The server computes the intersection, so what an operator
+   * approves is what the server will grant.
    */
   installPreview: (slug: string, organizationId: number) =>
     fetchAPI<ExtensionInstallPreview>(
@@ -124,7 +116,7 @@ export const extensionsAPI = {
 
   /**
    * Omitting a secret key leaves its stored value alone, so saving one field cannot blank a
-   * credential nobody retyped.
+   * credential that was not retyped.
    */
   updateSettings: (id: number, values: Record<string, unknown>) =>
     fetchAPI<ExtensionInstall>(`${install(id)}/settings`, {
@@ -159,10 +151,8 @@ export const extensionsAPI = {
     fetchAPI<void>(`${install(id)}/webhooks/${subscriptionId}`, { method: "DELETE" }),
 
   /**
-   * One page of the delivery log.
-   *
-   * The page is asked for explicitly. This used to send nothing and take the server's default of
-   * fifty with no offset, so the fifty-first delivery was unreachable and nothing said so.
+   * One page of the delivery log. Limit and offset are always sent; the server's default is the
+   * first fifty only.
    */
   listDeliveries: (
     id: number,

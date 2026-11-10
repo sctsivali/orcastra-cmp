@@ -1,24 +1,14 @@
-// Query-string codec for the non-enum filter kinds.
+// Query-string codec for table filters: one key per column, with a sigil inside the value.
 //
-// One key per column, with a sigil inside the value:
-//
-//   enum    ?node=nuc2,blitz01          (unchanged, handled by table-filter.ts)
+//   enum    ?node=node-a,node-b         (serialiseFacet / parseFacet, at the end of this file)
 //   number  ?devices=n:2..8   ?size=n:4194304..   ?days=n:..30
-//   date    ?created=d:last7d   ?expires=d:2026-09-01..   ?expires=d:~none
+//   date    ?created=d:last7d   ?expires=d:YYYY-MM-DD..   ?expires=d:~none
 //   text    ?name=t:lxdbr
 //
-// important: a sigil inside the value rather than a suffixed key (`?devices.min=2`) is what
-// keeps this small. The key stays exactly what keyFor(field) produces, so clearAll and the
-// namespaced tabbed pages (`certificates.days`) keep working untouched, and there is no
-// parse-on-the-last-dot rule to get wrong.
-//
-// note: collision with the enum format is structural, not statistical. serialiseFacet runs
-// encodeURIComponent per value and a colon always escapes, so an enum serialisation can never
-// produce a bare `n:`, `d:` or `t:` prefix. The same escaping is why a bare comma is a safe
-// separator here: an encoded text query cannot contain one.
-//
-// note: this module is deliberately alias-free with no runtime imports, so the round-trip
-// guard can compile it standalone and exercise it under node.
+// The sigil keeps the key exactly what keyFor(field) produces, so clearAll and namespaced keys
+// (`certificates.days`) work. Values are encodeURIComponent-escaped, so an enum value never
+// starts with a bare `n:`, `d:` or `t:` and a bare comma is a safe separator.
+// No aliases and no runtime imports: the round-trip guard compiles this module standalone.
 
 export const EMPTY_PARAM = "~none";
 export const RANGE_SEPARATOR = "..";
@@ -94,9 +84,9 @@ export function dayStart(at: number): number {
 /**
  * Resolve a preset against a reference day.
  *
- * note: snapping to local midnight is what makes "last 7 days" mean seven whole calendar days
- * rather than a rolling 168 hours, and it keeps the reference stable across renders so the
- * memo chain does not recompute on every tick.
+ * Snapping to local midnight makes "last 7 days" seven whole calendar days instead of a rolling
+ * 168 hours, and keeps the reference stable across renders so the memo chain does not recompute
+ * on every tick.
  */
 export function resolvePreset(
   id: DatePresetId,
@@ -204,8 +194,7 @@ export function serialiseDate(s: DateState): string | null {
 /**
  * important: the tilde is escaped by hand. encodeURIComponent leaves `~` alone, so a query
  * that is literally "~none" would serialise to a value indistinguishable from the empty
- * sentinel and parse back as "only rows with no value". The round-trip guard caught exactly
- * that, which is what it exists for.
+ * sentinel and parse back as "only rows with no value".
  */
 function encodeQuery(query: string): string {
   return encodeURIComponent(query).replace(/~/g, "%7E");
@@ -239,8 +228,7 @@ function toNumber(raw: string, integer: boolean): number | null {
 
 export function parseRange(raw: string | null, integer = false): RangeState {
   if (!raw) return INACTIVE_RANGE;
-  // A bare number is accepted so a link written when the column was an enum still works, and
-  // matches wider rather than hiding a row it used to show.
+  // Also accepts a bare number without the sigil, as an enum-style link writes it.
   const payload = raw.startsWith(NUMBER_SIGIL) ? raw.slice(NUMBER_SIGIL.length) : raw;
   const { body, empty } = splitEmpty(payload);
   if (empty === "only") return { min: null, max: null, empty };
@@ -266,7 +254,8 @@ function parseDayStart(raw: string): number | null {
   if (!DAY_PATTERN.test(raw)) return null;
   const [y, m, d] = raw.split("-").map(Number);
   const at = new Date(y, m - 1, d, 0, 0, 0, 0);
-  // Rejects 2026-13-45: the Date constructor rolls over, so the round trip disagrees.
+  // Rejects an impossible day (month 13, day 45): the Date constructor rolls over, so the round
+  // trip disagrees.
   if (at.getFullYear() !== y || at.getMonth() !== m - 1 || at.getDate() !== d) return null;
   return at.getTime();
 }
@@ -319,7 +308,7 @@ export function parseText(raw: string | null): TextState {
   return isTextActive(state) ? state : INACTIVE_TEXT;
 }
 
-/** Bounds a date state actually filters by, resolving a preset against `now`. */
+/** The bounds a date state filters by, resolving a preset against `now`. */
 export function resolveDateBounds(
   s: DateState,
   now: number,
@@ -328,9 +317,8 @@ export function resolveDateBounds(
 }
 
 /**
- * Bucket for a row whose facet value is missing or empty.
- *
- * note: a control character, so it cannot collide with a real node, project or type name.
+ * Bucket for a row whose facet value is missing or empty. A control character, so it cannot
+ * collide with a real node, project or type name.
  */
 export const EMPTY_FACET = "\u0000none";
 export const EMPTY_FACET_PARAM = "~none";
@@ -338,15 +326,12 @@ export const EMPTY_FACET_PARAM = "~none";
 /**
  * Serialise selected facet values into one query-string value.
  *
- * important: the tilde is escaped by hand, the same reason encodeQuery does it above.
- * encodeURIComponent leaves `~` alone, so a facet value that is literally the empty sentinel
- * would serialise to something indistinguishable from it and parse back as "only rows with no
- * value". Node and project names come from the cluster, not from us.
+ * important: the tilde is escaped by hand, as in encodeQuery. Node and project names come from
+ * the cluster, and one that is literally the empty sentinel would otherwise parse back as "only
+ * rows with no value".
  *
- * note: this lives here rather than beside the facet types in table-filter.ts so the round-trip
- * guard can compile and exercise it. table-filter.ts imports the whole app graph through its
- * `@/` aliases; this module is deliberately alias-free and import-free. The guard used to test an
- * inline re-implementation of this encoding, which is how the missing tilde escape survived.
+ * This lives here instead of beside the facet types in table-filter.ts so the round-trip guard
+ * can compile it: table-filter.ts pulls in the app graph through its `@/` aliases.
  */
 export function serialiseFacet(values: readonly string[]): string {
   return values

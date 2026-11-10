@@ -49,10 +49,10 @@ const HOLD_IN_VIEW_MS = 2000;
  * Bring a just-created row into view, once.
  *
  * important: a row is trusted only when the list was fetched after the intent was raised
- * (`dataUpdatedAt > intent.at`). Presence alone is not enough: delete-and-recreate under the
- * same name is routine, and the client cache or the server's 30 s list cache can still hold
- * the OLD row under that key, so presence would scroll to a row about to be replaced. A
- * stream upsert moves dataUpdatedAt too, so the instances placeholder resolving qualifies.
+ * (`dataUpdatedAt > intent.at`). Delete-and-recreate under the same name is routine, and the
+ * client cache or the server's 30 s list cache can still hold the replaced row under that
+ * key. A stream upsert moves dataUpdatedAt too, so the instances placeholder resolving
+ * qualifies.
  */
 export function useRowFocus<T>(opts: UseRowFocusOptions<T>): RowFocusState {
   const { list, rows, orderedRows, keyOf, pageSize, setPage, dataUpdatedAt, clearFilters } = opts;
@@ -108,8 +108,8 @@ export function useRowFocus<T>(opts: UseRowFocusOptions<T>): RowFocusState {
     ];
   }, [intent, fresh, orderedIndex, pageSize, setPage, list]);
 
-  // No dependency list on purpose: the row appears on the commit after setPage, and a
-  // querySelector per render only while a scroll is pending is cheaper than guessing a delay.
+  // No dependency list: the row appears on the commit after setPage, and a querySelector
+  // per render only while a scroll is pending is cheaper than guessing a delay.
   useEffect(() => {
     const key = scrollPending.current;
     if (!key) return;
@@ -132,7 +132,7 @@ export function useRowFocus<T>(opts: UseRowFocusOptions<T>): RowFocusState {
     holds.current.push(hold);
   });
 
-  // An intent nobody could act on must not sit in the store forever behind a notice.
+  // An intent that never resolves leaves the store after five minutes.
   useEffect(() => {
     if (!intent) return;
     const id = window.setTimeout(() => clearRowFocus(list), Math.max(0, intent.at + 5 * 60 * 1000 - Date.now()));

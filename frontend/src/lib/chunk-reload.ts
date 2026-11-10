@@ -1,15 +1,15 @@
 /**
- * A chunk that fails to download is almost always the console being updated or restarted
- * while a page was open: the browser holds the old HTML and asks for a hash the server no
- * longer serves, or asks while the server is not answering at all. One reload fetches the
- * current build; a second automatic reload would only loop while the server is still down,
- * so the mark below allows one per path per minute and the boundary then offers a button.
+ * One automatic reload after a chunk fails to download.
  *
- * note: scripts/checks/check-no-console-reload.mjs forbids a document reload under the console
- * and terminal surfaces because it tears down every live session the operator has open. This
- * helper lives outside those areas and is reached only from the root and inventory error
- * boundaries; by the time a boundary renders, the page that failed has unmounted along with
- * its effects.
+ * A failed chunk is almost always the console being updated or restarted while a page was
+ * open: the browser holds the old HTML and asks for a hash the server has dropped, or asks
+ * while the server is down. One reload fetches the current build. A second would loop while
+ * the server is down, so the mark below allows one per path per minute and the boundary then
+ * offers a button.
+ *
+ * scripts/checks/check-no-console-reload.mjs forbids a document reload under the console and
+ * terminal surfaces, since it tears down every live session. This helper is reached only from
+ * the root and inventory error boundaries, after the failed page has unmounted.
  */
 
 const MARK_PREFIX = "orcastra.chunk-reload.";
@@ -59,6 +59,6 @@ export function clearChunkReloadMark(pathname: string): void {
   try {
     window.sessionStorage.removeItem(markKey(pathname));
   } catch {
-    // nothing to clear
+    // Nothing to clear.
   }
 }

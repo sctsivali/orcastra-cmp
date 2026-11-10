@@ -48,9 +48,8 @@ interface ProjectQuotaLineProps {
 
 /**
  * The line under the resources that says what the project allows and how much of it is
- * already allocated. Rendered only when the project sets a limit. A request that would take
- * the project past a limit is a warning, not a blocker: usage may be stale by the time the
- * operator submits, and the cluster's own refusal is what decides.
+ * already allocated, rendered only when the project sets a limit. Going past a limit with the
+ * current usage is only a warning: usage may be stale, and the cluster's own refusal decides.
  */
 export function ProjectQuotaLine({ id, project, limits, used, check }: ProjectQuotaLineProps) {
   const parts: string[] = [];

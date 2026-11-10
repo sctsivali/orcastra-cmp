@@ -1,7 +1,7 @@
 import { fetchAPI, fetchRead, type ReadOptions } from "@/lib/api";
 import type { HostHealthReport, VaultSealStatus, VaultUnsealResult } from "@/types/host-health";
 
-// A fresh report runs every check now; Vault's own read can take 20 s on a slow registry LIST.
+// A fresh report runs every check; Vault's own read can take 20 s on a slow registry LIST.
 const FRESH_TIMEOUT_MS = 40_000;
 
 export const hostHealthAPI = {

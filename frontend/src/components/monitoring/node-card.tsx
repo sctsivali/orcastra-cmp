@@ -29,15 +29,14 @@ import { formatBytes, formatHypervisorType, plural } from "@/lib/utils";
 import { capacityReading } from "@/lib/capacity-reading";
 import type { ClusterMonitoringMetrics } from "@/types/api";
 
-// Node Card Component
 interface NodeCardProps {
   node: ClusterMonitoringMetrics;
   /** What the Clusters page calls this cluster. Defaults to its id. */
   displayName?: string;
 }
 
-// A Tenant is sent a cluster's status and its own instance counts only (owner decision
-// 2026-10-26): every host figure is null rather than zero, so there is nothing to draw.
+// A Tenant is sent a cluster's status and its own instance counts only: every host figure is
+// null instead of zero, so there is nothing to draw.
 function hostFigures(node: ClusterMonitoringMetrics) {
   const {
     cpu_total, cpu_used, memory_used_bytes, memory_total_bytes,
@@ -77,7 +76,6 @@ function NodeHostFigures({ host }: { host: NonNullable<ReturnType<typeof hostFig
   const { cpu, gpu, memory, storage } = host;
   return (
     <>
-      {/* CPU */}
       <div className="space-y-1.5">
         <div className="flex justify-between text-sm">
           <span className="inline-flex items-center gap-1.5 text-muted-foreground">
@@ -92,7 +90,6 @@ function NodeHostFigures({ host }: { host: NonNullable<ReturnType<typeof hostFig
         </p>
       </div>
       
-      {/* Memory */}
       <div className="space-y-1.5">
         <div className="flex justify-between text-sm">
           <span className="text-muted-foreground">Memory</span>
@@ -102,7 +99,6 @@ function NodeHostFigures({ host }: { host: NonNullable<ReturnType<typeof hostFig
         <p className="text-xs text-muted-foreground text-right">{memory ? `${memory.percent.toFixed(1)}%` : "Usage unavailable"}</p>
       </div>
       
-      {/* Storage */}
       <div className="space-y-1.5">
         <div className="flex justify-between text-sm">
           <span className="text-muted-foreground">Storage</span>
@@ -112,8 +108,8 @@ function NodeHostFigures({ host }: { host: NonNullable<ReturnType<typeof hostFig
         <p className="text-xs text-muted-foreground text-right">{storage ? `${storage.percent.toFixed(1)}%` : "Usage unavailable"}</p>
       </div>
       
-      {/* GPU. Allocation only: LXD reports no GPU telemetry. The cards count sits on
-          the line below the ratio so "0 / 1" can never read as "not detected". */}
+      {/* GPU allocation only: LXD reports no GPU telemetry. The cards count sits on the
+          line below the ratio so "0 / 1" never reads as "not detected". */}
       <div className="space-y-1.5">
         <div className="flex justify-between text-sm">
           <span className="inline-flex items-center gap-1.5 text-muted-foreground">
@@ -147,9 +143,8 @@ export const NodeCard = memo(function NodeCard({ node, displayName }: NodeCardPr
   const host = hostFigures(node);
   const rawStatus = clusterStatusMeta(node);
   // important: "Pending Trust" and "Error" are certificate-handshake and platform vocabulary a
-  // tenant cannot act on, and the operator-surface gate pins that neither reaches one. The body
-  // copy below already drew that line; the badge did not, and rendered the raw label. Every
-  // not-online state means one thing to a tenant: this node is not answering.
+  // tenant cannot act on, and the operator-surface gate pins that neither reaches one. To a
+  // tenant every not-online state means the same thing: this node is not answering.
   const statusMeta =
     isPartner || rawStatus.status === ClusterStatus.ONLINE
       ? rawStatus
@@ -209,7 +204,6 @@ export const NodeCard = memo(function NodeCard({ node, displayName }: NodeCardPr
           <>
             {host && <NodeHostFigures host={host} />}
 
-            {/* Instances */}
             <div className="flex items-center justify-between pt-2 border-t">
               <span className="text-sm text-muted-foreground">Running</span>
               <div className="flex items-center gap-1">
@@ -219,14 +213,12 @@ export const NodeCard = memo(function NodeCard({ node, displayName }: NodeCardPr
             </div>
           </>
         ) : (
-          // note: the dimming lives here and not on the Card. Fading the whole card faded the
-          // status chip with it, which put a solid chip back at tint strength.
+          // The dimming lives here, not on the Card: fading the whole card would fade the solid
+          // status chip back to tint strength.
           <div className="text-center py-4 text-muted-foreground opacity-60">
             <Server className="h-8 w-8 mx-auto mb-2 opacity-50" />
-            {/* One source for the word, so the badge above and this line can never disagree.
-                It used to compare node.cluster_status to the literal "pending_trust", which the
-                backend no longer emits. Kept as a sentence: the badge is the label, this is the
-                card's empty state and reads better saying what it means. */}
+            {/* One source for the word, so the badge above and this line cannot disagree. A
+                sentence here: the badge is the label, this is the card's empty state. */}
             <p className="text-sm font-medium">
               Cluster is {statusMeta.label.toLowerCase()}
             </p>

@@ -47,7 +47,7 @@ import { SnapshotsIllustration } from "@/components/illustrations/scenes/onboard
 
 interface InstanceSnapshotsTabProps {
   instance: VMInfo;
-  /** The tab is active. The query stays idle otherwise rather than polling behind another panel. */
+  /** The tab is active. The query stays idle otherwise instead of polling behind another panel. */
   enabled: boolean;
 }
 
@@ -60,15 +60,15 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
     enabled,
   );
   const { isReadOnly, isLoading: readOnlyLoading } = useReadOnlyMode();
-  // Read from the settings poll the console already runs, not probed by firing a request at a
-  // route that may not exist. `undefined` is not yet answered and leaves the button as it was.
+  // Read from the console's settings poll. `undefined` means not answered yet and leaves the
+  // button as it was.
   const schedulesEnabled = useSnapshotSchedulesEnabled();
   const [creating, setCreating] = React.useState(false);
   const [pendingSnapshot, setPendingSnapshot] =
     React.useState<PendingSnapshotNotice | null>(null);
   const [scheduling, setScheduling] = React.useState(false);
-  // Narrowed to this instance, so the tab reads one row rather than the whole fleet's schedules,
-  // and skipped entirely once the deployment has said the routes are not mounted.
+  // Narrowed to this instance, and skipped once the deployment reports the schedule routes are
+  // not mounted.
   const schedules = useSnapshotSchedules(
     { host: instance.host, project, instance: instance.name },
     enabled && schedulesEnabled !== false,
@@ -85,7 +85,7 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
   const totalPages = Math.ceil(snapshots.length / pageSize);
   const paginated = snapshots.slice((page - 1) * pageSize, page * pageSize);
 
-  // Keep the create dialog mounted while a fresh policy read is in flight or has failed. The
+  // important: keep the create dialog mounted while a policy read is in flight or has failed. The
   // dialog owns the ambiguous-outcome guard and draft; replacing this subtree during its Check
   // snapshots flow would erase both after a non-idempotent request may have reached the cluster.
   if (isLoading && !creating && !pendingSnapshot) {
@@ -116,10 +116,8 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
       )}
 
       {/*
-        Two kinds of schedule can now describe one instance, so neither block uses a bare
-        demonstrative. "That schedule" was true only while there was exactly one on screen; the
-        moment a second appears it binds to whichever the reader saw last. Each block names its own
-        owner instead, reusing the words the Origin column already puts on screen.
+        Two kinds of schedule can describe one instance, so each block names its own owner, in
+        the words the Origin column uses, instead of a bare "that schedule".
       */}
       {policy?.externally_managed && (
         <div className="flex gap-3 rounded-md border bg-muted/40 p-3">
@@ -180,14 +178,9 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
         <div className="flex w-full flex-col items-start gap-1 sm:w-auto sm:items-end">
           <div className="flex flex-wrap items-center gap-2">
           {/*
-            Disabled with the reason written above rather than refused after a round trip. The tab
-            already holds `policy.externally_managed`, so the one instance that cannot carry a
-            schedule is known before anything is clicked, and the operator reads why in the banner
-            instead of meeting a 409 they have to interpret.
-
-            The same argument covers the feature flag. SNAPSHOT_SCHEDULES_ENABLED is off by default
-            and gates the router, so on a stock deployment this button was enabled, opened a dialog,
-            and submitted into a 404 that names nothing an operator can act on.
+            Disabled up front, with the reason in the banner or title, instead of refused after a
+            round trip: an externally managed instance answers 409, and with
+            SNAPSHOT_SCHEDULES_ENABLED off (the default) the router is not mounted and answers 404.
           */}
           <Button
             size="sm"
@@ -255,8 +248,8 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
         />
       ) : (
         <>
-          {/* note: overflow-y-hidden because any containerClassName turns on vertical scroll, and
-              this table grows with its rows. The ground is the dialog, not a card. */}
+          {/* overflow-y-hidden because any containerClassName turns on vertical scroll, and this
+              table grows with its rows. The pinned-column ground is the dialog background. */}
           <Table containerClassName="overflow-y-hidden [--pinned-ground:hsl(var(--background))]">
             <TableHeader>
               <TableRow>
@@ -283,15 +276,7 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
                         mono
                       />
                     </TableCell>
-                    {/*
-                      The word the fleet table already uses, read from the same map.
-
-                      This cell said "Managed elsewhere" for anything without the `ops-` prefix,
-                      which is exactly the copy the three-class origin model was written to remove:
-                      a snapshot an operator took by hand over SSH is theirs, not another product's.
-                      The rewrite reached the fleet table and stopped there, and both specs that
-                      assert it is gone read the fleet grid, so it survived here.
-                    */}
+                    {/* The fleet table's origin word, read from the same map. */}
                     <TableCell>{ORIGIN_LABEL[snapshotOrigin(snapshot)]}</TableCell>
                     <TableCell className="whitespace-nowrap">
                       {typeof snapshot.size === "number" ? (
@@ -308,10 +293,9 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
                     </TableCell>
                     <TableCell pinned="end" className="text-right">
                       <SnapshotRowActions
-                        // The per-instance listing carries no host or project, because it was
-                        // read for one already-known scope. Stamping them here keeps every row
-                        // self-describing, which is what lets the actions take their target from
-                        // the row rather than from whichever page happens to render them.
+                        // The per-instance listing carries no host or project. Stamping them here
+                        // keeps each row self-describing, so the actions take their target from
+                        // the row instead of from the page that renders them.
                         snapshot={{
                           ...snapshot,
                           source_name: instance.name,

@@ -2,11 +2,11 @@
  * Snapshot rows follow the operator's action instead of the next fleet read.
  *
  * The fleet read behind the Snapshots page lists every cluster and then measures sizes, so it
- * takes seconds. A delete therefore takes its row out of every cached snapshot list as soon as
- * the cluster accepts it, and a list read that started before the delete settled cannot put it
- * back; a create replaces its own cluster and project inside the fleet list from the narrow read
- * of that one slice. This is the sibling of the instance pending deletes in
- * lib/instance-reconciliation.ts and uses the same clock and lifetimes.
+ * takes seconds. A delete takes its row out of every cached snapshot list as soon as the cluster
+ * accepts it, and a list read that started before the delete settled cannot put it back. A create
+ * replaces its own cluster and project inside the fleet list from a narrow read of that slice.
+ * Sibling of the pending instance deletes in lib/instance-reconciliation.ts, with the same clock
+ * and lifetimes.
  */
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 
@@ -26,7 +26,7 @@ export interface SnapshotIdentity {
 interface PendingSnapshotDelete {
   /** Which delete owns the entry, so a failed second delete cannot clear the first one's. */
   token: number;
-  /** Reads that started before this may not show the row; undefined while the cluster works. */
+  /** Reads that started earlier than this may not show the row; undefined while the cluster works. */
   settledAt?: number;
   expiresAt: number;
 }
@@ -107,8 +107,8 @@ function holdsSnapshot(queryKey: QueryKey, identity: SnapshotIdentity): boolean 
 
 function dropFromCachedLists(queryClient: QueryClient, identity: SnapshotIdentity): void {
   // important: every cached list predates the delete, so it is filtered as a read that started
-  // before any settle. Using "now" here missed the row whenever the delete had already settled,
-  // because a read starting at the settle instant counts as after it.
+  // before any settle. "Now" would miss the row when the delete has already settled: a read
+  // starting at the settle instant counts as after it.
   const beforeEverything = Number.NEGATIVE_INFINITY;
   for (const kind of ["fleetSnapshots", "instanceSnapshots"]) {
     for (const [queryKey, data] of queryClient.getQueriesData<SnapshotList>({ queryKey: [kind] })) {
@@ -140,7 +140,7 @@ export function markSnapshotDeleted(
   return nextToken;
 }
 
-/** The cluster finished (or its verdict could not be read): reads that start from now are the truth. */
+/** The cluster finished (or its verdict could not be read): reads that start from now are authoritative. */
 export function settleSnapshotDelete(queryClient: QueryClient, identity: SnapshotIdentity): void {
   const now = readClock();
   const entries = entriesFor(queryClient, now);
@@ -160,9 +160,9 @@ export function clearSnapshotDelete(queryClient: QueryClient, identity: Snapshot
  * A snapshot was created on `host`/`project`: read that one slice (one cluster call and the sizes
  * of that project's holders) and put it in place of the same slice in every fleet-wide list.
  *
- * important: the slice comes from the caller's own read of that cluster and project, so the rows
- * merged are only rows that caller may see. A refused or failed read merges nothing; the regular
- * fleet refetch still follows.
+ * important: the slice comes from the caller's own read of that cluster and project, so only rows
+ * that caller may see are merged. A refused or failed read merges nothing; the regular fleet
+ * refetch still follows.
  */
 export async function refreshSnapshotSlice(
   queryClient: QueryClient,

@@ -78,8 +78,8 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 export function NetworkDetail({ name, host, project }: NetworkDetailProps) {
-  // note: navigate() rather than a bare push, so the leaving transition raises the
-  // global progress bar. These hops follow a mutation and are the slowest in the app.
+  // navigate() instead of a bare push, so the leaving transition raises the global
+  // progress bar. These hops follow a mutation and are slow.
   const { navigate } = useNavigationProgress();
   const { toast } = useToast();
   const [topologyPage, setTopologyPage] = React.useState(1);
@@ -109,8 +109,8 @@ export function NetworkDetail({ name, host, project }: NetworkDetailProps) {
     );
   }
 
-  // LXD refuses to delete unmanaged networks (a physical NIC, `lo`, ...), so
-  // don't offer a button that is guaranteed to fail.
+  // LXD refuses to delete unmanaged networks (a physical NIC, `lo`, ...), so no
+  // Delete button is offered for them.
   const canDeleteThis = canDelete && network.managed;
 
   const config: Record<string, string> = network.config || {};
@@ -121,9 +121,8 @@ export function NetworkDetail({ name, host, project }: NetworkDetailProps) {
     (r) => r.kind !== "instances" && r.kind !== "profiles",
   );
 
-  // The trunk drew one branch per entry in used_by, which on a default bridge is every instance
-  // attached to it. A topology with two hundred branches has stopped being a diagram, so the
-  // branches are paged and the total moves onto the card title.
+  // One branch per entry in used_by, which on a default bridge is every attached instance, so
+  // the branches are paged and the total moves onto the card title.
   const branches = [...instances, ...profiles, ...others];
   const branchPages = Math.max(1, Math.ceil(branches.length / TOPOLOGY_PAGE_SIZE));
   const branchPage = Math.min(topologyPage, branchPages);
@@ -166,7 +165,6 @@ export function NetworkDetail({ name, host, project }: NetworkDetailProps) {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Breadcrumb header */}
       <div className="flex items-center justify-between">
         <div className="text-2xl font-bold flex items-center gap-2">
           <Link href="/inventory/networks" className="text-primary hover:underline">
@@ -208,7 +206,6 @@ export function NetworkDetail({ name, host, project }: NetworkDetailProps) {
         )}
       </div>
 
-      {/* Connections / topology */}
       <Card>
         <CardHeader>
           <CardTitle>Connections ({refs.length})</CardTitle>
@@ -224,7 +221,7 @@ export function NetworkDetail({ name, host, project }: NetworkDetailProps) {
                 <Network className="h-3.5 w-3.5" />
                 {network.name}
               </Badge>
-              {/* horizontal line from the network to the trunk */}
+              {/* Horizontal line from the network to the trunk. */}
               <div className="h-px w-6 bg-border shrink-0" />
               <div className="flex flex-col">
                 {pagedBranches.map((r, i, arr) => {
@@ -243,7 +240,7 @@ export function NetworkDetail({ name, host, project }: NetworkDetailProps) {
                       key={`${r.kind}-${r.project || ""}-${r.name}`}
                       className="flex items-center h-9"
                     >
-                      {/* connector cell: vertical trunk + horizontal branch */}
+                      {/* Connector cell: vertical trunk plus horizontal branch. */}
                       <div className="relative w-6 self-stretch shrink-0">
                         {arr.length > 1 && (
                           <span
@@ -269,7 +266,7 @@ export function NetworkDetail({ name, host, project }: NetworkDetailProps) {
               </div>
             </div>
           )}
-          {/* Absent rather than disabled when the whole topology fits. */}
+          {/* Absent instead of disabled when the whole topology fits. */}
           {branchPages > 1 && (
             <div className="mt-3">
               <DataTablePagination
@@ -284,7 +281,6 @@ export function NetworkDetail({ name, host, project }: NetworkDetailProps) {
         </CardContent>
       </Card>
 
-      {/* General */}
       <Card>
         <CardHeader>
           <CardTitle>General</CardTitle>

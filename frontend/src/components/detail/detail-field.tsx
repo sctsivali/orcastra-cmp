@@ -10,12 +10,8 @@ const SPANS = {
   full: "col-span-full",
 } as const;
 
-// One labelled value inside a detail dialog.
-//
-// important: an absent value renders the shared placeholder, not "N/A", not "None", not an
-// empty cell. Those three spellings are scattered across this codebase and each one is a
-// missing TableEmptyValue that a reviewer let through; putting the decision inside the
-// component is what stops the fourth spelling appearing.
+// One labelled value inside a detail dialog. An absent value renders the shared
+// TableEmptyValue placeholder, so call sites never spell "N/A" or "None" themselves.
 export function DetailField({
   label,
   value,

@@ -3,7 +3,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 export default function RegionsLoading() {
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="space-y-1">
           <Skeleton className="h-7 w-40" />
@@ -12,12 +11,10 @@ export default function RegionsLoading() {
         <Skeleton className="h-9 w-28" />
       </div>
 
-      {/* Map skeleton */}
       <div className="rounded-lg border bg-card p-4">
         <Skeleton className="h-[400px] w-full rounded-lg" />
       </div>
 
-      {/* Region cards skeleton */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {Array.from({ length: 6 }).map((_, i) => (
           <div key={i} className="rounded-lg border bg-card p-4 space-y-3">

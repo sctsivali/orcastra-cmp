@@ -8,9 +8,7 @@ import { capacityReading } from "@/lib/capacity-reading";
 import { Database } from "lucide-react";
 import type { UsageDict } from "../types";
 
-// Space AND inodes. The storage-pools page already fetches both from /resources-all and has
-// only ever rendered `space.used / space.total`, so the inode figures were being paid for on
-// every page load and thrown away. A pool can be perfectly healthy on bytes and full on inodes.
+// Space and inodes, because a pool can be healthy on bytes and full on inodes.
 function Meter({
   title,
   usage,

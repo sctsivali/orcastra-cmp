@@ -83,23 +83,19 @@ function IdentitiesContent() {
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useIdentities();
   const identities = (data as any)?.identities || [];
   const { toast } = useToast();
-  // Nodes the fan-out could not reach. Their rows are absent, so say so rather
-  // than let an outage read as an empty list.
+  // Nodes the fan-out could not reach. Their rows are absent, so say so instead of
+  // letting an outage read as an empty list.
   const reach = reachabilityOf(data);
   const hasIncus = Object.values(((data as any)?.node_engines ?? {}) as Record<string, string>).includes("incus");
   const deleteIdentityMutation = useDeleteIdentity();
   const { isReadOnly } = useReadOnlyMode();
   
-  // Pagination and search state
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  
-  // Delete confirmation state
+
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [identityToDelete, setIdentityToDelete] = useState<any>(null);
 
-  // Get unique nodes and types for filters
-  // Filter and search identities
   const resetPage = () => setCurrentPage(1);
   const filters = useTableFilters(IDENTITIES, identities as any[], { onFilterChange: resetPage });
 
@@ -114,7 +110,6 @@ function IdentitiesContent() {
     [filters.filteredRows, sortItems],
   );
 
-  // Pagination
   const totalPages = Math.ceil(sortedIdentities.length / pageSize);
   const paginatedIdentities = useMemo(() => {
     const startIndex = (currentPage - 1) * pageSize;
@@ -215,9 +210,9 @@ function IdentitiesContent() {
                 <TableBody>
                   {paginatedIdentities.map((identity: any, index: number) => (
                     <TableRow key={identity.node + "-" + identity.id + "-" + index}>
-                      {/* important: this page has no detail dialog, so the cell is the only place
-                          the id exists. It used to elide the middle and hang the whole value on a
-                          title, which is a mouse-only reveal. */}
+                      {/* This page has no detail dialog, so the cell is the only place the id
+                          exists. reveal="always" keeps the whole value reachable without a
+                          mouse-only title. */}
                       <TableCell className="max-w-[16rem] font-mono">
                         <OverflowText value={identity.id} label="identity id" reveal="always" mono />
                       </TableCell>
@@ -314,11 +309,10 @@ function IdentitiesContent() {
   );
 }
 
-// important: the five sibling partner pages gate here and these two did not, so a tenant
-// deep-linking straight to the route got the page shell and a wall of 403s instead of a
-// redirect. The backend is the real gate (require_partner on both routers); this keeps the
-// UI honest and stops the request being made at all, because the content component's
-// queries only mount once the role resolves.
+// important: the role gate. Without it a tenant deep-linking to the route gets the page shell
+// and a wall of 403s instead of a redirect. The backend is the real gate (require_partner on
+// the router); this also keeps the requests from being made, because the content component's
+// queries mount only once the role resolves.
 export default function IdentitiesPage() {
   const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
 

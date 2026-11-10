@@ -1,18 +1,10 @@
 /**
- * On-Screen Cursor - Virtual cursor for mobile/touch devices
- * Allows users to position a cursor and trigger left/right clicks.
- * Designed for mobile devices where right-click is not easily accessible.
- * 
- * Features:
- * - Left/Right click mode selection
- * - Hold Mode: keeps mouse button pressed for dragging windows in VM
- * - Tap to click, drag to move cursor
- * 
- * Implementation Notes:
- * - Uses refs for all state accessed in event callbacks to avoid stale closures
- * - Position is tracked both in state (for rendering) and refs (for callbacks)
- * - Cursor tip offset: the visible cursor tip is offset from cursor center
- * - Touch/mouse events are handled globally to prevent issues when finger/cursor leaves element
+ * Virtual cursor for touch devices, where a right click or a held button is hard to produce.
+ *
+ * Dragging moves the cursor, a tap clicks with the selected button, and Hold keeps the button
+ * pressed so a guest window can be dragged. State read inside event callbacks is mirrored in
+ * refs to avoid stale closures, and move and end events are handled on the document so a drag
+ * continues when the finger leaves the cursor.
  */
 
 "use client";
@@ -31,18 +23,14 @@ interface Position {
 }
 
 interface OnScreenCursorProps {
-  /** ID of the SPICE screen element to target */
+  /** Id of the SPICE screen element whose canvas receives the events. */
   screenId: string;
-  /** Whether the cursor is visible/active */
   isActive: boolean;
-  /** Callback when cursor is closed */
   onClose?: () => void;
-  /** Optional class name */
   className?: string;
 }
 
-// Cursor tip offset from the cursor element's top-left corner
-// This should match the visual crosshair position
+// Where clicks land, measured from the cursor element's top-left corner. Must match the crosshair.
 const CURSOR_TIP_OFFSET_X = 20;
 const CURSOR_TIP_OFFSET_Y = 8;
 
@@ -52,7 +40,6 @@ export function OnScreenCursor({
   onClose,
   className,
 }: OnScreenCursorProps) {
-  // === STATE (for rendering) ===
   const [clickMode, setClickMode] = useState<ClickMode>("left");
   const [position, setPosition] = useState<Position>({ x: 150, y: 150 });
   const [isDragging, setIsDragging] = useState(false);
@@ -60,25 +47,22 @@ export function OnScreenCursor({
   const [isHoldMode, setIsHoldMode] = useState(false);
   const [isHolding, setIsHolding] = useState(false);
 
-  // === REFS (for callbacks to avoid stale closures) ===
   const containerRef = useRef<HTMLDivElement>(null);
   const cursorRef = useRef<HTMLDivElement>(null);
   
-  // Mirror state in refs for callback access
+  // State mirrored in refs, so event callbacks never read a stale closure.
   const positionRef = useRef<Position>({ x: 150, y: 150 });
   const isDraggingRef = useRef(false);
   const isHoldModeRef = useRef(false);
   const isHoldingRef = useRef(false);
   const clickModeRef = useRef<ClickMode>("left");
   
-  // Drag tracking refs
-  // Offset-based approach: store the offset between mouse position and cursor position at drag start
-  // Then cursor position = mouse position - offset (clamped to bounds)
-  const dragOffsetRef = useRef<Position>({ x: 0, y: 0 }); // offset from cursor top-left to mouse position
+  // The pointer's offset from the cursor's top-left at drag start; during a drag the cursor sits
+  // at pointer - offset, clamped to the container.
+  const dragOffsetRef = useRef<Position>({ x: 0, y: 0 });
   const dragStartTimeRef = useRef(0);
   const dragStartClientRef = useRef<Position>({ x: 0, y: 0 }); // for tap detection
 
-  // === SYNC STATE TO REFS ===
   useEffect(() => {
     positionRef.current = position;
   }, [position]);
@@ -95,17 +79,13 @@ export function OnScreenCursor({
     isHoldingRef.current = isHolding;
   }, [isHolding]);
 
-  // === CANVAS ACCESS ===
   const getCanvas = useCallback((): HTMLCanvasElement | null => {
     const screen = document.getElementById(screenId);
     if (!screen) return null;
     return screen.querySelector("canvas");
   }, [screenId]);
 
-  /**
-   * Calculate the cursor tip position in screen coordinates
-   * The tip is where clicks should be registered (the crosshair position)
-   */
+  /** The cursor tip, where clicks land, in viewport coordinates. */
   const getTipScreenPosition = useCallback((cursorPos: Position): Position | null => {
     const container = containerRef.current;
     if (!container) return null;
@@ -118,12 +98,8 @@ export function OnScreenCursor({
     };
   }, []);
 
-  // === SPICE MOUSE EVENTS ===
   
-  /**
-   * Send mousemove event to canvas at the given screen coordinates
-   * Used during hold mode drag to move the cursor in the VM
-   */
+  /** Moves the guest pointer, with the button held down while Hold is on. */
   const sendMouseMoveToCanvas = useCallback((screenX: number, screenY: number) => {
     const canvas = getCanvas();
     if (!canvas) return;
@@ -133,11 +109,9 @@ export function OnScreenCursor({
 
     const rect = canvas.getBoundingClientRect();
     
-    // Clamp coordinates to canvas bounds
     const clampedX = Math.max(rect.left, Math.min(rect.right, screenX));
     const clampedY = Math.max(rect.top, Math.min(rect.bottom, screenY));
 
-    // When holding, we need to send the correct button state
     const mode = clickModeRef.current;
     const buttonState = isHoldingRef.current ? (mode === "left" ? 1 : 2) : 0;
 
@@ -156,9 +130,6 @@ export function OnScreenCursor({
     canvas.dispatchEvent(event);
   }, [getCanvas]);
 
-  /**
-   * Send mousedown event to canvas
-   */
   const sendMouseDown = useCallback((screenX: number, screenY: number): boolean => {
     const canvas = getCanvas();
     if (!canvas) return false;
@@ -176,7 +147,7 @@ export function OnScreenCursor({
     const button = mode === "left" ? 0 : 2;
     const buttons = mode === "left" ? 1 : 2;
 
-    // First position the cursor with a plain mousemove
+    // Position the pointer first, then press.
     const moveEvent = new PointerEvent("pointermove", {
       pointerId: 1,
       pointerType: "mouse",
@@ -191,7 +162,6 @@ export function OnScreenCursor({
     });
     canvas.dispatchEvent(moveEvent);
 
-    // Then mousedown
     const downEvent = new PointerEvent("pointerdown", {
       pointerId: 1,
       pointerType: "mouse",
@@ -209,9 +179,6 @@ export function OnScreenCursor({
     return true;
   }, [getCanvas]);
 
-  /**
-   * Send mouseup event to canvas
-   */
   const sendMouseUp = useCallback((screenX: number, screenY: number) => {
     const canvas = getCanvas();
     if (!canvas) return;
@@ -234,9 +201,6 @@ export function OnScreenCursor({
     canvas.dispatchEvent(upEvent);
   }, [getCanvas]);
 
-  /**
-   * Send complete click (down + up) sequence
-   */
   const sendClick = useCallback(() => {
     const tipPos = getTipScreenPosition(positionRef.current);
     if (!tipPos) return;
@@ -253,7 +217,6 @@ export function OnScreenCursor({
       return;
     }
 
-    // Show feedback
     setShowClickFeedback(true);
     setTimeout(() => setShowClickFeedback(false), 150);
 
@@ -261,7 +224,7 @@ export function OnScreenCursor({
     const button = mode === "left" ? 0 : 2;
     const buttons = mode === "left" ? 1 : 2;
 
-    // Move -> Down -> Up sequence
+    // Move, press and release, a few milliseconds apart.
     const moveEvent = new PointerEvent("pointermove", {
       pointerId: 1,
       pointerType: "mouse",
@@ -306,7 +269,7 @@ export function OnScreenCursor({
         });
         canvas.dispatchEvent(upEvent);
 
-        // Right click also needs contextmenu
+        // A right click also dispatches contextmenu.
         if (mode === "right") {
           const contextEvent = new MouseEvent("contextmenu", {
             bubbles: true,
@@ -322,7 +285,6 @@ export function OnScreenCursor({
     }, 20);
   }, [getCanvas, getTipScreenPosition]);
 
-  // === HOLD MODE TOGGLE ===
   const toggleHoldMode = useCallback(() => {
     const currentHoldMode = isHoldModeRef.current;
     const currentHolding = isHoldingRef.current;
@@ -330,7 +292,7 @@ export function OnScreenCursor({
     const tipPos = getTipScreenPosition(currentPos);
 
     if (currentHoldMode) {
-      // Turning off: release mouse at current tip position
+      // Turning off releases the button at the tip.
       if (currentHolding && tipPos) {
         sendMouseUp(tipPos.x, tipPos.y);
       }
@@ -339,7 +301,7 @@ export function OnScreenCursor({
       setIsHoldMode(false);
       isHoldModeRef.current = false;
     } else {
-      // Turning on: send mousedown at current tip position
+      // Turning on presses it there.
       if (tipPos) {
         const success = sendMouseDown(tipPos.x, tipPos.y);
         if (success) {
@@ -352,19 +314,8 @@ export function OnScreenCursor({
     }
   }, [getTipScreenPosition, sendMouseDown, sendMouseUp]);
 
-  // === CURSOR POSITION UPDATE ===
-  /**
-   * Update cursor position and send SPICE events if in hold mode
-   * 
-   * Uses offset-based positioning for smooth, predictable movement:
-   * - At drag start, we calculate offset = mousePos - cursorPos
-   * - During drag, cursorPos = mousePos - offset
-   * 
-   * This approach is more stable than delta-based tracking because:
-   * - No accumulation of floating point errors
-   * - No dependency on previous frame's position
-   * - Cursor follows mouse exactly, even if frames are dropped
-   */
+  // The cursor is placed at pointer - offset rather than moved by deltas, so it follows the
+  // pointer exactly with no accumulated error, even when frames are dropped.
   const positionFrameRef = useRef<number | null>(null);
   useEffect(() => () => {
     if (positionFrameRef.current !== null) cancelAnimationFrame(positionFrameRef.current);
@@ -374,22 +325,16 @@ export function OnScreenCursor({
     const container = containerRef.current;
     if (!container) return;
     
-    // IMPORTANT: Only update if actually dragging
-    // This is the primary guard against unwanted movement
     if (!isDraggingRef.current) return;
 
     const containerRect = container.getBoundingClientRect();
     
-    // Calculate cursor position relative to container
-    // mousePos (relative to container) = clientPos - containerRect.left/top
-    // cursorPos = mousePos - dragOffset
     const mouseRelativeX = clientX - containerRect.left;
     const mouseRelativeY = clientY - containerRect.top;
     
     const newX = mouseRelativeX - dragOffsetRef.current.x;
     const newY = mouseRelativeY - dragOffsetRef.current.y;
 
-    // Clamp to container bounds
     const cursorSize = 48;
     const maxX = containerRect.width - cursorSize;
     const maxY = containerRect.height - cursorSize;
@@ -399,8 +344,7 @@ export function OnScreenCursor({
 
     const newPos = { x: clampedX, y: clampedY };
 
-    // The ref updates on every move; the render at most once a frame (it used to re-render the
-    // whole overlay on every pointer event).
+    // The ref updates on every move; the overlay renders at most once a frame.
     positionRef.current = newPos;
     if (positionFrameRef.current === null) {
       positionFrameRef.current = requestAnimationFrame(() => {
@@ -409,7 +353,7 @@ export function OnScreenCursor({
       });
     }
 
-    // If holding, send mousemove to SPICE for window dragging
+    // While holding, the guest pointer follows, which drags the guest window.
     if (isHoldingRef.current) {
       const tipScreenX = containerRect.left + clampedX + CURSOR_TIP_OFFSET_X;
       const tipScreenY = containerRect.top + clampedY + CURSOR_TIP_OFFSET_Y;
@@ -417,81 +361,62 @@ export function OnScreenCursor({
     }
   }, [sendMouseMoveToCanvas]);
 
-  // === DRAG START ===
-  /**
-   * Start dragging the on-screen cursor
-   * Calculates the offset between mouse position and cursor position
-   */
   const startDrag = useCallback((clientX: number, clientY: number) => {
     const container = containerRef.current;
     if (!container) return;
     
     const containerRect = container.getBoundingClientRect();
     
-    // Calculate mouse position relative to container
     const mouseRelativeX = clientX - containerRect.left;
     const mouseRelativeY = clientY - containerRect.top;
     
-    // Calculate offset: how far is the mouse from the cursor's top-left?
-    // offset = mousePos - cursorPos
     const currentPos = positionRef.current;
     dragOffsetRef.current = {
       x: mouseRelativeX - currentPos.x,
       y: mouseRelativeY - currentPos.y,
     };
     
-    // Store for tap detection
     dragStartClientRef.current = { x: clientX, y: clientY };
     dragStartTimeRef.current = Date.now();
     
-    // Set dragging state - MUST be set AFTER storing offset
+    // Set after the offset, which a move reads as soon as this is true.
     isDraggingRef.current = true;
     setIsDragging(true);
   }, []);
 
-  // === DRAG END ===
-  /**
-   * End dragging and detect taps vs drags
-   */
+  /** Ends a drag; a short one that barely moved is a tap and clicks. */
   const endDrag = useCallback((clientX: number, clientY: number) => {
     if (!isDraggingRef.current) return;
 
-    // Calculate movement and duration for tap detection
     const duration = Date.now() - dragStartTimeRef.current;
     
-    // Use screen coordinates directly for tap detection
     const deltaX = Math.abs(clientX - dragStartClientRef.current.x);
     const deltaY = Math.abs(clientY - dragStartClientRef.current.y);
     const movement = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
 
-    // Clear dragging state FIRST to prevent any further updates
+    // Cleared first, so no later move updates the position.
     isDraggingRef.current = false;
     setIsDragging(false);
 
-    // Tap detection: short duration, minimal movement, NOT in hold mode
     if (duration < 250 && movement < 15 && !isHoldModeRef.current) {
       sendClick();
     }
   }, [sendClick]);
 
-  // === GLOBAL EVENT LISTENERS ===
   useEffect(() => {
     if (!isActive) return;
 
-    // Mouse move handler
     const handleMouseMove = (e: MouseEvent) => {
       if (!isDraggingRef.current) return;
       e.preventDefault();
       updateCursorPosition(e.clientX, e.clientY);
     };
 
-    // Mouse up handler
     const handleMouseUp = (e: MouseEvent) => {
       if (!isDraggingRef.current) return;
       endDrag(e.clientX, e.clientY);
     };
 
-    // Touch move handler
     const handleTouchMove = (e: TouchEvent) => {
       if (!isDraggingRef.current) return;
       if (e.touches.length !== 1) return;
@@ -503,28 +428,24 @@ export function OnScreenCursor({
       updateCursorPosition(touch.clientX, touch.clientY);
     };
 
-    // Touch end handler
     const handleTouchEnd = (e: TouchEvent) => {
       if (!isDraggingRef.current) return;
       if (e.changedTouches.length < 1) return;
       
-      // The browser follows a tap with compatibility mousedown/mouseup, which re-entered the drag
-      // handlers and clicked the guest twice. Cancelling the touchend suppresses them.
+      // The browser follows a tap with compatibility mousedown/mouseup, which would re-enter the
+      // drag handlers and click the guest twice. Cancelling the touchend suppresses them.
       if (e.cancelable) e.preventDefault();
       const touch = e.changedTouches[0];
       endDrag(touch.clientX, touch.clientY);
     };
 
-    // Touch cancel handler
     const handleTouchCancel = () => {
       if (!isDraggingRef.current) return;
-      // End drag immediately
       isDraggingRef.current = false;
       setIsDragging(false);
     };
 
-    // Add all listeners
-    // Using document instead of window for better touch capture
+    // On the document, so a drag continues when the finger leaves the cursor.
     document.addEventListener("mousemove", handleMouseMove, { passive: false });
     document.addEventListener("mouseup", handleMouseUp);
     document.addEventListener("touchmove", handleTouchMove, { passive: false });
@@ -540,27 +461,22 @@ export function OnScreenCursor({
     };
   }, [isActive, updateCursorPosition, endDrag]);
 
-  // === ELEMENT EVENT HANDLERS ===
   
-  // Mouse down on cursor element
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     startDrag(e.clientX, e.clientY);
   }, [startDrag]);
 
-  // Touch start on cursor element
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    // Don't prevent default here - let the global handler do it during move
+    // No preventDefault here; the document's touchmove handler does it during a drag.
     e.stopPropagation();
     if (e.touches.length === 1) {
       startDrag(e.touches[0].clientX, e.touches[0].clientY);
     }
   }, [startDrag]);
 
-  // === LIFECYCLE EFFECTS ===
   
-  // Center cursor when activated
   useEffect(() => {
     if (isActive && containerRef.current) {
       const rect = containerRef.current.getBoundingClientRect();
@@ -573,7 +489,7 @@ export function OnScreenCursor({
     }
   }, [isActive]);
 
-  // Cleanup: release hold mode when deactivated
+  // Deactivating releases a held button.
   useEffect(() => {
     if (!isActive && isHoldingRef.current) {
       const tipPos = getTipScreenPosition(positionRef.current);
@@ -587,7 +503,7 @@ export function OnScreenCursor({
     }
   }, [isActive, getTipScreenPosition, sendMouseUp]);
 
-  // Reset hold mode when click mode changes
+  // Switching the click mode releases a held button.
   useEffect(() => {
     if (isHoldingRef.current) {
       const tipPos = getTipScreenPosition(positionRef.current);
@@ -602,7 +518,6 @@ export function OnScreenCursor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clickMode]);
 
-  // === RENDER ===
   
   if (!isActive) return null;
 
@@ -611,10 +526,8 @@ export function OnScreenCursor({
       ref={containerRef}
       className={cn("absolute inset-0 z-40 pointer-events-none", className)}
     >
-      {/* Control panel - simple toggle buttons */}
       <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-auto z-50">
         <div className="flex items-center gap-1 bg-black/80 backdrop-blur-sm rounded-full px-2 py-1.5 shadow-lg border border-white/20">
-          {/* Left Click Toggle */}
           <Button
             variant="ghost"
             size="sm"
@@ -631,7 +544,6 @@ export function OnScreenCursor({
             Left
           </Button>
 
-          {/* Right Click Toggle */}
           <Button
             variant="ghost"
             size="sm"
@@ -648,10 +560,8 @@ export function OnScreenCursor({
             Right
           </Button>
 
-          {/* Divider */}
           <div className="w-px h-6 bg-white/30 mx-1" />
 
-          {/* Hold Mode Toggle - for dragging windows */}
           <Button
             variant="ghost"
             size="sm"
@@ -672,10 +582,8 @@ export function OnScreenCursor({
             Hold
           </Button>
 
-          {/* Divider */}
           <div className="w-px h-6 bg-white/30 mx-1" />
 
-          {/* Close Button */}
           <Button
             variant="ghost"
             size="icon"
@@ -687,7 +595,6 @@ export function OnScreenCursor({
         </div>
       </div>
 
-      {/* Draggable Cursor */}
       <div
         ref={cursorRef}
         className={cn(
@@ -698,7 +605,7 @@ export function OnScreenCursor({
           isDragging && "scale-110"
         )}
         style={{
-          // translate, not left/top: moving it composites instead of laying the page out again
+          // translate rather than left/top, so a move composites instead of re-running layout
           left: 0,
           top: 0,
           translate: `${position.x}px ${position.y}px`,
@@ -708,14 +615,12 @@ export function OnScreenCursor({
         onMouseDown={handleMouseDown}
         onTouchStart={handleTouchStart}
       >
-        {/* Cursor Visual */}
         <div
           className={cn(
             "relative w-11 h-11 rounded-full",
             "flex items-center justify-center",
             "shadow-xl border-2",
             "transition-all duration-100",
-            // Hold mode: green glow effect
             isHoldMode 
               ? "bg-green-500 border-green-300 ring-2 ring-green-400 ring-offset-1" 
               : clickMode === "left" 
@@ -724,7 +629,6 @@ export function OnScreenCursor({
             showClickFeedback && "scale-90 brightness-125"
           )}
         >
-          {/* Cursor Icon - show Lock when holding */}
           {isHoldMode ? (
             <Lock className="h-5 w-5 text-white drop-shadow-md" />
           ) : (
@@ -736,7 +640,6 @@ export function OnScreenCursor({
             />
           )}
           
-          {/* Mode Label */}
           <div className={cn(
             "absolute -bottom-1 -right-1 w-5 h-5 rounded-full shadow flex items-center justify-center",
             isHoldMode ? "bg-status-online" : "bg-white dark:bg-gray-200"
@@ -749,24 +652,21 @@ export function OnScreenCursor({
             </span>
           </div>
 
-          {/* Drag indicator */}
           <div className="absolute -top-1 -left-1 w-4 h-4 rounded-full bg-white/90 shadow flex items-center justify-center">
             <Move className="h-2.5 w-2.5 text-gray-600 dark:text-gray-700" />
           </div>
         </div>
 
-        {/* Click Ripple Effect */}
         {showClickFeedback && (
           <div className="absolute inset-0 rounded-full animate-ping bg-white/40" />
         )}
 
-        {/* Hold mode pulsing ring */}
         {isHoldMode && (
           <div className="absolute inset-0 rounded-full animate-pulse bg-status-online/30" />
         )}
       </div>
 
-      {/* Crosshair at cursor tip */}
+      {/* Crosshair at the cursor tip; its offset matches CURSOR_TIP_OFFSET_X and _Y. */}
       <div
         className="absolute pointer-events-none"
         style={{
@@ -787,12 +687,11 @@ export function OnScreenCursor({
         )} />
       </div>
 
-      {/* Instructions */}
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 pointer-events-none">
         <div className={cn(
           "text-white/90 text-xs px-3 py-1.5 rounded-full",
-          // One pill for both modes: the words say which, and white on a bright green pill
-          // measured below AA.
+          // One pill for both modes: the text names the mode, and white on bright green fails
+          // AA contrast.
           "bg-black/70"
         )}>
           {isHoldMode 

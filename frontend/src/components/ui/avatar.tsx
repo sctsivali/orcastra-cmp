@@ -1,10 +1,6 @@
 "use client";
 
-/**
- * Avatar Component
- *
- * A circular avatar component with image support and fallback.
- */
+/** Circular avatar with an image and a fallback, on Radix Avatar. */
 
 import * as React from "react";
 import * as AvatarPrimitive from "@radix-ui/react-avatar";

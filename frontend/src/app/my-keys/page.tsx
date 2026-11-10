@@ -89,8 +89,7 @@ const MY_KEYS = defineTable<KeyRow>()({
     { field: "last_used", label: "Last Used", sort: (k) => (k.last_used_at ? new Date(k.last_used_at).getTime() : null), filter: fromSort("date", { horizon: "past", emptyLabel: "Not recorded" }) },
     {
       // filter-coverage: the tabs above the table are this column's control. A Status facet
-      // as well would be two controls for one piece of state, which is the failure this
-      // whole change exists to remove.
+      // as well would be a second control for the same state.
       field: "status",
       label: "Status",
       sort: (k) => (k.is_expired ? 1 : 0) },
@@ -106,17 +105,14 @@ function MyKeysContent() {
   const { isReadOnly } = useReadOnlyMode();
   const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
 
-  // Fetch keys
   const {
     data: keysData,
     isLoading,
     refetch,
     refreshNow,
     dataUpdatedAt } = useRefreshableQuery({
-    // important: one unfiltered fetch. The server was doing a lowercase substring match over
-    // a list it had already materialised and cached, so every keystroke was a Vault round
-    // trip AND its own react-query cache entry. Filtering client-side removes both, and it
-    // is what makes the tab counts and the facet counts honest.
+    // One unfiltered fetch, filtered client-side. A server-side search would cost a Vault round
+    // trip and a cache entry per keystroke, and the tab and facet counts need the whole list.
     queryKey: ["my-keys"],
     queryFn: ({ fresh, signal }) => api.myKeys.list(undefined, undefined, { fresh, signal }) });
 
@@ -151,9 +147,8 @@ function MyKeysContent() {
   const [pageSize, setPageSize] = useState(TABLE_PAGE_SIZE);
   const resetPage = useCallback(() => setPage(1), []);
 
-  // note: the tabs are a filter over the same list, so they owe the same page reset the search
-  // and facet controls give. Without it, moving to a shorter tab leaves the operator on a page
-  // that tab does not have.
+  // The tabs filter the same list, so they reset the page as the search and facet controls do.
+  // Otherwise a shorter tab can leave the operator on a page it does not have.
   const handleTabChange = useCallback(
     (value: string) => {
       setActiveTab(value);
@@ -175,8 +170,8 @@ function MyKeysContent() {
     () => sortItems(filters.filteredRows),
     [filters.filteredRows, sortItems],
   );
-  // note: the tabs are a filter too. A key created while the Expired tab is showing is hidden
-  // by the tab, so "Show it" leaves the tab as well as clearing the toolbar.
+  // The tabs are a filter too. A key created while the Expired tab is showing is hidden by the
+  // tab, so "Show it" leaves the tab as well as clearing the toolbar.
   const showAllKeys = useCallback(() => {
     filters.clearAll();
     if (activeTab !== "active") handleTabChange("active");
@@ -198,21 +193,14 @@ function MyKeysContent() {
   const currentPage = Math.min(page, totalPages);
   const pagedKeys = sortedKeys.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
-  // note: the node list is built inside CreateKeyDialog by useNodePickerOptions, the one place
-  // node-picker options are assembled. This page used to pass down
-  // nodes.filter(n => n.connected).map(n => n.name), which silently dropped every node that was
-  // not answering, so an operator whose node had gone offline saw it disappear from the picker
-  // with nothing said. It is now listed and marked instead.
-
-  // Fetch projects for dropdown
+  // The cluster list is built inside CreateKeyDialog by useNodePickerOptions, the one place
+  // picker options are assembled; it lists an offline cluster and marks it instead of dropping it.
   const { data: projectsData, isLoading: projectsLoading } = useAllProjects();
 
-  // Flatten projects from all hosts
   const projects = projectsData 
     ? (projectsData as any[]).flatMap((hostData: any) => hostData.projects || [])
     : [];
 
-  // Generate key mutation
   const createMutation = useMutation({
     mutationFn: (request: KeyCreateRequest) => api.myKeys.create(request),
     onSuccess: (created) => {
@@ -234,7 +222,6 @@ function MyKeysContent() {
         variant: "destructive" });
     } });
 
-  // Delete key mutation
   const deleteMutation = useMutation({
     mutationFn: (keyId: string) => api.myKeys.delete(keyId),
     onSuccess: () => {
@@ -253,7 +240,6 @@ function MyKeysContent() {
   if (!isResolved) return <LoadingLottiePage />;
   if (!isPartner) return null;
 
-  // Download key handler
   const handleDownload = async (keyId: string) => {
     try {
       const blob = await api.myKeys.download(keyId);
@@ -277,7 +263,6 @@ function MyKeysContent() {
     }
   };
 
-  // Delete key handler
   const handleDeleteClick = (keyId: string, keyName: string) => {
     setKeyToDelete({ id: keyId, name: keyName });
     setDeleteDialogOpen(true);
@@ -347,10 +332,6 @@ function MyKeysContent() {
                 aria-label="Generate Key"
               >
                 <Plus className="h-4 w-4" />
-                {/* note: this was two spans, "Generate" gated on xs: and " Key" on sm:. There is
-                    no xs breakpoint in tailwind.config.ts and this was its only use in the
-                    codebase, so the class compiled to nothing and "hidden" won at every width:
-                    the button read " Key" everywhere and the verb was never shown. */}
                 <span className="hidden sm:inline">Generate Key</span>
               </Button>
             </DialogTrigger>
@@ -366,7 +347,6 @@ function MyKeysContent() {
 
       <KeyStats activeCount={activeCount} expiredCount={expiredCount} />
 
-      {/* Keys Table with Tabs */}
       <Card>
         <CardHeader className="space-y-4">
           <Tabs value={activeTab} onValueChange={handleTabChange}>
@@ -386,10 +366,9 @@ function MyKeysContent() {
           {focus.hidden && (
             <RowFocusNotice label={focus.hidden.label} onShow={focus.showHidden} className="mb-4" />
           )}
-          {/* note: gate on the rendered rows, not on the whole key set. Filtering, searching or
-              the Expired tab can empty the table while `keys` is still populated, and gating on
-              `keys.length` rendered a headers-only table with no message at all. The copy keys
-              off the full set, so it stays right whichever of the three did the emptying. */}
+          {/* Gated on the rendered rows, not the whole key set: filters, search or the Expired
+              tab can empty the table while `keys` is still populated. The copy keys off the full
+              set, so it stays right whichever of the three emptied it. */}
           {sortedKeys.length === 0 ? (
             filters.activeFilterCount === 0 && keys.length === 0 ? (
               <EmptyState

@@ -47,9 +47,9 @@ export interface InstanceRowActionsInput {
  * The row menu for one instance: lifecycle, then access, then management, then delete.
  *
  * Items are offered by state (Start only when not Running; Stop, Restart, Terminal and Console
- * only when Running) and by role (Copy, Rebuild and Delete only for canManage), the same gating
- * the inline buttons had. What changed is that a refusal is a reason under the label rather than
- * a greyed button: pending beats read-only, which beats the permission answer.
+ * only when Running) and by role (Edit Specifications, Copy, Move, Rebuild and Delete only for
+ * canManage). A refusal is a reason under the label instead of a greyed item: pending beats
+ * read-only, which beats the permission answer.
  */
 export function instanceRowActions(input: InstanceRowActionsInput): RowAction[] {
   const {
@@ -75,9 +75,9 @@ export function instanceRowActions(input: InstanceRowActionsInput): RowAction[] 
     };
   };
   const manage = readOnly ?? permissionReason("operate");
-  // note: Copy and Move only open the wizard, and planning is not a write: the server refuses
-  // execute in read-only mode and the wizard says so on its Start step. So they answer to the
-  // permission and the migration rollout, never to read-only.
+  // Copy and Move only open the wizard, and planning is not a write: the server refuses execute
+  // in read-only mode and the wizard says so on its Start step. So they answer to the permission
+  // and the migration rollout, never to read-only.
   const plan = permissionReason("operate");
   const consoleReason = permissionReason("console");
 

@@ -1,10 +1,9 @@
 /**
- * Clipboard Manager - Side panel for managing clipboard entries.
- * Supports adding text, viewing history, and inserting into console.
+ * Side panel holding clipboard entries to insert into the console.
  *
- * important: history lives in memory for this page only. It used to be persisted to
- * localStorage, where pasted passwords and keys stayed in plain text after the tab closed; the
- * old key is removed on first use. Text the guest copies (through its agent) is added here too.
+ * important: the history lives in memory for this page only. Persisting it would keep pasted
+ * passwords and keys in plain text after the tab closes; anything left under the legacy
+ * localStorage key is removed on mount. Text the guest copies through its agent is added too.
  */
 
 "use client";
@@ -59,7 +58,7 @@ function publish(entries: ClipboardEntry[]): void {
   listeners.forEach((listener) => listener(sessionHistory));
 }
 
-/** Adds text to the history (for example what the guest copied); a repeat moves to the top. */
+/** Adds text to the history (ex; what the guest copied); a repeat moves to the top. */
 export function rememberClipboard(text: string): void {
   const trimmed = text.trim();
   if (!trimmed) return;
@@ -78,7 +77,7 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
     try {
       localStorage.removeItem(LEGACY_STORAGE_KEY);
     } catch {
-      // storage unavailable; nothing to clean
+      // Storage unavailable; nothing to clean.
     }
     listeners.add(setEntries);
     return () => {
@@ -90,7 +89,6 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
     publish(newEntries);
   }, []);
 
-  // Add new entry
   const handleAdd = useCallback(() => {
     if (!newText.trim()) {
       toast({
@@ -120,11 +118,9 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
     });
   }, [newText, entries, saveHistory]);
 
-  // Paste from system clipboard
   const handlePasteFromSystem = useCallback(async () => {
-    // Check if clipboard API is available (requires HTTPS or localhost)
+    // The clipboard API needs a secure context (HTTPS or localhost).
     if (!navigator.clipboard || !navigator.clipboard.readText) {
-      // Fallback: prompt user to paste manually
       setShowAddForm(true);
       toast({
         title: "Paste manually",
@@ -150,7 +146,7 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
         });
       }
     } catch (e) {
-      // Fallback for permission denied or other errors
+      // Permission denied or another error: fall back to pasting by hand.
       setShowAddForm(true);
       toast({
         title: "Paste manually",
@@ -159,7 +155,6 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
     }
   }, []);
 
-  // Delete entry
   const handleDelete = useCallback((id: string) => {
     const newEntries = entries.filter(e => e.id !== id);
     setEntries(newEntries);
@@ -169,7 +164,6 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
     }
   }, [entries, selectedId, saveHistory]);
 
-  // Clear all entries
   const handleClearAll = useCallback(() => {
     setEntries([]);
     saveHistory([]);
@@ -180,7 +174,6 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
     });
   }, [saveHistory]);
 
-  // Copy entry text to system clipboard
   const handleCopy = useCallback(async (entry: ClipboardEntry) => {
     const ok = await copyText(entry.text);
     if (!ok) {
@@ -195,7 +188,6 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
     setTimeout(() => setCopiedId(null), 2000);
   }, []);
 
-  // Insert selected entry into console
   const handleInsert = useCallback(() => {
     if (!selectedId) {
       toast({
@@ -227,7 +219,6 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
         onMouseDown={(e) => e.stopPropagation()}
         onTouchStart={(e) => e.stopPropagation()}
       >
-        {/* Header */}
         <div className="flex items-center justify-between p-3 border-b bg-muted/50">
           <div className="flex items-center gap-2">
             <span className="font-medium text-sm">Clipboard Manager</span>
@@ -243,7 +234,6 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
           </Button>
         </div>
 
-        {/* Actions */}
         <div className="flex items-center gap-1 p-2 border-b">
           <Tooltip>
             <TooltipTrigger asChild>
@@ -291,7 +281,6 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
           </Tooltip>
         </div>
 
-        {/* Add form */}
         {showAddForm && (
           <div className="p-2 border-b space-y-2">
             <Textarea
@@ -322,7 +311,6 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
           </div>
         )}
 
-        {/* History list */}
         <ScrollArea className="flex-1">
           {entries.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-40 text-muted-foreground">
@@ -382,7 +370,6 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
           )}
         </ScrollArea>
 
-        {/* Insert button */}
         <div className="p-2 border-t bg-muted/30">
           <Button
             className="w-full"

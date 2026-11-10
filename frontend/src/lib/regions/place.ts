@@ -6,8 +6,8 @@ import type { Region } from "./catalog";
  * pickers, a stored location on a cluster, or a region on the map.
  *
  * A region outside Indonesia stands for the whole country, because the site of a cluster abroad
- * is rarely known when it is registered. Nothing here reads `city` for one, so a location stored
- * while country entries still named the capital never shows that capital.
+ * is rarely known when it is registered. Nothing here reads `city` for one, so a stored location
+ * whose `city` names the capital never shows it.
  */
 type PlaceFields = "city" | "country_code" | "country_name" | "province";
 export type Place =
@@ -23,7 +23,7 @@ function nameOf(place: Place): string {
   return "region_name" in place ? place.region_name : place.name;
 }
 
-// note: decided by the id, which the server rewrites for every catalogue region, rather than by
+// Decided by the id, which the server rewrites for every catalogue region, rather than by
 // "outside Indonesia": an API client's own location abroad (us-east-dc1 in Ashburn) carries a
 // real site and stays a pin.
 export function isWholeCountry(place: Place): boolean {

@@ -83,10 +83,9 @@ export interface DockResizeHandleProps {
  * The 6 px strip on the dock's top edge. A separator with the ARIA value contract, so a
  * keyboard reaches the same range a pointer does.
  *
- * important: while a pointer drag is live the body loses pointer events and text selection.
- * An xterm canvas or an iframe under the pointer would otherwise take the move events and the
- * drag would stall the moment the cursor crossed one. Pointer capture keeps delivering to this
- * element regardless, which is why it opts itself back in.
+ * important: while a pointer drag is live the body loses pointer events and text selection, or
+ * an xterm canvas or an iframe under the pointer would take the move events and stall the drag.
+ * Pointer capture keeps delivering to this element, which opts itself back in.
  */
 export function DockResizeHandle({ height, min, max, onChange, onCommit }: DockResizeHandleProps) {
   const desktop = useDesktopViewport();

@@ -18,17 +18,15 @@ function Stat({ label, value }: { label: string; value: number | string }) {
 }
 
 /**
- * The three GPU numbers, identical in the node modal and the cluster member modal.
- *
- * Cards detected is a caption rather than a fourth tile on purpose: a tile would imply it is
- * the same kind of number as the other three, and a display controller cannot be allocated.
+ * The three GPU numbers, shared by the node and cluster member modals. Cards detected is a
+ * caption rather than a fourth tile because a display controller cannot be allocated.
  */
 export function GpuSummary({ src, allocationUnknown = false }: { src: GpuSummarySource; allocationUnknown?: boolean }) {
   const summary = summarizeGpus(src);
   const cardsCaption = gpuCardsCaption(summary);
 
-  // note: allocation is counted from the instance list. When that list could not be read the
-  // two tiles are unknown, not zero: zero reads as free capacity.
+  // Allocation is counted from the instance list. When that list could not be read the two
+  // tiles show unknown, because zero would read as free capacity.
   return (
     <div className="space-y-3" data-partial={allocationUnknown ? "true" : undefined}>
       <div className="grid grid-cols-3 gap-4">

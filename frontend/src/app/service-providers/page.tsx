@@ -1,12 +1,7 @@
 "use client";
 
-// note: no sidebar entry on purpose. This route is reachable by URL and is named in
-// app/loading.tsx as one of the operator screens the root loader must not draw a marketing
-// hero over. It is not a nav destination, so it is absent from
-// components/sidebar/nav-config.tsx and from the sidebar click-through spec.
-// It has been flagged as an orphan by more than one cleanup sweep. It is not one: the
-// decision is to keep the route, so please leave this note in place rather than rediscover
-// the question.
+// Reachable by URL only, with no entry in components/sidebar/nav-config.tsx. The route is kept
+// on purpose; do not remove it as unreferenced.
 import * as React from "react";
 import Image from "next/image";
 import Link from "next/link";
@@ -91,7 +86,6 @@ export default function ServiceProvidersPage() {
             </CardHeader>
 
             <CardContent className="p-6 space-y-6">
-              {/* About Section */}
               <div>
                 <h3 className="text-xl font-semibold mb-3">About</h3>
                 <p className="text-muted-foreground leading-relaxed">
@@ -99,7 +93,6 @@ export default function ServiceProvidersPage() {
                 </p>
               </div>
 
-              {/* Links */}
               <div className="flex gap-3">
                 <Button asChild variant="default">
                   <Link
@@ -123,7 +116,6 @@ export default function ServiceProvidersPage() {
                 </Button>
               </div>
 
-              {/* Certifications */}
               {provider.certifications && provider.certifications.length > 0 && (
                 <div>
                   <h3 className="text-xl font-semibold mb-3">Certifications</h3>
@@ -146,7 +138,6 @@ export default function ServiceProvidersPage() {
         ))}
       </div>
 
-      {/* Additional Info */}
       <Card className="illo-launch bg-muted/50 border-dashed">
         <CardContent className="flex items-center gap-6 p-6">
           <div className="min-w-0 flex-1">

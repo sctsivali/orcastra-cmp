@@ -55,12 +55,11 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
   // The lifecycle actions in flight, keyed like the ref below (host/project/name:action), so a
   // row shows its own pending state and never a same-named instance's on another cluster.
   const [pendingActions, setPendingActions] = useState<ReadonlySet<string>>(() => new Set());
-  // important: actionLoading and isPending are React state and only reach the DOM on the next
-  // render, so two activations inside one tick both pass. The ref is what actually blocks the
-  // second request. Same recipe as snapshots/components/snapshot-row-actions.tsx, keyed by
-  // instance and action rather than one boolean: this hook serves every row of the table, and
-  // a single flag would drop a Stop on one row while another row's Start was still awaiting
-  // its response. Only the same action on the same instance is a repeat.
+  // important: pendingActions and isPending are React state and reach the DOM only on the next
+  // render, so two activations inside one tick both pass; this ref blocks the second request.
+  // Keyed by instance and action because the hook serves every row: one flag would drop a Stop
+  // on one row while another row's Start is in flight. Only the same action on the same instance
+  // is a repeat.
   const actionsInFlightRef = useRef<Set<string>>(new Set());
   // Instance pending delete confirmation (controls the shared AlertDialog).
   const [deleteTarget, setDeleteTarget] = useState<VMInfo | null>(null);
@@ -76,7 +75,7 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
     ? deleteTarget ?? deleteDisplayRef.current
     : null;
   // Confirmation for stop/restart, with a Force option (power-cycle) for guests
-  // that can't answer a graceful ACPI shutdown, e.g. a VM with no OS installed.
+  // that can't answer a graceful ACPI shutdown, ex; a VM with no OS installed.
   const [confirmAction, setConfirmAction] = useState<ConfirmActionState>({
     open: false,
     action: null,
@@ -176,7 +175,7 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
         });
 
         // The callback belongs to this actor's list query. Never invoke it after a session
-        // transition, even if the old request finishes successfully.
+        // transition, even when the request that scheduled it succeeds.
         if (actionRefetchTimerRef.current !== null) {
           clearTimeout(actionRefetchTimerRef.current);
         }

@@ -6,12 +6,9 @@ import { Button } from "@/components/ui/button";
 export type SessionScope = "self" | "org";
 
 /**
- * Whose sessions to show.
- *
- * The backend has always supported an organisation scope on the audit endpoint and the
- * page never asked for it, so a partner could not see who was on their own clusters.
- * Mirrors the Live/Paused control beside it rather than introducing a second toggle
- * idiom on the same card.
+ * Whose sessions to show: the caller's own, or everyone's in the organization (the audit
+ * endpoint's organization scope), so a Partner can see who is on their clusters. Mirrors the
+ * Live/Paused control beside it rather than adding a second toggle idiom to the card.
  */
 export function SessionScopeToggle({
   scope,

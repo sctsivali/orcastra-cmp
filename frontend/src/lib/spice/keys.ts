@@ -4,10 +4,9 @@
  * Combinations are sent as PC/XT set 1 scancodes, the codes a real keyboard sends and what QEMU's
  * SPICE input channel expects, rather than through the browser's keyCode. The vendored
  * spice-html5 maps keyCodes per browser and gets some wrong (Print Screen), and its
- * sendCtrlAltDel throws in strict code, which is why Ctrl+Alt+Del never reached a guest.
+ * sendCtrlAltDel throws in strict code, so Ctrl+Alt+Del never reaches a guest through it.
  *
- * Typing and paste still go through the keyCode path (KEY_CODES), which handles the keyboard
- * layout of printable characters.
+ * Typing and paste go through lib/spice/keyboard.ts (keyForCharacter, NAMED_KEYS).
  */
 
 export type ScanKey =
@@ -140,8 +139,8 @@ export function isWindowsGuest(os: string | null | undefined): boolean {
 }
 
 /**
- * DOM keyCodes for the typing path (on-screen keyboard keys, BIOS keys, paste). One table, where
- * the console window and the full-page console each used to keep a copy.
+ * DOM keyCodes by key name and character, read by characterKey. Typing, paste, BIOS keys and the
+ * on-screen keyboard use KeyboardEvent.code values from lib/spice/keyboard.ts instead.
  */
 export const KEY_CODES: Record<string, number> = {
   Escape: 27, Esc: 27,

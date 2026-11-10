@@ -8,8 +8,8 @@ import {
 // base64 data URI in the settings blob and would blow past the 4KB cookie budget on its own.
 export const PERSONALIZATION_COOKIE = "orcastra-personalization";
 
-// Deliberately two-letter keys. Every one of these rides on every request to this origin, so
-// the difference between `sidebarBgColor` and `sb` is real bytes on every navigation.
+// Two-letter keys: the cookie rides on every request to this origin, so key length costs bytes
+// on every navigation.
 export interface PersonalizationHint {
   ac?: string;
   sb?: string;
@@ -41,13 +41,12 @@ export function toPersonalizationHint(settings: PersonalizationSettings): Person
   };
 }
 
-// important: this module carries no "use client" directive, and that is the point. The root
-// layout is a server component and reads this cookie to seed the provider's first render, so
-// the parser has to be importable from both sides. Importing it out of the provider instead
-// would hand the server a client reference rather than a function.
+// important: keep this module free of a "use client" directive. The root layout is a server
+// component and reads this cookie to seed the provider's first render; importing the parser
+// from a client module would hand the server a client reference instead of a function.
 //
-// Takes the raw cookie VALUE, not the document.cookie string, so the server (which has a
-// parsed cookie store) and the browser (which does not) share one implementation.
+// Takes the raw cookie value rather than the document.cookie string, so the server (which has
+// a parsed cookie store) and the browser share one implementation.
 export function parsePersonalizationHint(
   raw: string | null | undefined,
 ): PersonalizationSettings | null {

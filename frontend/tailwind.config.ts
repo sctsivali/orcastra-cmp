@@ -6,8 +6,8 @@ const config: Config = {
     "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
-    // lib/ declares class names too (cluster-status.ts, cpu-allocation.ts); until now they
-    // were emitted only because a component happened to repeat the same literal.
+    // lib/ declares class names too (cluster-status.ts, cpu-allocation.ts), so Tailwind has to
+    // scan it; a class named only there is otherwise never emitted.
     "./src/lib/**/*.{js,ts,jsx,tsx}",
   ],
   theme: {
@@ -61,9 +61,9 @@ const config: Config = {
           DEFAULT: "hsl(var(--warning))",
           foreground: "hsl(var(--warning-foreground))",
         },
-        // Terminal and console chrome. Fixed in both themes by design, so these resolve to the
-        // same value under .dark; see the token block in globals.css. The alpha-value form is
-        // load-bearing: components/console/resource-bar.tsx paints hover:bg-terminal-raised/60.
+        // Terminal and console chrome, the same in both themes (see the token block in
+        // globals.css). Keep the alpha-value form: components/console/resource-bar.tsx paints
+        // hover:bg-terminal-raised/60.
         terminal: {
           DEFAULT: "hsl(var(--terminal-bg) / <alpha-value>)",
           deep: "hsl(var(--terminal-deep) / <alpha-value>)",
@@ -71,9 +71,8 @@ const config: Config = {
           border: "hsl(var(--terminal-border) / <alpha-value>)",
           accent: "hsl(var(--terminal-accent) / <alpha-value>)",
         },
-        // DEFAULT keeps bg-status-online and text-status-online resolving exactly as before,
-        // so the existing dot and icon call sites are untouched. The foreground pair is what
-        // a solid status chip writes on top of the token.
+        // DEFAULT serves bg-status-online and text-status-online (status dots and icons). The
+        // foreground pair is the text colour a solid status chip writes on top of the token.
         status: {
           online: {
             DEFAULT: "hsl(var(--status-online))",

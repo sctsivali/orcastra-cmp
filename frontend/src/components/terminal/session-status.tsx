@@ -5,8 +5,8 @@ import { AlertCircle, CheckCircle2, Loader2, Unplug } from "lucide-react";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
-// Session state, not cluster reachability, so it keeps its own vocabulary and is deliberately
-// not routed through lib/cluster-status.ts. Only the tones are shared.
+// Session state has its own vocabulary and does not go through lib/cluster-status.ts, which
+// describes cluster reachability. Only the tones are shared.
 export type SessionStatus = "connecting" | "connected" | "disconnected" | "error";
 
 const SESSION: Record<SessionStatus, { label: string; tone: BadgeTone; text: string }> = {
@@ -25,7 +25,7 @@ function SessionIcon({ status, className }: { status: SessionStatus; className?:
         : status === "error"
           ? AlertCircle
           : Unplug;
-  // The spinner is the one moving glyph: "connecting" is a value that is genuinely changing.
+  // Only "connecting" spins: it is the one state that is still changing.
   return (
     <Icon
       className={cn("h-3 w-3 shrink-0", status === "connecting" && "animate-spin", className)}

@@ -29,30 +29,20 @@ const DialogOverlay = React.forwardRef<
 ))
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 
-// important: closing a dialog used to drop focus onto <body> everywhere in this app, so a
-// keyboard user was returned to the top of the document and had to tab through the whole page
-// to get back to the row they came from. On a 25-row table that is the difference between
-// usable and not.
+// important: closing a dialog must return focus to the control that opened it, or a keyboard
+// user lands on <body> and has to tab through the whole page back to their row.
 //
-// The cause is upstream and worth writing down, because it looks like a Radix bug and is not.
-// Radix's modal Content ships this default (@radix-ui/react-dialog 1.1.15):
+// Radix's modal Content (@radix-ui/react-dialog 1.1.15) defaults onCloseAutoFocus to
+// `event.preventDefault(); context.triggerRef.current?.focus();`, which cancels FocusScope's own
+// restore and focuses the DialogTrigger. No dialog here uses DialogTrigger: each is controlled
+// through `open`/`onOpenChange` with its opener elsewhere, usually a TableLink in a cell, so
+// triggerRef is null and nothing gets focus.
 //
-//     onCloseAutoFocus: composeEventHandlers(props.onCloseAutoFocus, (event) => {
-//       event.preventDefault();
-//       context.triggerRef.current?.focus();
-//     })
-//
-// It cancels FocusScope's own restore and focuses the DialogTrigger instead. That is correct
-// for the trigger-driven API, but nothing in this codebase uses DialogTrigger: every dialog is
-// controlled through `open`/`onOpenChange` with its opener rendered somewhere else entirely,
-// usually a TableLink in a cell. So triggerRef is null, the optional chain quietly does
-// nothing, and the restore that would have happened was already cancelled.
-//
-// So capture the opener ourselves. onOpenAutoFocus fires before FocusScope moves focus into
-// the content, which is the last moment document.activeElement is still the control the user
-// pressed. composeEventHandlers runs a caller's handler before the built-in one and honours
-// defaultPrevented, so preventing here suppresses the null-trigger focus above, and a caller
-// that wants different behaviour can still prevent it first and win.
+// So the opener is captured here. onOpenAutoFocus fires before FocusScope moves focus into the
+// content, the last moment document.activeElement is still the control the user pressed.
+// composeEventHandlers runs a caller's handler before the built-in one and honours
+// defaultPrevented, so preventing here suppresses the null-trigger focus, and a caller that
+// wants different behaviour can still prevent it first.
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
@@ -73,32 +63,28 @@ const DialogContent = React.forwardRef<
         onCloseAutoFocus?.(event);
         if (event.defaultPrevented) return;
         const opener = openerRef.current;
-        // note: a background refetch can replace the row while the dialog is open, which
-        // detaches the opener. Falling through to the built-in behaviour is right there:
-        // focusing a node that is no longer in the document does nothing at all.
+        // A background refetch can replace the row while the dialog is open and detach the
+        // opener. Focusing a detached node does nothing, so the built-in behaviour runs then.
         if (opener && opener.isConnected) {
           event.preventDefault();
           // important: preventScroll, as Radix's own FocusScope restore does. A created row is
           // scrolled into view while its dialog is still closing (useRowFocus), and a plain
-          // focus() then scrolled back up to the Create button and left the row off screen.
+          // focus() would scroll back up to the Create button and leave the row off screen.
           opener.focus({ preventScroll: true });
         }
       }}
       className={cn(
-        // Fixed centered modal - use viewport-relative positioning
-        // z-[100001] to be above terminal layer (99999)
+        // z-[100001] sits above the terminal layer (99999).
         "fixed left-1/2 top-1/2 z-[100001] -translate-x-1/2 -translate-y-1/2",
-        // Width with margins - responsive for mobile
         "w-[calc(100vw-2rem)] max-w-lg",
         // `fixed` already establishes the containing block for the absolute close button.
         // Adding `relative` here makes tailwind-merge discard `fixed`, placing dialogs in the
         // document flow instead of the viewport.
         "border bg-background shadow-lg rounded-lg p-4 sm:p-6",
-        // Height constraints with dvh for mobile
+        // Height capped to the dynamic viewport on mobile.
         "max-h-[calc(100dvh-2rem)] overflow-y-auto",
-        // Prevent scroll issues on mobile
+        // Scrolling inside the dialog does not chain to the page.
         "overscroll-contain",
-        // Animations
         "data-[state=open]:animate-in data-[state=closed]:animate-out",
         "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
         "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
@@ -117,12 +103,11 @@ const DialogContent = React.forwardRef<
 })
 DialogContent.displayName = DialogPrimitive.Content.displayName
 
-// important: DialogContent has set no gap and no space-y since v0.2.0 (the mobile rewrite
-// dropped shadcn's `grid gap-4`), so a header sits flush against whatever follows it. Until the
-// gap is restored on DialogContent itself, a DialogHeader whose next child brings no spacing
-// of its own (a body, a form or a DialogFooter with no top margin or padding) carries `pb-4`:
-// sixteen pixels, the rhythm the bodies space their own sections by. A body that already
-// pads itself (`py-4`, `mt-4`) needs nothing more. AlertDialogContent kept `gap-4`.
+// important: DialogContent sets no gap and no space-y, so a header sits flush against whatever
+// follows it. A DialogHeader whose next child brings no spacing of its own (a body, a form or a
+// DialogFooter with no top margin or padding) carries `pb-4`, the rhythm the bodies space their
+// own sections by. A body that already pads itself (`py-4`, `mt-4`) needs nothing more.
+// AlertDialogContent keeps `gap-4`.
 const DialogHeader = ({
   className,
   ...props

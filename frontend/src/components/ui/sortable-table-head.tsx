@@ -9,18 +9,14 @@ import type { SortDirection } from "@/lib/sort";
 // Shared sortable column header. The active column shows a chevron for the current direction;
 // inactive columns show a faint neutral indicator so an operator can see which headers respond.
 //
-// important: the control is a real <button> inside the th, not an onClick on the th itself. A th
-// is not focusable, gets no focus ring and ignores Enter, so the previous shape made column
-// sorting mouse-only in all 26 tables. It is the same defect check-table-typography.mjs already
-// hard-bans for TableCell and TableRow, one element further out, and it survived because that
-// rule lists those two element names and not this one. The rule now names all three.
+// The control is a real <button> inside the th, because a th is not focusable, gets no focus
+// ring and ignores Enter. check-table-typography.mjs bans onClick on TableHead for that reason.
 //
-// important: the height and horizontal padding move onto the button and off the th, so the
-// button fills the cell. Left on the th they would leave a click target the size of the label
-// with a hover band to match, which is a worse target than the one being replaced.
+// The height and horizontal padding sit on the button rather than the th, so the button fills
+// the cell instead of leaving a click target the size of the label.
 //
-// note: aria-sort belongs on the column header cell, not on the button, which is why the th
-// keeps it while the button carries the label.
+// aria-sort belongs on the column header cell, so the th keeps it while the button carries the
+// label.
 const HIT_AREA: Record<"default" | "compact", string> = {
   default: "h-12 px-4 text-sm",
   compact: "h-8 px-3 text-xs",

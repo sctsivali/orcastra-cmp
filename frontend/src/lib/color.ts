@@ -1,10 +1,8 @@
 // Shared by the client provider and the server-rendered auth pages, so no "use client" here.
-// note: the pre-paint script in app/layout.tsx and scripts/checks/check-personalization-defaults.mjs
+// The pre-paint script in app/layout.tsx and scripts/checks/check-personalization-defaults.mjs
 // round the same way; keep the three identical.
 
-/**
- * Convert hex color to HSL
- */
+/** `#rrggbb` (`#` optional) to HSL: hue in degrees, saturation and lightness in percent. */
 export function hexToHSL(hex: string): { h: number; s: number; l: number } | null {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
   if (!result) return null;

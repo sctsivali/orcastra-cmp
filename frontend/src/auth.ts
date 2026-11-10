@@ -1,8 +1,5 @@
 /**
- * NextAuth.js v5 Configuration for Authentik OAuth2/OIDC
- *
- * This configuration provides SSO authentication
- * using Authentik as the Identity Provider.
+ * NextAuth v5 configuration for single sign-on through Authentik over OIDC.
  */
 
 import NextAuth from "next-auth";
@@ -14,7 +11,7 @@ import { Role, hasMappedRole, hasMinimumRole, resolveRoles } from "@/types/rbac"
 import { forget, grantOnce, holdTombstones, upgradeSpent, type GrantOutcome, type RefreshedFields } from "@/lib/refresh-grants";
 import { REFRESH_FAILED, REFRESH_TOKEN_REVOKED, createIdpClient } from "@/lib/auth-refresh";
 
-// Extend the built-in types to include custom fields
+// The custom fields this app keeps on the session, user and JWT.
 declare module "next-auth" {
   interface Session {
     user: {
@@ -47,9 +44,9 @@ declare module "next-auth/jwt" {
     error?: string;
     groups?: string[];
     roles?: string[];
-    authentikId?: string; // Persistent Authentik user ID (profile.sub)
+    authentikId?: string; // Persistent user id: the email, else the provider's user id.
     // Unix seconds. Earliest a failed refresh may be retried. Kept separate from expiresAt
-    // so the cooldown never has to lie about when the access token actually expires.
+    // so expiresAt stays the access token's real expiry.
     retryAfter?: number;
     // Unix seconds the groups were last read from an issued access token. Stamped by every
     // successful grant and at sign-in, so it is also when the session last refreshed.
@@ -57,7 +54,6 @@ declare module "next-auth/jwt" {
   }
 }
 
-// Authentik OAuth2 Provider configuration
 const authentikProvider = {
   id: "authentik",
   name: "Authentik",
@@ -70,15 +66,13 @@ const authentikProvider = {
       scope: "openid profile email offline_access",
     },
   },
-  // Map Authentik user info to NextAuth user object
   profile(profile: any) {
-    // Resolve email: use profile.email, fallback to preferred_username (if it looks like email), then sub
+    // The email, else preferred_username.
     const resolvedEmail = profile.email || profile.preferred_username || "";
-    // Resolve ID: must be non-empty for NextAuth to accept the account
+    // Must be non-empty for NextAuth to accept the account, so sub is the last fallback.
     const resolvedId = resolvedEmail || profile.sub;
     
     return {
-      // Use email as primary ID, fallback to preferred_username or sub
       id: resolvedId,
       name: profile.name || profile.preferred_username,
       email: resolvedEmail,
@@ -91,8 +85,7 @@ const authentikProvider = {
   },
 };
 
-// Cooldown period (seconds) before retrying a failed token refresh.
-// Prevents flooding the IdP with requests when it's unreachable.
+// Seconds to wait before retrying a failed token refresh, so an unreachable IdP is not flooded.
 const TOKEN_REFRESH_COOLDOWN_SECONDS = 60;
 
 // important: only /api/auth/session (nodejs) refreshes; middleware runs its own NextAuth
@@ -100,7 +93,7 @@ const TOKEN_REFRESH_COOLDOWN_SECONDS = 60;
 // spend the same token and the second one is refused, which ends the session.
 // important: a session read waits for its grant to finish, up to GRANT_CAP_MS. Giving up earlier
 // would discard a rotation the IdP may already have committed; the new refresh token exists only
-// in that answer. Measured 1.27 s warm, 2.05 s with discovery uncached.
+// in that answer. A grant normally takes one to two seconds.
 const GRANT_CAP_MS = 20_000;
 
 // Refresh this long before expiry. Authentik access tokens live ~5 min and SessionProvider polls
@@ -108,8 +101,8 @@ const GRANT_CAP_MS = 20_000;
 // and the poll is what spends the IdP round trip, never a navigation.
 const REFRESH_SKEW_S = 120;
 
-// note: the route handlers run on nodejs. Middleware and the layout's session read never reach the
-// IdP (they have their own non-refreshing NextAuth instances), so this is the only client.
+// The route handlers run on nodejs. Middleware and the layout's session read never reach the IdP
+// (they have their own non-refreshing NextAuth instances), so this is the only client.
 const idp = createIdpClient({
   issuer: process.env.AUTHENTIK_ISSUER,
   clientId: process.env.AUTHENTIK_CLIENT_ID || "",
@@ -128,7 +121,7 @@ async function grantTokens(refreshToken: string): Promise<GrantOutcome> {
   const result = await idp.grant(refreshToken);
   if (!result.ok) return { ok: false, revoked: result.kind === "revoked" };
   const { accessToken, refreshToken: next, expiresIn } = result.tokens;
-  // A role granted or removed in Authentik reaches the session here (issue #17). A token with
+  // A role granted or removed in Authentik reaches the session here. A token with
   // no readable claim keeps the groups it had: Authentik sends [] for "none", so a missing
   // claim is a broken mapping, and /me/access still answers for the backend's own reading.
   const groups = readGroupsClaim(accessToken);
@@ -177,7 +170,7 @@ async function refresh(token: JWT): Promise<JWT | null> {
   });
   const settled = await outcome;
   if (!settled.ok && settled.forgotten) {
-    // A rotation that landed after the sign-out: nobody will hold this token, so it goes too.
+    // A rotation that landed after the sign-out: no session will hold this token, so revoke it.
     if (settled.orphanedRefreshToken) void revokeAtIdp(settled.orphanedRefreshToken);
     return null;
   }
@@ -217,8 +210,7 @@ const FORCE_REFRESH_FLOOR_S = 30;
 async function jwtCallback({ token, user, account, trigger, session }: JwtParams): Promise<JWT | null> {
   // Initial sign in
   if (account && user) {
-    // Use EMAIL as the persistent user identifier.
-    // This is more reliable than the Authentik sub, which can change per session.
+    // The email is the persistent user id; the Authentik sub can change per session.
     const persistentUserId = user.email || user.id;
     // The backend decides on the access token's claim, so the session starts from the same one.
     const groups = readGroupsClaim(account.access_token) ?? (user as User).groups ?? [];
@@ -231,8 +223,6 @@ async function jwtCallback({ token, user, account, trigger, session }: JwtParams
       groups,
       roles: roleGroups(groups),
       groupsReadAt: Math.floor(Date.now() / 1000),
-      // CRITICAL: use email as the persistent user ID. The Authentik sub changes per
-      // session, email is stable.
       authentikId: persistentUserId,
       error: undefined,
       retryAfter: undefined,
@@ -261,8 +251,8 @@ async function jwtCallback({ token, user, account, trigger, session }: JwtParams
   const signal = trigger === "update" ? (session as { refreshRoles?: unknown; forceRefresh?: unknown } | null | undefined) : null;
   const sinceGrant = nowSeconds - (token.groupsReadAt ?? 0);
   const recheckRoles = signal?.refreshRoles === true && sinceGrant >= ROLE_RECHECK_FLOOR_S && !coolingDown;
-  // A socket ticket refused with 401 although the session thought its token valid (a clock
-  // ahead of ours, a token the backend no longer accepts): one fresh grant settles which.
+  // A socket ticket refused with 401 although the session thought its token valid (a backend
+  // clock ahead of this one, or a token the backend stopped accepting): one fresh grant settles it.
   const forced = signal?.forceRefresh === true && sinceGrant >= FORCE_REFRESH_FLOOR_S && !coolingDown;
   if (recheckRoles || forced) return refresh(token);
 
@@ -280,14 +270,13 @@ async function jwtCallback({ token, user, account, trigger, session }: JwtParams
 const PUBLIC_ASSET_EXTENSION =
   /^\/[^/]+\.(?:js|mjs|css|map|ico|png|jpe?g|gif|svg|webp|avif|woff2?|ttf|otf|txt|webmanifest|wasm|json)$/i;
 
-// NextAuth configuration
 export const authConfig: NextAuthConfig = {
   providers: [authentikProvider],
 
   // Use JWT for session management (stateless)
   session: {
     strategy: "jwt",
-    maxAge: 7 * 24 * 60 * 60, // 7 days
+    maxAge: 7 * 24 * 60 * 60,
   },
 
   pages: {
@@ -296,10 +285,8 @@ export const authConfig: NextAuthConfig = {
   },
 
   callbacks: {
-    // Handle JWT token updates
     jwt: jwtCallback,
 
-    // Customize session object
     async session({ session, token }): Promise<Session> {
       return {
         ...session,
@@ -315,14 +302,13 @@ export const authConfig: NextAuthConfig = {
       };
     },
 
-    // Control which routes are authorized
     authorized({ auth, request }) {
       const { nextUrl } = request;
       const host = request.headers.get("host");
       // important: a session whose refresh token the IdP refused is over, whatever the cookie still
-      // holds. Read as signed in, a deep link rendered with an expired token and every socket
-      // ticket came back 401; read as signed out, it goes through /auth/signin, which is silent
-      // while the IdP session lives, and comes back to the same link.
+      // holds. Read as signed in, a deep link renders with an expired token and every socket ticket
+      // comes back 401; read as signed out, it goes through /auth/signin, which is silent while the
+      // IdP session lives, and comes back to the same link.
       const sessionEnded = auth?.error === REFRESH_TOKEN_REVOKED;
       const isLoggedIn = !!auth?.user && !sessionEnded;
       const isOnAuthPage = nextUrl.pathname === "/auth" || nextUrl.pathname.startsWith("/auth/");
@@ -332,7 +318,6 @@ export const authConfig: NextAuthConfig = {
         nextUrl.pathname.startsWith("/_next/") ||
         PUBLIC_ASSET_EXTENSION.test(nextUrl.pathname);
 
-      // Allow public assets and API routes
       if (isPublicAsset || isApiRoute) {
         return true;
       }
@@ -345,16 +330,14 @@ export const authConfig: NextAuthConfig = {
           const target = safeCallbackPath(nextUrl.searchParams.get("callbackUrl"), nextUrl.origin) ?? "/";
           return Response.redirect(redirectTo(nextUrl, host, target));
         }
-        return true; // Allow access to auth pages for non-logged-in users
+        return true;
       }
 
-      // Require authentication for all other pages.
-      // important: return a redirect Response, not `false`. next-auth v5 checks
-      // `authorized instanceof Response` BEFORE the custom middleware function in middleware.ts, so a
-      // bare `false` is shadowed and never fires the sign-in redirect - leaving /console and /terminal
-      // to render tokenless and fail their WebSocket. The redirect drives /auth/signin -> silent SSO
-      // (shared IdP) -> back with a token, which those pages need.
-      // The redirect stays on the origin the request arrived on (see lib/auth-redirect.ts), so a
+      // Every other page needs a session.
+      // important: return a redirect Response, never `false`. next-auth v5 checks
+      // `authorized instanceof Response` before the custom middleware function in middleware.ts, so a
+      // bare `false` never fires the sign-in redirect, and /console and /terminal render without a
+      // token. The redirect stays on the origin the request arrived on (lib/auth-redirect.ts), so a
       // loopback liveness probe is never sent through the public edge.
       if (!isLoggedIn) {
         return Response.redirect(
@@ -362,20 +345,19 @@ export const authConfig: NextAuthConfig = {
         );
       }
 
-      // ---- Three-Tier Role-based route protection ----
-      // Extract role groups from session
+      // Role-based route protection.
       const userGroups: string[] = (auth?.user as any)?.groups ?? [];
 
       // important: the same mapping useRequireRole and the backend use (types/rbac.ts, which also
-      // reads role_<alias> groups). A local list here answered Tenant for role_orcastra-partners,
-      // so the server sent home a Partner the page and the API both accepted.
+      // reads role_<alias> groups). A separate list here would disagree with them and send home a
+      // Partner the page and the API both accept.
       const roles = resolveRoles(userGroups);
       const isAdmin = hasMinimumRole(roles, Role.ADMIN);
       const isPartner = hasMinimumRole(roles, Role.PARTNER);
 
       // important: every page that calls useRequireRole(Role.PARTNER) is listed here too, so a
-      // tenant deep link is sent home before the page shell mounts (the RC4 hotfix line already
-      // did this for seven of them). scripts/checks/check-role-gates.mjs keeps the lists in step.
+      // tenant deep link is sent home before the page shell mounts.
+      // scripts/checks/check-role-gates.mjs keeps the lists in step.
       const adminOrPartnerPaths = [
         "/inventory/identities",
         "/inventory/groups",
@@ -403,7 +385,7 @@ export const authConfig: NextAuthConfig = {
         (p) => nextUrl.pathname === p || nextUrl.pathname.startsWith(p + "/")
       );
 
-      // note: a session with no role at all is left to the access gate in MainLayout, which shows
+      // A session with no role at all is left to the access gate in MainLayout, which shows
       // the no-role notice on any page and keeps the URL, so Check again lands where the person
       // was going. The partner redirect is for a role below Partner.
       const belowPartner = hasMappedRole(userGroups) && !isPartner;
@@ -416,11 +398,9 @@ export const authConfig: NextAuthConfig = {
     },
   },
 
-  // Enable debug mode in development
   debug: process.env.NODE_ENV === "development",
 
-  // Trust the Authentik HTTPS certificate
-  // In production, ensure proper SSL configuration
+  // Trust the Host header the reverse proxy forwards when building callback URLs.
   trustHost: true,
 
   events: {
@@ -442,6 +422,6 @@ export const authConfig: NextAuthConfig = {
 
 // The route handlers: the one place that refreshes. Middleware and the layout's session read
 // build their own non-refreshing instances from authConfig.
-// note: the eager form on purpose. The lazy form, NextAuth((request) => config), returns promises
-// of the handlers, and nothing here needs the request to build the config.
+// The eager form: the lazy form, NextAuth((request) => config), returns promises of the
+// handlers, and nothing here needs the request to build the config.
 export const { handlers } = NextAuth(authConfig);

@@ -5,7 +5,7 @@
  * backend/app/services/interactive_relay.py (how a session ended on the instance side).
  * scripts/checks/check-ws-close-contract.mjs keeps the two sides equal and runs the table below.
  *
- * note: standalone on purpose, with no imports, so the check compiles this file on its own.
+ * Keep this file free of imports: the check compiles it on its own.
  */
 
 export const WS_CLOSE = {
@@ -86,8 +86,8 @@ export function isReasonToken(reason: string): boolean {
 
 /**
  * What a close means. A dropped connection that carried an error frame first is read by the
- * frame's code; a socket that never opened on its first try is read as a refusal once, because a
- * backend from before accept-then-refuse answered every refusal that way (HTTP 403, seen as 1006).
+ * frame's code. A socket that never opened on its first try is read as an auth refusal once: a
+ * backend that refuses before accepting answers HTTP 403, which the browser reports as 1006.
  */
 export function classifyClose(code: number, reason: string, context: CloseContext): CloseKind {
   const dropped = code === 1005 || code === 1006;

@@ -16,7 +16,7 @@ import { CreateUserDialog } from "./create-user-dialog";
 import { NoticeAlert } from "./credentials-states";
 import { PasswordDialog } from "./password-dialog";
 
-// note: a guest has a handful of login accounts, read in full each time, so the table carries no
+// A guest has a handful of login accounts, read in full each time, so the table carries no
 // toolbar. The definition is still the contract the table guards read.
 export const ACCOUNT_TABLE = defineTable<GuestAccount>()({
   id: "guestaccounts",

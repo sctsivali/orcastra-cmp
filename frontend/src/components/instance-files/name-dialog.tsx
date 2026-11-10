@@ -19,7 +19,7 @@ interface NameDialogProps {
   onClose: () => void;
 }
 
-// A name as a person would break it, said before it costs a round trip. The backend decides.
+// Obvious mistakes, caught before a round trip. The backend has the final say.
 export function nameProblem(value: string): string | null {
   if (!value || value === "." || value === "..") return "Enter a name.";
   if (value.includes("/")) return "A name cannot contain a slash.";

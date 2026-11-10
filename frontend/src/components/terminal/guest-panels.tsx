@@ -76,7 +76,7 @@ export function GuestPanelToggles({
   );
 }
 
-/** The open panel, over the terminal. Mounted only while open, as the file explorer always was. */
+/** The open panel, over the terminal. Mounted only while open. */
 export function GuestPanelOverlay({ panel, access, target }: { panel: GuestPanel; access: { files: boolean; credentials: boolean }; target: GuestTarget }) {
   if (panel === null || !access[panel]) return null;
   return (

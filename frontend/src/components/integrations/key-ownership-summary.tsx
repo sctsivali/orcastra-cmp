@@ -23,9 +23,9 @@ import { plural } from "@/lib/utils";
 /**
  * Which OrcaHub organizations a key owns, on its card.
  *
- * The owner is the only key that may sync an organization, update its members and provision for
- * it, so this is what an operator needs before ending a key, and what an expiry is about to stop.
- * Nothing renders for a key that owns none, or whose ownership could not be read.
+ * Only an owner key may sync an organization, update its members and provision for it, so an
+ * operator needs this before ending a key or letting it expire. Nothing renders for a key that
+ * owns none, or whose ownership could not be read.
  */
 export function KeyOwnershipSummary({ apiKey }: { apiKey: APIKeyInfo }) {
   const count = apiKey.owned_organization_count ?? 0;
@@ -82,13 +82,11 @@ export function KeyOwnershipSummary({ apiKey }: { apiKey: APIKeyInfo }) {
 /**
  * What a Revoke or Delete of an owner key opens instead of a destructive confirmation.
  *
- * The server refuses to end a key that owns an organization, so offering the action would only
- * produce a refusal. This says why and, for an administrator, opens the list where the
- * organizations are moved.
+ * The server refuses to end a key that owns an organization. This says why and, for an
+ * administrator, opens the list where the organizations are moved.
  *
  * important: the jump runs from onCloseAutoFocus. Radix returns focus to the trigger as the dialog
- * closes, so moving focus from the button's click handler was undone a moment later and a keyboard
- * user was left on the card instead of the list.
+ * closes, which would undo focus moved from the button's click handler.
  */
 export function TransferOwnershipFirst({
   apiKey,

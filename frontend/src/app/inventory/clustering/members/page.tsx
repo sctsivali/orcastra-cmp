@@ -52,9 +52,8 @@ import { inventoryLinks } from "@/lib/inventory-links";
 const MEMBERS = defineTable<any>()({
   searchPlaceholder: "Search members",
   defaultSort: { field: "server_name", direction: "asc" },
-  // important: `node` is reserved. On this page it selects WHICH cluster to query and feeds
-  // the react-query key, so a facet of that name would hijack cluster selection. The table
-  // has no Node column, so there is nothing to collide with, and this pins that.
+  // important: `node` is reserved. On this page it selects which cluster to query and feeds
+  // the react-query key, so a facet of that name would hijack cluster selection.
   reservedParams: ["node"],
   columns: [
     { field: "server_name", label: "Cluster Member", sort: (m) => m.server_name, search: (m) => m.server_name, filter: fromSort("text") },
@@ -76,8 +75,7 @@ const MEMBERS = defineTable<any>()({
       field: "architecture",
       label: "Architecture",
       sort: (m) => m.architecture,
-      // note: never formatLabel here. architecture arrives as x86_64 and would render as
-      // "X86 64".
+      // Never formatLabel here: architecture arrives as x86_64 and would render as "X86 64".
       facet: (m) => m.architecture,
       facetSpec: {} },
     {
@@ -98,36 +96,25 @@ function ClusterMembersContent() {
   const [isModalOpen, setIsModalOpen] = React.useState(false);
   const [page, setPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState(TABLE_PAGE_SIZE);
-  // note: declared here rather than beside the filters, because the cluster picker resets the
-  // page as well and its handler is defined further up than they are.
+  // Declared here instead of beside the filters, because the cluster picker's handler, defined
+  // above them, resets the page too.
   const resetPage = React.useCallback(() => setPage(1), []);
   
   const { data: clustersData } = useClusters();
   const clusters = React.useMemo<ClusterInfo[]>(() => {
-    // important: the status filter that used to sit beside the type filter is gone. An offline
-    // clustered host simply vanished from this picker, so an operator whose cluster had
-    // gone down was left with no row, no status and nothing to explain the absence. It is
-    // listed and marked instead, which is the rule every other cluster picker follows.
+    // Offline clusters stay listed and marked, as in every other cluster picker.
     //
-    // important: filtered on `clustered`, not on the MicroCloud label. Cluster members are a
-    // property of clustering, and the clusters page offers the Members button on the same
-    // rule - filtering by label here left a plain LXD cluster with a button leading to a
-    // picker that did not list it.
-    //
-    // important: `=== true`, where this used to be `!== false`. Keeping the undetermined case
-    // was deliberate and it was wrong: `clustered` reads null for a host that has never
-    // completed its trust handshake, so the picker offered clusters that answer 503 the moment
-    // they are chosen, while the clusters page only offers its Members button for a host that
-    // is both clustered and online. The backend now persists the clustering state whenever a
-    // host proves it on a trusted read, so `true` survives an outage and this filter keeps a
-    // clustered host that is merely down. See documentation/clusters/hypervisor-type-and-clustering.md.
+    // important: filtered on `clustered === true`, not on the MicroCloud label. Members are a
+    // property of clustering, and the clusters page offers its Members button on the same rule.
+    // `clustered` reads null for a host that has never completed its trust handshake, which would
+    // answer 503 here. The backend persists `true` once a host proves it on a trusted read, so a
+    // clustered host that is merely down stays listed.
     const rows = (clustersData?.clusters ?? []).filter(
       // important: never drop the cluster the URL named, even if it fails the rule.
       // SearchableSelect falls back to its placeholder when `value` matches no option, so a
-      // filtered-out deep link leaves the trigger reading "Select a clustered node" while the
-      // page underneath queries that very cluster. Two surfaces disagreeing is worse than one
-      // extra row, and a registration that predates the persistence change reads null until
-      // someone presses Check Authentication once.
+      // filtered-out deep link would leave the trigger reading "Select a cluster" while the
+      // page queries that very cluster. A registration whose clustering was never persisted
+      // reads null until Check Authentication runs once.
       (c: ClusterInfo) => c.clustered === true || c.cluster_id === node,
     );
     // Reachable clusters lead, so the list does not open on a row that cannot be read.
@@ -140,9 +127,8 @@ function ClusterMembersContent() {
   
   const { data: membersData, isLoading, refreshNow, dataUpdatedAt, errorUpdatedAt, error } = useClusterMembers(node);
   // important: React Query puts a query with no data back to `pending` (error cleared) on every
-  // fetch, so a retry of an unreachable cluster, by the refresh button or the poll, read as a
-  // first load: the page swapped to the full loader, the refresh control unmounted mid-click,
-  // and the description flipped to "Clustering is not enabled". A query that has answered
+  // fetch, so a retry of an unreachable cluster would read as a first load: the full loader
+  // replaces the page and the refresh control unmounts mid-click. A query that has answered
   // once, either way, keeps its page; one that last failed keeps saying so while it retries.
   const hasAnswered = dataUpdatedAt > 0 || errorUpdatedAt > 0;
   const unreachable = !!error || (!membersData && errorUpdatedAt > 0);
@@ -155,15 +141,13 @@ function ClusterMembersContent() {
     setIsModalOpen(true);
   };
 
-  // important: the member is kept, not cleared. Clearing it moved the query key while Radix
-  // was still animating the dialog out, so the body repainted as an empty panel on the way
-  // closed. The query is still stopped, because the modal gates it on isOpen, and reopening
-  // still refetches: react-query treats a query whose enabled was false as needing a fetch.
+  // important: the member is kept on close. Clearing it would move the query key while Radix is
+  // still animating the dialog out, repainting the body as an empty panel. The modal gates the
+  // query on isOpen, and reopening refetches: react-query fetches a query whose enabled was false.
   const handleCloseModal = () => {
     setIsModalOpen(false);
   };
   
-  // Show error toast if fetch fails
   React.useEffect(() => {
     if (error) {
       toast({
@@ -177,9 +161,8 @@ function ClusterMembersContent() {
     if (nodeParam && clusters.some((c: any) => c.cluster_id === nodeParam)) {
       setNode(nodeParam);
     } else if (clusters.length > 0 && !nodeParam) {
-      // important: prefer a cluster that will answer. Now that unreachable clusters are listed
-      // rather than filtered out, defaulting to the first row would open this page on an error
-      // toast on every visit whenever the alphabetically first cluster happened to be down.
+      // Prefer a cluster that will answer. Unreachable clusters are listed, so defaulting to the
+      // first row would open this page on an error toast whenever that cluster is down.
       const first =
         clusters.find((c: any) => clusterStatusMeta(c.status).reachable) ?? clusters[0];
       const firstNode = first.cluster_id;
@@ -190,14 +173,13 @@ function ClusterMembersContent() {
 
   const handleNodeChange = (value: string) => {
     setNode(value);
-    // important: members are scoped to the cluster, so a page number carried over from the
-    // previous one addresses nothing. Clamping alone would land page 3 of a long cluster on
-    // the last page of a short one instead of at the top of it.
+    // Members are scoped to the cluster, so a page number carried over from the previous one
+    // addresses nothing. Clamping alone would land page 3 of a long cluster on the last page of
+    // a short one instead of at the top of it.
     resetPage();
     replaceUrl(inventoryLinks.members(value));
   };
 
-  // Sorting
   const filters = useTableFilters(MEMBERS, members as any[], {
     onFilterChange: resetPage,
   });
@@ -212,9 +194,9 @@ function ClusterMembersContent() {
     [filters.filteredRows, sortItems],
   );
 
-  // note: clamped on read rather than corrected in an effect. A member leaving the cluster
-  // shrinks this list while the page is open, so the last page can disappear underneath the
-  // operator, and an effect would only fire after a page that no longer exists had painted.
+  // Clamped on read instead of corrected in an effect. A member leaving the cluster shrinks this
+  // list while the page is open, and an effect would fire only after an out-of-range page had
+  // painted.
   const totalPages = Math.max(1, Math.ceil(sortedMembers.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pagedMembers = sortedMembers.slice(
@@ -222,7 +204,6 @@ function ClusterMembersContent() {
     currentPage * pageSize,
   );
 
-  // Full-page loading state
   if (isLoading && node && !hasAnswered) {
     return <LoadingLottiePage />;
   }
@@ -241,11 +222,9 @@ function ClusterMembersContent() {
             className="w-[300px]"
             placeholder="Select a cluster"
             searchPlaceholder="Search clusters…"
-            // important: not disabled when the list is empty. SearchableSelect carries
-            // `emptyText` for exactly this, every other picker in the app stays operable, and
-            // node-picker-status-coverage.spec.ts opens this control before deciding whether
-            // there is anything to assert. A disabled control turns "nothing to choose" into a
-            // dead end the operator cannot confirm by looking.
+            // Not disabled when the list is empty: SearchableSelect shows `emptyText` instead,
+            // like every other picker in the app. A disabled control turns "nothing to choose"
+            // into a dead end the operator cannot confirm by looking.
             emptyText="No cluster with members is available"
             options={clusters.map((cluster: any) => {
               const meta = clusterStatusMeta(cluster.status);
@@ -290,9 +269,8 @@ function ClusterMembersContent() {
               </CardDescription>
             </div>
             {/* important: no node means nothing to refresh. React Query's refetch() runs the
-                query function even when the query is disabled, so this control sent
-                `?node=` and the backend went on to ask Vault for a cluster named "".
-                A control that cannot act is also a promise the page cannot keep. */}
+                query function even when the query is disabled, so this control would send
+                `?node=` and the backend would ask Vault for a cluster named "". */}
             {node && (
               <RefreshButton
                 label="Refresh cluster members"
@@ -304,14 +282,10 @@ function ClusterMembersContent() {
           {isClustered && <TableToolbar filters={filters} noun="members" />}
         </CardHeader>
         <CardContent>
-          {/* important: an unreachable cluster answers 503, which leaves membersData
-              undefined and is_clustered false. Rendering that as "Not a clustered node"
-              told the operator their cluster is not a cluster, presenting an outage as a
-              configuration fact. Reachability is checked before clustering. */}
-          {/* important: selection is checked before clustering. With no node chosen this fell
-              through to "Not a clustered node", which told an operator that a cluster they had
-              not picked yet is not a cluster. Tightening the filter made that state reachable
-              on a fleet where nothing has proven itself clustered. */}
+          {/* important: selection and reachability are checked before clustering. With no node
+              chosen, or for an unreachable cluster (a 503 leaves membersData undefined), the
+              is_clustered flag reads false and would present an unmade choice or an outage as
+              "Standalone server". */}
           {!node ? (
             clusters.length === 0 ? (
               <EmptyState
@@ -365,10 +339,9 @@ function ClusterMembersContent() {
                 </TableHeader>
                 <TableBody>
                   {sortedMembers.length === 0 ? (
-                    // important: this branch is only reachable with members present, because the
-                    // outer condition already handled the empty cluster. Reaching it means the
-                    // filters hid every member, which is a different fact from an empty cluster
-                    // and must not borrow its wording.
+                    // Reachable only with members present: the outer condition handles an empty
+                    // cluster. Here the filters hid every member, which must not borrow the
+                    // empty-cluster wording.
                     <TableEmptyRow
                       colSpan={6}
                       icon={Server}

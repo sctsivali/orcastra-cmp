@@ -44,7 +44,7 @@ function ownerLabel(org: IntegrationOrganization): string {
 }
 
 const SYNCED_ORGANIZATIONS = defineTable<IntegrationOrganization>()({
-  // note: an id of its own. The Integrations tab already carries the API key list, and two tables
+  // An id of its own. The Integrations tab already carries the API key list, and two tables
   // without a namespace would share `q` and narrow each other on every keystroke.
   id: "syncedorgs",
   searchPlaceholder: "Search organizations by name, slug, or owner key",
@@ -76,7 +76,7 @@ const SYNCED_ORGANIZATIONS = defineTable<IntegrationOrganization>()({
       label: "Owner State",
       sort: (org) => OWNER_KEY_STATE[ownerKeyState(org)].label,
       facet: (org) => OWNER_KEY_STATE[ownerKeyState(org)].label,
-      // The one question this list exists for: which organizations are frozen behind a dead key.
+      // The main question for this list: which organizations are frozen behind a dead key.
       facetSpec: { primary: true, order: OWNER_KEY_STATE_ORDER },
     },
   ],
@@ -85,7 +85,7 @@ const SYNCED_ORGANIZATIONS = defineTable<IntegrationOrganization>()({
 /**
  * The OrcaHub organizations synced into this control plane, and the key that owns each one.
  *
- * Only the owner key may sync an organization, update its members and policies and provision
+ * Only an owner key may sync an organization, update its members and policies and provision
  * tenant access for it, so an owner that is revoked, expired or deleted freezes it. Administrators
  * move such an organization to another key here; a Partner sees its own organizations read-only.
  */
@@ -104,15 +104,15 @@ function SyncedOrganizationsContent() {
     // Each owner key is read live from Vault on this route, so a 503 does not clear in a retry.
     retry: retryUnlessUnavailable,
   });
-  // The transfer dialog picks from the key list. Shared with the key cards above, so this is one
-  // read for the whole tab, and partners never open the dialog.
+  // The dialogs pick from the key list. Shared with the key cards above, so this is one read for
+  // the whole tab; partners never open the dialogs.
   const keysQuery = useQuery({
     queryKey: ["integrations", "api-keys"],
     queryFn: () => api.integrations.listAPIKeys(),
     enabled: isAdmin,
     staleTime: 30000,
-    // important: the same rule as the key list's own observer. Without it an admin's 503 was
-    // retried with react-query's default while a partner's was not.
+    // important: the same retry rule as the key list's own observer. react-query runs a shared
+    // query with whichever observer's options it holds, so every observer needs it.
     retry: retryUnlessUnavailable,
   });
 
@@ -186,7 +186,7 @@ function SyncedOrganizationsContent() {
                 direction={sortDirection} onSort={handleSort} />
               <SortableTableHead label="Owner State" field="state" currentField={sortField}
                 direction={sortDirection} onSort={handleSort} />
-              {/* Partners read this list; a column of empty cells for them said nothing. */}
+              {/* Partners read this list without actions, so they get no empty column. */}
               {isAdmin && (
                 <TableHead pinned="end" className="w-12 text-right">
                   <span className="sr-only">Actions</span>
@@ -263,7 +263,7 @@ function SyncedOrganizationsContent() {
   }
 
   return (
-    // note: scroll-mt-20 clears the sticky header (h-14, md:h-16) when the Review jump scrolls here.
+    // scroll-mt-20 clears the sticky header (h-14, md:h-16) when the Review jump scrolls here.
     <Card id="synced-organizations" tabIndex={-1} className="scroll-mt-20 focus:outline-none">
       <CardHeader>
         <CardTitle className="text-lg">Synced Organizations</CardTitle>
@@ -295,7 +295,7 @@ function SyncedOrganizationsContent() {
       )}
       {transferring && (
         <TransferOwnerKeyDialog
-          // the current row, so a background re-read is not hidden behind a snapshot
+          // The current row, so a background re-read is not hidden behind a snapshot.
           organization={rows.find((org) => org.id === transferring.id) ?? transferring}
           keys={keysQuery.data?.keys ?? []}
           onOpenChange={(open) => {

@@ -18,27 +18,23 @@ const PopoverContent = React.forwardRef<
       ref={ref}
       align={align}
       sideOffset={sideOffset}
-      // Ensure popover stays within viewport
       collisionPadding={16}
       avoidCollisions={true}
       className={cn(
-        // orcastra-popover-content is a marker, not a style. Radix gives this element
-        // role="dialog", and globals.css forces position:fixed on that role so real modals stay
-        // viewport-anchored. A popover must NOT be fixed: that takes it out of its popper
-        // wrapper's flow, the wrapper measures 0x0, and floating-ui then positions every popover
-        // as though its content had no height. The marker is how that rule excludes us.
+        // orcastra-popover-content is a marker class with no styles. Radix gives this element
+        // role="dialog", and globals.css forces position:fixed on that role so modals stay
+        // viewport-anchored. A fixed popover leaves its popper wrapper's flow, the wrapper
+        // measures 0x0, and floating-ui positions the popover as if it had no height. The
+        // globals.css rule skips elements that carry the marker.
         "orcastra-popover-content",
-        // z-[100002] to appear above dialogs (z-[100001])
+        // z-[100002] sits above dialogs (z-[100001]).
         "z-[100002] w-72 min-w-[var(--radix-popover-trigger-width)] rounded-md border bg-popover p-4 text-popover-foreground shadow-md outline-none",
-        // Max dimensions. The Radix variable is the space actually available on the side that was
-        // chosen, so the content can never be taller than the room it was given; 50vh is the
-        // fallback for a Popover rendered outside a popper context. The two max-h utilities this
-        // replaces were relying on CSS source order to decide a winner, which Tailwind does not
-        // guarantee.
+        // The Radix variable is the space available on the chosen side, so the content is never
+        // taller than its room; 50vh is the fallback outside a popper context. One max-h utility
+        // only: with two, CSS source order picks the winner, which Tailwind does not guarantee.
         "max-w-[calc(100vw-2rem)] max-h-[var(--radix-popper-available-height,50vh)] overflow-y-auto",
-        // Prevent scroll issues
+        // Scrolling inside the popover does not chain to the page.
         "overscroll-contain",
-        // Animations
         "data-[state=open]:animate-in data-[state=closed]:animate-out",
         "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
         "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",

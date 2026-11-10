@@ -1,12 +1,6 @@
 "use client";
 
-/**
- * Storage Cleanup Provider
- * 
- * Runs storage cleanup operations on app initialization to prevent
- * localStorage quota issues. This is especially important for
- * applications with many users.
- */
+/** Cleans up localStorage when the app starts, so it stays under the browser's quota. */
 
 import * as React from "react";
 import { 
@@ -18,10 +12,10 @@ import {
   nuclearCleanup,
 } from "@/lib/storage-utils";
 
-// threshold for aggressive cleanup on startup (1MB)
+// Startup size above which session storage is cleared and the emergency cleanup runs.
 const STARTUP_CLEANUP_THRESHOLD = 1 * 1024 * 1024;
 
-// threshold for nuclear cleanup (3MB - browsers typically allow 5-10MB)
+// Startup size above which the nuclear cleanup runs; browsers typically allow 5 to 10 MB.
 const NUCLEAR_CLEANUP_THRESHOLD = 3 * 1024 * 1024;
 
 interface StorageCleanupContextType {
@@ -37,27 +31,22 @@ const StorageCleanupContext = React.createContext<StorageCleanupContextType | un
 export function StorageCleanupProvider({ children }: { children: React.ReactNode }) {
   const [storageSize, setStorageSize] = React.useState(0);
   
-  // run cleanup on mount
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
     
     const size = getAppStorageSize();
     setStorageSize(size);
     
-    // If storage is VERY high, run nuclear cleanup
     if (size > NUCLEAR_CLEANUP_THRESHOLD) {
       nuclearCleanup();
     }
-    // If storage is over normal threshold, run aggressive cleanup
     else if (size > STARTUP_CLEANUP_THRESHOLD) {
       clearSessionStorage();
       emergencyCleanup();
     } else {
-      // run normal proactive cleanup
       checkAndCleanupStorage();
     }
     
-    // update size after cleanup
     const newSize = getAppStorageSize();
     setStorageSize(newSize);
   }, []);
@@ -99,7 +88,7 @@ export function StorageCleanupProvider({ children }: { children: React.ReactNode
 export function useStorageCleanup() {
   const context = React.useContext(StorageCleanupContext);
   if (!context) {
-    // return a fallback for components that might not be wrapped
+    // A component outside the provider gets an inert fallback.
     return {
       storageSize: 0,
       getBreakdown: () => ({}),

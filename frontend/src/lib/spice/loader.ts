@@ -1,11 +1,9 @@
 /**
  * Loads the vendored spice-html5 scripts (public/spice-html5) once per page.
  *
- * note: every script tag is inserted at once with `async = false`, so the browser downloads them
- * in parallel and still runs them in document order. They used to be appended one at a time,
- * each waiting for the previous `onload`, a serial waterfall of ~29 round trips on a first open.
- * A failed script now rejects the load (it used to be skipped, surfacing later as a
- * ReferenceError deep inside a connect).
+ * Every script tag is inserted at once with `async = false`, so the browser downloads them in
+ * parallel and still runs them in document order. A failed script rejects the load instead of
+ * surfacing later as a ReferenceError deep inside a connect.
  */
 
 const BASE = "/spice-html5";

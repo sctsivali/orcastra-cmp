@@ -91,7 +91,7 @@ function clock(iso: string): string {
 
 /**
  * QEMU's display serves one viewer at a time: opening it here disconnects whoever is watching.
- * Said before connecting, so nobody is cut off by surprise.
+ * Shown before connecting, so the operator knows before cutting the other viewer off.
  */
 export function ConflictNotice({
   sessions,

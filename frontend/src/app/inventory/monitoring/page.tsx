@@ -3,9 +3,8 @@
 import dynamic from "next/dynamic";
 import { Skeleton } from "@/components/ui/skeleton";
 
-// Dynamically import the full monitoring content (includes recharts ~120KB).
-// This creates a code-split point: the page shell loads instantly while the
-// heavy chart bundle loads asynchronously in the background.
+// Code-split point: the content pulls in recharts (about 120 KB), so the page shell
+// renders first and the chart bundle loads in the background.
 const MonitoringContent = dynamic(
   () => import("./monitoring-content"),
   {

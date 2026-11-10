@@ -1,8 +1,3 @@
-/**
- * Switch Component - Toggle switch UI element.
- * Based on Radix UI Switch primitive with custom styling.
- */
-
 "use client";
 
 import * as React from "react";

@@ -11,7 +11,7 @@ export interface ProjectScopeOption {
    *
    * important: this string is what lands in ClusterPermission.projects, and the backend matches
    * it literally with no folding of any kind. It is never lowercased, trimmed or reformatted
-   * anywhere between here and the payload. This fleet carries both `Ryo-Labs` and `ryo-labs`.
+   * anywhere between here and the payload. Names that differ only in case are distinct projects.
    */
   name: string;
   /** First non-empty description found across the covering clusters. */
@@ -34,9 +34,8 @@ export interface UseProjectScopeOptionsParams {
   /**
    * Skip the fetch. Defaults to true.
    *
-   * note: the dialog passes `projectScope === "specific"`. Without it, opening the dialog under
-   * any scope would fan the projects read out across the whole org for a field nobody is
-   * looking at.
+   * The dialog passes `projectScope === "specific"`, so opening it under another scope does not
+   * fan the projects read out across the whole org for a field that is not shown.
    */
   enabled?: boolean;
 }
@@ -68,10 +67,9 @@ const DEFAULT_PROJECT = "default";
 /**
  * The project rows a "specific projects" API key grant may choose from.
  *
- * Sources the fleet-wide `/projects` read rather than one call per ticked cluster. That endpoint
- * is single-flighted and cached for 30s, three other surfaces already warm it, and it degrades in
- * band: a cluster that cannot be reached comes back labelled rather than missing. The per-cluster
- * endpoint answers 503 instead, which is the one case this picker most needs to render calmly.
+ * Reads the fleet-wide `/projects` rather than one call per ticked cluster: it is
+ * single-flighted, cached for 30s, warmed by other surfaces, and an unreachable cluster comes
+ * back labelled rather than missing. The per-cluster endpoint answers 503 for that case.
  */
 export function useProjectScopeOptions({
   selectedClusterIds,
@@ -140,9 +138,8 @@ export function useProjectScopeOptions({
       };
     });
 
-    // `default` is pinned first because it is the backend's own fallback and the narrowest
-    // useful grant, so it should be one keystroke away rather than hunted for in a list of
-    // thirty. cmdk re-scores by match once a query is typed, which correctly overrides this.
+    // `default` is pinned first: it is the backend's own fallback and the narrowest useful
+    // grant. cmdk re-scores by match once a query is typed, which overrides this.
     built.sort((a, b) => {
       if (a.name === DEFAULT_PROJECT) return -1;
       if (b.name === DEFAULT_PROJECT) return 1;
@@ -157,8 +154,8 @@ export function useProjectScopeOptions({
   }, [byHost, selectedClusterIds, labelOf]);
 
   const { orphanedProjects, partiallyCoveredProjects } = React.useMemo(() => {
-    // Nothing answered, so nothing is known. Reporting orphans here would block a create
-    // because a cluster is down, which is the outage-as-operator-error failure again.
+    // With a selected cluster silent, nothing is known for sure. Reporting orphans here would
+    // block a create because a cluster is down.
     if (answeredCount === 0 || unansweredClusterLabels.length > 0) {
       return { orphanedProjects: [], partiallyCoveredProjects: [] };
     }

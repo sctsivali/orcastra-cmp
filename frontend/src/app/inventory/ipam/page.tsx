@@ -35,11 +35,9 @@ import { PageReadError } from "@/components/ui/read-error-state";
 import { NodeLink } from "@/components/ui/node-link";
 
 /**
- * The IPAM table: what is sortable, searchable and filterable.
- *
- * Allocation and network type are the two resting filters, because reconciling against an
- * IPAM catalogue starts with "show me the pinned addresses" and "show me the OVN ones". The
- * LXD row type and the network fall behind "Add filter" (declaration order decides).
+ * The IPAM table: what is sortable, searchable and filterable. Allocation and network type are
+ * the resting filters, since reconciling against an IPAM catalogue starts with pinned and OVN
+ * addresses. Row type and network sit behind "Add filter" (declaration order decides).
  */
 const IPAM = defineTable<IPAMAllocation>()({
   searchPlaceholder: "Search IP allocations",
@@ -217,7 +215,7 @@ function IPAMContent() {
                       {alloc.address}
                     </TableCell>
                     <TableCell>
-                      {/* plain text, as the instances list prints Static / DHCP under an address */}
+                      {/* Plain text, as the instances list shows Static / DHCP under an address. */}
                       {alloc.allocation === "unknown" ? (
                         <span title={UNKNOWN_ALLOCATION_REASON}>{allocationLabel(alloc.allocation)}</span>
                       ) : (
@@ -272,7 +270,7 @@ function IPAMContent() {
                       )}
                     </TableCell>
                     <TableCell>
-                      {/* note: font-mono, not <code>. One mono idiom in a table cell. */}
+                      {/* A font-mono span, the one mono idiom for table cells. */}
                       {alloc.hardware_address ? (
                         <span className="font-mono">{alloc.hardware_address}</span>
                       ) : (

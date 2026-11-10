@@ -33,13 +33,12 @@ import { NodeLink } from "@/components/ui/node-link";
 
 export type GroupDetailTab = "overview" | "members" | "permissions";
 
-// One dialog replacing the two the groups page carried. Beyond merging them it adds the two
-// fields the members modal dropped, `description` and `node`, and it stops printing raw
-// resource URLs.
+// A group's overview, members and permissions in one dialog, with each permission's resource
+// resolved to a link where it has a page.
 //
 // important: permission URLs go through parseLxdReference, the same module the used_by dialogs
-// use and a faithful port of the backend's tenant-visibility parser. Writing a second parser
-// here is the mistake that produced the two-dialog split this work removed.
+// use and a faithful port of the backend's tenant-visibility parser. Do not write a second
+// parser here.
 const PERMISSIONS = defineTable<any>()({
   id: "perms",
   searchPlaceholder: "Search permissions",
@@ -79,8 +78,8 @@ function PermissionsPanelContent({ group }: { group: any }) {
   // Filter, then sort, then slice, so an ordering covers every permission the filters kept and
   // not only the page on screen.
   const sortedPermissions = React.useMemo(() => sortItems(filters.filteredRows), [filters.filteredRows, sortItems]);
-  // note: clamped on read rather than corrected in an effect. An effect paints one wrong frame
-  // first and then moves the table while the reader is auditing it.
+  // Clamped on read instead of corrected in an effect, which would paint one wrong frame first
+  // and then move the table while the reader is auditing it.
   const totalPages = Math.max(1, Math.ceil(sortedPermissions.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pagedPermissions = sortedPermissions.slice((currentPage - 1) * pageSize, currentPage * pageSize);
@@ -123,8 +122,7 @@ function PermissionsPanelContent({ group }: { group: any }) {
                 <TableRow key={`${permission.url}-${permission.entitlement}-${index}`}>
                   <TableCell>{formatLabel(permission.entity_type ?? "")}</TableCell>
                   <TableCell>
-                    {/* The table used to print the raw URL and stop there, so a permission
-                        named a resource the reader could not follow or even identify. */}
+                    {/* The resource by name, linked when its kind has a page. */}
                     {href ? (
                       <TableLink href={href} title={`Open ${name} in ${kind.label}s`}>
                         {name}
@@ -132,8 +130,9 @@ function PermissionsPanelContent({ group }: { group: any }) {
                     ) : (
                       <OverflowText value={name} label={`${kind.label} name`} />
                     )}
-                    {/* important: the URL is what the permission actually grants against, so a
-                        reader who cannot see all of it cannot audit the grant. */}
+                    {/* important: the URL is what the permission grants against, so it must
+                        stay readable in full; a reader who cannot see all of it cannot audit
+                        the grant. */}
                     <TableSubText wrap>
                       <OverflowText value={permission.url} label={`permission target for ${name}`} mono />
                     </TableSubText>
@@ -166,7 +165,7 @@ function PermissionsPanelContent({ group }: { group: any }) {
 }
 
 // See the note in components/used-by/usage-panel.tsx: useTableFilters reads the query string
-// even with syncUrl false, so this carries its own boundary rather than relying on its host.
+// even with syncUrl false, so this carries its own boundary instead of relying on its host.
 function PermissionsPanel(props: React.ComponentProps<typeof PermissionsPanelContent>) {
   return (
     <Suspense fallback={<Skeleton className="h-64 w-full" />}>
@@ -223,7 +222,6 @@ export function GroupDetailDialog({
           label: "Overview",
           content: (
             <DetailGrid cols={3}>
-              {/* Both dropped by the modal this replaces. */}
               <DetailField label="Description" value={group.description} span="full" />
               <DetailField label="Cluster" value={<NodeLink clusterId={group.node} />} />
               <DetailField label="Members" value={memberCount} />

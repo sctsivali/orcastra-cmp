@@ -18,7 +18,7 @@ interface GaugeChartProps {
   emptyLabel?: string;
   /**
    * "usage" puts the arc on the usage ramp. "allocation" keeps it on the accent: a fully
-   * allocated GPU is a working state, and the ramp painted it critical red.
+   * allocated GPU is a working state, which the ramp would paint critical red.
    */
   kind?: "usage" | "allocation";
 }
@@ -41,13 +41,12 @@ export function GaugeChart({
   const offset = circumference - (percentage / 100) * circumference;
   const arc = `M ${strokeWidth / 2} ${size / 2} A ${radius} ${radius} 0 0 1 ${size - strokeWidth / 2} ${size / 2}`;
 
-  // Show tooltip only when value is 0 and we have a status message
+  // The status message explains an empty or zero gauge, so the tooltip appears only then.
   const showTooltip = percentage === 0 && statusMessage;
 
   const gaugeContent = (
     <div className="flex flex-col items-center">
       <svg width={size} height={size / 2 + 20} className="transform">
-        {/* Background arc */}
         <path
           d={arc}
           fill="none"
@@ -72,7 +71,7 @@ export function GaugeChart({
           />
         ) : null}
         {/* Value text. The empty label is a word, not a figure, so it is smaller and muted:
-            "Unavailable" at the figure's 20px bold is wider than the gauge and was clipped. */}
+            "Unavailable" at the figure's 20px bold would be wider than the gauge and clip. */}
         <text
           x={size / 2}
           y={size / 2}

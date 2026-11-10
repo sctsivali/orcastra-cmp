@@ -22,7 +22,7 @@ export interface TenantAccessSummary {
   ended_at?: string | null;
 }
 
-/** GET /me/access: whether this session may use the dashboard, and if not, why (issue #17). */
+/** GET /me/access: whether this session may use the dashboard, and if not, why. */
 export interface MyAccessVerdict {
   email: string | null;
   role: "admin" | "partner" | "tenant" | null;

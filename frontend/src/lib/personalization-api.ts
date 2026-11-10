@@ -2,7 +2,7 @@ import { fetchAPI } from "@/lib/api";
 import type { PersonalizationSettings, ThemePreference } from "@/types/personalization";
 
 export const personalizationAPI = {
-  /** Read-only command endpoint used to fetch a CORS-restricted image through the guarded backend. */
+  /** Read-only command endpoint that fetches a CORS-restricted image through the guarded backend. */
   proxyImage: (url: string, accessToken?: string): Promise<{ data: string }> =>
     fetchAPI<{ data: string }>("/user-preferences/proxy-image", {
       method: "POST",

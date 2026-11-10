@@ -37,9 +37,8 @@ import type { NavGroup, NavItem, PermissionFlags, RoleGate } from "./types";
 // Platform). Gates are data: the renderer never sees role logic, it receives an
 // already-filtered tree.
 //
-// note: unlike orcastra-mini there is no deploymentMode gate here. NEXT_PUBLIC_AUTH_MODE
-// is not a variable this app defines, and next.config.js whitelists only two public vars,
-// so the gate would evaluate false forever. This deployment is OIDC-only.
+// There is no deploymentMode gate. NEXT_PUBLIC_AUTH_MODE is not a variable this app defines
+// (next.config.js exposes only two public vars), and the app is OIDC-only.
 export const NAV_GROUPS: NavGroup[] = [
   {
     id: "top",
@@ -149,15 +148,15 @@ export function filterGroups(groups: NavGroup[], perms: PermissionFlags): NavGro
     .filter((g) => g.items.length > 0);
 }
 
-// route -> prefetch: warm the React Query cache on sidebar hover. Co-located with the
+// Route to prefetch: warms the React Query cache on sidebar hover. Co-located with the
 // config so prefetchKey values stay in sync with the routes they warm.
 export function buildPrefetchMap(
   queryClient: QueryClient,
   actorScope: string,
   canViewNodeInventory: boolean,
 ): Record<string, () => void> {
-  // the same read useInstances makes, pending deletes included, so a hover cannot warm the
-  // cache with a row that is being deleted
+  // The same read useInstances makes, pending deletes included, so a hover cannot warm the
+  // cache with a row that is being deleted.
   const readFleet = ({ signal }: { signal: AbortSignal }) =>
     readInstanceList(queryClient, actorScope, () =>
       api.instances.list(undefined, undefined, undefined, undefined, undefined, { signal }),
@@ -178,8 +177,8 @@ export function buildPrefetchMap(
         staleTime: 0,
       });
     },
-    // note: every key below comes from queryKeys and every read from the same call the page's
-    // hook makes (hooks/use-lxd.ts). Literal keys here filled seven entries no page ever read.
+    // Every key below comes from queryKeys and every read from the same call the page's hook
+    // makes (hooks/use-lxd.ts); a literal key would warm an entry no page reads.
     "/inventory/networks": () => {
       queryClient.prefetchQuery({ queryKey: queryKeys.networksFor(actorScope), queryFn: ({ signal }) => api.networks.list(undefined, undefined, { signal }), staleTime: 120_000 });
     },

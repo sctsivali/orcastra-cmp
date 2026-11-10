@@ -2,10 +2,8 @@ import { InfoToggletip } from "@/components/ui/info-toggletip";
 import { GPU_CAPACITY_NOTE, GPU_UTILIZATION_NOTE } from "@/lib/gpu";
 
 /**
- * Says plainly that the console reports GPU allocation, not utilization.
- *
- * A toggletip rather than a tooltip: the sentence has to open on a tap and by keyboard, and the
- * accessible name carries the meaning even before it is opened.
+ * States that the console reports GPU allocation rather than utilization. A toggletip rather
+ * than a tooltip, so it opens on tap and by keyboard; the accessible name carries the meaning.
  */
 export function GpuUtilizationInfo({ className }: { className?: string }) {
   return (

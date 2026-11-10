@@ -7,14 +7,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 /**
  * The secret store is not configured, so a credential surface has nothing to show.
  *
- * Extracted from the copy that was inline in integrations-settings, which painted itself with
- * six raw amber palette steps. That is the shape the house rules ban: a semantic state written
- * as a colour rather than as a token, in one file, waiting to be copied into a second one with
- * slightly different steps. Both call sites now render this.
- *
- * note: not `variant="destructive"`. Nothing is broken and nothing was lost; a capability is
- * unavailable until an operator configures it, and painting that as an error sends people
- * looking for a fault.
+ * Not `variant="destructive"`: nothing is broken or lost, a capability is unavailable until an
+ * operator configures it, and painting that as an error sends people looking for a fault.
  */
 export function VaultUnavailableNotice({ surface }: { surface: string }) {
   return (

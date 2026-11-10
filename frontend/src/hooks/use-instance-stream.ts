@@ -57,7 +57,7 @@ export function useInstanceStream(authorizedHosts: string[]): PendingCreate[] {
   const getSnapshot = useCallback(() => getPendingSnapshot(scopeKey), [scopeKey]);
   const pending = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const queryClient = useQueryClient();
-  // the durable create jobs themselves are followed app-wide (components/pending-create-follower)
+  // The durable create jobs are followed app-wide (components/pending-create-follower).
 
   // Authorized clusters come from VMListResponse.nodes, including clusters with zero rows.
   // Pending hosts remain connected until their durable create verdict is known.
@@ -121,7 +121,7 @@ export function useInstanceStream(authorizedHosts: string[]): PendingCreate[] {
           signal: lease.signal,
         });
         if (!active || !readFence.isCurrent(lease)) return false;
-        // a delete owns this row: nothing to patch and no address to wait for
+        // A delete owns this row: nothing to patch and no address to wait for.
         if (isHiddenByPendingDelete(queryClient, identity, readStartedAt)) return true;
         if (!upsertExactInstance(queryClient, identity, vm, readStartedAt)) {
           scheduleReconcile(true);
@@ -152,8 +152,8 @@ export function useInstanceStream(authorizedHosts: string[]): PendingCreate[] {
       const entry = findPending(host, name, project);
       if (!entry) return;
       // A create still in flight keeps its placeholder until the job decides. Once the job has
-      // a verdict, success or not, the instance being deleted leaves nothing to show for it; a
-      // failed placeholder kept here survived in session storage, reloads included.
+      // a verdict, success or not, a deleted instance leaves nothing to show; a placeholder kept
+      // here would survive reloads in session storage.
       if (entry.jobId && (!entry.jobStatus || ["pending", "running"].includes(entry.jobStatus))) {
         updatePendingCreate(scopeKey, entry.id, { lastSignalAt: Date.now() });
       } else {
@@ -249,8 +249,8 @@ export function useInstanceStream(authorizedHosts: string[]): PendingCreate[] {
         }
         const identity = { actorScope: scopeKey, host, project, name };
         readFence.tombstone(identity);
-        // a list read made in the next moments can still come from a cache the writer has not
-        // cleared yet (another tab, another operator, OrcaHub): it must not bring the row back
+        // A list read made in the next moments can still come from a cache the writer has not
+        // cleared yet (another tab, another operator, OrcaHub): it must not bring the row back.
         noteInstanceDeletedEvent(queryClient, identity);
         removeExactInstance(queryClient, identity);
         dropPending(host, name, project);
@@ -296,7 +296,7 @@ export function useInstanceStream(authorizedHosts: string[]): PendingCreate[] {
       reconnectTimers.add(timer);
     };
 
-    // note: every connect mints its own single-use ticket. A refused mint (403) is the same
+    // Every connect mints its own single-use ticket. A refused mint (403) is the same
     // signal as a 1008; any other failed mint backs off like a failed handshake.
     const connect = async (host: string): Promise<void> => {
       const conn = conns.get(host);
@@ -330,8 +330,8 @@ export function useInstanceStream(authorizedHosts: string[]): PendingCreate[] {
         conn.ws = null;
         conn.healthy = false;
         if (event.code === 1008) {
-          // Policy violation means the server revoked this actor's scope. Re-read the
-          // authorized fleet immediately and do not hammer a socket we may no longer open.
+          // Policy violation: the server revoked this actor's scope. Re-read the authorized
+          // fleet now and do not reconnect to a socket this actor may not be allowed to open.
           scheduleReconcile(true);
           return;
         }

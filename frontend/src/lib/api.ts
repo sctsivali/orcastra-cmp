@@ -1,5 +1,5 @@
 /**
- * API Client for the Orcastra CMP Backend
+ * Client for the Orcastra backend API.
  */
 
 import {
@@ -91,8 +91,8 @@ import {
 
 const API_PREFIX = "/api/v1";
 
-// All HTTP API calls use relative URLs, and Next.js rewrites proxy them to the backend.
-// This avoids cross-origin (CORS) and mixed-content issues entirely.
+// HTTP calls use relative URLs that Next.js rewrites proxy to the backend, which avoids
+// cross-origin (CORS) and mixed-content issues.
 const API_BASE_URL = "";
 
 // Relative API URL, safe for browser HTTP fetch calls.
@@ -112,8 +112,8 @@ let _onTokenRefreshed: (() => void) | null = null;
 const _authActorChangedListeners = new Set<() => void>();
 
 /**
- * Register a callback fired when the access token is REPLACED with a new value
- * (silent refresh / rotation), so cached query errors from the old token can be
+ * Register a callback fired when the access token is replaced by a new value
+ * (silent refresh or rotation), so query errors cached under the old token can be
  * refetched. Registered by a component inside QueryClientProvider.
  */
 export function onTokenRefreshed(fn: () => void) {
@@ -201,19 +201,15 @@ export function isAuthContextSynchronized(
 /**
  * 401 recovery, as two states rather than a count.
  *
- * important: never navigate. A hard redirect here throws the operator off the page
- * they were on and loses all in-memory state, open consoles included via the
- * beforeunload kill-all-sessions beacon. Auth death is announced to the UI, which
- * renders a re-auth prompt in place, so the current route survives.
+ * important: never navigate. A hard redirect throws the operator off the page they
+ * were on and loses all in-memory state, open consoles included. Auth failure is
+ * announced to the UI, which renders a re-auth prompt in place, so the route survives.
  *
- * important: no counter and no time window. Counting attempts inside a sliding
- * window cannot work here: real polls are 10 to 60 seconds apart, so any window
- * short enough to bound a burst is also short enough to reset between two genuine
- * failures, and the prompt becomes unreachable. The question is not "how many
- * 401s" but "did refreshing help", which is one bit: once a refresh has completed
- * and a request still comes back 401, refreshing is not the answer and the
- * operator has to be told. Parallel bursts are collapsed by the in-flight flag,
- * not by arithmetic.
+ * No counter and no time window either. Polls are 10 to 60 seconds apart, so a
+ * window short enough to bound a burst also resets between two real failures and
+ * the prompt never shows. What matters is whether refreshing helped: once a refresh
+ * has completed and a request still comes back 401, the operator has to be told.
+ * The in-flight flag collapses parallel bursts.
  */
 let _refreshCompleted = false; // a session refresh finished since the last success
 let _authFailureAnnounced = false;
@@ -275,7 +271,7 @@ export function onAuthRecovered(fn: () => void) {
 function handle401() {
   if (_authFailureAnnounced) return false;
 
-  // a refresh is already running: this request is part of the same burst
+  // A refresh is already running: this request is part of the same burst.
   if (_sessionRefreshInFlight) return false;
 
   if (!_refreshCompleted && _sessionRefreshFn) {
@@ -286,13 +282,13 @@ function handle401() {
       // already released B's in-flight gate, so the old promise must not close it again.
       if (_authActorGeneration !== refreshActorGeneration) return;
       _sessionRefreshInFlight = false;
-      // whatever the outcome, we have now tried. A further 401 means it did not help.
+      // Whatever the outcome, a refresh has been tried; a further 401 means it did not help.
       _refreshCompleted = true;
     });
     return true; // signal: refresh triggered, caller may retry
   }
 
-  // a refresh has completed and requests are still refused
+  // A refresh has completed and requests are still refused.
   _authFailureAnnounced = true;
   console.warn("[Auth] a session refresh did not clear 401s, prompting re-auth in place");
   _onAuthFailure?.();
@@ -300,13 +296,10 @@ function handle401() {
 }
 
 /**
- * Clear the auth-failure state. The only correct trigger is a request actually
- * succeeding: not a timer, and not a React effect re-running. auth-provider's
- * effect re-fires whenever useSession() rebuilds its memo, which update() does on
- * every refresh, so resetting from there erased the very state being tracked.
- *
- * note: no longer a counter. The threshold this used to hold was removed when the
- * handler became two states, and only the stale name survived.
+ * Clear the auth-failure state. The only correct trigger is a request succeeding,
+ * never a timer or a React effect: auth-provider's effect re-fires whenever
+ * useSession() rebuilds its memo, which update() does on every refresh, so resetting
+ * from there would erase the state being tracked.
  */
 function clearAuthFailureState() {
   const wasAnnounced = _authFailureAnnounced;
@@ -315,8 +308,8 @@ function clearAuthFailureState() {
   if (wasAnnounced) _onAuthRecovered?.();
 }
 
-// note: just above GRANT_CAP_MS in auth.ts, the longest a session read waits on the IdP. The
-// loop ends as soon as the refresh settles, so only a slow IdP waits this long.
+// Just above GRANT_CAP_MS in auth.ts, the longest a session read waits on the IdP. The loop
+// ends as soon as the refresh settles, so only a slow IdP waits this long.
 const SESSION_REFRESH_WAIT_MS = 21_000;
 
 /**
@@ -361,7 +354,6 @@ function waitForSessionRefresh(signal?: AbortSignal | null): Promise<void> {
   });
 }
 
-// Timeout wrapper for fetch with AbortController
 /** Retry-After as whole seconds: an integer delay or an HTTP-date, undefined when absent or bad. */
 function parseRetryAfter(header: string | null): number | undefined {
   if (!header) return undefined;
@@ -377,7 +369,7 @@ const VALIDATION_ITEMS_SHOWN = 3;
 
 /**
  * FastAPI's own 422 answer, `detail: [{loc, msg, ...}]`, as one sentence that names each field.
- * Undefined for any other shape, so a hand-written 422 detail keeps rendering as before.
+ * Undefined for any other shape, so a hand-written 422 detail renders as written.
  */
 function validationErrorMessage(detail: unknown): string | undefined {
   if (!Array.isArray(detail)) return undefined;
@@ -471,10 +463,9 @@ export async function fetchJSONWithTimeout(
  */
 const _inflightGets = new Map<string, Promise<unknown>>();
 
-// important: advanced when any write settles, and part of the de-duplication key. A read
-// asked for after a write (a delete's refetch, the fleet read that follows it) used to join a
-// GET that had started before the write and receive the pre-write body, which put a deleted
-// row straight back on screen.
+// important: advanced when any write settles, and part of the de-duplication key, so a read
+// asked for after a write (a delete's refetch, the fleet read that follows it) never joins a
+// GET that started before the write and shows the pre-write body.
 let _writeEpoch = 0;
 
 export interface FetchAPIOptions {
@@ -483,8 +474,7 @@ export interface FetchAPIOptions {
    *
    * important: set for anything a person explicitly asked for. Sharing a
    * promise with a poll that started before the click means the click never
-   * reaches the server and the data that lands predates it, which is exactly
-   * what made refresh buttons look broken.
+   * reaches the server and the data that lands predates it.
    */
   force?: boolean;
   /**
@@ -529,24 +519,22 @@ export async function fetchAPI<T>(
   );
 
   // Track in-flight GET requests for deduplication, keyed on auth generation and endpoint.
-  // note: a forced read carries `?fresh=true`, so it keys separately from the poll of
-  // the same resource and the two never join. That is the point: the click must reach
-  // the server. `force` above covers the reads that cannot say so in the URL, where the
-  // backend has no response cache to bypass.
+  // A forced read carries `?fresh=true`, so it keys separately from the poll of the same
+  // resource and the click reaches the server. `force` above covers the reads that cannot
+  // say so in the URL, where the backend has no response cache to bypass.
   if (method === "GET" && !transportIsCallerScoped) {
     _inflightGets.set(inflightKey, request);
     request
       .finally(() => {
-        // only clear our own entry - a forced request may have replaced it
+        // Clear only this request's entry; a forced request may have replaced it.
         if (_inflightGets.get(inflightKey) === request) {
           _inflightGets.delete(inflightKey);
         }
       })
       // important: .finally() returns a NEW promise that rejects with the same reason, and
-      // nothing awaits this one. Every failed GET therefore raised an unhandled rejection
-      // on top of the error the caller was already handling. Invisible while no page load
-      // produced a failing read, then three per mount the moment an endpoint answered 503.
-      // The caller owns the rejection; this branch exists only for the bookkeeping.
+      // nothing awaits it. Without this catch every failed GET raises an unhandled rejection
+      // on top of the error the caller handles. The caller owns the rejection; this branch
+      // exists only for the bookkeeping.
       .catch(() => {});
   }
 
@@ -576,22 +564,21 @@ export function freshParam(endpoint: string, fresh?: boolean): string {
  * Which response bodies the backend served past their cache TTL (X-Orcastra-Cache: stale).
  *
  * The backend answers a fan-out list from its last read for up to three minutes past the TTL
- * while one background read replaces it (backend core/swr.py). Left alone, the page would keep
- * that older body until its next poll, which for the fleet lists is three minutes away. The
- * QueryCache in components/providers.tsx asks again a few seconds later instead, when the
- * replacement has normally landed.
+ * while one background read replaces it (backend core/swr.py). Instead of keeping that body
+ * until the next poll, the QueryCache in components/providers.tsx asks again a few seconds
+ * later, when the replacement has normally landed.
  *
- * note: keyed by the parsed body object, so a query function that reshapes the body (rather
- * than returning it) simply converges on its own poll, as before. Kept in this module because
- * the transport is compiled on its own by the structural checks.
+ * Keyed by the parsed body object, so a query function that reshapes the body converges on its
+ * own poll unless it calls carryStaleMark. Kept in this module because the structural checks
+ * compile the transport on its own.
  */
 const staleBodies = new WeakSet<object>();
 
 function noteServedStale(body: unknown, cacheHeader: string | null): void {
   if (body === null || typeof body !== "object") return;
-  // note: a body naming a cluster that is still reading (late_nodes) converges the same way: the
+  // A body naming a cluster that is still reading (late_nodes) converges the same way: the
   // backend finishes that read in the background and rebuilds the entry, so looking again in a
-  // few seconds finds its rows. Read off the body, not a header, so a cached copy counts too.
+  // few seconds finds its rows. Read off the body instead of a header, so a cached copy counts too.
   const late = (body as { late_nodes?: unknown }).late_nodes;
   if (cacheHeader === "stale" || (Array.isArray(late) && late.length > 0)) {
     staleBodies.add(body);
@@ -608,10 +595,10 @@ export function carryStaleMark<T>(from: unknown, to: T): T {
   return to;
 }
 
-// The background read usually lands within a fan-out's duration (the instance list took 4.3 s
-// at p50 and 6.7 s at p95 on dev), so the first look waits 5 s and the second 9 s more: a stale
-// list is replaced within about 14 s at worst. Two looks per stale answer, never more: a cluster
-// that stays down must not turn this into a poll.
+// The background read usually lands within a fan-out's duration (about 4 to 7 s for the
+// instance list), so the first look waits 5 s and the second 9 s more: a stale list is replaced
+// within about 14 s at worst. Two looks per stale answer, never more: a cluster that stays down
+// must not turn this into a poll.
 export const STALE_FOLLOW_UP_DELAYS_MS = [5_000, 9_000] as const;
 
 /** Options accepted by the read methods that back a refresh control. */
@@ -628,8 +615,8 @@ export interface InstanceListOptions extends ReadOptions {
 }
 
 // Endpoints that fan out across every cluster. Cached they are fast; forced
-// fresh they are genuinely slow (/regions is 15-45s cold), and the default 45s
-// budget turns that into a coin flip between an answer and a false timeout.
+// fresh they are slow (/regions takes 15 to 45 s cold), and the default 45 s
+// budget would often end in a false timeout.
 const HEAVY_FRESH_TIMEOUT_MS = 90000;
 
 /** GET helper for the read paths behind a refresh button. */
@@ -656,12 +643,11 @@ function fetchHeavyRead<T>(endpoint: string, opts: ReadOptions = {}): Promise<T>
 /**
  * GET for a read whose backend keeps no response cache.
  *
- * important: `fresh` bypasses the in-flight dedupe, so a click landing during a poll still
- * reaches the server, but the query parameter is deliberately not sent. These handlers do
- * not read the response cache, so FastAPI dropped the unknown parameter while the
- * middleware still charged the request against the scarce per-operator bypass budget: the
- * click cost budget and changed nothing. Applies to /operations, /server, /identities,
- * /groups, /network-acls and /certificates.
+ * `fresh` bypasses the in-flight dedupe, so a click landing during a poll still reaches the
+ * server, but the query parameter is not sent. These handlers do not read the response cache,
+ * yet the middleware would still charge the request against the scarce per-operator bypass
+ * budget. Applies to /operations, /server, /identities, /groups, /network-acls and
+ * /certificates.
  */
 function fetchUncachedRead<T>(endpoint: string, opts: ReadOptions = {}): Promise<T> {
   return fetchAPI<T>(
@@ -684,7 +670,6 @@ async function _fetchAPIInternal<T>(
 ): Promise<T> {
 
   try {
-    // build headers with auth token
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       ...(options.headers as Record<string, string>),
@@ -707,14 +692,14 @@ async function _fetchAPIInternal<T>(
         errorDetail = errorData?.detail || errorData?.error;
       }
       
-      // handle non-string error details (e.g. FastAPI validation errors return arrays)
+      // Details are not always strings (ex; FastAPI validation errors are arrays).
       let errorMessage: string;
       const validationMessage =
         response.status === 422 ? validationErrorMessage(errorDetail) : undefined;
       if (!errorDetail) {
         errorMessage = `HTTP ${response.status}`;
       } else if (validationMessage) {
-        // note: the raw list carries Pydantic's input echo and documentation URLs, which put a JSON
+        // The raw list carries Pydantic's input echo and documentation URLs, which would put a JSON
         // blob in front of the operator. APIError.detail keeps the list for a caller that maps fields.
         errorMessage = validationMessage;
       } else if (typeof errorDetail === 'string') {
@@ -724,17 +709,17 @@ async function _fetchAPIInternal<T>(
         errorDetail !== null &&
         typeof (errorDetail as { message?: unknown }).message === 'string'
       ) {
-        // important: a structured refusal already carries a sentence written for a human. The
+        // A structured refusal already carries a sentence written for a human. The
         // billing-impact gate and the break-glass service both answer with `{error, message, ...}`
-        // so the caller can act on the machine-readable part, and stringifying the whole object
-        // put a raw JSON blob in front of the operator instead of the sentence inside it.
+        // so the caller can act on the machine-readable part; the operator sees the sentence,
+        // never the stringified object.
         errorMessage = (errorDetail as { message: string }).message;
       } else {
         errorMessage = JSON.stringify(errorDetail);
       }
 
       // The same-origin proxy forwards upstream headers, so Retry-After reaches the browser.
-      // A 429 used to surface as the bare detail; the picker notices count down from this.
+      // The picker notices count down from it.
       const retryAfter = parseRetryAfter(response.headers.get('Retry-After'));
       if (response.status === 429) {
         errorMessage = `Rate limited by the API. Try again in ${retryAfter ?? 30}s.`;
@@ -775,7 +760,7 @@ async function _fetchAPIInternal<T>(
       throw new APIError(errorMessage, response.status, errorDetail, retryAfter);
     }
 
-    // a request got through, so whatever was failing has cleared
+    // A request got through, so whatever was failing has cleared.
     if (
       _authActorGeneration === requestActorGeneration &&
       (_refreshCompleted || _authFailureAnnounced)
@@ -783,7 +768,6 @@ async function _fetchAPIInternal<T>(
       clearAuthFailureState();
     }
 
-    // handle 204 No Content (no body to parse)
     if (response.status === 204) {
       return undefined as unknown as T;
     }
@@ -792,7 +776,6 @@ async function _fetchAPIInternal<T>(
     noteServedStale(body, response.headers.get("X-Orcastra-Cache"));
     return body as T;
   } catch (error) {
-    // Handle network errors or timeout
     if (error instanceof APIError) {
       throw error;
     }
@@ -952,11 +935,10 @@ export const imageAPI = {
   // comes from a tenant-filtered instance list and can undercount, so the confirm dialog must
   // not be built from it alone.
   //
-  // important: a short timeout, not the 45s default. The confirm button waits on this, so a
-  // slow or restarting backend would otherwise hold a destructive control disabled for the
-  // best part of a minute with nothing to explain it. Eight seconds is long enough for a
-  // fleet fan-out that is going to answer, and the caller falls back to what it can already
-  // see. The backend refuses on its own either way, so giving up early is safe.
+  // A short timeout instead of the 45s default. The confirm button waits on this,
+  // and a slow backend would hold a destructive control disabled with nothing to explain it.
+  // Eight seconds is long enough for a fleet fan-out that is going to answer, and the caller
+  // falls back to what it can see. The backend refuses on its own either way.
   usage: async (fingerprint: string, host: string, project?: string): Promise<ImageUsageResponse> => {
     const params = new URLSearchParams({ host });
     if (project) params.set("project", project);
@@ -967,10 +949,10 @@ export const imageAPI = {
     );
   },
 
-  // important: (host, project, fingerprint) is the key, not the fingerprint alone. An image
-  // store is per cluster and a project may keep its own, so the same fingerprint can exist in
-  // several and each row names one. `force` overrides the backend's refusal when instances
-  // were built from the image; the backend, not this call, decides whether the refusal applies.
+  // important: an image is identified by (host, project, fingerprint). An image store is per
+  // cluster and a project may keep its own, so the same fingerprint can exist in several and
+  // each row names one. `force` overrides the backend's refusal when instances were built from
+  // the image; the backend decides whether the refusal applies.
   delete: async (fingerprint: string, host: string, force = false, project?: string) => {
     const params = new URLSearchParams({ host });
     if (project) params.set("project", project);
@@ -991,8 +973,8 @@ export const nodeAPI = {
     return fetchAPI<string[]>("/nodes/names", { signal: opts.signal });
   },
 
-  // important: fetchRead, not fetchHeavyRead. Six pickers poll this; putting it on the
-  // heavy-read budget alongside the node-status fan-out is the storm we are avoiding.
+  // fetchRead, never fetchHeavyRead. Six pickers poll this, and sharing the heavy-read
+  // budget with the node-status fan-out would cause a request storm.
   availability: async (opts: ReadOptions = {}): Promise<ClusterAvailabilityResponse> => {
     return fetchRead<ClusterAvailabilityResponse>("/nodes/availability", opts);
   },
@@ -1094,7 +1076,7 @@ export const projectAPI = {
   },
 };
 
-// Tags API (Enterprise-Grade)
+// Tags API
 export const tagAPI = {
   // ============================================
   // Category Operations
@@ -1177,7 +1159,7 @@ export const tagAPI = {
   },
 
   // ============================================
-  // Resource Tag Operations (New API)
+  // Resource Tag Operations
   // ============================================
 
   getResourceTags: async (
@@ -1295,7 +1277,7 @@ export const tagAPI = {
   },
 
   // ============================================
-  // Legacy Endpoints (Backward Compatibility)
+  // Legacy Per-Type Endpoints (instances, projects, nodes)
   // ============================================
 
   updateInstanceTags: async (
@@ -1389,7 +1371,7 @@ const systemAPI = {
   },
 };
 
-// Instance Operations (similar to VMs but more comprehensive)
+// Instance Operations
 export interface RebuildRequest {
   host: string;
   project?: string;
@@ -1568,8 +1550,8 @@ export const instanceAPI = {
   },
 
   // `project` narrows the list to one project (the backend keys its cache on it); omitted,
-  // every project the caller may see. Passed through the trailing options so the five
-  // positional callers stay as they are.
+  // every project the caller may see. It rides in the trailing options instead of another
+  // positional parameter.
   list: async (host?: string, status?: string, type?: string, offset?: number, limit?: number, opts: InstanceListOptions = {}): Promise<VMListResponse> => {
     const { project, ...read } = opts;
     const params = new URLSearchParams();
@@ -1610,8 +1592,8 @@ export const instanceAPI = {
  * Build `path?a=1&b=2`, dropping anything unset.
  *
  * The network, ACL and profile endpoints all carry an optional host and an optional LXD
- * project, and hand-assembling that in eleven call sites is how one of them ends up omitting
- * the project and silently reading the default one.
+ * project. Building the query in one place keeps a call site from dropping the project and
+ * silently reading the default one.
  */
 function withQuery(path: string, params: Record<string, string | undefined>): string {
   const query = Object.entries(params)
@@ -1851,8 +1833,8 @@ export const storageVolumeAPI = {
   },
 };
 
-// ISO upload (resumable, tus-style). Raw fetch is used for the binary PATCH so
-// the file streams in chunks instead of being buffered as JSON.
+// ISO upload (resumable, tus-style). The binary PATCH bypasses fetchAPI so each
+// chunk is sent as raw bytes instead of JSON.
 const ISO_UPLOAD_BASE = `${API_BASE_URL}${API_PREFIX}/storage/iso-uploads`;
 
 export interface UploadRequestOptions {
@@ -2150,8 +2132,8 @@ export const imageUploadAPI = {
 
 // Warning Operations
 export const warningAPI = {
-  // note: fetchRead, not fetchUncachedRead. The backend caches both warning feeds per scope
-  // now, so a refresh has to send fresh=true to reach the clusters.
+  // fetchRead, never fetchUncachedRead: the backend caches both warning feeds per scope, so a
+  // refresh has to send fresh=true to reach the clusters.
   list: async (host?: string, opts: ReadOptions = {}) => {
     const endpoint = host ? `/warnings?host=${encodeURIComponent(host)}` : "/warnings";
     return fetchRead(endpoint, opts);
@@ -2271,7 +2253,7 @@ export const clusterAPI = {
     return fetchAPI<ClusterAuthCheckResponse>("/clusters/check-auth", {
       method: "POST",
       body: JSON.stringify({ cluster_id: clusterId }),
-    }, 20000); // 20s timeout - node should respond quickly if trust is configured
+    }, 20000); // a node with trust configured answers well within this
   },
 
   list: async (
@@ -2322,7 +2304,7 @@ export const clusterAPI = {
 export const ipamAPI = {
   list: async (host?: string, opts: ReadOptions = {}) => {
     const url = host ? `/ipam?host=${encodeURIComponent(host)}` : "/ipam";
-    // three all-projects reads plus one per project per node: the heavy budget on a fresh read
+    // Three all-projects reads plus one per project per node, so a fresh read gets the heavy budget.
     return fetchHeavyRead<IPAMListResponse>(url, opts);
   },
 };
@@ -2459,7 +2441,7 @@ export const certificateAPI = {
   },
 };
 
-// Integrations API (External Apps - Orcahub)
+// Integrations API (external apps such as OrcaHub)
 import type {
   APIKeyInfo,
   APIKeyCapabilitiesRequest,
@@ -2513,7 +2495,7 @@ export const integrationsAPI = {
     });
   },
 
-  // note: withdrawing tenant.provision from a key that owns organizations answers 409 with what would
+  // Withdrawing tenant.provision from a key that owns organizations answers 409 with what would
   // stop; the same request with force set goes through.
   updateAPIKeyCapabilities: async (keyId: string, request: APIKeyCapabilitiesRequest): Promise<APIKeyInfo> => {
     return fetchAPI<APIKeyInfo>(`/integrations/api-keys/${encodeURIComponent(keyId)}/capabilities`, {
@@ -2528,8 +2510,8 @@ export const integrationsAPI = {
     });
   },
 
-  // note: a new secret for the same key id. The organizations the key owns record that id, so
-  // they keep syncing once the integration is given the new secret.
+  // A new secret for the same key id. The organizations the key owns record that id, so they
+  // keep syncing once the integration is given the new secret.
   rotateAPIKeySecret: async (keyId: string): Promise<APIKeyCreateResponse> => {
     return fetchAPI<APIKeyCreateResponse>(`/integrations/api-keys/${encodeURIComponent(keyId)}/rotate-secret`, {
       method: "POST",
@@ -2571,10 +2553,9 @@ export const integrationsAPI = {
     return fetchAPI<CapabilityVocabularyResponse>("/integrations/capabilities");
   },
 
-  // note: this is the one integrations call that authenticates with the credential in the BODY
-  // rather than with a session, because it is the endpoint an external app uses before it has
-  // anything else. The dialog uses it to prove a freshly issued key works before the operator
-  // walks away from the only screen that will ever show the secret.
+  // The one integrations call that authenticates with the credential in the body instead of a
+  // session: it is the endpoint an external app calls before it has anything else. The dialog
+  // uses it to prove a freshly issued key works while the secret, shown only once, is on screen.
   validate: async (request: APIKeyValidateRequest): Promise<APIKeyValidateResponse> => {
     return fetchAPI<APIKeyValidateResponse>("/integrations/validate", {
       method: "POST",
@@ -2766,9 +2747,9 @@ const snapshotAPI = {
   /**
    * Every snapshot in scope, one upstream call per cluster, then a bounded size read per holder.
    *
-   * Both parameters are omitted rather than sent empty when they are not set. The backend reads
-   * a present-but-blank host as a caller who named a cluster and got it wrong, and answers 422,
-   * which is what stops a narrowed request silently widening into a fleet sweep.
+   * Unset parameters are omitted, never sent empty. The backend reads a present-but-blank host
+   * as a caller who named a cluster and got it wrong, and answers 422, which stops a narrowed
+   * request silently widening into a fleet sweep.
    *
    * A heavy read: the fan-out runs on a 40 s backend budget, and the default window leaves a
    * forced refresh no headroom.
@@ -2811,9 +2792,8 @@ const snapshotAPI = {
       confirmSnapshot?: string;
     } = {},
   ): Promise<SnapshotActionResponse> => {
-    // DELETE carries no body, so every gate travels as a query parameter. Deliberately not moved
-    // to a body: a DELETE body is not carried through every proxy, and a confirmation something
-    // can silently strip fails open in exactly the direction these gates close.
+    // DELETE carries no body, so every gate travels as a query parameter. A DELETE body is not
+    // carried through every proxy, and a confirmation a proxy can silently strip would fail open.
     const params = new URLSearchParams({ host, project });
     if (opts.acknowledgeBillingImpact) params.set("acknowledge_billing_impact", "true");
     if (opts.acknowledgeUpstreamSnapshot) params.set("acknowledge_upstream_snapshot", "true");
@@ -2883,7 +2863,7 @@ export const api = {
   tags: tagAPI,
   system: systemAPI,
   health: healthCheck,
-  // New LXD Features
+  // LXD resources
   instances: instanceAPI,
   instanceDevices: instanceDeviceAPI,
   profiles: profileAPI,

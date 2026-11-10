@@ -21,13 +21,12 @@ import {
   taskStatusDisplay,
 } from "./task-format";
 
-// The cells of a task row. One implementation for the dock and the Operations page, so the
-// two never render the same record two ways.
+// The cells of a task row, shared by the dock and the Operations page so the two never render
+// the same record two ways.
 //
-// note: every cell here is a whole TableCell, and the Badge lives here rather than in the
-// TableBody that mounts these. Status is one of the two chips the table conventions allow in
-// a body, and keeping it in a cell component is what the badge ratchet in
-// check-table-typography.mjs is designed to leave alone.
+// Every cell here is a whole TableCell, and the Badge lives here rather than in the TableBody
+// that mounts these. Status is one of the two chips the table conventions allow in a body; the
+// badge ratchet in check-table-typography.mjs leaves a chip inside a cell component alone.
 
 interface TaskCellProps {
   task: TaskRecord;

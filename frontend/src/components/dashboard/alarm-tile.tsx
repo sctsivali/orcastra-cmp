@@ -13,9 +13,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-// note: every tile points at a list page with its own query string, which is a distinct router
-// cache key. Prefetching them on sight cost an RSC request per tile on every paint, so they warm
-// on intent like the sidebar does.
+// Every tile opens a list page with its own query string, a distinct router cache key, so tiles
+// warm on intent like the sidebar instead of costing an RSC request per tile on every paint.
 import { IntentLink as Link } from "@/components/navigation/route-intent";
 import { TONE_TEXT, type ClusterStatusTone } from "@/lib/cluster-status";
 import { cn } from "@/lib/utils";
@@ -45,14 +44,12 @@ const ALARM_KINDS: Record<AlarmKind, { label: string; icon: LucideIcon; tone: Cl
 
 /**
  * One alarm count that opens its list. Shared by the dashboard's System Alerts and the
- * Monitoring page's Alarm Statistics, which drew the same tiles in two sizes and two palettes.
+ * Monitoring page's Alarm Statistics.
  *
- * important: a neutral tile. The colour is on the icon alone and only while the count is above
- * zero. Each tile used to sit in its own tinted box, a low-opacity wash of a palette hue under a
- * number in a darker step of the same hue, through six hues, so a fleet with nothing wrong still
- * painted a row of alarm colours and the one tile that mattered looked like the five that did not.
+ * A neutral tile: the colour is on the icon alone, and only while the count is above zero, so a
+ * fleet with nothing wrong paints no row of alarm colours and the tile that matters stands out.
  *
- * note: the number is the first <p> in the link. The browser harness reads it from there.
+ * Browser tests read the number from the first <p> in the link; keep it first.
  */
 function AlarmTileBody({ kind, count }: { kind: AlarmKind; count: number }) {
   const { label, icon: Icon, tone } = ALARM_KINDS[kind];
@@ -96,7 +93,7 @@ export function AlarmCount({ kind, count }: { kind: AlarmKind; count: number }) 
   );
 }
 
-/** The line a card shows when every tile reads zero. A statement, not a banner. */
+/** The line a card shows when every tile reads zero: plain text, no banner. */
 export function NoActiveAlarms() {
   return (
     <p className="flex items-center gap-2 text-sm text-muted-foreground">

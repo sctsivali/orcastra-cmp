@@ -36,10 +36,9 @@ interface PolicyEditorDialogProps {
 /**
  * Create or edit an access policy.
  *
- * important: the form lives inside DialogContent, which Radix unmounts on close, so every open
- * starts from the policy (or the empty template) again. The state used to live on the always
- * mounted dialog and was reset only from onOpenChange, which a parent opening it through its
- * `open` prop never calls, so Create reopened on the previous attempt's name and rules.
+ * important: keep the form state inside DialogContent, which Radix unmounts on close, so every
+ * open starts from the policy (or the empty template). A parent opening the dialog through its
+ * `open` prop never calls onOpenChange, so a reset there would not run.
  */
 export function PolicyEditorDialog(props: PolicyEditorDialogProps) {
   const { open, onOpenChange } = props;

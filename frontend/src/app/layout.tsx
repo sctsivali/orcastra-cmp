@@ -45,7 +45,7 @@ export async function generateMetadata(): Promise<Metadata> {
 // The colour the browser paints its own chrome with: the mobile address bar, the pull-to-refresh
 // overshoot and the PWA splash. Without it those stay the UA default and frame a #14111c page in
 // white. Keyed to the OS preference rather than the stored theme because the browser reads this
-// before any of our script runs; the values are the two --background tokens in globals.css.
+// before any page script runs; the values are the two --background tokens in globals.css.
 export const viewport: Viewport = {
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#f3f4f6" },
@@ -53,8 +53,8 @@ export const viewport: Viewport = {
   ],
 };
 
-// inline script to prevent theme flash (FOUC) on page load
-// reads cookie set by ThemeProvider, falls back to system preference
+// Applies the theme before paint from the cookie ThemeProvider sets, falling back to the system
+// preference, so the page never flashes the wrong theme.
 const themeInitScript = `
 (function(){
   try {
@@ -71,18 +71,12 @@ const themeInitScript = `
 })();
 `;
 
-// inline script to prevent personalization flash (FOUC) on page load
-// reads compact cookie with visual CSS values and applies them before paint
+// Applies the personalization cookie's CSS values before paint. Without the cookie it does
+// nothing: the globals.css seeds are already the defaults.
 //
-// Returning early on a missing cookie is deliberate: with no hint to apply, the seeds in
-// globals.css are already the shipped defaults and touching anything here would only risk
-// writing something worse.
-//
-// important: the accent is written twice, as a hex AND as the h/s/l triplet that
-// globals.css binds --primary and --ring to. Writing only the hex left every Button, Badge,
-// switch, checkbox and focus ring on the seed accent until React mounted, so an operator with
-// a custom accent watched the whole app change colour one tick after paint. The triplet is
-// what the stylesheet actually reads.
+// important: the accent is written as a hex and as the h/s/l triplet that globals.css binds
+// --primary and --ring to. The stylesheet reads the triplet; with only the hex, every control
+// and focus ring stays on the seed accent until React mounts.
 const personalizationInitScript = `
 (function(){
   try {
@@ -151,11 +145,9 @@ export default async function RootLayout({
   const sidebarCollapsed = cookieStore.get("orcastra-sidebar-collapsed")?.value === "true";
   // The task panel's open state and height, for the same first-byte reason.
   const initialDock = parseDockCookie(cookieStore.get(DOCK_COOKIE)?.value);
-  // Same reasoning one property further: the sidebar's colour has to be right in the first
-  // byte too. The pre-paint script below can set the CSS variables from this cookie, but it
-  // cannot decide whether the aside carries `sidebar-custom-bg` at all, because that is a
-  // className React owns. Reading the hint here is what keeps the server render and the
-  // browser's first render describing the same sidebar.
+  // The sidebar colour has to be right in the first byte too. The pre-paint script can set the
+  // CSS variables, but whether the aside carries `sidebar-custom-bg` is a className React owns;
+  // reading the hint here keeps the server render and the first client render in agreement.
   const initialPersonalization = parsePersonalizationHint(
     cookieStore.get(PERSONALIZATION_COOKIE)?.value,
   );
@@ -178,7 +170,7 @@ export default async function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
         {/* Prevent personalization flash: apply CSS custom properties before paint */}
         <script dangerouslySetInnerHTML={{ __html: personalizationInitScript }} />
-        {/* The favicon links come from generateMetadata above, once; they used to be written here too. */}
+        {/* The favicon links come from generateMetadata above; do not write them here too. */}
       </head>
       <body
         className={`${GeistSans.variable} ${GeistMono.variable} font-sans antialiased min-h-screen bg-background`}

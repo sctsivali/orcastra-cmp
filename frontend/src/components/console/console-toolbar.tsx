@@ -1,6 +1,6 @@
 /**
- * Console Toolbar: power, clipboard, on-screen keyboard and pointer, display scale, the graphical
- * console's guest actions, BIOS keys, connection details and reconnect.
+ * The console toolbar: power, clipboard, on-screen keyboard and pointer, display scale, the
+ * graphical console's guest actions, BIOS keys, connection details and reconnect.
  *
  * Shared by the floating console window and the full-page console, so it holds no store state:
  * the instance's status goes back through `onInstanceStatus`.

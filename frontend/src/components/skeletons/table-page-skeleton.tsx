@@ -6,8 +6,8 @@ interface TablePageSkeletonProps {
 }
 
 // Shared route-loading shape for the inventory table pages: title, toolbar, dense rows.
-// Lifted out of the per-segment loading.tsx files so they stay one line each and the shape
-// does not drift between sixteen near-identical copies.
+// The per-segment loading.tsx files render this, so each stays one line and the shape cannot
+// drift between them.
 export function TablePageSkeleton({ rows = 10 }: TablePageSkeletonProps) {
   return (
     <div className="space-y-6 animate-in fade-in duration-300">

@@ -1,16 +1,14 @@
 import { Box, FolderKanban, Server, type LucideIcon } from "lucide-react";
 import type { PermissionFlags, RoleGate } from "@/components/sidebar/types";
 
-// Single source of truth for the global create menu. The header renders this list twice, as the
-// desktop dropdown and as the mobile floating action button, so the two surfaces cannot drift
-// apart. Gates are data, the same shape the sidebar uses in nav-config.tsx: the renderer never
-// sees role logic, it receives an already-filtered list.
+// The global create menu in the header. Gates are data, the same shape the sidebar uses in
+// nav-config.tsx, so the renderer never sees role logic: it receives an already-filtered list.
 
 /** Sidebar IA section the action belongs to, so ordering stays anchored to NAV_GROUPS. */
 export type CreateSection = "compute" | "networking" | "cluster";
 
 export interface CreateAction {
-  /** Stable key. React key, and the anchor the browser QA spec matches on. */
+  /** Stable key: the React key, and the anchor browser tests match on. */
   id: string;
   label: string;
   icon: LucideIcon;
@@ -22,11 +20,10 @@ export interface CreateAction {
   startsGroup?: boolean;
 }
 
-// Ordered as NAV_GROUPS is: Compute, then Networking, then Cluster. Icons are the ones the
-// matching sidebar entries already use, so the menu and the nav read as one product.
-// note: a create that lives in a dialog on its own list page (networks, network ACLs, ISO and
-// image uploads) is not offered here. The menu is a list of destinations, real links an
-// operator can open in a new tab, and a dialog is not a destination.
+// Ordered as NAV_GROUPS is: Compute, then Networking, then Cluster, with the icons of the
+// matching sidebar entries. A create that lives in a dialog on its own list page (networks,
+// network ACLs, ISO and image uploads) is not offered: the menu lists destinations, links an
+// operator can open in a new tab.
 export const CREATE_ACTIONS: readonly CreateAction[] = [
   {
     id: "instance",
@@ -63,11 +60,8 @@ function roleAllowed(role: RoleGate, perms: PermissionFlags): boolean {
 }
 
 /**
- * The actions to offer right now.
+ * The actions to offer right now, without the one for the route the operator is already on.
  *
- * important: the item for the route the operator is already standing on is dropped here rather
- * than by a hardcoded pathname list in the header. That list named exactly the two routes the
- * menu happened to offer and would have gone stale the moment a third action was added.
  * usePathname() returns the pathname alone, with no query or hash, so a plain comparison is
  * sound for these static destinations.
  */

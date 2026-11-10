@@ -1,25 +1,19 @@
-/**
- * Optimized query configurations for different data types
- * Based on update frequency and user interaction patterns
- */
+/** React Query presets, grouped by how often the data changes. */
 
 import { APIError } from "@/types";
 
 /**
- * Poll intervals, matched to the response-cache TTL each endpoint carries on the backend.
+ * Poll intervals, matched to the backend response-cache TTL of the endpoints they serve.
+ * Polling faster than the TTL only returns the same cached body, and a cache miss fans out to
+ * every cluster in scope.
  *
- * important: polling faster than the server's TTL cannot produce a newer number. It returns
- * the identical cached body and a log line, and on these endpoints a miss is a fan-out across
- * every cluster in scope. Each value below is the TTL of the endpoints it serves:
- *
- *   live      uncached, single-instance metrics while its Metrics tab is visible
- *   watched   uncached, single-cluster reads a person is looking at right now
+ *   live      uncached, single-instance metrics while the Metrics tab is visible
+ *   watched   uncached, single-cluster reads on screen
  *   active    30s   /instances, /monitoring/*
  *   attended  60s   /nodes/availability (45), /cluster-members/{m}/resources, pool resources
  *   fleet     180s  /nodes, /clusters, /networks, /storage-*, /images, /vms
  *
- * Anything slower than fleet is catalog data and should not poll at all: it changes only when
- * an operator acts in this console, and every mutation already invalidates its key.
+ * Catalog data slower than fleet should not poll; mutations already invalidate its key.
  */
 export const POLL_MS = {
   live: 5 * 1000,
@@ -30,10 +24,8 @@ export const POLL_MS = {
 } as const;
 
 /**
- * Age past which a reading stops being a claim about now.
- *
- * Three intervals, not one: a tab that was hidden misses its ticks, so a single interval would
- * cry wolf on every ordinary resume and operators would learn to ignore the marker.
+ * Age after which a reading is shown as stale. Three intervals, because a hidden tab skips ticks
+ * and one interval would flag every ordinary resume.
  */
 export const STALE_AFTER_MS = {
   live: 3 * POLL_MS.live,
@@ -44,14 +36,11 @@ export const STALE_AFTER_MS = {
 } as const;
 
 /**
- * Spread a poll interval by +/-10%, resolved once per hook instance.
+ * Spread a poll interval by +/-10% so queries created in the same render do not poll in
+ * lockstep and hit an expired cache TTL together.
  *
- * important: every query created in the same render tick shares a deadline for the life of the
- * page, so a page of twelve cards produces one synchronised burst per cycle rather than a
- * trickle. On the fleet tier those bursts land on an expired TTL together.
- *
- * note: call this from a lazy useState initialiser, never in the render body, or the cadence
- * wanders on every re-render.
+ * Call it from a lazy useState initialiser, not the render body, or the interval changes on
+ * every render.
  */
 export function jitter(base: number): number {
   return Math.round(base * (0.9 + Math.random() * 0.2));
@@ -68,16 +57,11 @@ type PollingQuery = {
 };
 
 /**
- * Poll at `base`, backing off geometrically while the query is failing.
+ * Poll at `base`, backing off geometrically while the query keeps failing. An unreachable
+ * cluster makes every attempt wait on a connect timeout, and the last reading is already shown.
  *
- * A cluster that is not answering is where polling costs most and buys least: every attempt
- * sits on a connect timeout, and the operator already has the last reading on screen with its
- * age beside it, which is worth more than a fifth identical failure.
- *
- * important: the wait is how long the query has been failing, not `fetchFailureCount`. React
- * Query resets that count at the start of every fetch, so after its own retries it always read
- * the same number and the "backoff" sat at one constant interval for as long as a cluster was
- * down. Waiting as long as it has already been failing doubles the gap on each attempt.
+ * The delay is based on how long the query has been failing. `fetchFailureCount` cannot be used:
+ * React Query resets it at the start of every fetch.
  */
 export function backingOffInterval(base: number, max: number = 5 * 60 * 1000) {
   return (query: PollingQuery): number => {
@@ -91,17 +75,14 @@ export function backingOffInterval(base: number, max: number = 5 * 60 * 1000) {
   };
 }
 
-/**
- * Smart retry: skip retries for auth errors (401) and rate limits (429).
- * These won't resolve by retrying and would worsen a 429 storm.
- */
+/** No retry on 401, 403 or 429: retrying cannot fix them and makes a 429 storm worse. */
 function shouldRetry(failureCount: number, error: unknown, maxRetries: number): boolean {
   if (error instanceof APIError) {
     if (error.status === 401 || error.status === 429 || error.status === 403) {
       return false;
     }
   }
-  // still check the raw Error message for status codes
+  // Some callers throw a plain Error with the status in the message.
   if (error instanceof Error) {
     const msg = error.message;
     if (msg.includes('401') || msg.includes('429') || msg.includes('403')) {
@@ -111,84 +92,58 @@ function shouldRetry(failureCount: number, error: unknown, maxRetries: number): 
   return failureCount < maxRetries;
 }
 
-/**
- * Configuration for data that rarely changes (nodes, clusters, projects)
- * - Longer staleTime to reduce unnecessary refetches
- * - Longer cache duration
- * - No window focus refetch
- */
+/** Data that rarely changes: nodes, clusters, projects. */
 export const STATIC_DATA_CONFIG = {
-  staleTime: 3 * 60 * 1000, // 3 minutes
-  gcTime: 10 * 60 * 1000, // 10 minutes
+  staleTime: 3 * 60 * 1000,
+  gcTime: 10 * 60 * 1000,
   refetchOnWindowFocus: false,
-  refetchOnMount: true, // Fetch on mount to ensure data is loaded
+  refetchOnMount: true,
   refetchOnReconnect: true,
   retry: (failureCount: number, error: unknown) => shouldRetry(failureCount, error, 2),
 };
 
-/**
- * Configuration for semi-static data (images, profiles, networks)
- * - Moderate staleTime
- * - Good cache duration
- */
+/** Data that changes occasionally: images, profiles, networks. */
 export const SEMI_STATIC_DATA_CONFIG = {
-  staleTime: 2 * 60 * 1000, // 2 minutes
-  gcTime: 5 * 60 * 1000, // 5 minutes
+  staleTime: 2 * 60 * 1000,
+  gcTime: 5 * 60 * 1000,
   refetchOnWindowFocus: false,
-  refetchOnMount: true, // Fetch on mount to ensure data is loaded
+  refetchOnMount: true,
   refetchOnReconnect: true,
   retry: (failureCount: number, error: unknown) => shouldRetry(failureCount, error, 2),
 };
 
-/**
- * Configuration for frequently changing data (instances, status, metrics)
- * - Shorter staleTime for fresher data
- * - Still cache to avoid excessive requests
- */
+/** Frequently changing data: instances, status, metrics. */
 export const DYNAMIC_DATA_CONFIG = {
-  staleTime: 30 * 1000, // 30 seconds
-  gcTime: 2 * 60 * 1000, // 2 minutes
-  // note: no refetch on tab focus. Returning from AFK would fire every query at
-  // once under a possibly-expired token. Freshness comes from the refetchInterval
-  // the call site sets from POLL_MS below, which resumes on its own once the tab
-  // is visible again. This preset deliberately sets no interval of its own: it is
-  // shared with permission surfaces (identities, groups, ACLs) where a value
-  // changing under an admin mid-edit is worse than a stale one.
+  staleTime: 30 * 1000,
+  gcTime: 2 * 60 * 1000,
+  // No refetch on focus: returning to an idle tab would fire every query at once, possibly on
+  // an expired token. Call sites set refetchInterval from POLL_MS instead. No interval here
+  // because permission screens share this preset and must not change under an admin mid-edit.
   refetchOnWindowFocus: false,
-  refetchOnMount: true, // Fetch on mount to ensure data is loaded
+  refetchOnMount: true,
   refetchOnReconnect: true,
   retry: (failureCount: number, error: unknown) => shouldRetry(failureCount, error, 1),
 };
 
-/**
- * Configuration for data an operator is watching while it is on screen.
- *
- * note: this was called REALTIME_DATA_CONFIG and had no call sites at all, which is how a
- * 60-second interval came to be the only one in this file while every list on the console
- * sat still. Nobody reaches for a constant called REALTIME when they want a minute.
- */
+/** Data an operator is watching on screen, polled at the attended interval. */
 export const ATTENDED_DATA_CONFIG = {
   staleTime: 30 * 1000,
   gcTime: 1 * 60 * 1000,
   refetchInterval: POLL_MS.attended,
-  refetchIntervalInBackground: false, // Stop polling when tab is hidden
+  refetchIntervalInBackground: false,
   refetchOnWindowFocus: false, // see DYNAMIC_DATA_CONFIG
   refetchOnMount: true,
   refetchOnReconnect: true,
   retry: (failureCount: number, error: unknown) => shouldRetry(failureCount, error, 1),
 };
 
-/**
- * Configuration for on-demand data (details, operations)
- * - Cache but don't auto-refetch
- * - User-initiated refreshes only
- */
+/** On-demand data (details, operations), fetched only when the caller enables or refetches it. */
 export const ON_DEMAND_CONFIG = {
-  staleTime: 5 * 60 * 1000, // 5 minutes
-  gcTime: 10 * 60 * 1000, // 10 minutes
+  staleTime: 5 * 60 * 1000,
+  gcTime: 10 * 60 * 1000,
   refetchOnWindowFocus: false,
   refetchOnMount: false,
   refetchOnReconnect: false,
-  enabled: false, // Typically used with manual trigger
+  enabled: false,
   retry: (failureCount: number, error: unknown) => shouldRetry(failureCount, error, 1),
 };

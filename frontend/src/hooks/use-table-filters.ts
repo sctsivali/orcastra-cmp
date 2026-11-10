@@ -95,12 +95,11 @@ export interface TableFilterOptions<F extends string, C, T = unknown> {
   /**
    * Extra search reach for data that hangs off the row rather than sitting on it, ex; the
    * instance names inside a project. Declared search accessors are compiled at module scope and
-   * cannot close over component state, which is what an index like that lives in.
+   * cannot close over component state, which is where an index like that lives.
    *
-   * important: this ORs into the search pass, it does not bypass the filters. Overview used to
-   * union its index hits back on top of the filtered rows, which rendered projects the active
-   * Node facet had excluded and left the toolbar counting a different set than the grid showed.
-   * Keep it referentially stable, ex; useCallback.
+   * important: this ORs into the search pass and does not bypass the filters. A row it matches
+   * must still pass every active facet, or the toolbar counts a different set than the grid
+   * shows. Keep it referentially stable, ex; useCallback.
    */
   extraSearch?: (row: T, query: string) => boolean;
   /**
@@ -170,7 +169,7 @@ export function formatBound(value: number, unit: string): string {
     if (value < 3600) return `${Math.round(value / 60)}m`;
     return `${(value / 3600).toFixed(1)}h`;
   }
-  // `bps` is a legacy internal name. The session API has always supplied bytes per second.
+  // `bps` here means bytes per second, which is what the session API supplies.
   if (unit === "bps") return formatNetworkRate(value);
   if (unit === "days") return `${value}d`;
   return String(value);
@@ -227,15 +226,15 @@ export function useTableFilters<T, F extends string, C = void>(
   const searchKey = `${namespace}q`;
   const showKey = `${namespace}show`;
 
-  // A table inside a dialog keeps its state local: leaving its keys in the address bar after
-  // the dialog closes would filter something the operator can no longer see.
+  // A table inside a dialog keeps its state local: its keys left in the address bar after the
+  // dialog closes would filter something that is not on screen.
   const [localParams, setLocalParams] = useState<Record<string, string>>({});
   const readParam = useCallback(
     (key: string) => (syncUrl ? searchParams.get(key) : (localParams[key] ?? null)),
     [syncUrl, searchParams, localParams],
   );
 
-  // note: one reference for the whole render, so a date preset resolves consistently rather
+  // One reference for the whole render, so a date preset resolves consistently rather
   // than drifting between the predicate and the chip that describes it.
   const now = useMemo(() => dayStart(Date.now()), []);
 
@@ -263,10 +262,8 @@ export function useTableFilters<T, F extends string, C = void>(
    *
    * important: `useSearchParams` updates on the next transition commit, so two writes landing
    * inside one commit both start from the same rendered `searchParams`, and the second silently
-   * drops whatever the first added. Typing into the search box and picking a scope in the same second is enough: the
-   * debounced write sets `q`, the select writes `host` from a snapshot taken before `q` existed,
-   * and the typed term is gone from a URL the operator is about to share or reload. Reproduced on
-   * /inventory/snapshots, two runs in three.
+   * drops whatever the first added (ex; a debounced search write followed by a scope pick loses
+   * the typed term).
    *
    * Writes compose onto this ref instead, and the effect below re-seeds it whenever the URL moves
    * for any other reason: Back, Forward, a deep link, or another component's navigation.
@@ -331,7 +328,7 @@ export function useTableFilters<T, F extends string, C = void>(
     [table.facetFields, states],
   );
 
-  // important: one pass-mask per ACTIVE field, computed once, rather than re-filtering the
+  // One pass-mask per ACTIVE field, computed once, rather than re-filtering the
   // whole list per field. With every column filterable a page can carry ten facets, and the
   // instances page recomputes on every LXD stream event.
   const masks = useMemo(() => {
@@ -367,7 +364,7 @@ export function useTableFilters<T, F extends string, C = void>(
 
   // important: facts are co-filtered, computed over the rows passing the search and every
   // OTHER active filter but not this one. Counted over the raw set, an option would promise
-  // rows that vanish the moment a second filter is on, which reads as a bug.
+  // rows that vanish the moment a second filter is on.
   const facts = useMemo(() => {
     const result = {} as Record<F, FilterFacts>;
     for (const field of table.facetFields) {
@@ -497,13 +494,11 @@ export function useTableFilters<T, F extends string, C = void>(
   //   2. any filter already in use, whatever its option count
   //   3. primary or revealed facets, capped at MAX_RESTING_FACETS
   //
-  // important: a pinned role is exempt from the two-value threshold on purpose. One option
-  // filters nothing, which is why the threshold exists for everything else, but node and
-  // project are the dimensions this product is organised around and an operator should not
-  // have to learn that their position moves with today's fleet.
+  // A pinned role is exempt from the two-value threshold: node and project are the dimensions
+  // the product is organised around, so their position does not move with the fleet.
   //
-  // note: an active filter keeps its CONTROL, not just its chip. The chip makes a deep link
-  // removable; the control is what makes it adjustable.
+  // An active filter keeps its CONTROL as well as its chip. The chip makes a deep link
+  // removable; the control makes it adjustable.
   const visibleFacets: RenderedFacet<F>[] = useMemo(() => {
     const pinned = (field: F) => table.pinnedFields.includes(field);
     const active = (field: F) => isActiveState(states[field]);
@@ -518,11 +513,9 @@ export function useTableFilters<T, F extends string, C = void>(
     // The cap counts only what the page shows on its own. Overflow falls behind "Add filter" in
     // declaration order, so the page author decides who is cut rather than the data.
     //
-    // important: a revealed facet is exempt, exactly like an active filter. Budgeting it made
-    // "Add filter" inert on every table that already rendered two primaries (the menu kept
-    // offering the column, because addableFacets only excludes what is visible, so each further
-    // click was dead too), and on the remaining tables a reveal silently evicted a control that
-    // was already there instead of adding one. Revealing is a deliberate act, not a default.
+    // important: a revealed facet is exempt from the cap, like an active filter. Counted against
+    // it, a reveal on a table that already shows its primaries would do nothing (addableFacets
+    // keeps offering the column) or evict a control that is already there.
     let budget = MAX_RESTING_FACETS;
     const rendered = eligible.filter((field) => {
       if (pinned(field) || active(field) || revealed.has(field)) return true;
@@ -569,8 +562,7 @@ export function useTableFilters<T, F extends string, C = void>(
   );
 
   // important: a chip renders for every active filter even when its control is not on the
-  // toolbar. That is what stops a deep link filtering the view with no way to see or undo it,
-  // which is the defect the warnings page shipped with.
+  // toolbar, so a deep link never filters the view with no way to see or undo it.
   const chips: FilterChip<F>[] = useMemo(
     () =>
       activeFields.flatMap((field): FilterChip<F>[] => {

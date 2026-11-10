@@ -262,7 +262,7 @@ export function createPlanBody(draft: MigrationDraftState): MigrationPlanCreateR
     mappings.storage_pools = { ...mappings.storage_pools, root: pool };
   } else {
     // important: a plan echoes its mappings back into the draft, so a pool picked earlier is still
-    // here. "Same Pool or Project Default" has to remove it, or the PATCH keeps the old pool while
+    // here. "Same Pool or Project Default" has to remove it, or the PATCH keeps that pool while
     // the form shows the default. The server replaces mappings whole, so leaving it out is enough.
     const { root: _root, "*": _anyDisk, ...otherPools } = mappings.storage_pools;
     mappings.storage_pools = otherPools;

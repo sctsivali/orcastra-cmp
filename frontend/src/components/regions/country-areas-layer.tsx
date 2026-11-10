@@ -30,7 +30,7 @@ function areaLabel(region: RegionSummary): string {
 }
 
 interface CountryAreasLayerProps {
-  // whole-country regions only
+  // Whole-country regions only.
   regions: RegionSummary[];
   areas: CountryAreas | null;
   onSelectRegion: (regionId: string) => void;
@@ -39,15 +39,14 @@ interface CountryAreasLayerProps {
 /**
  * Shades each whole-country region across its full outline, in its status colour.
  *
- * SVG rather than canvas: there is one path per country in the fleet, not thirty thousand, and
- * an SVG path takes a class, so the fill follows the theme tokens in map-theme.css live and the
- * hover is plain CSS. The chip in the marker layer stays the keyboard target; the outline is the
- * same region for a pointer.
+ * SVG rather than canvas: there is one path per country in the fleet, and an SVG path takes a
+ * class, so the fill follows the theme tokens in map-theme.css and the hover is plain CSS. The
+ * chip in the marker layer stays the keyboard target.
  */
 export function CountryAreasLayer({ regions, areas, onSelectRegion }: CountryAreasLayerProps) {
   const map = useMap();
   const rendererRef = React.useRef<L.SVG | null>(null);
-  // read when a tooltip or popup opens, so counts stay current without a redraw on every poll
+  // Read when a tooltip or popup opens, so counts stay current without a redraw on every poll.
   const latest = React.useRef(regions);
   latest.current = regions;
   const onSelectRef = React.useRef(onSelectRegion);
@@ -58,8 +57,8 @@ export function CountryAreasLayer({ regions, areas, onSelectRegion }: CountryAre
     .sort()
     .join("|");
 
-  // note: one renderer per map. Leaflet adds a renderer to the map on first use and never takes
-  // it away, so creating one per redraw would leave an orphaned <svg> behind each poll.
+  // One renderer per map. Leaflet adds a renderer to the map on first use and never takes it
+  // away, so creating one per redraw would leave an orphaned <svg> behind each poll.
   React.useEffect(() => {
     if (!map) return;
     if (!map.getPane(PANE)) map.createPane(PANE).style.zIndex = PANE_Z_INDEX;
@@ -81,7 +80,7 @@ export function CountryAreasLayer({ regions, areas, onSelectRegion }: CountryAre
       if (!area) continue;
       const regionId = region.region_id;
       const current = () => latest.current.find((r) => r.region_id === regionId) ?? region;
-      // the outline's own id is the ISO code that matched it, so it is always two letters
+      // The outline's own id is the ISO code that matched it, so it is always two letters.
       const className = `country-area country-area--${regionStatus(region)} country-area-${String(area.id).toLowerCase()}`;
       const layer = L.geoJSON(area, {
         attribution: OFFLINE_BASEMAP_ATTRIBUTION,

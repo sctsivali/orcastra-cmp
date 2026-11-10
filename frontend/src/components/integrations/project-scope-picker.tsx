@@ -23,10 +23,8 @@ const SEARCH_THRESHOLD = 6;
 
 export interface ProjectScopePickerProps {
   /**
-   * Ties the trigger to its Label.
-   *
-   * note: a button is a labelable element, so `<Label htmlFor={id}>` gives it its accessible
-   * name and getByLabel resolves it. Same device as the selects above it in the dialog.
+   * Ties the trigger to its Label. A button is a labelable element, so `<Label htmlFor={id}>`
+   * gives it its accessible name, as for the selects above it in the dialog.
    */
   id: string;
   /** The picked names, exactly as they will be sent. Owned by the caller, never mutated here. */
@@ -54,13 +52,11 @@ function listSentence(labels: readonly string[]): string {
 }
 
 /**
- * Picks the projects an API key grant names, from the projects the selected clusters actually
- * have.
+ * Picks the projects an API key grant names, from the projects the selected clusters report.
  *
- * This replaced a comma-separated text box. A name is compared literally at every enforcement
- * site, so one typo produced a key that authenticated, read as correctly scoped on its card, and
- * was refused by every project-bounded call for the rest of its life, silently. Typing here only
- * searches. The value is always a click on something the cluster reported.
+ * A name is compared literally at every enforcement site, so a typo would make a key that is
+ * refused by every project-bounded call. Typing here only searches; the value is always a click
+ * on something a cluster reported.
  */
 export function ProjectScopePicker({
   id,
@@ -85,22 +81,17 @@ export function ProjectScopePicker({
 
   const hasClusters = selectedClusterIds.length > 0;
   const isBlocked = disabled || !hasClusters;
-  // The fallback exists only for the case the picker genuinely cannot cover. Offering it while
-  // the list loaded would reopen the typo door this control was built to close.
+  // The typed fallback appears only when a cluster did not answer or the read failed; offering
+  // it with the list loaded would let typos back in.
   const degraded = unansweredClusterLabels.length > 0 || isError;
 
-  // important: freeze the rendered rows while the popover is open. The projects read polls every
-  // five minutes, and re-sorting a live list moves a row out from under the cursor between the
-  // eye and the click. On a control that writes a permission grant that is the wrong project,
-  // not a cosmetic glitch. Same device as SearchableSelect.
+  // important: freeze the rendered rows while the popover is open. The projects read polls, and
+  // a re-sorted list moves a row out from under the cursor, which here grants the wrong project.
+  // Same device as SearchableSelect.
   //
-  // important: the empty list is exempt, and that exemption is load-bearing. This read is a live
-  // fan-out across every cluster in scope, so on a real fleet it lands seconds after the popover
-  // opens. Freezing the empty array captured at open time left the panel reading "No projects
-  // visible on the selected clusters." for as long as it stayed open, which says the clusters
-  // have nothing when the truth is that the answer had not arrived. Nothing can move under the
-  // cursor while nothing is rendered, so adopting the first non-empty list costs the guarantee
-  // nothing. Found on the live fleet; the fixture specs answer instantly and never saw it.
+  // important: an empty list is not frozen. The read is a live fan-out that can land seconds
+  // after the popover opens; freezing the empty array would show "No projects visible" until it
+  // closes. Nothing can move under the cursor while nothing is rendered.
   const frozen = React.useRef(options);
   if (!open || frozen.current.length === 0) frozen.current = options;
   const rendered = open ? frozen.current : options;
@@ -126,7 +117,7 @@ export function ProjectScopePicker({
     try {
       await onRetry();
     } catch {
-      // The notice is already on screen and says the same thing. Nothing to add.
+      // The notice already on screen says the same thing.
     } finally {
       setRetrying(false);
     }
@@ -140,8 +131,8 @@ export function ProjectScopePicker({
   let emptyText: string;
   if (isLoading) emptyText = "Loading projects…";
   else if (isError) emptyText = "Projects could not be loaded.";
-  // "visible" is load-bearing: the projects read applies the tenant ACL, so an empty list can
-  // mean the operator may not see them rather than the cluster not having any.
+  // "visible" matters: the projects read applies the tenant ACL, so an empty list can mean the
+  // operator may not see them instead of the cluster not having any.
   else if (rendered.length === 0) emptyText = "No projects visible on the selected clusters.";
   else emptyText = "No project matches that search.";
 
@@ -161,8 +152,8 @@ export function ProjectScopePicker({
             aria-controls={listboxId}
             disabled={isBlocked}
             onKeyDown={(event) => {
-              // A combobox opens on ArrowDown. PopoverTrigger only opens on click, Enter and
-              // Space, so without this a keyboard user arrowing down the form walks past it.
+              // A combobox opens on ArrowDown; PopoverTrigger alone opens only on click, Enter
+              // and Space.
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                 event.preventDefault();
                 setOpen(true);
@@ -201,8 +192,7 @@ export function ProjectScopePicker({
                   return (
                     <CommandItem
                       key={option.name}
-                      // The value stays the exact project name, so cmdk's own normalisation
-                      // never becomes a second spelling of a string the backend matches
+                      // The value stays the exact project name, which the backend matches
                       // literally. Everything else searchable goes in keywords.
                       value={option.name}
                       keywords={[option.description ?? ""]}
@@ -210,14 +200,12 @@ export function ProjectScopePicker({
                       aria-selected={isSelected}
                       // important: a closure, never onSelect's argument. cmdk derives that from
                       // its own normalised value, and Staging and staging are different grants.
-                      //
-                      // important: no setOpen(false). Multi-select means several toggles per
-                      // visit, and closing on select is the obvious mistake here.
+                      // The popover stays open: multi-select means several toggles per visit.
                       onSelect={() => toggle(option.name)}
                     >
                       {/* The check and the weight carry the state. --primary is the
-                          user-configurable accent and is not contrast-clamped, so it can never
-                          be the only signal. */}
+                          user-configurable accent and is not contrast-clamped, so it is never
+                          the only signal. */}
                       <Check
                         aria-hidden="true"
                         className={cn(

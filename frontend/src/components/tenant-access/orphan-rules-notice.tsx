@@ -12,10 +12,10 @@ import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { formatDateTime, plural } from "@/lib/utils";
 import { APIError, type OrphanRule } from "@/types/api";
 
-// A rule naming a project or instance deleted outside Orcastra (lxc delete) hands whatever is
-// created under that name next to the old tenant. The backend audit only reports such rules
-// (services/tenant_rule_audit.py, owner decision 2026-10-27); removing one is a partner's call,
-// and the backend reads the cluster again before it does.
+// A rule naming a project or instance deleted outside Orcastra (lxc delete) grants its tenants
+// whatever is created under that name next. The backend audit only reports such rules
+// (services/tenant_rule_audit.py); removing one is a partner's call, and the backend reads the
+// cluster again before it does.
 
 const ORPHAN_KEY = ["tenant-access-orphan-rules"] as const;
 
@@ -43,7 +43,7 @@ export function OrphanRulesNotice() {
       void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
     },
     onError: (failure) => {
-      // 409: what the rule names exists again; 503: the cluster did not answer. Both kept the rule.
+      // 409: what the rule names exists again; 503: the cluster did not answer. Both keep the rule.
       setError(failure instanceof APIError ? failure.message : "The rule could not be removed. Try again.");
       void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
     },

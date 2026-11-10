@@ -78,9 +78,8 @@ function ImageSelector({
   }, [imagesData, host]);
 
   const hostImages = hostEntry?.images || [];
-  // important: a host that did not answer comes back with an empty image list. Telling the
-  // operator it has no images is how they conclude the cluster is fine and the catalog is
-  // empty, when the cluster is simply down.
+  // A host that did not answer comes back with an empty image list, so the empty state says it
+  // is unreachable rather than that it has no images.
   const hostUnreachable = hostEntry?.reachable === false;
 
   if (!host) {
@@ -97,10 +96,9 @@ function ImageSelector({
     return <Skeleton className="h-10 w-full" />;
   }
 
-  // note: a Select trigger clamps its label to one line by contract, so reopening the list is
-  // the reveal. That only works if the list itself shows the whole value, which is why the row
-  // below wraps rather than clipping and why this no longer cuts the fingerprint to 12
-  // characters: an operator was picking the image for a new instance from a prefix.
+  // A Select trigger clamps its label to one line, so reopening the list is the reveal. The rows
+  // below wrap rather than clip and show the whole fingerprint, so an operator never picks the
+  // image for a new instance from a prefix.
   const getImageLabel = (image: ImageInfo) =>
     image.aliases.find(Boolean) || image.description || image.fingerprint;
 
@@ -137,8 +135,8 @@ function ImageSelector({
 }
 
 export function VMCreateForm() {
-  // note: the router is still needed for back(). Forward hops go through navigate() so
-  // the leaving transition raises the global progress bar.
+  // The router is used for back(). Forward hops go through navigate() so the leaving
+  // transition raises the global progress bar.
   const router = useRouter();
   const { navigate } = useNavigationProgress();
   const nodePicker = useNodePickerOptions();
@@ -167,10 +165,10 @@ export function VMCreateForm() {
   const selectedHost = watch("host");
   const instanceType = watch("instance_type");
 
-  // important: the disabled flag is React state, so it only reaches the button on the next
-  // render. Two clicks inside one tick both pass it and both fire the mutation. react-hook-form
-  // does not help here: its handleSubmit has no re-entry guard and awaits the resolver before
-  // calling this, so the window is wider, not narrower. The ref is claimed synchronously.
+  // important: the disabled flag is React state, so it reaches the button only on the next
+  // render, and two clicks inside one tick would both fire the mutation. react-hook-form's
+  // handleSubmit has no re-entry guard and awaits the resolver first, so the ref is claimed
+  // synchronously.
   const submitInFlightRef = React.useRef(false);
 
   const onSubmit = async (data: VMCreateFormData) => {
@@ -194,7 +192,6 @@ export function VMCreateForm() {
 
       navigate("/inventory");
     } catch (error) {
-      // Check if error is due to read-only mode
       const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
       const isReadOnlyError = errorMessage.toLowerCase().includes("read-only mode") || errorMessage.includes("read-only");
       
@@ -206,8 +203,8 @@ export function VMCreateForm() {
         variant: "destructive",
       });
     } finally {
-      // note: released even on the success path, which has already navigated away. Leaving it
-      // claimed would lock the form if the user comes back to it via the browser history.
+      // Released even on the success path, which has already navigated away. Leaving it claimed
+      // would lock the form if the user comes back to it via the browser history.
       submitInFlightRef.current = false;
     }
   };
@@ -230,7 +227,6 @@ export function VMCreateForm() {
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Main Configuration */}
           <Card className="lg:col-span-2">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -239,7 +235,6 @@ export function VMCreateForm() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
-              {/* Instance Name */}
               <div className="space-y-2">
                 <Label htmlFor="name">Instance Name</Label>
                 <Input
@@ -253,7 +248,6 @@ export function VMCreateForm() {
                 )}
               </div>
 
-              {/* Instance Type */}
               <div className="space-y-2">
                 <Label>Instance Type</Label>
                 <div className="grid grid-cols-2 gap-4">
@@ -288,7 +282,6 @@ export function VMCreateForm() {
                 </div>
               </div>
 
-              {/* Cluster Selection */}
               <div className="space-y-2">
                 <Label>Target Cluster</Label>
                 {nodesLoading ? (
@@ -298,7 +291,7 @@ export function VMCreateForm() {
                     value={selectedHost}
                     onValueChange={(value) => {
                       setValue("host", value);
-                      setValue("image", ""); // Reset image when host changes
+                      setValue("image", "");
                     }}
                     className={errors.host ? "border-destructive" : ""}
                     placeholder="Select a cluster"
@@ -321,7 +314,6 @@ export function VMCreateForm() {
                 )}
               </div>
 
-              {/* Image Selection */}
               <div className="space-y-2">
                 <Label>Image</Label>
                 <ImageSelector
@@ -343,7 +335,6 @@ export function VMCreateForm() {
             </CardContent>
           </Card>
 
-          {/* Sidebar Options */}
           <div className="space-y-6">
             <Card>
               <CardHeader>
@@ -400,7 +391,6 @@ export function VMCreateForm() {
           </div>
         </div>
 
-        {/* Cloud-Init Section */}
         {showCloudInit && (
           <Card className="animate-scale-in">
             <CardHeader>

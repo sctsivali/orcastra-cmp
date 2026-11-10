@@ -48,8 +48,8 @@ interface CreateAPIKeyDialogProps {
   onOpen?: () => void;
   capabilities: CapabilityOption[];
   applicationTypes: ApplicationTypeOption[];
-  // Resolves when the key is created and rejects when it is not, so the form is only cleared
-  // once the work actually succeeded.
+  // Resolves when the key is created and rejects when it is not, so the form is cleared only on
+  // success.
   onSubmit: (data: APIKeyCreateRequest) => Promise<unknown>;
   isSubmitting: boolean;
 }
@@ -76,9 +76,9 @@ export function CreateAPIKeyDialog({
   const [projectScope, setProjectScope] = useState<ProjectScope>("default");
   const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
 
-  // Two clicks inside one tick both pass the disabled check and both fire, which is two real
-  // credentials. The ref is claimed synchronously, before any await, so the second click has
-  // something to lose against. Same guard as network-create-form.tsx.
+  // important: two clicks inside one tick both pass the disabled check and would create two real
+  // credentials. The ref is claimed synchronously, before any await, so the second click loses.
+  // Same guard as network-create-dialog.tsx.
   const submitInFlightRef = useRef(false);
 
   const projectScopeOptions = useProjectScopeOptions({
@@ -98,15 +98,14 @@ export function CreateAPIKeyDialog({
     return map;
   }, [applicationTypes]);
 
-  // Seed the capability ticks from the chosen type. They stay editable afterwards: the preset is
-  // a starting point, not a ceiling, so an operator can grant a custom application anything they
-  // are willing to grant.
+  // Seed the capability ticks from the chosen type. They stay editable afterwards; the preset
+  // only sets the starting selection.
   const applyAppType = (nextType: string) => {
     setAppType(nextType);
     setSelectedCapabilities([...(defaultsByType.get(nextType) ?? [])]);
   };
 
-  // The vocabulary arrives asynchronously, so seed the initial type once it lands rather than
+  // The vocabulary arrives asynchronously, so seed the initial type once it lands instead of
   // leaving the form with no capabilities ticked.
   useEffect(() => {
     if (defaultsByType.size === 0) return;
@@ -138,9 +137,9 @@ export function CreateAPIKeyDialog({
           ? selectedProjects
           : ["default"];
 
-    // important: re-asserted rather than trusted to the button's disabled attribute, which is
-    // driven by React state and lands one render late. An empty array is not a narrower key,
-    // it is a key that answers 403 to every project-bounded call for its whole life.
+    // important: re-checked here because the button's disabled attribute follows React state and
+    // lands one render late. An empty project list makes a key that answers 403 to every
+    // project-bounded call for its whole life.
     if (projects.length === 0) return;
 
     const permissions: ClusterPermission[] = selectedClusterIds.map(
@@ -162,8 +161,7 @@ export function CreateAPIKeyDialog({
         expire_days: expireDays === "never" ? null : parseInt(expireDays),
       });
     } catch {
-      // The parent surfaces the error. Keep the dialog open with everything the operator typed:
-      // clearing it on failure meant a rejected create silently discarded the whole form.
+      // The parent surfaces the error. Keep the dialog open with everything the operator typed.
       return;
     } finally {
       submitInFlightRef.current = false;
@@ -189,10 +187,8 @@ export function CreateAPIKeyDialog({
     );
   };
 
-  // "Specific projects" with nothing picked is a blocked state, not a fallback. The box it
-  // replaced silently substituted ["default"], so an operator who chose to narrow the grant
-  // received a different one and nothing said so. An orphan blocks too: a name no selected
-  // cluster has produces a grant that matches nothing.
+  // "Specific projects" with nothing picked blocks submit; it never falls back to ["default"].
+  // An orphan blocks too: a name no selected cluster has produces a grant that matches nothing.
   const specificScopeIncomplete =
     projectScope === "specific" &&
     (selectedProjects.length === 0 ||

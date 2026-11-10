@@ -26,9 +26,9 @@ interface SyncOptions {
 
 const ORG_PREF_POLL_INTERVAL_MS = 45_000;
 
-// note: every account reads the same two endpoints. An Administrator without the partner role used
-// to read its personal row as its whole branding; the server now answers my-preferences with the
-// deployment default for it, and the personal row holds only the theme for everyone.
+// Every account reads the same two endpoints. The server answers my-preferences with the
+// deployment default for an Administrator without the partner role, and the personal row holds
+// only the theme for everyone.
 export function usePersonalizationSync({
   userId, scopeKey, accessToken, authenticated, sessionLoading,
   personalRowRef, lastLocalEditRef, setSettings, setIsLoading, setThemeOrigin,
@@ -39,9 +39,9 @@ export function usePersonalizationSync({
   const previousScopeRef = React.useRef<string | null>(null);
   const checkInFlightRef = React.useRef(false);
   currentScopeRef.current = scopeKey;
-  // important: read the bearer through a ref. As a dependency it made every silent rotation
-  // (about every four minutes) look like a reason to re-read, so all three preference reads ran
-  // again and the poll restarted. An actor change is fenced by scopeKey and onAuthActorChanged.
+  // important: read the bearer through a ref. As a dependency every silent rotation (about every
+  // four minutes) would re-run all three preference reads and restart the poll. An actor change
+  // is fenced by scopeKey and onAuthActorChanged.
   const accessTokenRef = React.useRef(accessToken);
   accessTokenRef.current = accessToken;
 

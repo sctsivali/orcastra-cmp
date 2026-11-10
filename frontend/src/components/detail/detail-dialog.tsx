@@ -25,23 +25,15 @@ export interface RecordDetailTab {
   content: React.ReactNode;
 }
 
-// The one shape for "everything about this row".
-//
-// It bakes in three things every hand-rolled detail dialog in this codebase got wrong at least
-// once, so a call site cannot get them wrong again:
-//
-//   1. The tall-modal recipe. DialogContent needs `flex flex-col overflow-hidden` with a
-//      bounded max-h and the scrolling done by DialogBody, or the title scrolls out of view on
-//      a long record. Four existing dialogs still have the broken form.
-//   2. `recordId` is REQUIRED. Truncating an id to eight characters with no way to read the
-//      rest is the defect on the operations table and the identities table both.
-//   3. An `error` renders as a real destructive block when set and is ABSENT when empty,
-//      rather than printing "None" into a field nobody wanted.
+// The shared "everything about this row" dialog. DialogContent is
+// `flex flex-col overflow-hidden` with a bounded max-h and DialogBody scrolls, so the title
+// stays in view on a long record. `recordId` is required and shown in full; `error` renders as
+// a destructive alert when set and renders nothing when empty.
 export interface RecordDetailDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: React.ReactNode;
-  /** The machine id, shown in full with a copy affordance. Required, no exceptions. */
+  /** The machine id, shown in full with a copy button. */
   recordId: string;
   recordIdLabel?: string;
   subtitle?: React.ReactNode;
@@ -51,9 +43,8 @@ export interface RecordDetailDialogProps {
   tabs?: readonly RecordDetailTab[];
   defaultTab?: string;
   /**
-   * Optional controlled tab. A caller needs this when something outside the dialog depends on
-   * which tab is showing, ex; gating a polling query so it only runs while somebody is reading
-   * the panel it feeds.
+   * Controlled tab, for callers whose own state depends on the visible tab, ex; a polling query
+   * that runs only while its panel is shown.
    */
   tab?: string;
   onTabChange?: (tab: string) => void;
@@ -92,10 +83,9 @@ export function RecordDetailDialog({
     [onTabChange],
   );
 
-  // important: this resets on the OPENING EDGE only, and its deps deliberately exclude `tabs`.
-  // A caller builds that array inline, so its reference changes on every render; with it in the
-  // dep list the effect fires every render and slams the tab back to defaultTab, which means
-  // clicking any other tab bounces straight back and the tab strip does not work at all.
+  // important: reset on the opening edge only, and keep `tabs` out of the deps. Callers build
+  // that array inline, so with it in the deps the effect runs every render and snaps the tab
+  // back to defaultTab, which makes every other tab unreachable.
   const wasOpen = React.useRef(false);
   React.useEffect(() => {
     if (open && !wasOpen.current) setTab(defaultTab ?? "");
@@ -105,10 +95,8 @@ export function RecordDetailDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={cn(SIZES[size], "max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden")}>
-        {/* note: pb-4 because DialogContent sets no gap at all, so the header sat flush against
-            whatever followed it while the body's own sections are spaced 16px apart. It was
-            invisible for as long as every record dialog carried a subtitle line to fill the
-            space, and it showed the moment one stopped. Measured: 0px against a 16px rhythm. */}
+        {/* pb-4: DialogContent sets no gap, so without it the header sits flush against the
+            next element while the body's sections are spaced 16px apart. */}
         <DialogHeader className="pr-8 pb-4">
           <div className="flex flex-wrap items-center gap-2">
             <DialogTitle className="min-w-0">{title}</DialogTitle>

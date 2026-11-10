@@ -126,7 +126,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
   const [runError, setRunError] = useState<string | null>(null);
   const [remoteImageIntent, setRemoteImageIntent] = useState(false);
 
-  // --- Load the read-only preflight when the dialog opens --------------------
+  // Load the read-only preflight when the dialog opens.
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
@@ -173,7 +173,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
     [contextKey],
   );
 
-  // --- Image catalog (local + remote), filtered to the instance type ---------
+  // Image catalog, local and remote, filtered to the instance type.
   const wantType = preflight?.type; // "container" | "virtual-machine"
   // The store the instance's project reads, not the host's default store: a rebuild resolves a
   // local fingerprint the same way a create does, inside the target project.
@@ -224,7 +224,6 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
   );
   const selectedRow = imageRows.find((r) => r.key === selectedImageKey);
 
-  // --- Validation ------------------------------------------------------------
   const snapshots = preflight?.snapshots ?? [];
   const blocked = snapshots.length > 0;
   const volumes = preflight?.attached_volumes ?? [];
@@ -234,7 +233,6 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
   const cloudInitOk = mode !== "cloud-init" || !!cloudInit.trim();
   const canSubmit = phase === "form" && !blocked && nameMatches && imageOk && cloudInitOk;
 
-  // --- Submit + poll ---------------------------------------------------------
   const startRebuild = async () => {
     if (runInFlightRef.current) return;
     runInFlightRef.current = true;
@@ -371,7 +369,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
 
   const busy = phase === "running";
   const handleOpenChange = (next: boolean) => {
-    if (busy) return; // don't let the user close mid-rebuild
+    if (busy) return; // The dialog cannot close mid-rebuild.
     onOpenChange(next);
   };
 
@@ -406,7 +404,6 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
           </DialogDescription>
         </DialogHeader>
 
-        {/* Loading preflight */}
         {phase === "loading" && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -414,7 +411,6 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
           </div>
         )}
 
-        {/* Preflight failed */}
         {phase === "error" && (
           <Alert variant="destructive">
             <AlertTriangle className="h-4 w-4" aria-hidden />
@@ -422,7 +418,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
           </Alert>
         )}
 
-        {/* Snapshot block: LXD refuses to rebuild an instance with snapshots */}
+        {/* LXD refuses to rebuild an instance that has snapshots. */}
         {phase === "form" && blocked && (
           <div className="space-y-3">
             <div className="flex gap-2 rounded-md border border-status-pending/40 p-3 text-sm">
@@ -446,10 +442,8 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
           </div>
         )}
 
-        {/* Main form */}
         {phase === "form" && !blocked && (
           <div className="space-y-4">
-            {/* Mode */}
             <div className="space-y-2">
               <Label>Rebuild from</Label>
               <div className="flex gap-2">
@@ -459,7 +453,6 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
               </div>
             </div>
 
-            {/* Image picker */}
             {needsImage && (
               <div className="space-y-2">
                 <Label>
@@ -514,7 +507,6 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
               </div>
             )}
 
-            {/* Cloud-init */}
             {mode === "cloud-init" && (
               <div className="space-y-2">
                 <Label htmlFor="rebuild-cloud-init">cloud-init user-data</Label>
@@ -528,7 +520,6 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
               </div>
             )}
 
-            {/* Empty note */}
             {mode === "empty" && (
               <div className="flex gap-2 rounded-md border bg-muted/30 p-3 text-sm">
                 <Disc3 className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
@@ -540,7 +531,6 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
               </div>
             )}
 
-            {/* Reassurances: what survives the rebuild */}
             <div className="flex gap-2 rounded-md border bg-muted/30 p-3 text-sm">
               <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-status-online" aria-hidden="true" />
               <div className="space-y-1 text-muted-foreground">
@@ -560,7 +550,6 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
               </div>
             </div>
 
-            {/* Provisioning toggle (not for empty) */}
             {mode !== "empty" && (
               <label className="flex items-start gap-2 text-sm">
                 <input
@@ -579,7 +568,6 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
               </label>
             )}
 
-            {/* Destructive warning + name gate */}
             <div className="space-y-2 rounded-md border border-destructive/40 p-3">
               <div className="flex gap-2 text-sm text-destructive">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -600,7 +588,6 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
           </div>
         )}
 
-        {/* Running / done / failed / unknown */}
         {(phase === "running" || phase === "done" || phase === "failed" || phase === "unknown") && (
           <div className="space-y-3">
             {phase === "done" ? (

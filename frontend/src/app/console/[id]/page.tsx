@@ -67,7 +67,7 @@ function ConsolePage() {
   useEffect(() => {
     if (connection !== "connected") return;
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      // A sign-in this page started leaves on purpose and comes straight back here.
+      // A sign-in this page started navigates away and comes straight back here.
       if (isReauthenticating()) return;
       event.preventDefault();
       event.returnValue = "";
@@ -116,7 +116,7 @@ function ConsolePage() {
         <span className="hidden shrink-0 text-sm text-muted-foreground sm:inline" translate="no">@ {host}</span>
         <span className="hidden shrink-0 text-sm text-muted-foreground sm:inline" translate="no">({project})</span>
         <SessionStatusBadge status={connection} />
-        {/* An agent driving the same desktop is shown while it matters, not only afterwards. */}
+        {/* Shows an agent driving the same desktop while it happens. */}
         <AgentActivityBadge instanceName={instanceName} accessToken={getAccessToken()} />
       </header>
 

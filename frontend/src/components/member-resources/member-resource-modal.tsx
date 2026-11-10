@@ -33,12 +33,10 @@ interface MemberResourceModalProps {
 /**
  * One cluster member's resources.
  *
- * important: the query lives here rather than on the page. The page used to own it and pass
- * down only `data` and `isLoading`, so `error`, `isLoadingError`, `isRefetchError` and
- * `refreshNow` were all discarded before they could be rendered. Every failure - a cluster that
- * was down, one that was slow, a member that no longer existed, an account without access -
- * arrived as `resources === null` and painted the same "No resource data" block. Owning the
- * query is what makes dropping a field impossible rather than merely discouraged.
+ * important: the query lives here, not on the page, so `error`, `isLoadingError`,
+ * `isRefetchError` and `refreshNow` reach the render. Passing only `data` down would turn
+ * every failure (cluster down or slow, member gone, no access) into the same "No resource
+ * data" block.
  */
 export function MemberResourceModal({
   isOpen,
@@ -61,8 +59,8 @@ export function MemberResourceModal({
   } = useMemberResources(nodeName ?? "", memberName ?? "", { enabled: isOpen });
 
   // The forced refresh bypasses the 60s server cache and is rate limited to 12 a minute per
-  // subject, so the hook's own double-click guard and pending hold are what keep the control
-  // honest. It also toasts on failure, which the passive poll deliberately does not.
+  // subject, hence the hook's double-click guard and pending hold. It toasts on failure; the
+  // passive poll does not.
   const retry = useManualRefresh(refreshNow, {
     errorTitle: `Could not read resources for ${memberName ?? "this member"}`,
   });
@@ -125,8 +123,7 @@ export function MemberResourceModal({
         <DialogBody className="pr-2">
         {/* important: data first, unconditionally. React Query keeps the last good body when a
             refetch fails (isRefetchError), so an error branch above this would blank a
-            populated panel because one poll tick did not land. The header's stale marker is
-            what reports that instead. */}
+            populated panel over one missed poll. The header's stale marker reports that. */}
         {resources ? (
           <MemberResourcePanels
             resources={resources}
@@ -134,8 +131,7 @@ export function MemberResourceModal({
             onShowInstances={handleShowInstances}
           />
         ) : isLoadingError ? (
-          /* isLoadingError is isError && !hasData, which is exactly the case that has nothing
-             to show. Using the library's own name keeps the invariant above unmissable. */
+          /* isLoadingError is isError && !hasData: the case with nothing to show. */
           <EmptyState
             action={
               failure.retryable ? (

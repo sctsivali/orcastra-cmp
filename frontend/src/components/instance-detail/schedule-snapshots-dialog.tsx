@@ -50,16 +50,10 @@ interface ScheduleDialogProps {
  * Ask for a schedule as a sentence: snapshot this FOR [label], EVERY [interval] at [time],
  * KEEPING the last [n], EXPIRING each after [d] days.
  *
- * Presets rather than a cron field, because a Select cannot produce an invalid value and nobody
- * has to be taught a syntax. Every preset label begins with a digit, which `check-heading-case`
- * requires of a `label:` literal it is not going to Title Case, and which happens to be the more
- * scannable spelling.
- *
- * Two things are deliberately NOT here. There is no cluster picker: the host and project come
- * from the instance this dialog was opened on, so there is nothing to choose and nothing to get
- * wrong. And there is no acknowledgement block, because there is no acknowledgement that opens
- * this door: an instance the metered product already schedules is refused outright, and the
- * button that opens this dialog is disabled with the reason written beside it.
+ * Presets instead of a cron field, so a Select cannot produce an invalid value. Every preset
+ * label begins with a digit, which `check-heading-case` requires of a `label:` literal it does
+ * not Title Case. Host and project come from the instance. An instance the metered product
+ * already schedules is refused outright: the button that opens this dialog is disabled.
  */
 export function ScheduleSnapshotsDialog({
   open,
@@ -81,8 +75,8 @@ export function ScheduleSnapshotsDialog({
   const [error, setError] = useState<string | null>(null);
   const submitInFlightRef = useRef(false);
 
-  // Reset on open, keyed to `open` rather than to the target, so a dialog reopened on a different
-  // instance never shows the previous one's draft.
+  // Reset on every open, so a dialog reopened on a different instance never shows the previous
+  // one's draft.
   useEffect(() => {
     if (!open) return;
     setLabel(existing?.label ?? "");
@@ -100,9 +94,8 @@ export function ScheduleSnapshotsDialog({
   const expiryValid = Number.isInteger(days) && days >= 1 && days <= MAX_EXPIRY_DAYS;
   const labelValid = label.trim().length > 0 && label.trim().length <= MAX_LABEL;
   const pending = create.isPending || update.isPending;
-  // Refused here rather than at the server. The backend answers 422 for this pair, and a 422 an
-  // operator has to interpret is worse than a button that is already off with the reason written
-  // under it.
+  // Checked here as well as on the server, which answers 422 for this pair, so the button is off
+  // with the reason written under it.
   const coherent = !expiryValid || retentionFits(frequency, Number(keepLast), days);
   const canSubmit = labelValid && expiryValid && coherent && !pending;
 
@@ -272,8 +265,8 @@ export function ScheduleSnapshotsDialog({
             )}
           </div>
 
-          {/* Retention and expiry interact and the interaction is invisible. The form does the
-              arithmetic once so the operator does not do it wrong every time. */}
+          {/* Retention and expiry interact in a way the fields do not show, so the form spells
+              out the result. */}
           {expiryValid && (
             <p className={coherent ? "text-xs text-muted-foreground" : "text-xs text-destructive"}>
               {scheduleSentence(frequency, Number(keepLast), days)}

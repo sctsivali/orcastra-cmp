@@ -75,7 +75,6 @@ export function StatsOverview({ data, clustersData, isLoading, clustersLoading }
   const virtualMachines =
     instances?.vms.filter((vm) => vm.type === "virtual-machine").length || 0;
   
-  // Count registered clusters by status
   const totalClusters = clusters?.total || 0;
   const onlineClusters = clusters?.clusters?.filter(c => c.status === ClusterStatus.ONLINE).length || 0;
   const offlineClusters = Math.max(totalClusters - onlineClusters, 0);

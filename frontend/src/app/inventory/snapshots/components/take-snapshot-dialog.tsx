@@ -310,7 +310,7 @@ function TakeSnapshotDialogBody({
       }}
       onViewSnapshots={async () => {
         // A failed verification read removes the active target fail-closed, but an ambiguous POST
-        // still needs a safe read-only recovery action. Reuse only the exact tuple that previously
+        // still needs a safe read-only recovery action. Reuse only the exact tuple that last
         // passed every preflight. Changing any selector remounts the keyed form and removes the
         // recovery action before this callback can be exposed for a different target.
         const recoveryTarget = target ?? verifiedTargetRef.current;

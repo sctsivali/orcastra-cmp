@@ -1,20 +1,15 @@
 // Whether a piece of text is currently being clipped by its own box.
 //
-// CSS has no selector for "this text is overflowing": `text-overflow` exposes no state hook,
-// and a container query knows the box width but not the length of the text inside it. So the
-// only way to hide a reveal control on a value that genuinely fits is to measure, and the only
-// way to measure is at runtime.
+// CSS has no selector for overflowing text (`text-overflow` exposes no state, and a container
+// query knows the box width but not the text length), so hiding a reveal control on a value
+// that fits takes a runtime measurement.
 //
-// important: this is not a public hook. A `useIsOverflowing` in components/ is how the reveal
-// primitive gets bypassed and every screen starts inventing its own treatment again, which is
-// the drift the primitive exists to end. Only components/ui/overflow-text.tsx calls this.
+// Not a public hook. Only components/ui/overflow-text.tsx calls this; a `useIsOverflowing`
+// in components/ would let screens bypass the reveal primitive.
 //
-// note: one module-level ResizeObserver rather than one per subscriber. The gain is not raw
-// throughput, browsers run a single observation loop per document either way. It is that the
-// subscription is keyed on the DOM node rather than on an effect's dependency array. These
-// tables re-render on every react-query refetch, and a per-instance effect with the wrong deps
-// would observe and unobserve roughly two hundred elements on every poll, forever. It also puts
-// the "no ResizeObserver at all" fallback in one place instead of two hundred.
+// One module-level ResizeObserver keys each subscription on its DOM node rather than on an
+// effect's dependency array, so tables that re-render on every refetch do not observe and
+// unobserve hundreds of elements per poll. The no-ResizeObserver fallback lives here once.
 
 type OverflowCallback = (overflowing: boolean) => void;
 
@@ -68,11 +63,8 @@ function ensureObserver(): ResizeObserver | null {
   });
 
   // important: a font swap changes how wide the text renders without changing the element's
-  // box, so ResizeObserver stays silent through it. Geist is wired through next/font with a
-  // metric-matched fallback so the delta is small, but small is not zero, and a swap that makes
-  // text wider AFTER the control was already hidden strands the value with no way to read it.
-  // That is the same shape as a reveal gated on a condition that is false exactly when the
-  // reveal is needed, which this codebase has shipped before.
+  // box, so ResizeObserver stays silent. Geist's metric-matched fallback keeps the delta small
+  // but not zero, and text that widens after the control was hidden would be left unreadable.
   if (!fontsHooked && typeof document !== "undefined" && document.fonts) {
     fontsHooked = true;
     document.fonts.ready.then(remeasureAll).catch(() => undefined);
@@ -84,11 +76,9 @@ function ensureObserver(): ResizeObserver | null {
 /**
  * Watch `element` and call `callback` whenever its clipped state changes.
  *
- * important: the callback fires only on a CHANGE, and never fires at all when there is no
- * ResizeObserver (jsdom, older Safari). Callers must therefore start from the pessimistic
- * assumption that the text IS clipped and let a measurement take the control away, never the
- * other way round. A control that appears only once JavaScript has decided it is needed is a
- * control that is missing in exactly the window where it is needed.
+ * important: the callback fires only on a change, and never when there is no ResizeObserver
+ * (jsdom, older Safari). Callers must start by assuming the text is clipped and let a
+ * measurement remove the control, never the other way round.
  */
 export function observeOverflow(
   element: HTMLElement,

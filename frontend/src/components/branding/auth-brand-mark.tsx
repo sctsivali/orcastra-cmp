@@ -20,8 +20,8 @@ export function AuthBrandMark({ withoutLogo = "icon" }: { withoutLogo?: "icon" |
       </div>
     );
   }
-  // note: both, switched by the `dark` class the pre-paint script puts on <html>. Choosing one in
-  // JavaScript would render the light logo on the server and swap it after hydration.
+  // Both logos render, switched by the `dark` class the pre-paint script puts on <html>. Choosing
+  // one in JavaScript would render the light logo on the server and swap it after hydration.
   return (
     <div className="mx-auto flex h-16 items-center justify-center">
       {[{ src: light, className: "dark:hidden" }, { src: dark, className: "hidden dark:block" }].map((logo) => (

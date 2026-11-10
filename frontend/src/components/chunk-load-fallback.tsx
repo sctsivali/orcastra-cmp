@@ -8,9 +8,8 @@ import { clearChunkReloadMark } from "@/lib/chunk-reload";
 
 /**
  * What an error boundary shows when a page chunk could not be downloaded and the automatic
- * reload has already been spent. The button reloads the document on purpose (see
- * lib/chunk-reload.ts for why that is safe here); `reset()` would only re-request the same
- * missing chunk.
+ * reload has already been spent. The button reloads the document (lib/chunk-reload.ts
+ * explains why that is safe here); `reset()` would only re-request the same missing chunk.
  */
 export function ChunkLoadFallback({ secondary }: { secondary?: ReactNode }) {
   const pathname = usePathname();

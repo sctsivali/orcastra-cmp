@@ -44,17 +44,14 @@ const DropdownMenuSubContent = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DropdownMenuPrimitive.SubContent
     ref={ref}
-    // Ensure sub-content stays within viewport
     collisionPadding={16}
     avoidCollisions={true}
     className={cn(
-      // z-[100002] to appear above dialogs (z-[100001])
+      // z-[100002] sits above dialogs (z-[100001]).
       "z-[100002] min-w-[8rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-lg",
-      // Max dimensions for mobile
       "max-w-[calc(100vw-2rem)] max-h-[50dvh] max-h-[50vh] overflow-y-auto",
-      // Prevent scroll issues
+      // Scrolling inside the menu does not chain to the page.
       "overscroll-contain",
-      // Animations
       "data-[state=open]:animate-in data-[state=closed]:animate-out",
       "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
       "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
@@ -76,17 +73,14 @@ const DropdownMenuContent = React.forwardRef<
     <DropdownMenuPrimitive.Content
       ref={ref}
       sideOffset={sideOffset}
-      // Ensure dropdown stays within viewport on mobile
       collisionPadding={16}
       avoidCollisions={true}
       className={cn(
-        // z-[100002] to appear above dialogs (z-[100001])
+        // z-[100002] sits above dialogs (z-[100001]).
         "z-[100002] min-w-[8rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md",
-        // Max dimensions for mobile
         "max-w-[calc(100vw-2rem)] max-h-[50dvh] max-h-[50vh] overflow-y-auto",
-        // Prevent scroll issues
+        // Scrolling inside the menu does not chain to the page.
         "overscroll-contain",
-        // Animations
         "data-[state=open]:animate-in data-[state=closed]:animate-out",
         "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
         "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",

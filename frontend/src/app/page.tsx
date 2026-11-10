@@ -32,14 +32,13 @@ export default function HomePage() {
   const { settings } = usePersonalization();
   const { isPartner } = usePermissions();
   
-  // important: through the owning hooks. These were three bare useQuery calls on the same keys
-  // with different options, so whether the counters on this page moved depended on which other
-  // component happened to be mounted in the same tab session to carry the interval.
+  // important: read through the owning hooks. A bare useQuery on the same key with other options
+  // makes whether these counters refresh depend on which other component is mounted.
   const { data: nodesData, isLoading: isLoadingNodes, isError: nodesError } = useNodeAvailability();
   const { data: vmsData, isLoading: isLoadingVMs, isError: vmsError } = useInstances();
   const { data: projectsData, isLoading: isLoadingProjects, isError: projectsError } = useAllProjects();
-  // A read that failed with nothing from before is not a zero (issue #15: a sealed Vault made
-  // every counter here read 0). Each card says it could not be read instead.
+  // A read that failed with nothing cached is not a zero, ex; while Vault is sealed. Each card
+  // says it could not be read instead.
   const nodesFailed = nodesError && !nodesData;
   const vmsFailed = vmsError && !vmsData;
   const projectsFailed = projectsError && !projectsData;
@@ -50,13 +49,12 @@ export default function HomePage() {
   const runningVMs = vmsData?.vms?.filter(vm => vm.status === "Running").length || 0;
   const totalProjects = projectsData?.reduce((sum, node) => sum + (node.projects?.length || 0), 0) || 0;
 
-  // Animated counters with faster duration (800ms) - must be called before any early returns
   const animatedTotalNodes = useCounterAnimation(totalNodes, 800);
   const animatedTotalVMs = useCounterAnimation(totalVMs, 800);
   const animatedRunningVMs = useCounterAnimation(runningVMs, 800);
   const animatedTotalProjects = useCounterAnimation(totalProjects, 800);
 
-  // Progressive loading: show skeleton placeholders per section instead of full-page block
+  // Skeletons per section rather than a full-page loader.
   const isStatsLoading = isLoadingNodes || isLoadingVMs || isLoadingProjects;
 
   const features = [
@@ -98,14 +96,12 @@ export default function HomePage() {
     },
   ];
 
-  // Get background settings with defaults
   const backgroundImage = settings.background.backgroundImage || '/bg_orcastra-scaled-1.jpg';
   const overlayOpacity = settings.background.backgroundOverlayOpacity / 100;
   const backgroundBlur = settings.background.backgroundBlur;
 
   return (
     <div className="relative">
-      {/* Background Image */}
       <div className="fixed inset-0 z-0">
         <div 
           className="absolute inset-0 bg-cover bg-center bg-no-repeat"
@@ -116,7 +112,7 @@ export default function HomePage() {
             transform: backgroundBlur > 0 ? 'scale(1.05)' : 'none', // Prevent blur edge artifacts
           }}
         />
-        {/* Gradient overlay for better readability - uses personalized opacity */}
+        {/* Overlay at the personalized opacity, for readability. */}
         <div 
           className="absolute inset-0 bg-gradient-to-b from-background via-background to-background"
           style={{ 
@@ -125,9 +121,7 @@ export default function HomePage() {
         />
       </div>
       
-      {/* Content */}
       <div className="relative z-10 container py-8 space-y-12">
-        {/* Hero Section */}
         <section className="text-center space-y-6 py-12">
         <div className="space-y-4">
           <h1 className="text-5xl md:text-6xl font-bold tracking-tight">
@@ -166,9 +160,8 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Stats Overview */}
-      {/* note: two a row until xl. At md the sidebar leaves four tiles about 82px wide, which clipped
-          "Instances" and "connected" before any scene was involved. */}
+      {/* Two a row until xl: at md the sidebar leaves four tiles about 82px wide, which clips
+          "Instances" and "connected". */}
       <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
         <Card className="illo-kpi">
           <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
@@ -231,7 +224,6 @@ export default function HomePage() {
         </Card>
       </section>
 
-      {/* Features Grid */}
       <section className="space-y-6">
         <div className="text-center space-y-2">
           <h2 className="text-3xl font-bold">Platform Features</h2>
@@ -240,8 +232,8 @@ export default function HomePage() {
           </p>
         </div>
 
-        {/* note: launcher cards, text beside the scene (the owner's reference), two a row from xl. A
-            card narrower than 440px steps its scene down (illustrations.css, illo-launch). */}
+        {/* Launcher cards, text beside the scene, two a row from xl. A card narrower than 440px
+            steps its scene down (illustrations.css, illo-launch). */}
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
           {features.map((feature) => {
             const Icon = feature.icon;
@@ -267,7 +259,6 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* CTA Section */}
       <section className="text-center space-y-6 py-12 rounded-lg border bg-card">
         <GetStartedIllustration size="xl" className="mx-auto" />
         <div className="space-y-2">
@@ -276,8 +267,7 @@ export default function HomePage() {
             Watch the health of your fleet, or dive into the technologies powering {settings.branding.appName || "Orcastra"}
           </p>
         </div>
-        {/* note: the hero above already opens the inventory, so these two lead elsewhere (owner
-            decision 2026-11-09). */}
+        {/* The hero above already opens the inventory, so these two lead elsewhere. */}
         <div className="flex flex-wrap items-center justify-center gap-4">
           <Button asChild size="lg" variant="default">
             <Link href="/inventory/monitoring">Open Monitoring</Link>

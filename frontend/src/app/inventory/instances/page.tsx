@@ -92,18 +92,15 @@ function InstancesContent() {
   const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
 
   // The response names every authorized cluster, including clusters with zero instances.
-  // Subscribing from rows alone missed the first create event on an empty cluster.
+  // Subscribing from rows alone would miss the first create event on an empty cluster.
   const authorizedHosts = ((data as VMListResponse | undefined)?.nodes ?? []);
   const pendingCreates = useInstanceStream(authorizedHosts);
 
   // A placeholder is "resolved" once a matching instance appears in list data that
   // landed AFTER the create was issued (the stream normally removes it first; this
-  // is the fallback). Freshness is the real guard against the stale-cache race, and
-  // it is exact where a fixed grace window was only a guess: a create invalidates
-  // the instance-list cache server-side, so any data newer than the placeholder
-  // cannot be the pre-create list. A blanket 12s wait used to sit here, which left
-  // the same instance rendered twice, once "Creating…" and once with its real
-  // status, for as long as the real row beat the stream event.
+  // is the fallback). A create invalidates the instance-list cache server-side, so
+  // data newer than the placeholder cannot be the pre-create list. A fixed grace
+  // window would render the instance twice until the stream event arrived.
   type Placeholder = (typeof pendingCreates)[number];
   const hasRealRow = (p: Placeholder) =>
     dataUpdatedAt > p.createdAt &&
@@ -111,7 +108,7 @@ function InstancesContent() {
       (i: any) =>
         i.host === p.host &&
         i.name === p.name &&
-        // important: with the project. Two projects can each hold an instance called "test",
+        // important: match the project too. Two projects can each hold an instance called "test",
         // so matching on host and name alone resolves a placeholder against someone else's row.
         (i.project || "default") === (p.project || "default"),
     );
@@ -128,18 +125,15 @@ function InstancesContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instances, pendingCreates, dataUpdatedAt, scopeKey]);
   // Hide a placeholder as soon as its real row is listed. The entry itself stays until the
-  // durable job's verdict, but showing both read as two instances for the seconds between
+  // durable job's verdict, but showing both would read as two instances for the seconds between
   // LXD creating it and the job confirming it.
   const visiblePendingCreates = pendingCreates.filter((p) => reportsFailure(p) || !hasRealRow(p));
 
-  // important: isStalePending compares against Date.now() and is only read during a render,
-  // and nothing here renders on a clock. useInstances runs with realtime, which sets
-  // refetchInterval false, refetchOnWindowFocus is off by house config, and the only other
-  // render sources are a stream frame or the operator clicking something. In the very case the
-  // expiry exists for, a create LXD refused in the background, none of those arrive by
-  // definition: the missing signal IS the premise. So the row kept animating "Creating..."
-  // past the ten-minute mark until something unrelated happened to re-render the page.
-  // One tick while a live placeholder is on screen, and nothing when the list is quiet.
+  // important: isStalePending compares against Date.now() and is read only during a render, and
+  // nothing here renders on a clock: realtime turns refetchInterval off and window-focus refetch
+  // is off too. A create LXD refused in the background sends no stream frame, so without this tick
+  // the row would show "Creating..." past the ten-minute expiry. It ticks only while a live
+  // placeholder is on screen.
   const [, forceStaleCheck] = useState(0);
   const hasLivePlaceholder = visiblePendingCreates.some(
     (p) =>
@@ -182,10 +176,8 @@ function InstancesContent() {
   const selectionIsCurrent = selectionActorScope === scopeKey;
   const router = useRouter();
   const { navigate } = useNavigationProgress();
-  // permsLoading matters for the reasons below: until the access rules arrive, hasPermission
-  // answers false for everyone, so an operator briefly sees every action withheld and told
-  // "No permission" when the real answer is "not known yet". The items stay withheld, which is
-  // the safe direction, but the reason must not claim a denial that has not been established.
+  // Until the access rules arrive, hasPermission answers false for everyone. The actions stay
+  // withheld meanwhile, but permissionReason says "Checking permissions" instead of a denial.
   const { hasPermission, termReadOnlyReason, isLoading: permsLoading } = useTenantAccess();
 
   // Dialog targets are local state, so a sign-out/sign-in in the same document must clear
@@ -246,10 +238,9 @@ function InstancesContent() {
     resetPage,
   );
 
-  // OrcaHub links in the wild carry ?instance=<name>. It is an external contract, so it is
-  // read forever and translated once into the canonical search key, then removed. Removing it
-  // is what keeps the seed from reasserting itself the moment the operator clears the field.
-  // ?host= and ?project= need no translation: they already are the facet keys.
+  // OrcaHub links carry ?instance=<name>, an external contract. It is translated once into the
+  // canonical search key and removed, so the seed does not come back when the operator clears
+  // the field. ?host= and ?project= already are the facet keys.
   useEffect(() => {
     const legacy = searchParams.get("instance");
     if (legacy === null) return;
@@ -267,8 +258,8 @@ function InstancesContent() {
   };
 
   const currentSelectedInstance = selectionIsCurrent ? selectedInstance : null;
-  // The dialog follows the row as the events stream updates it; the clicked object alone kept
-  // showing the status the instance had when it was clicked.
+  // The dialog follows the row as the events stream updates it; the clicked object alone would
+  // keep the status the instance had when it was clicked.
   const { record: liveSelectedInstance } = useLiveRecord<VMInfo>(
     instances,
     currentSelectedInstance ? instanceRecordId(currentSelectedInstance) : null,
@@ -303,7 +294,6 @@ function InstancesContent() {
     [refreshNow],
   );
 
-  // Pagination
   const totalPages = Math.ceil(sortedInstances.length / pageSize);
   const paginatedInstances = useMemo(() => {
     const startIndex = (currentPage - 1) * pageSize;
@@ -311,8 +301,7 @@ function InstancesContent() {
   }, [sortedInstances, currentPage, pageSize]);
 
   // Full-page loading state, only while there is nothing to show. A create the operator just made
-  // keeps its placeholder row through a slow first read: the loader used to replace the whole table,
-  // so the new instance vanished for as long as that read took (seen at 4 to 10 s on a cache miss).
+  // keeps its placeholder row through a slow first read instead of vanishing behind the loader.
   if (isLoading && visiblePendingCreates.length === 0) {
     return <LoadingLottiePage />;
   }
@@ -459,7 +448,6 @@ function InstancesContent() {
         />
       )}
 
-      {/* Rebuild (shared across rows, controlled by rebuildTarget) */}
       {rebuildTarget && (
         <RebuildDialog
           open={!!rebuildTarget}
@@ -475,7 +463,6 @@ function InstancesContent() {
         />
       )}
 
-      {/* Confirm-and-mutate dialogs, shared across rows */}
       <InstanceActionDialogs
         deleteTarget={deleteTarget}
         deleteDisplay={actions.deleteDisplay}
@@ -503,7 +490,7 @@ function InstancesLoading() {
   );
 }
 
-// Export with a Suspense wrapper - required because InstancesContent calls useSearchParams().
+// The Suspense wrapper is required because InstancesContent calls useSearchParams().
 export default function InstancesPage() {
   return (
     <Suspense fallback={<InstancesLoading />}>

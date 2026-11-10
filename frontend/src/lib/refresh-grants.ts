@@ -1,18 +1,16 @@
 // One registry for refresh grants, so a refresh token is presented to the IdP at most once.
 //
 // important: Authentik rotates the refresh token on every grant by default (2025.10,
-// refresh_token_threshold "seconds=0"): the old one is revoked, and presenting it again answers
-// invalid_grant and records a SUSPICIOUS_REQUEST event. Readers that arrive together with one
-// spent cookie (a burst of session reads, a second tab, a 401 retry) share the grant in flight,
-// and a reader that arrives just after it settled is handed the result instead of a second grant.
+// refresh_token_threshold "seconds=0"): presenting a spent one answers invalid_grant and records a
+// SUSPICIOUS_REQUEST event. Readers arriving together with one spent cookie (a burst of session
+// reads, a second tab, a 401 retry) share the grant in flight; one arriving just after it settled
+// is handed the result instead of a second grant.
 //
-// important: the window after a rotation is short on purpose (KEEP_MS, MAX_HOPS). Healing an
-// older cookie into the newest tokens also means the IdP never sees a reuse, which is how rotation
-// detects a copied session. Session reads wait for their grant (auth.ts), so the window only has
-// to cover requests already in flight when the rotation landed. Every replay is logged.
-//
-// note: per process. The dashboard runs one frontend process and only the nodejs runtime grants
-// (middleware has its own non-refreshing NextAuth instance). More replicas need a shared store.
+// important: keep the window after a rotation short (KEEP_MS, MAX_HOPS). Healing an older cookie
+// into the newest tokens hides a reuse, which is how rotation detects a copied session. Session
+// reads wait for their grant (auth.ts), so the window only covers requests already in flight.
+// Every replay is logged. Per process: one frontend process, and only the nodejs runtime grants
+// (middleware's NextAuth instance does not refresh). More replicas need a shared store.
 
 export interface RefreshedFields {
   accessToken: string;
@@ -51,7 +49,7 @@ const MAX_PER_SUBJECT = 16;
 
 const entries = new Map<string, Entry>();
 const tombstones = new Map<string, number>();
-// Pseudonymous subjects in logs: stable within one process, not reversible from a user list.
+// Pseudonymous subjects in logs: stable within one process and not reversible from a user list.
 const LOG_SALT = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16)).join("");
 
 function tombstoned(key: string, now: number): boolean {
@@ -79,9 +77,9 @@ function sweep(now: number): void {
   if (evicted) console.warn(`[AUTH] grant registry evicted ${evicted} entries (bounds reached)`);
 }
 
-// important: a subject at its limit is refused rather than having its oldest entries evicted.
-// Eviction would reopen a remembered failure, so cycling through old cookies could keep the IdP
-// refusing spent tokens.
+// important: a subject at its limit is refused; its oldest entries are not evicted. Eviction
+// would reopen a remembered failure, so cycling through old cookies could keep the IdP refusing
+// spent tokens.
 function atSubjectLimit(sub: string, now: number): boolean {
   let held = 0;
   for (const entry of entries.values()) if (entry.sub === sub && entry.keepUntil > now) held += 1;
@@ -124,7 +122,8 @@ export async function upgradeSpent(
 /**
  * Start a grant for this refresh token, join the one already running, or take the outcome of one
  * that settled moments ago. `outcome` settles when the IdP answers or the grant's cap runs out.
- * note: wrapped in an object on purpose; awaiting a promise of a promise would wait for the grant.
+ * It is wrapped in an object because awaiting a promise of a promise would wait for the grant.
+ *
  * important: everything after the one await is synchronous, so a grant that settles meanwhile is
  * seen here and never overwritten by a second grant with its spent token.
  */
@@ -160,8 +159,8 @@ export async function grantOnce(
 
   const entry: Entry = { sub, outcome: Promise.resolve({ ok: false }), state: "pending", keepUntil: Infinity, joined: 0 };
   entry.outcome = grant().then(async (outcome): Promise<GrantOutcome> => {
-    // Deliberate and permanent: proves from outside that a burst made exactly one grant, and
-    // which runtime made it. Logs no token material.
+    // Permanent log line: shows from outside that a burst made exactly one grant, and which
+    // runtime made it. Logs no token material.
     console.info(
       `[AUTH] refresh grant runtime=${process.env.NEXT_RUNTIME ?? "nodejs"} ` +
         `shared=${entry.joined + 1} ms=${Date.now() - now} ok=${outcome.ok}`,

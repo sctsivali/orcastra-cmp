@@ -59,11 +59,11 @@ function waitForUploadPoll(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 /**
- * Follow a submitted upload import without ever replaying its finalize request.
+ * Follow a submitted upload import without replaying its finalize request.
  *
- * The caller owns the one finalize attempt. This helper only performs cancellable reads, bounds
- * the total uncertainty window, honours API backpressure, and distinguishes a daemon-reported
- * failure from an outcome that Orcastra could not prove.
+ * The caller owns the one finalize attempt. This only performs cancellable reads, bounds the
+ * total wait, honours a 429's Retry-After, and tells a daemon-reported failure
+ * (UploadTerminalFailure) apart from an outcome it could not confirm (UploadOutcomeUnknown).
  */
 export async function followUploadToTerminal<T extends UploadTerminalState>(
   options: FollowUploadOptions<T>,

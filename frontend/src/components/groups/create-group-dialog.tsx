@@ -84,8 +84,7 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
   const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;
 
   // The list is ordered reachable-first, so the first selectable option is a cluster that can
-  // actually take a group. This used to default to nodes[0] of a list the page had already
-  // filtered down to whatever answered, which hid the rest rather than ranking them.
+  // take a group.
   const defaultNode = useMemo(
     () => nodeOptions.find((o) => !o.disabled)?.value ?? "",
     [nodeOptions],
@@ -97,7 +96,7 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
     node: "",
   });
 
-  // note: reachability arrives after the dialog can open, so the default cannot be a useState
+  // Reachability arrives after the dialog can open, so the default cannot be a useState
   // initialiser. Only ever fills an empty choice, never overwrites the operator's.
   useEffect(() => {
     if (!open || !defaultNode) return;
@@ -115,9 +114,8 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
   const [resourceSearch, setResourceSearch] = useState("");
   const [resourcePage, setResourcePage] = useState(1);
   
-  // Fetch resources based on selected node
-  // Gated on a node: the dialog mounts closed and used to read (and poll) the whole fleet's
-  // instances, images, profiles, networks and pools before the operator had picked anything.
+  // Gated on a node, so the dialog, which mounts closed, reads (and polls) no instances, images,
+  // profiles, networks or pools until a cluster is picked.
   const hasNode = !!formData.node;
   const { data: projectsData, isLoading: loadingProjects } = useProjects(formData.node);
   const { data: instancesData, isLoading: loadingInstances } = useInstances(formData.node, { enabled: hasNode });
@@ -128,7 +126,6 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
   const { data: networksData, isLoading: loadingNetworks } = useNetworks(formData.node, undefined, { enabled: hasNode });
   const { data: poolsData, isLoading: loadingPools } = useStoragePools(formData.node, { enabled: hasNode });
 
-  // Get available resources based on entity type
   const getAvailableResources = (): Resource[] =>
     permissionResources(newPermission.entity_type, {
       projects: projectsData,
@@ -152,9 +149,7 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
   };
 
   const handleEntityTypeChange = (value: string) => {
-    // Get valid entitlements for new entity type
     const validEntitlements = getValidEntitlements(value);
-    // Reset to first valid entitlement
     const defaultEntitlement = validEntitlements[0] || "can_view";
     
     setNewPermission({ 
@@ -173,11 +168,10 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
     );
   };
 
-  // The list under the checkbox is live LXD data: every image pulled or cached on the node, every
-  // instance created on it. It rendered all of them into a 64-unit scroller, so a node with a
-  // cached image catalogue put thousands of checkboxes in the DOM with no way to find one.
+  // The list under the checkbox is live LXD data (every image and instance on the node, possibly
+  // thousands), so it is searched and paged rather than rendered whole.
   //
-  // important: selection is stored by resource name, not by position, so paging and searching
+  // important: selection is stored by resource path, not by position, so paging and searching
   // cannot lose a tick that is off screen. handleAddPermission still reads the full list.
   const availableResources = getAvailableResources();
   const matchingResources = resourceSearch.trim()
@@ -193,7 +187,7 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
   );
 
   // Compared during render rather than in an effect: switching the resource type or the node
-  // replaces the list entirely, and an effect would paint the old page against the new data.
+  // replaces the list entirely, and an effect would paint the previous page against the new data.
   const resourceListKey = `${formData.node}:${newPermission.entity_type}:${resourceSearch}`;
   const [lastResourceListKey, setLastResourceListKey] = useState(resourceListKey);
   if (lastResourceListKey !== resourceListKey) {
@@ -230,8 +224,7 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
       const resources = getAvailableResources();
       // important: keyed by path, not name. Every LXD project carries its own `default`
       // profile, so a bare name matches the first row of that name whatever project it is in,
-      // and the grant lands on the wrong project's resource. The edit dialog already keys by
-      // path; this one was left behind.
+      // and the grant lands on the wrong project's resource.
       selectedResources.forEach(resourcePath => {
         const resource = resources.find(r => r.path === resourcePath);
         if (resource) {
@@ -261,8 +254,8 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
   };
 
   // important: isPending is React state, so it only reaches the button's disabled prop on the
-  // next render. Two clicks inside one tick both pass it and both create a group. Claimed after
-  // the validation returns below, which are synchronous and cheap, so they need no release.
+  // next render. Two clicks inside one tick would both pass it and both create a group. Claimed
+  // after the synchronous validation returns below, so those need no release.
   const submitInFlightRef = useRef(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -305,7 +298,6 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
       });
 
       const created = { node: formData.node, name: formData.name };
-      // Reset form
       setFormData({ name: "", description: "", node: defaultNode });
       setPermissions([]);
       setNewPermission({ entity_type: "project", entitlement: "can_view" });
@@ -335,7 +327,6 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Basic Information */}
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="node">Target Cluster *</Label>
@@ -390,7 +381,6 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
             </div>
           </div>
 
-          {/* Permissions Section */}
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <Label className="text-base font-semibold">Permissions</Label>
@@ -409,7 +399,6 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
               </TooltipProvider>
             </div>
 
-            {/* Existing Permissions */}
             {permissions.length > 0 && (
               <div className="space-y-2 max-h-48 overflow-y-auto border rounded-lg p-3 bg-muted/30">
                 <Label className="text-xs font-semibold text-muted-foreground">
@@ -423,8 +412,8 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
                     <Badge variant="outline" className="text-xs">
                       {permission.entity_type}
                     </Badge>
-                    {/* important: the URL is the identity of the permission being granted, and
-                        it was clipped inside the flow that grants it. */}
+                    {/* The URL identifies what the permission grants, so it is never clipped
+                        without a reveal. */}
                     <span className="min-w-0 flex-1 px-2 text-xs">
                       <OverflowText
                         value={permission.url}
@@ -448,11 +437,9 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
               </div>
             )}
 
-            {/* Add New Permission */}
             <div className="border rounded-lg p-4 space-y-4 bg-card">
               <Label className="text-sm font-semibold">Add Permission</Label>
               
-              {/* Step 1: Resource Type */}
               <div className="space-y-2">
                 <Label className="text-xs text-muted-foreground">1. Select Resource Type</Label>
                 <Select
@@ -474,7 +461,6 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
                 </Select>
               </div>
 
-              {/* Step 2: Select Resources */}
               {newPermission.entity_type !== "server" && (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
@@ -489,7 +475,6 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
                     )}
                   </div>
 
-                  {/* All Resources Checkbox */}
                   <div className="flex items-center gap-2 p-2 bg-muted/50 rounded border">
                     <Checkbox
                       id="all-resources"
@@ -509,7 +494,6 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
                     </Label>
                   </div>
 
-                  {/* Resource List */}
                   {!allResources && (
                     <>
                     <SearchInput
@@ -596,7 +580,6 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
                 </div>
               )}
 
-              {/* Step 3: Permission Level */}
               <div className="space-y-2">
                 <Label className="text-xs text-muted-foreground">
                   {newPermission.entity_type === "server" ? "2" : "3"}. Set Permission Level

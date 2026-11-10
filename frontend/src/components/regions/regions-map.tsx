@@ -23,8 +23,8 @@ const TILE_ERROR_LIMIT = 4;
 
 const WORLD_CENTER: L.LatLngTuple = [15, 20];
 const WORLD_ZOOM = 2;
-// note: one copy of the world, a little past the antimeridian. The bundled outline is drawn
-// once, so panning further sideways only showed empty sea.
+// One copy of the world, a little past the antimeridian. The bundled outline is drawn once, so
+// panning further sideways would only show empty sea.
 const WORLD_BOUNDS = L.latLngBounds([-85, -200], [85, 200]);
 // Fitting never zooms in further than this, so one cluster still shows its surroundings.
 const FIT_MAX_ZOOM = 6;
@@ -42,7 +42,7 @@ function regionTarget(region: RegionSummary, areas: CountryAreas | null): L.LatL
 interface FitToRegionsProps {
   regions: RegionSummary[];
   areas: CountryAreas | null;
-  // false while country outlines are still loading, so the map frames once rather than twice
+  // False while country outlines are still loading, so the map frames once rather than twice.
   areasSettled: boolean;
   fitSignal: number;
   maxZoom: number;
@@ -85,7 +85,7 @@ interface FocusSelectedRegionProps {
   regions: RegionSummary[];
   areas: CountryAreas | null;
   selectedRegion: string | null;
-  // bumped by "View on Map", so asking for the region already selected still moves the map
+  // Bumped by "View on Map", so asking for the region already selected still moves the map.
   focusSignal: number;
   focusZoom: number;
 }
@@ -94,8 +94,8 @@ interface FocusSelectedRegionProps {
  * Flies to the region the operator picked: a whole country framed on its main landmasses, any
  * other region on its point.
  *
- * important: keyed on the selection alone. It used to depend on the regions array, which the
- * overview poll replaces, so every refresh after a selection flew the map back to it.
+ * important: keyed on the selection alone. The overview poll replaces the regions array, so
+ * depending on it would fly the map back to the selection on every refresh.
  */
 function FocusSelectedRegion({ regions, areas, selectedRegion, focusSignal, focusZoom }: FocusSelectedRegionProps) {
   const map = useMap();
@@ -140,11 +140,10 @@ function MarkerClusterLayer({ regions, onSelectRegion }: MarkerClusterLayerProps
       spiderfyOnMaxZoom: true,
       showCoverageOnHover: false,
       chunkedLoading: true,
-      // note: no colour here, and a class of our own rather than markercluster's. It only
-      // attaches .leaflet-cluster-spider-leg on its animated branch, so at rest the legs
-      // carry no class at all and a stylesheet cannot reach them. Leaflet does apply
-      // options.className to the SVG path in every branch, so this one always lands and the
-      // stroke can follow the theme live instead of being frozen at construction.
+      // No colour here, and its own class rather than markercluster's: markercluster attaches
+      // .leaflet-cluster-spider-leg only on its animated branch, so at rest a stylesheet cannot
+      // reach the legs. Leaflet applies options.className to the SVG path in every branch, so
+      // the stroke follows the theme live.
       spiderLegPolylineOptions: {
         weight: 1.5,
         opacity: 0.6,
@@ -154,8 +153,8 @@ function MarkerClusterLayer({ regions, onSelectRegion }: MarkerClusterLayerProps
 
     regions.forEach((region) => {
       const country = isWholeCountry(region);
-      // note: a country's chip joins the same cluster group as the pins, so a bubble still counts
-      // regions and a crowded corner of the map (Singapore beside Batam) merges instead of
+      // A country's chip joins the same cluster group as the pins, so a bubble still counts
+      // regions and a crowded corner of the map (ex; Singapore beside Batam) merges instead of
       // stacking chips. Its shading is drawn outside the group and stays visible either way.
       const marker = L.marker([region.latitude, region.longitude], {
         icon: country ? createCountryChip(region) : getRegionIcon(region),
@@ -218,9 +217,8 @@ interface BasemapLayerProps {
 /**
  * Draws whichever basemap the deployment resolved to.
  *
- * A configured tile endpoint that keeps failing falls back to the bundled outline rather
- * than leaving a grid of broken image icons, which is what the page used to degrade into
- * once the previous hardcoded CDN started refusing anonymous requests.
+ * A configured tile endpoint that keeps failing falls back to the bundled outline rather than
+ * leaving a grid of broken image icons.
  */
 function BasemapLayer({ basemap, onFallback }: BasemapLayerProps) {
   const { resolvedTheme } = useTheme();
@@ -257,10 +255,10 @@ function BasemapLayer({ basemap, onFallback }: BasemapLayerProps) {
 
 export interface RegionsMapProps {
   regions: RegionSummary[];
-  // outlines for the whole-country regions; null until loaded, or when they failed
+  // Outlines for the whole-country regions; null until loaded, or when they failed.
   countryAreas: CountryAreas | null;
   areasSettled: boolean;
-  // bumped by the card's "Fit to clusters" button
+  // Bumped by the card's "Fit to clusters" button.
   fitSignal?: number;
   focusSignal?: number;
   selectedRegion: string | null;
@@ -315,11 +313,11 @@ export default function RegionsMap({
     >
       <MaxZoomSync maxZoom={maxZoom} />
 
-      {/* important: before the basemap, not after. Leaflet only wires an attribution's
-          removal through its `layeradd` handler; layers already present when the control
-          mounts are scanned and added directly, with no cleanup hook (leaflet-src.js, the
-          block its own author marked "TODO ugly, refactor"). Mounting the control second
-          left a failed tile provider credited underneath the basemap that replaced it. */}
+      {/* important: before the basemap. Leaflet wires an attribution's removal only through
+          its `layeradd` handler; layers already present when the control mounts are added
+          directly with no cleanup hook (leaflet-src.js, the block marked "TODO ugly,
+          refactor"). Mounted second, the control would keep crediting a failed tile provider
+          under the basemap that replaced it. */}
       <AttributionControl position="bottomright" prefix={false} />
 
       <BasemapLayer basemap={effectiveBasemap} onFallback={handleFallback} />

@@ -3,7 +3,7 @@ import { idpAccountSettingsUrl } from "@/lib/idp-urls";
 /**
  * The Authentik end-session endpoint of this deployment. The image is built with a placeholder
  * that frontend/entrypoint.sh swaps for NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL at container start, so
- * each install, ours or a partner's, carries its own IdP address without a rebuild.
+ * each install carries its own IdP address without a rebuild.
  */
 export const IDP_LOGOUT_URL = process.env.NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL || "";
 

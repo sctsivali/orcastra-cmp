@@ -45,8 +45,10 @@ import {
 interface NetworkCreateDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Called after a successful create, once the dialog has closed. */
-  /** The network as it landed: the backend can resolve a create to another project. */
+  /**
+   * Called after a successful create, once the dialog has closed, with the network as it
+   * landed: the backend can resolve a create to another project.
+   */
   onSaved?: (created: CreatedNetwork) => void;
 }
 
@@ -58,10 +60,9 @@ export interface CreatedNetwork {
 
 /**
  * Create Network as a dialog on the Networks page, the same shape as Create Network ACL and
- * Upload ISO. The form body is a child of DialogContent on purpose: Radix unmounts it while
- * the dialog is closed, so its node, project and uplink queries (useNetworks is always enabled
- * and polls the fleet) run only while an operator is actually creating a network, and every
- * reopen starts from a blank form.
+ * Upload ISO. The form body is a child of DialogContent, which Radix unmounts while the dialog
+ * is closed, so its node, project and uplink queries (useNetworks polls the fleet) run only
+ * while a network is being created, and every reopen starts from a blank form.
  */
 export function NetworkCreateDialog({ open, onOpenChange, onSaved }: NetworkCreateDialogProps) {
   const [busy, setBusy] = useState(false);
@@ -121,10 +122,8 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
   //
   // important: LXD accepts only a managed bridge or physical network as an OVN uplink, and it
   // resolves the uplink in the DEFAULT project whatever project the OVN network itself lives
-  // in. This list used to be filtered by node alone, so it offered other OVN networks, macvlan
-  // interfaces and the loopback. On one node in this fleet that is 11 unusable candidates out
-  // of 23. Picking one produced a create the daemon rejected, and an instance that never
-  // finished coming up.
+  // in. Any other candidate (another OVN network, macvlan, the loopback) produces a create the
+  // daemon rejects.
   const { data: networksResp } = useNetworks(node || undefined, "default", { enabled: !!node });
   const uplinkOptions = ((networksResp as NetworkListResponse | undefined)?.networks || [])
     .filter((n) => (n.node ? n.node === node : true))
@@ -132,7 +131,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
     .map((n) => ({ value: n.name, label: `${n.name} (${n.type})` }));
 
   // Projects that can hold a network. LXD refuses every type except OVN outside default, so a
-  // bridge create is pinned to default rather than offered a choice it cannot honour.
+  // bridge create is pinned to default instead of offered a choice it cannot honour.
   const { data: projectsResp } = useProjects(node);
   const projectOptions = (() => {
     const seen = new Set<string>(["default"]);
@@ -162,9 +161,9 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
       : "";
 
   // important: `submitting` is React state, so it only reaches `canSubmit` on the next render.
-  // Two clicks inside one tick both pass the disabled check and both fire a create, which is
-  // two networks on the cluster. The ref is claimed synchronously, before any await, so the
-  // second click has something to lose against. Same guard as instance-create-form.tsx.
+  // Two clicks inside one tick both pass the disabled check and would create two networks. The
+  // ref is claimed synchronously, before any await, so the second click loses. Same guard as
+  // instance-create-form.tsx.
   const submitInFlightRef = useRef(false);
 
   const canSubmit =
@@ -195,8 +194,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
       };
       const created = await createNetwork.mutateAsync({ data: payload, host: node, project });
       // A project with features.networks unset does not hold its own networks, so the backend
-      // resolves the create to the project that does. Name where it landed, not what was asked
-      // for, or the toast points the operator at a project the network is not in.
+      // resolves the create to the project that does. The toast names where it landed.
       const landed = (created as { network?: { project?: string } })?.network?.project ?? project;
       toast({
         title: "Network created",
@@ -236,7 +234,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
                   if (next === node) return;
                   setNode(next);
                   // The uplink and the project were read from the previous node; a stale
-                  // uplink from node A used to survive a switch to node B and pass canSubmit.
+                  // uplink would otherwise survive the switch and pass canSubmit.
                   setUplink("");
                   setProject("default");
                   setOptions(defaultNetworkOptions());

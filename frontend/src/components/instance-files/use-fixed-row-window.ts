@@ -7,18 +7,16 @@ const OVERSCAN = 10;
 /**
  * Which rows of a long table are in the DOM.
  *
- * important: fixed height only, which is why this is 40 lines and not a dependency. Pagination was
- * the alternative and it breaks what a file list is for: Shift-selecting a range, arrow keys, and
- * type-ahead all cross page boundaries. `content-visibility` does not apply to a `<tr>`.
- *
- * note: the table owns its scroll container (ui/table.tsx), found from the table element.
+ * Fixed row height only. The list is windowed instead of paginated because Shift-selecting a
+ * range, arrow keys and type-ahead all cross page boundaries; `content-visibility` does not apply
+ * to a `<tr>`. The table owns its scroll container (ui/table.tsx), found from the table element.
  */
 export function useFixedRowWindow(estimatedRowHeight: number, rowCount: number, pinned: number | null) {
   const tableRef = useRef<HTMLTableElement>(null);
   const scrollerRef = useRef<HTMLElement | null>(null);
   const [view, setView] = useState({ top: 0, height: 600 });
   const [measured, setMeasured] = useState<number | null>(null);
-  // Read from a real row: a spacer sized from a guess leaves the scrollbar lying about the end.
+  // Measured from a real row: a spacer sized from a guess misplaces the scrollbar's end.
   const rowHeight = measured ?? estimatedRowHeight;
 
   useEffect(() => {

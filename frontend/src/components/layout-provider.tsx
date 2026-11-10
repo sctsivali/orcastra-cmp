@@ -10,10 +10,9 @@ import {
   type DockTab,
 } from "@/lib/dock-cookie";
 
-// Collapse state lives in a cookie rather than localStorage so app/layout.tsx can read it
-// on the server and the very first paint already has the right sidebar width and content
-// margin. localStorage is unreadable during SSR, which is why the previous implementation
-// always rendered collapsed and then jumped once hydration ran the effect.
+// Collapse state lives in a cookie instead of localStorage so app/layout.tsx can read it on
+// the server and the first paint already has the right sidebar width and content margin.
+// localStorage is unreadable during SSR, so the layout would jump after hydration.
 const SIDEBAR_COOKIE = "orcastra-sidebar-collapsed";
 const LEGACY_STORAGE_KEY = "sidebar-collapsed";
 const ONE_YEAR_SECONDS = 60 * 60 * 24 * 365;
@@ -125,10 +124,9 @@ export function LayoutProvider({
     });
   }, []);
 
-  // One-shot migration from the localStorage key this used to persist to. A user who had
-  // explicitly collapsed or expanded keeps that choice; a user who never touched the toggle
-  // falls through to the new expanded default. Costs one post-hydration flip, once, and
-  // only for profiles that predate the cookie.
+  // One-shot migration from the legacy localStorage key. A stored choice is kept; without
+  // one the expanded default applies. Costs one post-hydration flip, once, for a browser
+  // that has the legacy key but no cookie.
   React.useEffect(() => {
     if (document.cookie.includes(`${SIDEBAR_COOKIE}=`)) return;
     let legacy: string | null = null;

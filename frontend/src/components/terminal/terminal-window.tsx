@@ -1,7 +1,4 @@
-/**
- * Terminal Window - Draggable, resizable terminal popup window.
- * Uses react-rnd for drag and resize functionality.
- */
+/** A draggable, resizable floating terminal window, built on react-rnd. */
 
 "use client";
 
@@ -47,8 +44,8 @@ interface TerminalWindowProps {
 }
 
 export function TerminalWindow({ terminal }: TerminalWindowProps) {
-  // Selectors, not the whole store: another terminal's status or position no longer re-renders
-  // this window (and its xterm).
+  // Per-field selectors, so another terminal's status or position does not re-render this
+  // window (and its xterm).
   const closeTerminal = useTerminalStore((s) => s.closeTerminal);
   const minimizeTerminal = useTerminalStore((s) => s.minimizeTerminal);
   const focusTerminal = useTerminalStore((s) => s.focusTerminal);
@@ -74,18 +71,16 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
   const [scrollOffset, setScrollOffset] = useState({ x: 0, y: 0 });
   const basePositionRef = useRef({ x: terminal.position.x, y: terminal.position.y });
   
-  // Update base position when terminal position changes (from drag/resize/maximize)
   useEffect(() => {
     if (terminal.sticky) {
-      // When pinned, store current position as base
+      // A pinned window records its position as the base.
       basePositionRef.current = { x: terminal.position.x, y: terminal.position.y };
     }
   }, [terminal.position.x, terminal.position.y, terminal.sticky]);
   
-  // Handle scroll for unpinned terminals
+  // An unpinned window follows page scroll; pinning or minimizing resets the offset.
   useEffect(() => {
     if (terminal.sticky || terminal.minimized) {
-      // Reset scroll offset when pinned or minimized
       setScrollOffset({ x: 0, y: 0 });
       return;
     }
@@ -95,7 +90,6 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
     const initialScrollY = window.scrollY;
     
     const handleScroll = () => {
-      // Calculate how much we've scrolled since unpinning
       const deltaX = window.scrollX - initialScrollX;
       const deltaY = window.scrollY - initialScrollY;
       setScrollOffset({ x: -deltaX, y: -deltaY });
@@ -105,27 +99,22 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
     return () => window.removeEventListener('scroll', handleScroll);
   }, [terminal.sticky, terminal.minimized]);
 
-  // Handle window focus
   const handleFocus = useCallback(() => {
     bringToFront(terminal.id);
   }, [terminal.id, bringToFront]);
 
-  // Handle close
   const handleClose = useCallback(() => {
     closeTerminal(terminal.id);
   }, [terminal.id, closeTerminal]);
 
-  // Handle sticky toggle
   const handleToggleSticky = useCallback(() => {
     toggleStickyTerminal(terminal.id);
   }, [terminal.id, toggleStickyTerminal]);
 
-  // Handle minimize
   const handleMinimize = useCallback(() => {
     minimizeTerminal(terminal.id);
   }, [terminal.id, minimizeTerminal]);
 
-  // Handle maximize toggle
   const handleMaximize = useCallback(() => {
     if (terminal.maximized) {
       restoreFromMaximize(terminal.id);
@@ -134,7 +123,6 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
     }
   }, [terminal.id, terminal.maximized, maximizeTerminal, restoreFromMaximize]);
 
-  // Handle expand to new tab
   const handleExpand = useCallback(() => {
     const url = `/terminal/${terminal.id}?instance=${encodeURIComponent(terminal.instanceName)}&host=${encodeURIComponent(terminal.host)}&project=${encodeURIComponent(terminal.project)}`;
     window.open(url, "_blank");
@@ -142,16 +130,14 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
     closeTerminal(terminal.id);
   }, [terminal, closeTerminal]);
 
-  // Handle arrange all terminals in a grid layout
   const handleArrangeAll = useCallback(() => {
     arrangeAllTerminals();
   }, [arrangeAllTerminals]);
 
-  // Handle drag/resize - also clears maximized state
   const handleDragStop = useCallback(
     (_e: any, d: { x: number; y: number }) => {
       updateTerminalPosition(terminal.id, { x: d.x, y: d.y });
-      // Clear maximized state if user drags
+      // Dragging a maximized window restores it.
       if (terminal.maximized) {
         restoreFromMaximize(terminal.id);
       }
@@ -171,14 +157,12 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
     [terminal.id, updateTerminalPosition]
   );
 
-  // Handle search
   const handleSearch = useCallback((direction: 'next' | 'prev' = 'next') => {
     if (terminalInstanceRef.current && searchTerm) {
       terminalInstanceRef.current.search(searchTerm, direction === 'next');
     }
   }, [searchTerm]);
 
-  // Search on Enter key
   const handleSearchKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -188,12 +172,10 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
     }
   }, [handleSearch]);
 
-  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!terminal.focused) return;
 
-      // Ctrl+Shift+F for search
       if (e.ctrlKey && e.shiftKey && e.key === "F") {
         e.preventDefault();
         setShowSearch((s) => !s);
@@ -213,21 +195,18 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
     }
   }, [canUseFiles]);
 
-  // Render terminal window with react-rnd for drag/resize
-  // Calculate actual position (base position + scroll offset for unpinned)
+  // An unpinned window moves with the page: its stored position plus the scroll offset.
   const displayPosition = {
     x: terminal.position.x + scrollOffset.x,
     y: terminal.position.y + scrollOffset.y,
   };
   
-  // When minimized, we still render the component but hide it visually
-  // This keeps the WebSocket connection alive and terminal session running
+  // A minimized window stays mounted and is only hidden, so its WebSocket and session stay alive.
   const isMinimized = terminal.minimized;
   
   return (
     <Rnd
-      // Controlled mode - position/size from props, synced with store
-      // For unpinned terminals, apply scroll offset to simulate scrolling with page
+      // Controlled by the store; an unpinned window adds the scroll offset.
       position={displayPosition}
       size={{ width: terminal.position.width, height: terminal.position.height }}
       // A phone is narrower than 400 px; the store clamps the window to the viewport, so must this.
@@ -238,7 +217,6 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
       onDragStop={handleDragStop}
       onResizeStart={handleFocus}
       onResizeStop={handleResizeStop}
-      // Disable interaction when minimized
       disableDragging={isMinimized}
       enableResizing={isMinimized ? false : {
         top: true,
@@ -252,9 +230,9 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
       }}
       style={{ 
         zIndex: isMinimized ? -1 : 99999 + zIndex,
-        // Always use fixed positioning - sticky controls scroll behavior
+        // Always fixed; `sticky` only decides whether the scroll offset applies.
         position: 'fixed',
-        // Hide visually when minimized but keep mounted for active connection
+        // Hidden while minimized but kept mounted, so the connection stays open.
         visibility: isMinimized ? 'hidden' : 'visible',
         pointerEvents: isMinimized ? 'none' : 'auto',
       }}
@@ -268,9 +246,7 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
         )}
         onClick={handleFocus}
       >
-        {/* Title Bar */}
         <div className="terminal-drag-handle flex items-center justify-between h-10 px-3 bg-terminal-deep border-b border-terminal-border select-none cursor-move">
-          {/* Left: Icon and Title */}
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <TerminalIcon className="h-4 w-4 text-blue-400 shrink-0" />
             <SessionStatusIcon status={terminal.status} />
@@ -282,7 +258,7 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
             </span>
           </div>
 
-          {/* Right: Controls - stopPropagation to prevent triggering parent focus and drag on button click/touch */}
+          {/* A click or touch on the controls must not focus or drag the window. */}
           <div 
             className="flex items-center gap-1 ml-2 touch-manipulation"
             onClick={(e) => e.stopPropagation()}
@@ -291,7 +267,6 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
             onTouchEnd={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
           >
-            {/* Instance Operations (Start/Restart/Stop) */}
             <InstanceOperations
               terminalId={terminal.id}
               instanceName={terminal.instanceName}
@@ -301,7 +276,6 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
             />
 
             <TooltipProvider delayDuration={100}>
-              {/* Arrange All Terminals - only show if more than 1 active terminal */}
               {visibleTerminalCount > 1 && (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -319,7 +293,6 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
                 </Tooltip>
               )}
 
-              {/* Sticky Toggle */}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -344,7 +317,6 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
                 </TooltipContent>
               </Tooltip>
 
-              {/* Search */}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -363,10 +335,8 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
                 <TooltipContent>Search (Ctrl+Shift+F)</TooltipContent>
               </Tooltip>
 
-              {/* Files and logins in the instance */}
               <GuestPanelToggles panel={panel} onPanel={setPanel} access={panelAccess} />
 
-              {/* Expand to new tab */}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -382,7 +352,6 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
                 <TooltipContent>Open in New Tab</TooltipContent>
               </Tooltip>
 
-              {/* Minimize */}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -398,7 +367,6 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
                 <TooltipContent>Minimize</TooltipContent>
               </Tooltip>
 
-              {/* Maximize */}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -418,7 +386,6 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
                 <TooltipContent>{terminal.maximized ? "Restore" : "Maximize"}</TooltipContent>
               </Tooltip>
 
-              {/* Close */}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -437,7 +404,6 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
           </div>
         </div>
 
-        {/* Search Bar (conditional) */}
         {showSearch && (
           <div className="flex items-center gap-2 px-3 py-2 bg-terminal-raised border-b border-terminal-border">
             <Search className="h-4 w-4 text-gray-400" />
@@ -479,7 +445,7 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
           </div>
         )}
 
-        {/* Terminal content, with a guest panel over it when open so xterm keeps its size */}
+        {/* A guest panel draws over the terminal, so xterm keeps its size. */}
         <div className="flex-1 overflow-hidden relative" onDragOver={handleFileDragOver}>
           <TerminalInstance
             ref={terminalInstanceRef}

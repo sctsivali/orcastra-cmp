@@ -9,12 +9,10 @@ import { describeReadError } from "@/lib/read-error";
 
 // A list read that failed, told apart from a list that is empty.
 //
-// important: every list page used to gate on isLoading only, so a read that FAILED rendered
-// the same "No X found" row a filter renders when it matches nothing, with the filter chip
-// still on the toolbar. An operator following a link into a filtered list then read that as
-// "the filter is wrong", cleared it, refreshed, and saw the rows, because the retry happened
-// to succeed. The failure was real and the message blamed the filter. This says what
-// happened and offers the retry, and says nothing about whether the rows exist.
+// important: a failed read must not render the "No X found" row a filter renders when it
+// matches nothing. With a filter chip on the toolbar, an operator would blame the filter for a
+// real failure. This says what happened, offers the retry, and says nothing about whether the
+// rows exist.
 
 interface ReadErrorStateProps {
   /** Plural noun, lowercase, ex; "instances". */

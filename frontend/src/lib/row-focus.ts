@@ -1,13 +1,10 @@
 /**
  * Post-create focus intents.
  *
- * A create hands the operator back to a list. The row they just made then lands wherever the
- * sort and the page size put it, behind whatever filter is active, with nothing pointing at
- * it. This store carries the intent "bring this row into view" across the navigation from a
- * create page and across the dialog close on a list page, and `useRowFocus` consumes it once
- * the list holds the row.
- *
- * Kept outside React, like pending-creates, so it survives `navigate()`.
+ * After a create, the new row lands wherever the sort, page size and active filter put it. This
+ * store carries "bring this row into view" across the navigation from a create page or a dialog
+ * close, and `useRowFocus` consumes it once the list holds the row. Kept outside React, like
+ * pending-creates, so it survives `navigate()`.
  */
 
 export type RowFocusList =
@@ -31,7 +28,7 @@ export interface RowFocusIntent {
   at: number;
 }
 
-/** An intent nobody consumed in this long is about a row the operator has moved on from. */
+/** An intent left unconsumed this long expires: the operator has moved on. */
 export const ROW_FOCUS_TTL_MS = 5 * 60 * 1000;
 /** How long the row stays marked. */
 export const ROW_FOCUS_MARK_MS = 4000;

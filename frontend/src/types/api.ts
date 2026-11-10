@@ -1,17 +1,11 @@
 import type { KernelAdvisoryWarning } from "./kernel-advisory";
 
-/**
- * TypeScript type definitions for the Orcastra CMP API
- */
+/** Request and response types of the Orcastra dashboard API. */
 
-// Enums
 export type VMStatus = "Running" | "Stopped" | "Frozen" | "Error" | "Unknown";
 
-// Resource Usage
-// Every field is named after the LXD key it carries. The two that were not (`cpu_usage` held
-// cumulative nanoseconds while claiming to be a percentage, `memory_limit` held a peak-usage
-// high-water mark every VM reports as 0) are why this card printed raw counters and a zero
-// limit. A live percentage lives on InstanceMetrics, which samples over time.
+// Every field is named after the LXD key it carries. A live CPU percentage lives on
+// InstanceMetrics, which samples over time.
 export interface ResourceUsage {
   /** Cumulative CPU time consumed since the instance started, in nanoseconds. Not a percentage. */
   cpu_time_ns: number | null;
@@ -44,7 +38,7 @@ export type InstanceGuestAgentStatus = "not_applicable" | "connected" | "unreach
 
 export type InstanceRateStatus = "ready" | "calculating" | "unavailable";
 
-// note: every field added after the readiness contract is optional, so a newer frontend still
+// Every field added after the readiness contract is optional, so a newer frontend still
 // renders against an older backend while a deploy rolls through.
 export interface InstanceMetrics {
   instance_name: string;
@@ -89,12 +83,11 @@ export interface InstanceMetrics {
   unavailable_sections: InstanceMetricSection[];
   timestamp: string;
   /** Whether the instance's own config caps it. False: the vCPU and memory figures are the
-   *  host's size, not a limit. Absent or null: not known. */
+   *  host's size. Absent or null: unknown. */
   cpu_limit_set?: boolean | null;
   memory_limit_set?: boolean | null;
 }
 
-// VM Information
 export interface VMInfo {
   name: string;
   status: VMStatus;
@@ -114,17 +107,15 @@ export interface VMInfo {
   resources: ResourceUsage | null;
   config: Record<string, string> | null;
   // Devices set on the instance itself. A root disk sized at create time lands here.
-  // Optional because a client may be talking to a backend older than 1.0.0-RC4, which did not
-  // return either field.
+  // Optional, like expanded_devices: an older backend returns neither.
   devices?: Record<string, Record<string, string>> | null;
-  // Devices after profile expansion: what LXD actually applies. Read the effective root disk
-  // from here, since an instance that overrides nothing still has one.
+  // Devices after profile expansion: what LXD applies. Read the effective root disk from
+  // here, since an instance that overrides nothing still has one.
   expanded_devices?: Record<string, Record<string, string>> | null;
   profiles: string[];
   tags: string[];
 }
 
-// VM List Response
 export interface VMListResponse {
   total: number;
   vms: VMInfo[];
@@ -198,7 +189,6 @@ export interface InstanceSpecificationsResponse {
   collected_at: string;
 }
 
-// VM Create Request
 export interface VMCreateRequest {
   name: string;
   description?: string;
@@ -216,9 +206,9 @@ export interface VMCreateRequest {
 }
 
 // Body for the dashboard's POST /instances. Mirrors the backend's
-// InstanceCreateRequest: same as VMCreateRequest but with a blank-VM source, so
-// `image` is omitted when source_type is "none" (an empty root disk, no OS).
-// VMCreateRequest stays as-is for Orcahub's POST /vms, where image is required.
+// InstanceCreateRequest: VMCreateRequest plus a blank-VM source, so `image` is
+// omitted when source_type is "none" (an empty root disk, no OS).
+// VMCreateRequest is the body of OrcaHub's POST /vms, where image is required.
 export interface InstanceCreateRequest extends Omit<VMCreateRequest, "image"> {
   image?: string;
   source_type?: "image" | "none";
@@ -278,7 +268,7 @@ export interface RemoteImageInfo {
   architecture: string;
   type: string; // "container" | "virtual-machine"
   alias: string;
-  source: string; // e.g. "Custom", "Ubuntu"
+  source: string; // ex; "Custom", "Ubuntu"
   server: string;
   fingerprint: string;
 }
@@ -288,7 +278,6 @@ export interface RemoteImageListResponse {
   total: number;
 }
 
-// VM Create Response
 export interface VMCreateResponse {
   success: boolean;
   message: string;
@@ -418,7 +407,6 @@ export interface InstanceSpecificationUpdateRequest
   acknowledgements?: string[];
 }
 
-// VM Action Request
 export interface VMActionRequest {
   host: string;
   project?: string;
@@ -426,7 +414,6 @@ export interface VMActionRequest {
   timeout?: number;
 }
 
-// VM Action Response
 export interface VMActionResponse {
   success: boolean;
   message: string;
@@ -435,7 +422,6 @@ export interface VMActionResponse {
   new_status: VMStatus | null;
 }
 
-// Image Information
 export interface ImageInfo {
   fingerprint: string;
   aliases: string[];
@@ -458,11 +444,10 @@ export interface ImageInfo {
    * store and is named here; a project that shares the host's store reads `default`.
    */
   project: string;
-  /** Present on the flattened per-host rows the images page builds, not on the API model. */
+  /** Set on the flattened per-host rows the images page builds; the API does not send it. */
   node?: string;
 }
 
-// Image List Response
 export interface ImageListResponse {
   host: string;
   images: ImageInfo[];
@@ -502,9 +487,8 @@ export interface GPUDRMInfo {
 
 // NVIDIA-specific GPU Information
 export interface GPUNvidiaInfo {
-  // note: `uuid` is deliberately absent. It is a per-device serial and the backend excludes it
-  // from the response, because NodeResources rides the ungated /nodes body that Technologies
-  // reads. It still exists server-side, where the card matcher uses it as a key.
+  // `uuid` is omitted: it is a per-device serial, and NodeResources rides the ungated /nodes
+  // body that Technologies reads. The backend keeps it as the card matcher's key.
   cuda_version?: string;
   nvrm_version?: string;
   brand?: string;
@@ -555,7 +539,7 @@ export interface GPUCardInfo {
   in_use: boolean;
   used_by?: string;
   
-  // Classification + enrichment (compute vs display, device model, unified memory) - backend-set.
+  // Classification and enrichment (compute or display, model, unified memory), set by the backend.
   gpu_class?: "compute" | "integrated" | "display" | "unknown";
   is_compute?: boolean;
   /** Shares system RAM. Orthogonal to gpu_class: a Jetson iGPU is compute and integrated. */
@@ -573,11 +557,10 @@ export interface GPUCardInfo {
   mdev_profiles: GPUMdevProfile[];
 }
 
-// Node Resources
 // ==================== Detected Hardware ====================
-// Mirrors backend/app/models/schemas.py. Every field here survived an allowlist: asset
-// identifiers (system UUID and serial, chassis and motherboard serials, disk serial and WWN,
-// NIC MAC) are dropped in the backend and have no field on either side.
+// Mirrors backend/app/models/schemas.py. Asset identifiers (system UUID and serial, chassis
+// and motherboard serials, disk serial and WWN, NIC MAC) are dropped in the backend and have
+// no field on either side.
 
 export interface FirmwareInfo {
   vendor?: string | null;
@@ -679,7 +662,7 @@ export interface StorageDeviceInfo {
   read_only?: boolean | null;
   firmware_version?: string | null;
   block_size?: number | null;
-  /** 0 means solid state. The node reports rpm, not a boolean. */
+  /** 0 means solid state. */
   rpm?: number | null;
   partitions: number;
   member?: string | null;
@@ -731,7 +714,7 @@ export interface NodeResources {
   storage_used: number;
   storage_available: number;
   /** Every member's every pool added up. Equal to storage_total on a standalone host, higher
-   * on a cluster with shared storage. Kept so no view loses the number it used to show. */
+   * on a cluster with shared storage. */
   storage_raw_total?: number;
   storage_raw_used?: number;
   storage_pools: Array<{
@@ -746,19 +729,18 @@ export interface NodeResources {
     space_used: number;
     space_available: number;
   }>;
-  /** At least one part of the read did not come back, so the numbers are floors. A clustered
-   * host reporting zero storage used to be indistinguishable from one with no storage. */
+  /** At least one part of the read did not come back, so the numbers are floors. */
   degraded?: boolean;
   /** Which parts were lost: 'storage', 'storage:<pool>'. */
   degraded_parts?: string[];
   /** Detected hardware. Absent when the node did not answer, which is not the same as empty. */
   hardware?: HardwareProfile | null;
-  /** When this sample was read off the cluster. Absent means unknown, which must never
-   * be rendered as "now": a body cached before this field existed carries no stamp. */
+  /** When this sample was read off the cluster. Absent means unknown; never render it as
+   * "now", since an older cached body carries no stamp. */
   collected_at?: string | null;
 }
 
-// LXD Node Environment Information (from LXD API)
+/** The LXD server environment block, filtered by the backend. */
 export interface NodeEnvironment {
   // Architecture
   architectures?: string[];
@@ -783,9 +765,9 @@ export interface NodeEnvironment {
   // Other
   firewall?: string;
   project?: string;
-  // note: these are all served and none was typed, so every read site cast. server_pid,
-  // addresses, certificate and certificate_fingerprint are deliberately absent: the backend
-  // allowlist drops them before the response leaves.
+  // The backend allowlist (PUBLIC_ENVIRONMENT_KEYS in services/lxd/resources.py) drops
+  // addresses, certificate, certificate_fingerprint and server_pid, so server_pid above is
+  // never set.
   instance_types?: string[];
   storage_supported_drivers?: Array<{ Name?: string; Version?: string; Remote?: boolean }>;
   /** Values are the STRINGS "true" and "false". Boolean("false") is true, so compare. */
@@ -839,7 +821,6 @@ export interface HypervisorRelease {
   security_fixed_in?: string | null;
 }
 
-// Node Status
 export interface NodeStatus {
   name: string;
   endpoint: string;
@@ -857,14 +838,13 @@ export interface NodeStatus {
   resources: NodeResources | null;
   tags: string[];
   display_name?: string | null;
-  /** Whether the host answered our probe. connected=false with reachable=true means it
-   *  answered and refused our certificate; reachable=false means it never answered. */
+  /** Whether the host answered the probe. connected=false with reachable=true means it
+   *  answered and refused the dashboard's certificate; reachable=false means it never answered. */
   reachable?: boolean | null;
   /** Server-derived status, so no client re-derives it from booleans. */
   status?: ClusterStatus;
 }
 
-// Nodes Status Response
 export interface NodesStatusResponse {
   nodes: NodeStatus[];
   all_connected: boolean;
@@ -873,7 +853,6 @@ export interface NodesStatusResponse {
   collected_at?: string | null;
 }
 
-// Project Information
 export interface ProjectInfo {
   name: string;
   description: string | null;
@@ -907,7 +886,6 @@ export interface ProjectUsageResponse {
   collected_at: string;
 }
 
-// Project List Response
 export interface ProjectListResponse {
   host: string;
   projects: ProjectInfo[];
@@ -918,7 +896,6 @@ export interface ProjectListResponse {
   error?: string | null;
 }
 
-// Project Create Request
 export interface ProjectCreateRequest {
   name: string;
   host: string;
@@ -929,21 +906,18 @@ export interface ProjectCreateRequest {
   max_storage?: string;
 }
 
-// Project Create Response
 export interface ProjectCreateResponse {
   success: boolean;
   message: string;
   project: ProjectInfo | null;
 }
 
-// Error Response
 export interface ErrorResponse {
   error: string;
   detail: string | null;
   code: string | null;
 }
 
-// API Error
 export class APIError extends Error {
   /** Seconds the server asked the client to wait (from Retry-After), set on a 429 or 503. */
   public retryAfter?: number;
@@ -1074,7 +1048,7 @@ export interface NetworkInfo {
   config: Record<string, string>;
   used_by: string[];
   status: string;
-  /** Set per row by the fan-out. The backend has always sent it; this type had not. */
+  /** Set per row by the fan-out. */
   node?: string;
   /** The LXD project that holds this record. Not the projects that consume it: see used_by. */
   project?: string;
@@ -1190,7 +1164,7 @@ export interface StorageVolumeCreateRequest {
   content_type?: string;
 }
 
-// Operation Types
+// Warning Types
 export interface WarningInfo {
   uuid: string;
   location: string;
@@ -1461,7 +1435,7 @@ export interface ClusterAuthCheckResponse {
   status: ClusterStatus;
   message: string;
   server_info?: Record<string, any>;
-  cluster_type?: string;  // Auto-detected: "LXD", "MicroCloud", or "Incus" - updated post-auth
+  cluster_type?: string;  // Auto-detected after authentication: "LXD", "MicroCloud", or "Incus"
   clustered?: boolean | null;  // Read from the authenticated payload; null when not determined
 }
 
@@ -1481,7 +1455,7 @@ export enum AvailabilityReason {
   UNKNOWN = "unknown",
 }
 
-/** One row for a cluster picker. Carries no hardware detail by design. */
+/** One row for a cluster picker. Carries no hardware detail. */
 export interface ClusterAvailability {
   /** Cluster id. The exact value a create request sends as its node. */
   name: string;
@@ -1513,10 +1487,9 @@ export interface ClusterDeleteResponse {
   trust_cleanup_complete?: boolean;
 }
 
-// Version Information
 export interface VersionInfo {
   app_version: string;
-  /** The API contract version, not the build. Always sent; the backend types it as a required str. */
+  /** The API contract version; app_version is the build. Always sent. */
   api_version: string;
   build_date?: string | null;
   build_commit?: string | null;
@@ -1530,10 +1503,8 @@ export interface SystemSettings {
   /**
    * Whether this deployment mounted the snapshot schedule routes.
    *
-   * important: a capability of the deployment, not a user preference. Optional on the type
-   * because a console can be newer than the backend it is talking to during a rolling deploy,
-   * and `undefined` there must read as "not stated" rather than as "off": a control is only
-   * disabled on an explicit `false`.
+   * important: optional because a console can be newer than its backend during a rolling
+   * deploy. `undefined` means "not stated"; disable a control only on an explicit `false`.
    */
   snapshot_schedules_enabled?: boolean;
   instance_files_enabled?: boolean;
@@ -1703,12 +1674,12 @@ export interface SystemOverview {
 // ========== Monitoring Dashboard Types ==========
 
 export interface ClusterMonitoringMetrics {
-  // note: the host figures below are null for a Tenant (owner decision 2026-10-26).
+  // The host figures below are null for a Tenant.
   node_name: string;
   node_type: string | null;
   is_online: boolean;
-  cluster_status?: string; // online, pending_trust, offline, error
-  status_message?: string; // Status message for troubleshooting
+  cluster_status?: string; // a ClusterStatus value
+  status_message?: string;
   /** This collection ran out of time on the Cluster; its figures are partial until the next one. */
   collection_timed_out?: boolean;
   cpu_total: number | null;
@@ -1765,14 +1736,14 @@ export interface InstanceMonitoringSummary {
   network_rx_bytes_per_sec?: number | null;
   network_tx_bytes_per_sec?: number | null;
   /** Whether the instance's own config caps it. False: the vCPU and memory figures are the
-   *  host's size, not a limit. Absent or null: not known. */
+   *  host's size. Absent or null: unknown. */
   cpu_limit_set?: boolean | null;
   memory_limit_set?: boolean | null;
 }
 
 export interface StoragePoolMetrics {
   name: string;
-  /** The registered cluster this pool was read through, not the machine holding the disk. */
+  /** The registered cluster this pool was read through; the disk may sit on another member. */
   node: string;
   /** Cluster members this row covers. A standalone host lists itself as its one member. */
   members?: string[];
@@ -1822,7 +1793,7 @@ export interface MetricsHistoryPoint {
 }
 
 export interface MonitoringDashboardResponse {
-  // note: the host figures below are null for a Tenant (owner decision 2026-10-26).
+  // The host figures below are null for a Tenant.
   timestamp: string;
   
   // Cluster Overview
@@ -2056,9 +2027,9 @@ export interface OSInfo {
   uptime_seconds: number;
 }
 
-// note: `cpu`, `memory`, `disks`, `process` and `os` predate the split into scopes and mix them
-// (cgroup counts and limits beside host-wide percent, load and uptime). They stay for older
-// clients; new consumers read `host` and `container`.
+// `cpu`, `memory`, `disks`, `process` and `os` mix scopes (cgroup counts and limits beside
+// host-wide percent, load and uptime) and stay for older clients; new consumers read `host`
+// and `container`.
 export interface SystemResourceUsage {
   timestamp: string;
   container: ContainerInfo | null;
@@ -2236,7 +2207,7 @@ export interface SystemWarningsResponse {
 }
 
 // ============================================
-// External Integrations (Orcahub)
+// External Integrations (OrcaHub)
 // ============================================
 
 export interface ClusterPermission {
@@ -2268,14 +2239,13 @@ export interface APIKeyInfo {
   name: string;
   app_name: string;
   app_type: string;
-  // null marks a key issued before capabilities existed. It keeps unrestricted access to the
-  // external router, which is why the UI flags it rather than rendering it as "no access".
+  // null marks a legacy key issued before capabilities existed. It keeps unrestricted access
+  // to the external router, so the UI flags it instead of showing "no access".
   capabilities?: string[] | null;
   created_at: string;
   expires_at?: string | null;
-  // note: both derived server-side from expires_at on every read, never stored. `is_expired` is
-  // what a client branches on; `expiry_state` is what the card renders, and it carries the
-  // "expiring" case the UI had no way to compute.
+  // Both derived server-side from expires_at on every read, never stored. `is_expired` is
+  // what a client branches on; `expiry_state` is what the card renders, including "expiring".
   is_expired?: boolean;
   expiry_state?: "never" | "active" | "expiring" | "expired";
   is_active: boolean;
@@ -2361,15 +2331,13 @@ export interface APIKeyValidateResponse {
 export interface CapabilityOption {
   name: string;
   description: string;
-  // Needs a deliberate decision rather than an application-type default. The picker marks these
-  // instead of listing all capabilities as equivalent ticks.
+  // Needs an explicit decision rather than an application-type default; the picker marks these.
   elevated: boolean;
-  // note: the reason comes from the server because there is more than one. Some elevated
-  // capabilities write access control; others reach inside a guest. A single hardcoded label
-  // was wrong for half of them.
+  // Sent by the server because the reasons differ: some elevated capabilities write access
+  // control, others reach inside a guest.
   elevated_reason?: string | null;
-  // Never seeded by an application type and never inherited by a key issued before capabilities
-  // existed, so the form says so rather than letting a tick look routine.
+  // Never seeded by an application type and never inherited by a legacy key, so the form
+  // calls it out.
   never_inherited?: boolean;
 }
 
@@ -2393,9 +2361,7 @@ export interface APIKeyListResponse {
   total: number;
   active: number;
   revoked: number;
-  // note: expired keys used to be counted in `active`. Without this the three tiles stopped
-  // adding up: on a fleet with six lapsed keys the Active figure simply dropped by six with
-  // nowhere for them to go, which reads as keys having been deleted.
+  // Expired keys are counted here, never in `active`.
   expired?: number;
   keys: APIKeyInfo[];
 }
@@ -2417,8 +2383,8 @@ export interface AvailableCluster {
   /**
    * Connection status, or absent when reachability could not be established.
    *
-   * important: absent is not offline. A picker renders it as no marking at all rather than
-   * painting the fleet dead because one probe was slow.
+   * Absent does not mean offline. A picker shows no marking for it, so one slow probe does not
+   * paint the fleet dead.
    */
   status?: ClusterStatus | null;
   reason_code?: AvailabilityReason | null;
@@ -2433,7 +2399,7 @@ export interface AvailableClustersResponse {
 }
 
 // ============================================
-// Tag System Types (Enterprise-Grade)
+// Tag System Types
 // ============================================
 
 export interface TagCategory {
@@ -2588,7 +2554,6 @@ export const TAG_CATEGORY_PREFIXES: Record<string, { name: string; color: string
   "cost_": { name: "Cost Center", color: "#84cc16", icon: "wallet" },
 };
 
-// Helper function to classify a tag
 export function classifyTag(tag: string): { prefix: string; value: string; category: string } {
   const knownPrefixes = ["loc_", "reg_", "vend_", "own_", "env_", "app_", "sla_", "cost_"];
   
@@ -2606,7 +2571,6 @@ export function classifyTag(tag: string): { prefix: string; value: string; categ
   return { prefix: "", value: tag, category: "Other" };
 }
 
-// Helper function to get tag display name
 export function getTagDisplayName(tag: string): string {
   const { value } = classifyTag(tag);
   return value.replace(/-/g, " ").replace(/_/g, " ").split(" ")
@@ -2614,7 +2578,6 @@ export function getTagDisplayName(tag: string): string {
     .join(" ");
 }
 
-// Helper function to get tag color
 export function getTagColor(tag: string): string {
   const { prefix } = classifyTag(tag);
   if (prefix && TAG_CATEGORY_PREFIXES[prefix]) {
@@ -2623,7 +2586,6 @@ export function getTagColor(tag: string): string {
   return "#6b7280"; // Gray for uncategorized
 }
 
-// Helper function to group tags
 export function groupTags(tags: string[]): TagGrouped {
   const grouped: TagGrouped = {
     location: [],
@@ -2676,7 +2638,7 @@ export interface GeoLocation {
   continent: string;
   facility_name?: string;
   facility_provider?: string;
-  // set for an Indonesian kabupaten or kota; region_name is the short form ("Bogor (Regency)")
+  // Set for an Indonesian kabupaten or kota; region_name is the short form ("Bogor (Regency)")
   province?: string;
   admin_code?: string;
   official_name?: string;
@@ -2693,7 +2655,7 @@ export interface ExtendedHardwareInfo {
   cpu_sockets: number;
   cpu_architecture: string;
   cpu_vendor?: string;  // Intel, AMD, Apple, ARM
-  cpu_model?: string;   // e.g., "Intel Xeon Gold 6248"
+  cpu_model?: string;   // ex; "Intel Xeon Gold 6248"
   
   // Memory
   memory_total: number;
@@ -2711,8 +2673,8 @@ export interface ExtendedHardwareInfo {
   // Storage
   storage_total: number;
   storage_used: number;
-  storage_types: string[];  // e.g., ["NVMe", "SATA", "SSD"]
-  storage_drivers: string[];  // e.g., ["zfs", "btrfs", "ceph"]
+  storage_types: string[];  // ex; ["NVMe", "SATA", "SSD"]
+  storage_drivers: string[];  // ex; ["zfs", "btrfs", "ceph"]
   
   // Network
   network_interfaces?: string[];
@@ -2778,12 +2740,9 @@ export interface ClusterLocationUpdateResponse {
 // ── Organization types ──
 
 export interface Organization {
-  // important: a number on the wire. OrgResponse.id is an int, and this said `string` for as
-  // long as the type has existed, which is not a cosmetic lie: it let
-  // components/org-personalization-settings.tsx hold the raw value in a `string` state and hand
-  // it to a Radix Select, where it never matched the `String(id)` on any SelectItem, so the
-  // picker rendered its placeholder while an organization was in fact selected. Coerce with
-  // String() at any UI boundary that compares by value.
+  // important: a number on the wire (OrgResponse.id is an int). Coerce with String() at any UI
+  // boundary that compares by value: a Radix Select whose items carry `String(id)` never
+  // matches the raw number and shows its placeholder.
   id: number;
   name: string;
   slug: string;
@@ -2799,7 +2758,6 @@ export interface Organization {
   is_member: boolean;
 }
 
-/** Organization synced from external app (OrcaHub) */
 export type OwnerKeyState =
   | "active"
   | "expiring"
@@ -2810,6 +2768,7 @@ export type OwnerKeyState =
   | "unknown"
   | "unclaimed";
 
+/** An organization synced from an external app (OrcaHub). */
 export interface IntegrationOrganization {
   id: number;
   name: string;
@@ -3106,8 +3065,8 @@ export interface ExtensionSettingField {
 /**
  * One requested capability, with the server's own reason for marking it.
  *
- * `elevated_reason` is nullable and differs per capability: "Writes access control" is true of
- * two of them and false of the rest, which is why a single hardcoded label was wrong.
+ * `elevated_reason` is nullable and differs per capability, so the UI shows the server's text
+ * instead of one fixed label.
  */
 export interface ExtensionCapabilityInfo {
   name: string;
@@ -3126,9 +3085,8 @@ export interface ExtensionVocabulary {
 /**
  * A manifest as an author submits it.
  *
- * Mirrors the server's `ExtensionManifest`. Deliberately not a partial: publishing a new version
- * sends the whole document, because a patch would leave an operator approving a diff rather than
- * the thing being asked for.
+ * Mirrors the server's `ExtensionManifest`. Not a partial: publishing a new version sends the
+ * whole document, so an operator approves the full request rather than a diff.
  */
 export interface ExtensionManifestInput {
   slug: string;
@@ -3179,7 +3137,6 @@ export interface ExtensionDetail {
   updated_at: string;
 }
 
-/** The consent screen's source of truth. Every field here was computed by the server. */
 /** An organization whose add-ons the caller may install and manage (GET /extensions/manageable-organizations). */
 export interface ManageableOrganization {
   id: number;
@@ -3187,12 +3144,13 @@ export interface ManageableOrganization {
   slug: string;
 }
 
+/** The consent screen's source of truth. Every field here was computed by the server. */
 export interface ExtensionInstallPreview {
   extension: ExtensionDetail;
   organization_id: number;
   organization_slug: string;
   capabilities: ExtensionCapabilityInfo[];
-  /** The intersection. Never recomputed in the browser. */
+  /** Asked for and inside the installer's own scope. Never recomputed in the browser. */
   grantable_cluster_ids: string[];
   /** Asked for and outside the installer's own scope, so the screen can say so. */
   refused_cluster_ids: string[];
@@ -3221,7 +3179,7 @@ export interface ExtensionInstall {
   extension_id: number;
   extension_slug: string;
   extension_name: string;
-  /** The version THIS installation consented to, not what the add-on has published since. */
+  /** The version this installation consented to; see available_version for anything newer. */
   extension_version: string;
   /** Set only when the add-on has moved on, so the gap is visible to whoever must approve it. */
   available_version?: string | null;
@@ -3229,9 +3187,8 @@ export interface ExtensionInstall {
   organization_slug?: string | null;
   status: ExtensionInstallStatus;
   /**
-   * note: `null` on an APIKeyInfo means a pre-capability key, which grants everything. An
-   * installation can never produce one, but the type keeps the null so the UI renders honestly
-   * rather than silently if the backend ever hands one back.
+   * Always a list. `null` on an APIKeyInfo means a legacy key that grants everything; an
+   * installation never produces one.
    */
   granted_capabilities: string[];
   granted_scope: ClusterPermission[];
@@ -3322,12 +3279,9 @@ export interface WebhookDelivery {
 }
 
 /**
- * One page of the delivery log, with the two totals that answer different questions.
- *
- * `total` matches the state filter in force, because that is what the pager divides by. `counts` is
- * the breakdown over every delivery on the installation and ignores the filter, because the health
- * panel reports how much has failed altogether. Reducing over the rows in hand answered neither
- * once the list was capped at fifty.
+ * One page of the delivery log. `total` matches the state filter in force (what the pager divides
+ * by); `counts` covers every delivery on the installation and ignores the filter, for the health
+ * panel. Neither can be computed from one capped page.
  */
 export interface WebhookDeliveryPage {
   deliveries: WebhookDelivery[];
@@ -3340,10 +3294,9 @@ export interface WebhookDeliveryPage {
 
 // Whether an organization permits an AI agent to see and drive its guests' desktops.
 //
-// Four switches, not one. Screen capture, keyboard and pointer, the clipboard, and guest access
-// are separate disclosures: the clipboard is the highest-yield exfiltration primitive on the
-// surface, and guest access is root inside the container. The last two used to ride on `enabled`,
-// so an organization that agreed to screenshots was silently agreeing to both.
+// Screen capture (`enabled`), keyboard and pointer, the clipboard and guest access are separate
+// consents: the clipboard is the easiest exfiltration path on this surface, and guest access is
+// root inside the container.
 export interface DesktopControlPolicy {
   organization_id: number;
   enabled: boolean;
@@ -3360,9 +3313,9 @@ export interface DesktopControlPolicyRequest {
 }
 
 // ========== Snapshot Types ==========
-// Operator snapshots, distinct from the metered snapshot product sold upstream. Anything this
-// console creates is prefixed `ops-` and carries an expiry, which is what `operator_managed`
-// reports back so the UI can tell the two apart without re-deriving the rule.
+// Operator snapshots, distinct from the snapshots an upstream product meters. Anything this
+// console creates is prefixed `ops-` and carries an expiry; `operator_managed` reports that,
+// so the UI does not re-derive the rule.
 
 export interface SnapshotInfo {
   name: string;
@@ -3371,7 +3324,7 @@ export interface SnapshotInfo {
   created_at?: string | null;
   /** RFC3339. Null means the snapshot never expires, which only upstream-managed ones do. */
   expires_at?: string | null;
-  /** Guest memory captured. Needs CRIU on the host and is false across this fleet. */
+  /** Guest memory captured. Needs CRIU on the host. */
   stateful?: boolean | null;
   /** Bytes. Driver-dependent: a dir pool reports the full copy, zfs reports the delta. */
   size?: number | null;
@@ -3397,24 +3350,22 @@ export interface SnapshotInfo {
   project?: string;
   source_status?: string | null;
   /**
-   * Whether the SOURCE instance carries an upstream snapshot schedule. Fleet listing only, where
-   * it is the one fact the billing gate acts on: without it the row actions cannot offer the
-   * acknowledgement the backend requires, and every delete or restore from that page is refused.
+   * Whether the SOURCE instance carries an upstream snapshot schedule. Fleet listing only: the
+   * row actions need it to offer the billing acknowledgement the backend requires before a
+   * delete or restore.
    */
   source_externally_managed?: boolean;
   source_schedule?: string | null;
   source_expiry?: string | null;
 }
 
-/** The LXD-native schedule on a source. Read only here: it belongs to the upstream product. */
 export type ScheduleFrequency = "every_6_hours" | "every_12_hours" | "daily" | "weekly";
 
 /**
  * A recurring snapshot this console owns.
  *
- * note: `state` is the stored active/paused only. A failing schedule is still active, and the
- * console derives that third label from `consecutive_failures` rather than the API inventing a
- * state the database does not have.
+ * `state` is the stored active/paused only. A failing schedule is still active; the console
+ * derives that label from `consecutive_failures`.
  */
 export interface SnapshotSchedule {
   id: number;
@@ -3474,12 +3425,13 @@ export type SnapshotScheduleUpdateRequest = Partial<
   >
 >;
 
+/** The LXD-native schedule on a source. Read only here: it belongs to the upstream product. */
 export interface SnapshotPolicy {
   schedule?: string | null;
   schedule_stopped?: string | null;
   expiry?: string | null;
   pattern?: string | null;
-  /** A timer other than this operator is creating snapshots on this source. */
+  /** A timer other than this console creates snapshots on this source. */
   externally_managed: boolean;
 }
 
@@ -3489,7 +3441,7 @@ export interface SnapshotListResponse {
   policy: SnapshotPolicy;
 }
 
-/** How much of a read the caller is actually looking at. */
+/** How many snapshot sizes a fleet read obtained (see `size_measurement`). */
 export type SizeMeasurement = "measured" | "partial" | "skipped";
 
 export interface FleetSnapshotListResponse {
@@ -3497,7 +3449,7 @@ export interface FleetSnapshotListResponse {
   items: SnapshotInfo[];
   /** Clusters in scope that could not be read. Distinguishes an empty fleet from an unread one. */
   unreachable_nodes: string[];
-  /** Clusters that answered. Zero of these with rows expected is an outage, not an empty fleet. */
+  /** Clusters that answered. None answering while rows are expected means an outage. */
   queried_nodes?: string[];
   /** Answered, but not for every project they hold. Their rows ARE present, unlike unreachable. */
   partial_nodes?: string[];

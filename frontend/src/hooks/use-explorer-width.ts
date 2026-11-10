@@ -12,7 +12,7 @@ function modeOf(width: number): ExplorerWidth {
 /**
  * The explorer's own width. A viewport breakpoint means nothing inside a floating console window.
  *
- * note: a hidden tab measures 0, and laying out for 0 would throw away the columns a person just
+ * A hidden tab measures 0, and laying out for 0 would throw away the columns a person just
  * chose to see, so a zero reading is ignored.
  */
 export function useExplorerWidth<T extends HTMLElement>() {

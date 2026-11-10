@@ -34,12 +34,11 @@ const EMPTY_MODES: { id: EmptyMode; label: string }[] = [
 /**
  * Min and max bounds for a numeric column.
  *
- * note: Popover without cmdk. There is no option list to filter, and Command intercepts arrow
- * keys and typed characters, which fights a numeric input. cmdk is for lists; this is a form.
+ * A Popover without cmdk: there is no option list to filter, and Command intercepts arrow keys
+ * and typed characters, which fights a numeric input.
  *
  * important: the bounds are never pre-filled from the data. A pre-filled range is an active
- * filter nobody asked for, it would make every page load look filtered, and it would break the
- * assertion that a clean page carries no chips.
+ * filter the operator did not ask for, and it would make every page load look filtered.
  */
 export function RangeFilter({
   label,
@@ -76,8 +75,8 @@ export function RangeFilter({
   const commit = () => {
     let min = parse(minDraft);
     let max = parse(maxDraft);
-    // A reversed range is swapped, not rejected. An unremovable validation error inside a
-    // popover is worse than a range that means what the numbers say.
+    // A reversed range is swapped: an unremovable validation error inside a popover is worse
+    // than a range that means what the numbers say.
     if (min !== null && max !== null && min > max) [min, max] = [max, min];
     if (min !== value.min || max !== value.max) onChange({ ...value, min, max });
   };

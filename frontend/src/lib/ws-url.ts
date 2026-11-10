@@ -39,7 +39,7 @@ export const ACCESS_REVOKED_MESSAGE = SOCKET_MESSAGES.accessRevoked;
 /**
  * Derive WebSocket protocol + host from NEXT_PUBLIC_API_URL.
  *
- *   "https://api.orcastra.io"   -> { protocol: "wss:", host: "api.orcastra.io" }
+ *   "https://api.example.com"   -> { protocol: "wss:", host: "api.example.com" }
  *   "http://192.168.1.5:4050"   -> { protocol: "ws:",  host: "192.168.1.5:4050" }
  *   (unset / "")                -> { protocol: "ws:",  host: "<page host>:4050" }
  */

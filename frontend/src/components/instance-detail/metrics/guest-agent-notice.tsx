@@ -5,8 +5,9 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import type { InstanceGuestAgentStatus } from "@/types/api";
 
 /**
- * Why a running virtual machine has no CPU, memory or process figures. Without lxd-agent the
- * cluster can only see the VM from the host side, so network and disk keep updating.
+ * Why a running virtual machine has no CPU, memory or process figures. Without the guest
+ * agent (lxd-agent or incus-agent) the cluster sees the VM only from the host side, so
+ * network and disk keep updating.
  */
 export function GuestAgentNotice({ status }: { status: InstanceGuestAgentStatus | undefined }) {
   if (status !== "unreachable" && status !== "disabled") return null;

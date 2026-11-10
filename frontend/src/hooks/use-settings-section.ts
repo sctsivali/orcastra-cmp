@@ -11,11 +11,11 @@ export const SECTION_PARAM = "section";
  * The section of a settings tab, read from `?section=` and written back with a history entry.
  *
  * important: a query parameter, not a nested path. The middleware answers 404 for any
- * /settings/<tab>/<more> (documentation/ui/settings-navigation-and-cache.md), and the default
- * section carries no parameter, so /settings/integrations stays the canonical URL.
+ * /settings/<tab>/<more>, and the default section carries no parameter, so
+ * /settings/integrations stays the canonical URL.
  *
- * note: an unknown or repeated value falls back to the default rather than being echoed, and the
- * URL is never rewritten on mount. A mount-time write would land before Next's history patch is
+ * An unknown or repeated value falls back to the default rather than being echoed, and the URL
+ * is never rewritten on mount: a mount-time write would land before Next's history patch is
  * installed (lib/url-state.ts) and leave the router's view of the URL stale.
  */
 export function useSettingsSection<S extends string>(sections: readonly S[], fallback: S) {

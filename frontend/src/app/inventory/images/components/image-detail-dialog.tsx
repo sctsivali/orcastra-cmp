@@ -14,17 +14,14 @@ import type { ImageInfo, VMInfo } from "@/types/api";
 import { inventoryLinks } from "@/lib/inventory-links";
 import { NodeLink } from "@/components/ui/node-link";
 
-// The images table had zero row interaction: no drill-down, no copy, no way to read a
-// fingerprint in full even though the fingerprint is the only thing that identifies an image.
-//
 // The "instances using this image" section is a client-side join over the instances list the
-// page already fetches, on `volatile.base_image`, which is the same key the backend uses for
-// tenant filtering (routers/images.py:189). No new endpoint, and one request for the page
-// rather than one per row.
+// page already fetches, on `volatile.base_image`, the same key the backend uses for tenant
+// filtering (routers/images.py, _allowed_image_fingerprints_by_host). One request for the page
+// instead of one per row.
 //
-// important: the heading says "Your instances", not "Instances". The list it joins against is
-// tenant-filtered server-side, so the count genuinely differs by role and a heading implying
-// totality would be wrong for everyone except an admin.
+// The heading says "Your instances". The list it joins against is tenant-filtered server-side,
+// so the count differs by role and a heading implying totality would be wrong for everyone
+// except an admin.
 /** A dialog section, not a table: ten rows is already a long read inside a modal. */
 const INSTANCE_PAGE_SIZE = PANEL_PAGE_SIZE;
 
@@ -43,9 +40,9 @@ export function ImageDetailDialog({
   // would change how many hooks run.
   const [page, setPage] = React.useState(1);
 
-  // The join key is volatile.base_image, so one standard image is the parent of nearly every
-  // instance an organization runs. This section is therefore the whole visible fleet for the
-  // image an operator is most likely to open, and it rendered every row unsliced.
+  // The join key is volatile.base_image, so one standard image can be the parent of nearly every
+  // instance an organization runs. The section is paged so that image does not list the whole
+  // visible fleet at once.
   const totalPages = Math.max(1, Math.ceil(instances.length / INSTANCE_PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
   const pagedInstances = instances.slice(
@@ -53,7 +50,7 @@ export function ImageDetailDialog({
     currentPage * INSTANCE_PAGE_SIZE,
   );
 
-  // note: reset when the dialog is pointed at a different image. It stays mounted between
+  // Reset when the dialog is pointed at a different image. It stays mounted between
   // openings, so without this the next image opens on the previous one's page number.
   const fingerprint = image?.fingerprint ?? null;
   const [lastFingerprint, setLastFingerprint] = React.useState(fingerprint);
@@ -64,11 +61,9 @@ export function ImageDetailDialog({
 
   if (!image) return null;
 
-  // important: the description first. This used to title itself with a 12 character slice of the
-  // fingerprint whenever an image had no alias, so the dialog opened to show what the table had
-  // cut and announced itself with the same cut value. The whole fingerprint is one line below,
-  // in full, with a copy button, because RecordDetailDialog requires recordId for exactly this.
-  // The aliases have their own section, so they are not repeated in a subtitle.
+  // The description first, then an alias, then the whole fingerprint, never a slice of it. The
+  // fingerprint is also shown in full with a copy button as recordId, and the aliases have their
+  // own section, so they are not repeated in a subtitle.
   const title = image.description || image.aliases?.find(Boolean) || image.fingerprint;
 
   return (
@@ -84,7 +79,7 @@ export function ImageDetailDialog({
       <div className="space-y-4">
         <DetailSection title="Image">
           <DetailGrid cols={3}>
-            {/* important: raw. formatLabel renders x86_64 as "X86 64". */}
+            {/* Raw: formatLabel renders x86_64 as "X86 64". */}
             <DetailField label="Architecture" value={image.architecture} mono />
             <DetailField label="Type" value={formatInstanceType(image.type)} />
             <DetailField label="Size" value={formatBytes(image.size)} />

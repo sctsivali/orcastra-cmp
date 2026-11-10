@@ -26,7 +26,7 @@ interface ExplorerDialogsProps {
   onSelect: (names: string[]) => void;
 }
 
-/** Says what a recursive change could not do. A dialog that just closes would claim all of it. */
+/** Reports what a recursive change could not do, instead of closing as if all of it succeeded. */
 function reportTreeChange(outcomes: (TreeChange | undefined)[]): void {
   if (outcomes.some((outcome) => outcome?.unfinished)) {
     throw new Error("This folder is too large to finish in one go. Part of it changed and the rest did not.");
@@ -40,7 +40,7 @@ function reportTreeChange(outcomes: (TreeChange | undefined)[]): void {
   }
 }
 
-/** Every question the explorer asks, in one place, so its root stays about the list. */
+/** Every dialog the explorer opens, kept out of the explorer's root component. */
 export function ExplorerDialogs({ prompt, target, folder, writeReason, actions, onClose, onSelect }: ExplorerDialogsProps) {
   const removePath = async (entries: GuestEntry[], onProgress: (deleted: number) => void) => {
     let deleted = 0;
@@ -56,7 +56,7 @@ export function ExplorerDialogs({ prompt, target, folder, writeReason, actions, 
           (count) => onProgress(before + count),
         );
       } catch (error) {
-        // Already gone, which is what was asked: a retry after a partial failure starts here.
+        // Already gone counts as deleted, so a retry after a partial failure goes through.
         if (fileErrorCode(error) === "not_found") continue;
         throw error;
       }

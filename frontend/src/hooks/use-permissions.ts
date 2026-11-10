@@ -1,11 +1,8 @@
 /**
- * usePermissions - React hook for three-tier RBAC permission checks
+ * Three-tier RBAC checks for UI gating: the session's groups resolved to Admin, Partner or
+ * Tenant roles and their permissions.
  *
- * Reads the current user's groups from the NextAuth session,
- * resolves them to internal roles (Admin/Partner/Tenant),
- * and exposes helpers for UI gating.
- *
- * NOTE: This is for UI/UX only. Backend always enforces RBAC independently.
+ * UI only. The backend enforces RBAC on its own.
  */
 
 "use client";
@@ -25,15 +22,12 @@ import {
 export interface UsePermissionsResult {
   /** No permission answer available yet (first load only, not a background refresh) */
   isLoading: boolean;
-  /** Session resolved and the user is signed in - a denial is only meaningful when true */
+  /** Session resolved and the user is signed in; a denial counts only when true */
   isAuthenticated: boolean;
-  /** Resolved roles */
   roles: Role[];
   /** Highest-privilege role */
   highestRole: Role;
-  /** All permissions */
   permissions: Set<Permission>;
-  /** Check a single permission */
   can: (permission: Permission) => boolean;
   /** Check minimum role level */
   hasRole: (minRole: Role) => boolean;
@@ -51,8 +45,8 @@ export function usePermissions(): UsePermissionsResult {
   const { data: session, status } = useSession();
   // important: useSession().update() flips status back to "loading" while keeping the
   // existing session data. Treating that as "loading" makes every PermissionGuard
-  // unmount and remount its children on each silent token refresh. We only lack an
-  // answer when there is no session to read roles from.
+  // unmount and remount its children on each silent token refresh, so only a missing
+  // session counts as loading.
   const isLoading = status === "loading" && !session;
   const isAuthenticated = status === "authenticated";
 

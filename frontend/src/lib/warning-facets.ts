@@ -6,10 +6,8 @@ import type { CertificateWarning, WarningInfo } from "@/types/api";
 // opens are counted over the same set.
 //
 // important: LXD's own severities are low, moderate and high (lxd/db/warningtype). The
-// dashboard's certificate and node checks add critical, high, warning, low and info. Before
-// this file the tiles bucketed `error` with critical and `medium` with warning, never knew
-// `moderate`, and each link carried a single value, so a tile could say 3 and open a list
-// that said "No warning matches the current filters."
+// dashboard's certificate and node checks add critical, high, warning, low and info. A bucket
+// must list every raw value it counts, or a tile can show a count its list does not match.
 
 export const WARNING_SEVERITY_BUCKETS = {
   critical: ["critical", "error"],
@@ -42,9 +40,9 @@ export const WARNING_SEVERITY_ORDER: readonly string[] = [
 /**
  * What the platform tab's Node facet compares: the registered node, never the LXD member.
  *
- * important: `location` is the cluster member that raised the warning, which on a clustered
- * host is a name nothing else in the console links by. Every other surface identifies a node
- * by its registered id, so this is the value a link into the warnings page carries.
+ * important: `location` is the cluster member that raised the warning, a name nothing else in
+ * the console links by. Every other surface identifies a node by its registered id, so a link
+ * into the warnings page carries this value.
  */
 export function warningNodeValue(warning: Pick<WarningInfo, "source_node">): string {
   return warning.source_node || "";

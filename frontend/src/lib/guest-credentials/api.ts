@@ -7,7 +7,7 @@ export type { GuestTarget };
 export type AccountKind = "root" | "root_equivalent" | "human";
 /** `empty` means a console login with no password at all. */
 export type PasswordState = "set" | "none" | "locked" | "empty" | "unknown";
-/** `rootpw`: sudo asks for root's password, not the user's (openSUSE). `absent`: sudo is not installed. */
+/** `rootpw`: sudo asks for root's password, as on openSUSE. `absent`: sudo is not installed. */
 export type SudoVerdict = "yes" | "no" | "rootpw" | "absent";
 
 export interface GuestAccount {
@@ -132,8 +132,8 @@ function route(target: GuestTarget, name: string): string {
 // change was sent, rather than by a browser timeout that cannot say anything.
 const TIMEOUT_MS = 95_000;
 
-// note: every route is POST, reads included, so a Partner cluster past its paid term refuses them
-// as it refuses the console. Secrets travel in the body only, never in the query string.
+// Every route is POST, reads included, so a Partner cluster past its paid term refuses them as it
+// refuses the console. Secrets travel in the body only, never in the query string.
 export const guestCredentialsAPI = {
   overview: (target: GuestTarget, signal?: AbortSignal) =>
     fetchAPI<GuestOverview>(route(target, "overview"), { method: "POST", signal }, TIMEOUT_MS),

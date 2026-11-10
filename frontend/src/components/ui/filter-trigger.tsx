@@ -22,10 +22,6 @@ export interface FilterTriggerProps {
 /**
  * The one toolbar trigger, shared by every filter control.
  *
- * note: extracted rather than copied. Four independently maintained triggers is exactly how
- * this codebase ended up with four divergent search inputs, and the same drift was starting
- * again the moment a second control needed the same button.
- *
  * The data attributes exist for the browser tests: targeting a control by field and kind is
  * stable, where matching a label prefix goes ambiguous as soon as two controls on one page
  * share one.
@@ -41,8 +37,8 @@ export const FilterTrigger = React.forwardRef<HTMLButtonElement, FilterTriggerPr
         // important: `rest` is spread FIRST so this component's own attributes win. Radix
         // PopoverTrigger injects its props through asChild, including an aria-controls pointing
         // at the id it generated for the panel. Every control here labels its panel itself, so
-        // with the spread last that injected value silently replaced ours and referenced an id
-        // no element carried. Radix's own onClick, data-state and aria-haspopup still arrive
+        // with the spread last that injected value would replace ours and reference an id no
+        // element carries. Radix's own onClick, data-state and aria-haspopup still arrive
         // through the spread; nothing below re-declares them.
         {...rest}
         ref={ref}

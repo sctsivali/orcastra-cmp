@@ -11,13 +11,13 @@ export interface ActionChipProps extends React.ButtonHTMLAttributes<HTMLButtonEl
 }
 
 /**
- * A secondary state on a card that opens something: an outline chip, the state carried by a
- * toned icon and the words, the surface left to the one solid status chip beside it.
+ * A secondary state on a card that opens something: an outline chip whose state is carried by a
+ * toned icon and the words, leaving the solid surface to the one status chip beside it.
  *
  * important: forwardRef, unlike Badge. TooltipTrigger and DialogTrigger both hand their child a
- * ref through asChild, and a function component drops it. data-slot="badge" keeps the chip in the
- * QA sweeps that measure every chip for tint, fade and contrast. Hover is bg-muted, a solid
- * token: an opacity hover measures as a faded chip.
+ * ref through asChild, and a function component drops it. data-slot="badge" marks it as a chip
+ * for tests that check every chip's tint and contrast. The hover is bg-muted, a solid token,
+ * because an opacity hover reads as a faded chip.
  */
 export const ActionChip = React.forwardRef<HTMLButtonElement, ActionChipProps>(
   ({ icon: Icon, iconClassName, className, children, type = "button", ...props }, ref) => (

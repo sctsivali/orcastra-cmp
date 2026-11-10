@@ -38,12 +38,8 @@ import type {
 } from "@/types/api";
 
 /**
- * The query key the organization picker rides in.
- *
- * note: the page and page size deliberately stay out of the URL, and the reason is recorded in
- * documentation/ui/project-grid-pagination.md: a page number resolves against the reader's page
- * size and sort rather than the sender's, so a shared link lands somewhere else. Which organization
- * you are installing into describes what you are looking at, so it belongs there.
+ * The query key that holds the organization picker. Page and page size stay out of the URL: a page
+ * number resolves against the reader's page size and sort, so a shared link would land elsewhere.
  */
 const ORG_PARAM = "org";
 
@@ -59,8 +55,8 @@ function ExtensionsOverviewContent() {
       const params = currentQuery();
       if (next) params.set(ORG_PARAM, next);
       else params.delete(ORG_PARAM);
-      // replace, not push: a picker change is not a navigation an operator wants Back to undo one
-      // selection at a time, and the filter engine writes here the same way.
+      // Replace rather than push, so Back does not step through picker changes. The filter engine
+      // writes the same way.
       replaceQuery(pathname, params);
     },
     [pathname],
@@ -72,15 +68,15 @@ function ExtensionsOverviewContent() {
   const [pendingUninstall, setPendingUninstall] = useState<ExtensionInstall | null>(null);
   const [uninstallError, setUninstallError] = useState<string | null>(null);
 
-  // note: only the organizations the caller may install into. The general list included ones it is a
-  // buyer or a plain member of, where every install answers "Organization not found".
+  // Only the organizations the caller may install into. In one where it is a buyer or a plain
+  // member, every install answers "Organization not found".
   const organizations = useQuery({
     queryKey: ["extensions", "manageable-organizations"],
     queryFn: () => extensionsAPI.manageableOrganizations(),
     staleTime: 60000,
   });
 
-  // A shared or bookmarked ?org= that this caller may not install into is cleared, not kept selected.
+  // A shared or bookmarked ?org= that this caller may not install into is cleared.
   useEffect(() => {
     if (!organizations.data || !organizationId) return;
     if (!organizations.data.some((org) => String(org.id) === organizationId)) setOrganizationId("");
@@ -130,7 +126,7 @@ function ExtensionsOverviewContent() {
     onSuccess: (result) => {
       setPreview(null);
       setIssued(result);
-      // the whole family: the catalogue, this list and each install's own page share status
+      // The whole family: the catalogue, this list and each install's own page share status.
       void reconcileMutationImpact(queryClient, "extension.write");
     },
     onError: (error: Error) => setInstallError(error.message),
@@ -151,7 +147,7 @@ function ExtensionsOverviewContent() {
       setPublishError(null);
       void reconcileMutationImpact(queryClient, "extension.write");
     },
-    // The server's own words. A paraphrase here would hide which field it actually refused.
+    // The server's message verbatim, so the author sees which field it refused.
     onError: (error: Error) => setPublishError(error.message),
   });
 
@@ -204,19 +200,18 @@ function ExtensionsOverviewContent() {
         ? "No organization you run"
         : "Choose an organization";
   const installedSlugs = new Set((installs.data ?? []).map((i) => i.extension_slug));
-  // A draft is visible only to its owner, which is exactly the step that used to strand people:
-  // publishing produced one, the operator saw an empty catalogue, and nobody got an error.
+  // A draft is visible only to its owner and cannot be installed, so drafts are listed apart from
+  // the catalogue.
   const drafts = (catalogue.data ?? []).filter((e) => e.status === "draft");
   const installable = (catalogue.data ?? []).filter((e) => e.status !== "draft");
 
   return (
     <div className="space-y-8">
       {/* The refresh reads the queries this component owns, so the page title lives here rather
-          than in the route file. Beside the organization picker it read as a statement about the
-          picker; on the title line it reads as one about the page. */}
+          than in the route file. */}
       <div className="flex flex-wrap items-start justify-between gap-3">
-        {/* This route is deliberately absent from the sidebar, so the card in Settings is the only
-            way in and this is the only way back. */}
+        {/* This route is not in the sidebar: the card in Settings is the way in and this link is
+            the way back. */}
         <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:gap-4">
           <BackLink href="/settings" label="Settings" />
           <div className="min-w-0">
@@ -229,8 +224,7 @@ function ExtensionsOverviewContent() {
         <RefreshButton
           label="Refresh add-ons"
           onRefresh={async () => {
-            // Both, because the page shows both and refreshing half of it is what made the
-            // Installed list look stale after an install.
+            // Both lists, so the Installed list does not look stale after an install.
             await Promise.all([catalogue.refetch(), installs.refetch()]);
           }}
           lastUpdatedAt={Math.min(catalogue.dataUpdatedAt, installs.dataUpdatedAt) || undefined}
@@ -292,10 +286,8 @@ function ExtensionsOverviewContent() {
         />
       </section>
 
-      {/* Present only when there is something to say. An always-on empty state cost a full
-          EmptyState block of whitespace on every visit for a section most operators never use, and
-          rows per screen is the product here. The loading and error cases still render, because
-          those were the two states this section genuinely lacked. */}
+      {/* Rendered only while loading, on error, or with drafts to show. Most operators have no
+          drafts, and an always-on empty state would cost a block of space on every visit. */}
       {(catalogue.isLoading || catalogue.error || drafts.length > 0) && (
       <section className="space-y-3">
         <div>
@@ -393,11 +385,8 @@ function ExtensionsOverviewContent() {
 }
 
 /**
- * The boundary the query string requires.
- *
- * The organization picker lives in the query string, which opts this out of prerendering, and Next
- * fails `next build` on the route without a boundary above it. It sits here rather than in the
- * route file so the component carries its own requirement.
+ * Carries its own Suspense boundary. The organization picker lives in the query string, which opts
+ * this out of prerendering, and `next build` fails on the route without a boundary above it.
  */
 export function ExtensionsOverview() {
   return (

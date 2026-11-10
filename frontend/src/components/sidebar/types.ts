@@ -16,8 +16,8 @@ export interface NavItem {
   role?: RoleGate;
   render?: SpecialRender; // when set, renders the live session menu instead of a link
   prefetchKey?: string; // key into the prefetch map; defaults to href
-  // note: renders one level deeper in the expanded tree. Terminals and Consoles are live
-  // instances of what /inventory/sessions lists, and that hierarchy is meaningful.
+  // Renders one level deeper in the expanded tree: Terminals and Consoles are live instances
+  // of what /inventory/sessions lists.
   indent?: boolean;
   // A live count beside the label, and on the collapsed rail's group icon. Admin-only items only:
   // the count's read is refused (and audited) for any other role.
@@ -39,11 +39,9 @@ export interface PermissionFlags {
 }
 
 // Shared rendering context threaded to nav items. `intent` is already guarded against the
-// active route and already resolves the React Query warm map, so a renderer never sees either
-// concern.
-// note: there is deliberately no onLinkClick. The mobile drawer and the collapsed flyout used
-// to close on click, which unmounted the <Link> and killed its pending spinner. Both now close
-// when the new route commits, which is what the operator is actually waiting for.
+// active route and resolves the React Query warm map, so a renderer never sees either concern.
+// There is no onLinkClick: the mobile drawer and the collapsed flyout close when the new route
+// commits, since closing on click would unmount the <Link> and its pending spinner.
 export interface NavRenderContext {
   activeHref: string | null;
   intent: RouteIntent;

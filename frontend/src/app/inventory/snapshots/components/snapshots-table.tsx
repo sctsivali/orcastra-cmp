@@ -26,12 +26,11 @@ import { ORIGIN_LABEL, ORIGIN_ORDER, ORIGIN_RANK, snapshotOrigin } from "./snaps
 import type { IllustrationProps } from "@/components/illustrations/illustration-frame";
 
 /**
- * The table definition lives beside the rows it renders.
+ * The table definition lives beside the rows it renders rather than in page.tsx.
  *
- * important: not in page.tsx. check-table-filters.mjs counts any file rendering <TableBody>
- * without a defineTable< as an unmanaged table, against a baseline that may fall and never rise,
- * so splitting the two would fail the build. It is also simply where it belongs: the columns and
- * the cells that fill them are one thing.
+ * check-table-filters.mjs counts any file rendering <TableBody> without a defineTable< as an
+ * unmanaged table, against a baseline that may fall and never rise, so splitting the two would
+ * fail the build.
  */
 export const SNAPSHOTS = defineTable<SnapshotInfo>()({
   searchPlaceholder: "Search snapshots",
@@ -75,14 +74,10 @@ export const SNAPSHOTS = defineTable<SnapshotInfo>()({
     {
       field: "origin",
       label: "Origin",
-      // Three classes, not two. The console used to say "Managed elsewhere" for anything without
-      // the ops- prefix, which lumped a snapshot an operator took by hand in with the ones the
-      // upstream product owns and bills for.
-      //
-      // note: the facet's value is the machine value and `format` supplies the label, the same
-      // split the warnings page uses for severity. Sorting follows ORIGIN_RANK rather than the
-      // alphabet, so the order is "how much of this do we own" rather than an accident of
-      // spelling.
+      // A snapshot taken by hand is its own class, apart from the ones the upstream product
+      // owns and bills for. The facet's value is the machine value and `format` supplies the
+      // label, as the warnings page does for severity. Sorting follows ORIGIN_RANK, by how much
+      // of the snapshot this console owns, rather than the alphabet.
       sort: (s) => ORIGIN_RANK[snapshotOrigin(s)],
       facet: (s) => snapshotOrigin(s),
       facetSpec: {
@@ -94,9 +89,9 @@ export const SNAPSHOTS = defineTable<SnapshotInfo>()({
     {
       field: "size",
       label: "Size",
-      // note: null, not 0, exactly as created_at below does for a missing timestamp. Folding an
-      // unknown size to 0 made a "size at least 1 GB" filter hide the very rows whose size is
-      // unknown, presenting an absent measurement as a small one.
+      // Null rather than 0, as created_at below does for a missing timestamp. Folding an
+      // unknown size to 0 would present an absent measurement as a small one to a filter such as
+      // "size at least 1 GB".
       sort: (s) => s.size ?? null,
       filter: fromSort("number", { unit: "bytes" }),
     },
@@ -118,11 +113,8 @@ export const SNAPSHOTS = defineTable<SnapshotInfo>()({
 });
 
 /**
- * The header row as data, so the column count and the empty row's span cannot disagree.
- *
- * The previous version hardcoded colSpan={6} beside five <SortableTableHead> and one <TableCell>,
- * which is both a wrong span and a <td> inside <thead>. zz-colspan-parity.spec.ts counts
- * `thead th`, so the two defects hid each other.
+ * The header row as data, so the column count and the empty row's span cannot disagree. The
+ * actions header is a TableHead, so every header cell is a `th`.
  */
 const SNAPSHOT_HEADERS = [
   { label: "Snapshot", field: "name" },
@@ -196,8 +188,8 @@ export function SnapshotsTable({
             const scope = snapshotScope(snapshot);
             return (
               // The key carries the whole address. Two clusters can each hold an instance of the
-              // same name, and so can two projects on one cluster, so the old
-              // `source_name/name` collides the moment the read spans either.
+              // same name, and so can two projects on one cluster, so `source_name/name` alone
+              // would collide once the read spans either.
               <TableRow key={`${scope.host}/${scope.project}/${snapshot.source_name}/${snapshot.name}`}>
                 <TableCell className="font-medium">
                   <span className="font-mono">{snapshot.name}</span>
@@ -208,15 +200,14 @@ export function SnapshotsTable({
                 </TableCell>
                 <TableCell className="whitespace-nowrap">{snapshot.project || "default"}</TableCell>
                 <TableCell>{ORIGIN_LABEL[snapshotOrigin(snapshot)]}</TableCell>
-                {/* nowrap: a squeezed table broke "15.89 MB" across two lines. */}
+                {/* nowrap keeps a size such as "15.89 MB" on one line in a squeezed table. */}
                 <TableCell className="whitespace-nowrap">
                   {typeof snapshot.size === "number" ? (
                     formatBytes(snapshot.size)
                   ) : (
-                    // Two different facts, two different names. "Not reported" means the cluster
-                    // was asked and its storage driver answered nothing; "Not measured" means
-                    // this read did not obtain a size for the instance: the holder cap, the
-                    // deadline or a failed read. The row says which, so the page does not.
+                    // "Not reported" means the cluster was asked and its storage driver answered
+                    // nothing; "Not measured" means this read did not obtain a size for the
+                    // instance (the holder cap, the deadline or a failed read).
                     <TableEmptyValue
                       label={snapshot.size_measured === false ? "Not measured" : "Not reported"}
                     />

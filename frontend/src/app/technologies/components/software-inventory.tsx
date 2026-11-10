@@ -15,15 +15,10 @@ import { SoftwareNodeCard } from "./software-node-card";
 /**
  * The software inventory, one card per connected node.
  *
- * This replaces a single set of cards built from connectedNodes[0]. On a fleet of Ubuntu 24.04
- * on x86_64 and Ubuntu 22.04 on aarch64 that read as "the platform runs 24.04", which is the
- * same class of untrue statement the hardcoded values on this page used to make: one node
- * quietly speaking for all of them.
+ * No single node speaks for the fleet: nodes can differ in OS, kernel and architecture.
  *
- * The section opens the way both hardware sections do, with a heading and a one-line subtitle
- * rather than a bordered callout. The callout was the only one on the page, so the two tabs
- * read as different products, and it carried no heading, which left this tab jumping from the
- * page h1 straight to the h3 inside each node card.
+ * The section opens the way both hardware sections do, with an h2 heading and a one-line
+ * subtitle, so the heading order runs from the page h1 to the h3 inside each node card.
  */
 export function SoftwareInventory({ nodes }: { nodes: NodeStatus[] }) {
   const connected = nodes.filter((node) => node.connected && node.environment);
@@ -32,20 +27,18 @@ export function SoftwareInventory({ nodes }: { nodes: NodeStatus[] }) {
   const unreachable = nodes.filter((node) => !node.connected);
   const divergence = fleetDivergence(connected);
 
-  // Clamped on read. These cards are heavier than the hardware tab's: each is expanded by
-  // default with two detail grids, a runtimes grid and a storage grid, so one card is roughly a
-  // screenful and the page length tracked the fleet exactly.
+  // Clamped on read. Each card is expanded by default with two detail grids, a runtimes grid
+  // and a storage grid, so one card is roughly a screenful.
   //
-  // note: `divergence` is computed over every connected node, not the page, because a fleet
-  // that disagrees about a version has to say so whichever page you are on.
+  // `divergence` covers every connected node, not the page: a fleet that disagrees about a
+  // version says so on every page.
   const totalPages = Math.max(1, Math.ceil(connected.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pagedNodes = connected.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
-  // important: `name` is the unique node id, `display_name` is a cosmetic label two nodes can
-  // share (types/api.ts marks it optional). The banner keys its reasons by the label it is
-  // handed, so a shared label would attribute one node's failure to the other. Fall back to the
-  // id whenever the friendly label is not unique within this list.
+  // important: `name` is the unique node id, `display_name` a cosmetic label two nodes can
+  // share. The banner keys its reasons by the label it is handed, so a shared label would
+  // attribute one node's failure to the other. Fall back to the id when the label is not unique.
   const labelFor = (node: NodeStatus) => {
     const label = node.display_name || node.name;
     const shared = unreachable.filter((other) => (other.display_name || other.name) === label);
@@ -56,8 +49,8 @@ export function SoftwareInventory({ nodes }: { nodes: NodeStatus[] }) {
     unreachable.map((node) => [labelFor(node), node.error ?? ""]),
   );
 
-  // note: the zero-connected line describes the section rather than repeating the empty state
-  // sitting directly under it. The other two are the copy this section has always carried.
+  // With no cluster connected, the subtitle describes the section instead of repeating the
+  // empty state directly under it.
   const subtitle =
     connected.length === 0
       ? "Each cluster reports its own software inventory, and they do not have to agree."
@@ -79,8 +72,7 @@ export function SoftwareInventory({ nodes }: { nodes: NodeStatus[] }) {
       </div>
 
       {/* important: outside the connected branch, so a fleet that is entirely down still names
-          which nodes are silent and why. It used to sit below the node grid, which the
-          all-unreachable case never reached, and that is the ordinary state for a partner. */}
+          which nodes are silent and why. */}
       <UnreachableNodesBanner
         nodes={unreachableNames}
         reasons={unreachableReasons}

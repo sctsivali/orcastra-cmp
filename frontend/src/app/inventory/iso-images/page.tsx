@@ -83,12 +83,11 @@ const ISOS = defineTable<any>()({
     },
     {
       // filter-coverage: this is not the project dimension. It answers which projects
-      // CONSUME the image, derived from used_by, while the "project" column above answers
-      // which one holds it, and that is the column carrying the project role.
+      // CONSUME the image, derived from used_by; the "project" column above answers which
+      // one holds it and carries the project role.
       field: "projects",
       label: "Used By Projects",
-      // The one page in the used_by family that never had this column, though the rows have
-      // always carried used_by. Same shape as storage-volumes.
+      // Same shape as the storage-volumes column.
       sort: (i) => projectsFromUsedBy(i.used_by).length,
       facet: (i) => projectsFromUsedBy(i.used_by),
       facetSpec: { emptyLabel: "(no project)" },
@@ -105,8 +104,8 @@ function IsoImagesContent() {
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt, isError, error } = useStorageVolumes();
   const allVolumes = (data as any)?.volumes || [];
   // The ISO list is the volume list filtered, so a cluster the volume read lost is a
-  // cluster whose ISOs are missing here too. Without this banner the page said "No ISO
-  // images yet" for a cluster holding two.
+  // cluster whose ISOs are missing here too. Without the banner the page would say "No ISO
+  // images yet" for a cluster that holds some.
   const reach = reachabilityOf(data);
   // ISOs are custom storage volumes with content-type "iso".
   const isos = useMemo(
@@ -148,9 +147,9 @@ function IsoImagesContent() {
 
   const resetPage = () => setCurrentPage(1);
 
-  // note: derived from the rows, not from the fleet, matching the five sibling used_by pages.
-  // A pinned role is exempt from the two-value threshold, so without this gate the Node control
-  // renders on a scope with no node at all and offers nothing but the empty bucket.
+  // Derived from the rows, like the other used_by pages. A pinned role is exempt from the
+  // two-value threshold, so without this gate the Cluster control would render on a scope with
+  // no node and offer nothing but the empty bucket.
   const nodes = useMemo(
     () => Array.from(new Set(isos.map((i: any) => i.node).filter(Boolean))).sort(),
     [isos],
@@ -238,9 +237,8 @@ function IsoImagesContent() {
   };
 
   const actionsFor = (volume: StorageVolumeInfo): RowAction[] => {
-    // note: every row the API returns carries its node, but the type says otherwise and both
-    // actions address a specific cluster. Offering them without one would build a create link
-    // to nowhere and a delete with no target, so a nodeless row gets no menu at all.
+    // Every row the API returns carries its node, but the type allows none and both actions
+    // address a specific cluster, so a nodeless row gets no menu at all.
     const node = volume.node;
     if (!node) return [];
 
@@ -370,7 +368,7 @@ function IsoImagesContent() {
             </TableHeader>
             <TableBody>
               {paginated.length === 0 ? (
-                // note: the filtered list empties too, and "yet" with a scene would read as a first run.
+                // A filtered-empty list gets its own row: "yet" with a scene would read as a first run.
                 filters.activeFilterCount > 0 ? (
                   <TableEmptyRow colSpan={columnCount} icon={Disc} title="No ISO images match the filters" />
                 ) : (
@@ -438,7 +436,7 @@ function IsoImagesContent() {
 
       <UsedByDialog {...usedBy.dialogProps} />
 
-      {/* important: gated, not only its trigger. The dialog's picker reads /nodes/names, which
+      {/* The dialog is gated as well as its trigger: its picker reads /nodes/names, which
           refuses a Tenant. */}
       {canUpload && (
         <IsoUploadDialog
@@ -483,9 +481,9 @@ export default function IsoImagesPage() {
   );
 }
 
-// note: built on click for the row the operator chose, never during the table's render pass.
-// An ISO volume carries no devices, rules or capacity of its own, so its only extra panel is
-// its config, and when that is empty the dialog renders no tab strip at all.
+// Built on click for the chosen row, never during the table's render pass. An ISO volume has
+// no devices, rules or capacity, so its only extra panel is its config; with an empty config
+// the dialog renders no tab strip.
 function isoSubject(volume: StorageVolumeInfo): UsedBySubject {
   const config = volume.config ?? {};
   return {

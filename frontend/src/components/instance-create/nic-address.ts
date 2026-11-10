@@ -1,12 +1,7 @@
 /**
- * Validating a fixed IPv4 for an instance NIC, in the browser.
- *
- * Enterprise workloads (a database cluster, DNS, a load balancer, an API gateway) need their
- * address decided at provisioning time rather than discovered afterwards, and LXD's own web UI
- * has no control for it. The address is written as the NIC device's `ipv4.address`.
- *
- * The backend validates this too, and it is the authority. This exists so the operator finds
- * out while the field is in front of them, not after a submit.
+ * Browser-side validation of a fixed IPv4 for an instance NIC, written as the NIC device's
+ * `ipv4.address`. The backend validates it too and is the authority; this check reports a
+ * mistake while the field is still in front of the operator.
  */
 
 export type AddressCheck = { ok: true } | { ok: false; reason: string };
@@ -62,7 +57,7 @@ export function checkFixedAddress(
   const baseOctets = parseIPv4(base);
   const prefix = Number(prefixRaw);
   if (!baseOctets || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
-    return { ok: true }; // unparseable config is not the operator's mistake to answer for
+    return { ok: true }; // Unparseable network config is not the operator's mistake.
   }
 
   const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;

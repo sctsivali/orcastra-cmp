@@ -6,9 +6,8 @@ import { Button } from "@/components/ui/button";
 import type { VMInfo } from "@/types/api";
 import { plural } from "@/lib/utils";
 
-// note: an LXD instance config is mostly `volatile.*`, which the daemon writes and nobody sets.
-// Showing forty of those above the six an operator actually chose is worse than showing none,
-// so they start collapsed behind a count rather than being filtered away silently.
+// An LXD instance config is mostly `volatile.*` keys the daemon writes itself. They start
+// collapsed behind a count rather than hidden, so the keys an operator set stay visible.
 export function InstanceConfigTab({ instance }: { instance: VMInfo }) {
   const [showVolatile, setShowVolatile] = React.useState(false);
 

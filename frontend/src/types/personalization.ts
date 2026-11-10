@@ -1,56 +1,47 @@
-/**
- * Personalization Types for Orcastra CMP
- * Allows users to customize branding and appearance
- */
+/** Branding and appearance settings, their presets and the product defaults. */
 
-// Logo settings for different themes
 export interface LogoSettings {
-  lightModeLogo: string | null; // Base64 or URL for light mode logo
-  darkModeLogo: string | null;  // Base64 or URL for dark mode logo
-  favicon: string | null;       // Custom favicon
+  lightModeLogo: string | null; // Base64 or URL
+  darkModeLogo: string | null;  // Base64 or URL
+  favicon: string | null;
 }
 
-// Background settings for landing page
+/** Background of the landing page. */
 export interface BackgroundSettings {
-  backgroundImage: string | null;      // Base64 or URL for background image
-  backgroundOverlayOpacity: number;    // 0-100 opacity for overlay
-  backgroundBlur: number;              // 0-20 blur level
+  backgroundImage: string | null;      // Base64 or URL
+  backgroundOverlayOpacity: number;    // Percent, 0-100
+  backgroundBlur: number;              // Pixels, 0-20
 }
 
-// Branding text settings
 export interface BrandingSettings {
-  appName: string;            // Application name (default: "Orcastra")
-  tagline: string;            // Tagline on landing page
-  footerText: string;         // Footer copyright text
+  appName: string;
+  tagline: string;            // Shown on the landing page
+  footerText: string;         // "{YEAR}" is replaced with the current year
 }
 
-// Color preset type for accent colors
 export interface ColorPreset {
   name: string;
   value: string;
 }
 
-// Visual theme preset with sidebar background
 export interface ThemePreset {
   name: string;
-  accentColor: string;      // Unified accent for buttons and active states
-  sidebarBgColor: string;   // Sidebar background color
-  sidebarTextColor: string; // Sidebar text color for this preset
+  accentColor: string;      // Buttons and active states
+  sidebarBgColor: string;
+  sidebarTextColor: string;
 }
 
-// Accent/Theme color settings
 export interface ColorSettings {
-  accentColor: string;           // Unified accent color (buttons, active sidebar)
-  sidebarBgColor: string;        // Sidebar background color
-  sidebarTextColor: string;      // Sidebar text color (manual override)
-  sidebarLogoColor: "auto" | "black" | "white"; // Logo color preference for sidebar
-  useCustomAccent: boolean;      // Whether using custom accent color
-  useCustomSidebarBg: boolean;   // Whether using custom sidebar bg
-  useCustomSidebarText: boolean; // Whether using custom text color
-  autoTextColor: boolean;        // Auto-calculate text color based on bg brightness
+  accentColor: string;           // Buttons and the active sidebar item
+  sidebarBgColor: string;
+  sidebarTextColor: string;      // Manual override
+  sidebarLogoColor: "auto" | "black" | "white";
+  useCustomAccent: boolean;
+  useCustomSidebarBg: boolean;
+  useCustomSidebarText: boolean;
+  autoTextColor: boolean;        // Derive the text colour from the background's brightness
 }
 
-// Available accent color presets
 export const COLOR_PRESETS: ColorPreset[] = [
   { name: "Violet", value: "#8467e4" },
   { name: "Purple", value: "#a855f7" },
@@ -66,13 +57,12 @@ export const COLOR_PRESETS: ColorPreset[] = [
   { name: "Rose", value: "#f43f5e" },
 ];
 
-// Visual theme presets (like image 5) - sidebar bg + accent combinations
-// Text colors are explicitly set to ensure readability in both light/dark modes
+// Sidebar background and accent combinations. Each sets its text colour explicitly so it stays
+// legible in both light and dark mode.
 export const THEME_PRESETS: ThemePreset[] = [
-  // First, and identical to DEFAULT_PERSONALIZATION.colors. personalization-settings.tsx marks
-  // a preset active by matching all three values, so without this entry a fresh account shows
-  // no preset selected at all and there is no way back to the shipped look short of typing
-  // three hexes.
+  // Identical to DEFAULT_PERSONALIZATION.colors. personalization-settings.tsx marks a preset
+  // active only when all three values match, so this entry is how a fresh account sees its
+  // preset selected and gets back to the default look.
   { name: "Orcastra", accentColor: "#8467e4", sidebarBgColor: "#321f6f", sidebarTextColor: "#f8fafc" },
   { name: "Classic Light", accentColor: "#8b5cf6", sidebarBgColor: "#ffffff", sidebarTextColor: "#1e293b" },
   { name: "Ocean", accentColor: "#06b6d4", sidebarBgColor: "#f0fdfa", sidebarTextColor: "#134e4a" },
@@ -92,11 +82,10 @@ export const SIDEBAR_BG_PRESETS: ColorPreset[] = [
   { name: "Soft Green", value: "#f0fdf4" },
   { name: "Soft Orange", value: "#fff7ed" },
   { name: "Soft Pink", value: "#fdf2f8" },
-  // The shipped default. First of the dark grounds because it is the one an operator returns
-  // to, and present at all because the picker marks a swatch selected by exact value match.
+  // The product default. It has to be listed: the picker marks a swatch selected by exact
+  // value match.
   { name: "Orcastra Violet", value: "#321f6f" },
-  // Matches the dark theme's own ground, so an operator who wants the sidebar to sit flush
-  // with the page has a preset for it rather than having to type the value.
+  // The dark theme's own background, for a sidebar that sits flush with the page.
   { name: "Orcastra Dark", value: "#14111c" },
   { name: "Dark Navy", value: "#1e1b4b" },
   { name: "Dark Slate", value: "#1e293b" },
@@ -104,7 +93,6 @@ export const SIDEBAR_BG_PRESETS: ColorPreset[] = [
   { name: "True Black", value: "#000000" },
 ];
 
-// Theme preference type
 export type ThemePreference = "dark" | "light" | "system";
 
 /** Whether cards show their illustration (components/illustrations). */
@@ -114,18 +102,16 @@ export function isIllustrationPreference(value: unknown): value is IllustrationP
   return value === "show" || value === "hide";
 }
 
-// Complete personalization settings
 export interface PersonalizationSettings {
   logo: LogoSettings;
   background: BackgroundSettings;
   branding: BrandingSettings;
   colors: ColorSettings;
-  theme: ThemePreference;          // User's theme preference (dark/light/system)
+  theme: ThemePreference;
   illustrations: IllustrationPreference;
   lastModified: string | null;   // ISO date string
 }
 
-// Default personalization settings
 export const DEFAULT_PERSONALIZATION: PersonalizationSettings = {
   logo: {
     lightModeLogo: null,
@@ -142,27 +128,23 @@ export const DEFAULT_PERSONALIZATION: PersonalizationSettings = {
     tagline: "Operations center for managing virtualized infrastructure and containers across distributed clusters. Streamline resource management with real-time monitoring and automation.",
     footerText: "© {YEAR} ORCASTRA",
   },
-  // important: these five colour values are one of five copies of the same defaults. The others
-  // are the CSS seeds in app/globals.css, the runtime fallbacks in
-  // components/personalization-provider.tsx, the picker fallbacks in
-  // components/personalization-settings.tsx, and get_default_settings() in the backend's
-  // routers/user_preferences.py, which is what a user with no stored row receives.
-  // scripts/checks/check-personalization-defaults.mjs fails the build when they disagree,
-  // because the copies drifting is not hypothetical: the CSS accent hex and its own HSL
-  // triplet described two different purples for as long as personalization has shipped.
+  // important: the CSS seeds in app/globals.css, SIDEBAR_TEXT_ON_DARK in the provider and the
+  // backend's routers/user_preferences.py (what a user with no stored row receives) repeat these
+  // colours; the provider and the picker fall back to this object.
+  // scripts/checks/check-personalization-defaults.mjs fails the build when they disagree.
   colors: {
     accentColor: "#8467e4",       // 254 70% 65%, the sidebar ground's hue
     sidebarBgColor: "#321f6f",    // 254 56% 28%
-    sidebarTextColor: "#f8fafc",  // what autoTextColor derives for a ground this dark
-    sidebarLogoColor: "auto",     // Auto = follows sidebar background brightness
+    sidebarTextColor: "#f8fafc",  // What autoTextColor derives for a ground this dark
+    sidebarLogoColor: "auto",     // Follows the sidebar background's brightness
     useCustomAccent: false,
     useCustomSidebarBg: true,     // The product ships a coloured sidebar; false falls back to bg-card
     useCustomSidebarText: false,
-    autoTextColor: true,          // Auto-calculate text color by default
+    autoTextColor: true,
   },
-  theme: "system",               // Default: follow system preference
-  // Off until an organization or the deployment turns them on in Personalization (owner
-  // decision 2026-11-09); this is also what the first byte renders when nothing is set.
+  theme: "system",
+  // Off until an organization or the deployment turns them on in Personalization; this is also
+  // what the first render shows when nothing is set.
   illustrations: "hide",
   lastModified: null,
 };

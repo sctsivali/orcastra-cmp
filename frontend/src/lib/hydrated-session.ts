@@ -2,14 +2,13 @@
  * The shape a server-read session travels in from the root layout to SessionProvider.
  *
  * important: the access token is masked with a fresh random pad on every render. The document is
- * gzip-compressed and also echoes the request's query string, so an unmasked bearer next to
- * attacker-chosen text is the BREACH setup: an observer of encrypted response sizes could
- * recover it a byte at a time over a TLS deployment. A token XORed with a new pad per response
- * compresses differently every time, which takes away the length signal. Same technique as
- * masked CSRF tokens. The real token only ever exists in memory, after unmaskSession.
+ * gzip-compressed and echoes the request's query string, so an unmasked bearer next to
+ * attacker-chosen text allows BREACH: an observer of encrypted response sizes could recover it a
+ * byte at a time. XORed with a new pad per response, as masked CSRF tokens are, the token
+ * compresses differently every time. The real token exists only in memory, after unmaskSession.
  *
- * Isomorphic on purpose: masking runs in the server render, unmasking in the browser (and in the
- * server render of the client tree), and scripts/checks exercise both directly.
+ * Isomorphic: masking runs in the server render, unmasking in the browser (and in the server
+ * render of the client tree), and scripts/checks exercise both directly.
  */
 import type { Session } from "next-auth";
 

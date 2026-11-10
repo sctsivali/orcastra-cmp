@@ -1,22 +1,15 @@
 /**
  * The session a hard load can start from, read on the server. Server components only.
  *
- * Without it every document load rendered nothing until the browser had fetched
- * /api/auth/session (twice: next-auth's mount read echoes through its own BroadcastChannel), and
- * that route runs on the nodejs runtime with the 120 s background refresh skew (auth.ts), so a
- * reload inside the window also waited 1.2 to 2 s for the identity provider before any data was
- * requested.
+ * It lets the first render send data requests without waiting on /api/auth/session, which runs
+ * on the nodejs runtime with the 120 s background refresh skew (auth.ts) and can wait on the
+ * identity provider.
  *
- * important: this is a second NextAuth instance whose jwt callback NEVER refreshes. The normal
- * `auth()` called from a server component may refresh an expired token, and a server component
- * cannot set cookies: next-auth's RSC path keeps only the JSON of its internal response. A
- * refresh here would spend the rotating refresh token and throw the new one away. Instead a
- * token that is not comfortably valid yields no session, and the browser falls back to fetching
- * one exactly as it did before.
- *
- * important: the cookie read is the one the browser sent. Middleware never refreshes
- * (middleware.ts), so an expired token stays expired for this render, fails the validity margin,
- * and the browser's session read is what refreshes it.
+ * important: this is a second NextAuth instance whose jwt callback never refreshes. A server
+ * component cannot set cookies (next-auth's RSC path keeps only the JSON of its internal
+ * response), so a refresh here would spend the rotating refresh token and lose the new one. A
+ * token that is not comfortably valid, including the expired one the browser sent (middleware
+ * never refreshes), yields no session, and the browser's own session read refreshes it.
  */
 import NextAuth from "next-auth";
 import { authConfig } from "@/auth";
@@ -42,10 +35,10 @@ const { auth: peekSession } = NextAuth({
  * A session to hydrate SessionProvider with, or undefined to let the browser fetch one.
  *
  * important: never null. SessionProvider reads null as "known signed out": it starts not
- * loading and its poll never fetches, which wedges the tab. And an explicit projection, never
- * the raw result: in a server component next-auth builds `{ user: token, ...session }`, so a
- * session callback that ever stopped returning `user` would serialize the whole JWT, refresh
- * token included, into the HTML. The access token itself travels masked (lib/hydrated-session.ts).
+ * loading and its poll never fetches, which wedges the tab. Always an explicit projection: in a
+ * server component next-auth builds `{ user: token, ...session }`, so a session callback that
+ * stopped returning `user` would serialize the whole JWT, refresh token included, into the HTML.
+ * The access token itself travels masked (lib/hydrated-session.ts).
  */
 export async function readHydratableSession(): Promise<HydratedSession | undefined> {
   try {

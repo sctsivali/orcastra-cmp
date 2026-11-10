@@ -83,7 +83,7 @@ function TerminalPage() {
   useEffect(() => {
     if (connection !== "connected") return;
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      // A sign-in this page started leaves on purpose and comes straight back here.
+      // A sign-in this page started navigates away and comes straight back, so no prompt.
       if (isReauthenticating()) return;
       event.preventDefault();
       event.returnValue = "";

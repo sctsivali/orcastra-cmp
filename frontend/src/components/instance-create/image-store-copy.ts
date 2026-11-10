@@ -1,10 +1,9 @@
 /**
  * What the create form says about the image store it is listing.
  *
- * LXD resolves a local fingerprint only inside the target project's image store. A project
- * with `features.images` keeps its own store, so its Local rows are that store and nothing
- * else; a project without it reads the host's shared default store. The backend resolves
- * which one applies and answers with the store's name, so this copy only has to say it.
+ * LXD resolves a local fingerprint only inside the target project's image store: a project with
+ * `features.images` keeps its own store, and one without it reads the host's shared default
+ * store. The backend answers with the store's name, so this copy only has to say it.
  */
 
 export interface ImageStoreCopyInput {

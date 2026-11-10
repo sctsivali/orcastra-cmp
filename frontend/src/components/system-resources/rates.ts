@@ -4,11 +4,10 @@ import type { SystemResourceUsage } from "@/types";
  * Readings derived from two consecutive answers of GET /system/resource-usage.
  *
  * Every counter used here is machine-wide or container-wide, so the delta between two answers
- * is honest whichever uvicorn worker produced each one. The server's own CPU percents are not:
- * each worker keeps its own previous sample, so with four workers a poll can land on one that
- * last answered an hour ago and report an hour-long average as "now". The browser measures its
- * own poll-to-poll window instead, and falls back to the server figure only when that figure's
- * window is short enough to mean the same thing.
+ * holds whichever uvicorn worker produced each one. The server's own CPU percents do not: each
+ * worker keeps its own previous sample, so a poll can land on one that last answered an hour
+ * ago. The browser measures its own poll-to-poll window, and falls back to the server figure
+ * only when that figure's window is as short.
  */
 
 /** Longest gap still read as "now". A tab that was hidden for minutes starts measuring again. */
@@ -34,11 +33,8 @@ export function sampleWindow(prevAt: string | undefined, currAt: string): number
 }
 
 /**
- * Bytes per second between two samples, from the server's own timestamps.
- *
- * The panel used to divide a counter delta by a hard-coded five seconds, which was only right
- * while the poll was exactly five seconds apart: a manual refresh a second after a poll
- * reported a rate five times too small.
+ * Bytes per second between two samples, from the server's own timestamps, so a manual refresh
+ * between two polls still divides by the real gap.
  */
 export function ratePerSecond(
   prev: number | null | undefined,
@@ -50,7 +46,7 @@ export function ratePerSecond(
   const seconds = sampleWindow(prevAt, currAt);
   if (seconds === null) return null;
   const delta = curr - prev;
-  // whole bytes: formatBytes picks its unit from log1024 and has none for a fraction of a byte
+  // Whole bytes: formatBytes picks its unit from log1024 and has none for a fraction of a byte.
   return delta > 0 ? Math.floor(delta / seconds) : 0;
 }
 
@@ -73,7 +69,7 @@ export function hostCpuReading(prev: SystemResourceUsage | null, curr: SystemRes
   if (a && b && window !== null) {
     const busy = b.busy_seconds - a.busy_seconds;
     const total = b.total_seconds - a.total_seconds;
-    // a counter that went backwards means the machine rebooted between the two answers
+    // A counter that went backwards means the machine rebooted between the two answers.
     if (busy >= 0 && total > 0) return { percent: clampPercent((busy / total) * 100), windowSeconds: window };
   }
   return serverReading(curr.host?.cpu.percent, curr.host?.cpu_window_seconds);
@@ -91,7 +87,7 @@ export function containerCpuReading(prev: SystemResourceUsage | null, curr: Syst
   const window = sampleWindow(prev?.timestamp, curr.timestamp);
   if (a !== null && a !== undefined && b !== null && b !== undefined && window !== null && capacity) {
     const used = b - a;
-    // a counter that went backwards means the container restarted between the two answers
+    // A counter that went backwards means the container restarted between the two answers.
     if (used >= 0) return { percent: clampPercent((used / (window * 1_000_000 * capacity)) * 100), windowSeconds: window };
   }
   return serverReading(cpu?.percent, cpu?.window_seconds);

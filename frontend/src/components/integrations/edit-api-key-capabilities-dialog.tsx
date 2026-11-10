@@ -40,10 +40,9 @@ function seedFrom(apiKey: APIKeyInfo, vocabulary: CapabilityOption[]): string[] 
 /**
  * Narrow or widen what an existing key may do, without reissuing it.
  *
- * Withdrawing tenant.provision from a key that owns OrcaHub organizations is asked about: the server
- * answers with what would stop, the dialog shows it, and Withdraw Anyway sends the same edit with
- * force. Withdrawing org.sync or inventory.read from such a key is refused outright, and the dialog
- * shows the server's sentence for that too.
+ * Withdrawing tenant.provision from a key that owns OrcaHub organizations needs confirmation: the
+ * server answers with what would stop, and Withdraw Anyway resends the edit with force. Withdrawing
+ * org.sync or inventory.read from such a key is refused, and the dialog shows the server's reason.
  */
 export function EditAPIKeyCapabilitiesDialog({
   apiKey,
@@ -58,7 +57,7 @@ export function EditAPIKeyCapabilitiesDialog({
   const [refusal, setRefusal] = useState<string | null>(null);
   const submitInFlightRef = useRef(false);
 
-  // Re-seed each time it opens, so a stale form never writes the old set back.
+  // Re-seed each time it opens, so a stale form never writes back an outdated set.
   useEffect(() => {
     if (!open) return;
     setSelected(seed);
@@ -67,7 +66,7 @@ export function EditAPIKeyCapabilitiesDialog({
   }, [open, seed]);
 
   const toggle = (name: string) => {
-    // A changed selection is a different question, so an earlier answer no longer applies.
+    // A changed selection clears the warning or refusal given for the previous one.
     setWarning(null);
     setRefusal(null);
     setSelected((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));

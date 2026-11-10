@@ -16,11 +16,10 @@ const SIZE: Record<IllustrationSize, string> = {
 };
 
 /**
- * A crop of the canvas, [x, y, width, height] in canvas units, measured per scene in Chromium from
- * the rendered silhouette. Every scene's silhouette covers the same share of its frame (30%), is
- * centred, and stands on one ground line 12% above the frame's bottom, so scenes side by side in a
- * row read at one weight and one baseline whatever their shape. A scene too tall or too wide for that
- * share is fitted inside an 8% margin instead. Re-measure after moving geometry.
+ * A crop of the canvas, [x, y, width, height] in canvas units, measured per scene from the rendered
+ * silhouette. Each silhouette covers 30% of its frame, centred, on a ground line 12% above the
+ * bottom, so scenes in one row share a weight and a baseline; a scene too tall or too wide for that
+ * is fitted inside an 8% margin instead. Re-measure after moving geometry.
  */
 export type IllustrationView = readonly [number, number, number, number];
 
@@ -56,7 +55,7 @@ export function IllustrationFrame({
 }
 
 /**
- * Wraps what a surface showed before it had a scene; illustrations.css shows it only when scenes
+ * Wraps what a surface shows in place of its scene; illustrations.css shows it only when scenes
  * are hidden. A span, so it is valid inside a button or a heading as well as a block.
  */
 export function IllustrationFallback({ children }: { children: React.ReactNode }) {

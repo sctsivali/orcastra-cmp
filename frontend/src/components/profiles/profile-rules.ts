@@ -6,12 +6,12 @@
  * empty or duplicate keys, empty or duplicate device names, a device with no type.
  */
 
-// The house rule the backend applies on create: a letter first, then letters, digits, dots,
-// underscores and hyphens, at most 63. Stricter than LXD on purpose.
+// The rule the backend applies on create, stricter than LXD: a letter first, then letters,
+// digits, dots, underscores and hyphens, at most 63.
 export const PROFILE_NAME_RE = /^[a-zA-Z][a-zA-Z0-9._-]*$/;
 export const PROFILE_NAME_MAX = 63;
-// LXD has no cap. The dialog shows a count past this so a long description is a choice, not
-// a surprise; a description written elsewhere that is longer still edits and saves.
+// LXD has no cap. Past this the dialog shows a count so a long description is noticed; a
+// longer description written elsewhere still edits and saves.
 export const DESCRIPTION_MAX = 255;
 
 export const STALE_PROFILE_MESSAGE =
@@ -72,8 +72,8 @@ export function configRowErrors(rows: ConfigRow[], reserved: readonly string[] =
   const seen = new Set<string>();
   for (const row of rows) {
     const key = row.key.trim();
-    // a row just added is blank by definition; it blocks the save (the footer says why) but is
-    // not painted as a mistake until something has been typed into it
+    // A row just added is blank; it blocks the save (the footer says why) but is not painted as
+    // a mistake until something has been typed into it.
     if (!key) out[row.id] = row.value.trim() ? "Enter a key" : "";
     else if (/\s/.test(key)) out[row.id] = "A key cannot contain spaces";
     else if (reserved.includes(key)) out[row.id] = "Set the type with the selector above";

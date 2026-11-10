@@ -5,18 +5,15 @@
  * returns with `new URL(location)` (node_modules/next-auth/lib/index.js, isSameAuthAction),
  * so the value must stay absolute; a relative path throws and 500s every signed-out page load.
  *
- * The origin next-auth hands the callback is not the one the request arrived on: with
- * NEXTAUTH_URL set, `reqWithEnvURL` rewrites it to the public origin. A liveness probe that
- * asks `http://127.0.0.1:2025/` therefore used to be sent to `https://<public host>/auth/signin`,
- * and a probe that follows redirects then judged the container by the health of the edge in
- * front of it. The `Host` header survives the rewrite, so a request that arrived over loopback
- * is answered with a loopback redirect and never leaves the box. Only loopback hosts are
- * reflected, so this is not an open redirect.
+ * With NEXTAUTH_URL set, `reqWithEnvURL` rewrites the origin next-auth hands the callback to the
+ * public one, so a loopback liveness probe would be redirected to the edge in front of the
+ * container. The `Host` header survives the rewrite, so a request that arrived over loopback is
+ * answered with a loopback redirect. Only loopback hosts are reflected, so this is not an open
+ * redirect.
  */
 
-// The whole header, port included, or nothing: a prefix match let "[::1]@evil.com" through
-// (the bracket form was cut at the first "]" and the raw header was reflected), which is the
-// one shape that turns this control into an open redirect.
+// important: match the whole header, port included. A prefix match admits "[::1]@evil.com"
+// (cut at the first "]") and reflects the raw header, which makes this an open redirect.
 const LOOPBACK_HOST = /^(?:localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|\[::1\])(?::\d{1,5})?$/;
 
 export function isLoopbackHost(hostHeader: string | null | undefined): boolean {

@@ -31,13 +31,9 @@ export const CERTIFICATES = defineTable<CertificateInfo>()({
       label: "Cluster",
       sort: (c) => c.cluster_id,
       search: (c) => c.cluster_id,
-      // The only cluster-scoped table that could not be filtered by cluster, while both
-      // sibling tables on the warnings page facet the same dimension.
-      //
-      // note: this facets `cluster_id` where warnings facets `display_name || cluster_id`,
-      // because CertificateInfo carries no display_name. Joining a second query inside a
-      // facet accessor is the pattern lib/used-by.ts argues against, so the option labels
-      // differ between sibling pages and that is deliberate.
+      // Faceted on `cluster_id` where the warnings page facets `display_name || cluster_id`:
+      // CertificateInfo carries no display_name, and joining a second query inside a facet
+      // accessor is the pattern lib/used-by.ts argues against.
       facet: (c) => c.cluster_id,
       facetSpec: { role: "node" } },
     {
@@ -45,9 +41,9 @@ export const CERTIFICATES = defineTable<CertificateInfo>()({
       label: "Status",
       sort: (c) => c.status,
       facet: (c) => c.status,
-      // note: the enum carries five states while the summary cards show three, so Total is
-      // not the sum of the cards. The facet lists all five; the cards stay at the three an
-      // operator acts on.
+      // The enum carries five states while the summary cards show three, so Total is not the
+      // sum of the cards. The facet lists all five; the cards stay at the three an operator
+      // acts on.
       facetSpec: { primary: true, format: formatLabel } },
     // Searchable, never sortable: ordering by a hash orders nothing an operator cares about.
     { field: "fingerprint", label: "Fingerprint", search: (c) => c.fingerprint },

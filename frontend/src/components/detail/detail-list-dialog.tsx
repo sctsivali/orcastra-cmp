@@ -23,9 +23,8 @@ const SIZES = {
 // The full set behind a count or a "+N". Presentation only: it owns no trigger and no state
 // beyond the copy announcement, so a page mounts one and drives it from its own selection.
 //
-// important: the tall-modal recipe lives here rather than at each call site. DialogContent
-// needs `flex flex-col overflow-hidden` with a bounded max-h, and the scroll has to happen in
-// DialogBody, otherwise the title scrolls out of view on a long list.
+// DialogContent is `flex flex-col overflow-hidden` with a bounded max-h and DialogBody
+// scrolls, so the title stays in view on a long list.
 export interface DetailListDialogProps<T> {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -55,7 +54,7 @@ export function DetailListDialog<T>({
   icon,
   size = "md",
 }: DetailListDialogProps<T>) {
-  // note: one region for the whole list. See the comment in copyable-text.tsx.
+  // One live region for the whole list; see copyable-text.tsx.
   const [announcement, setAnnouncement] = React.useState("");
 
   React.useEffect(() => {

@@ -3,10 +3,9 @@ import { compareValues, type SortDirection } from "@/lib/sort";
 
 type Accessor<T> = (item: T) => unknown;
 
-// Generic single-column table sort. Each table supplies an accessor map keyed by
-// its sort field; the accessor returns the comparable value for a column (number,
-// string, array for count, or a normalized timestamp for dates). Sorting type
-// awareness lives in compareValues, so tables only describe what to compare.
+// Single-column table sort. Each table supplies an accessor map keyed by its
+// sort field; an accessor returns the comparable value (number, string, array
+// for count, or a normalized timestamp). compareValues handles the types.
 //
 // Keep the accessors object stable (module const or useMemo([])) so sortItems
 // keeps a stable identity and downstream memos do not thrash.

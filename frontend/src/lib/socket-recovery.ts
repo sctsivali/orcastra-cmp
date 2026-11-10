@@ -2,16 +2,12 @@
  * What an interactive socket (a shell, a serial console, a SPICE display) does after a refused
  * ticket or a close: refresh the session once, sign in again, back off, or stop and say why.
  *
- * important: a page opened from a deep link in a new tab often holds a session the IdP has
- * already ended, and it used to show "disconnected" with nothing recovering. Now:
- * - a ticket refused with 401 (after fetchAPI's own refresh) or a 4401 close forces one session
- *   refresh: a new token mints again (at once the first time, then with the backoff), an ended
- *   session signs in again (automatically when nothing was live, behind a button when something
- *   was), and an IdP that does not answer backs off;
- * - 4403, 4428 and 4423 stop and say why; reconnecting would be refused again;
- * - a dropped connection or a 1011 backs off 1, 2, 4, 8, 16 s and gives up after five tries.
+ * A deep link opened in a new tab often holds a session the IdP already ended, so a refused
+ * ticket (401 after fetchAPI's own refresh) or a 4401 close forces one session refresh. A new
+ * token mints again (at once the first time, then with the backoff); an ended session signs in
+ * again (automatically when nothing was live, behind a button otherwise); a silent IdP backs off.
+ * 4403, 4428 and 4423 stop and say why. A drop or a 1011 backs off 1, 2, 4, 8, 16 s, then stops.
  * The relay's own endings (1000, 1012, 4404, 4409) stay with the caller, which knows the instance.
- *
  * Not React: the terminal hook and the SPICE session class both hold one.
  */
 
@@ -58,7 +54,7 @@ export class SocketRecovery {
   }
 
   /**
-   * The session is genuinely working (a shell's ready, a display's first frame), so its sign-in
+   * The session is working (a shell's ready, a display's first frame), so its sign-in
    * worked and a later 4401 may refresh again. Attempts still count until stable().
    */
   ready(): void {
@@ -98,11 +94,11 @@ export class SocketRecovery {
       this.authTried = false;
       return this.backoff(SOCKET_MESSAGES.idpUnavailable);
     }
-    // "refreshed" carries a new token. "unchanged" means the session holds what it holds: one more
+    // "refreshed" carries a new token. "unchanged" means the session is as it was: one more
     // ticket settles whether the refusal was the ticket's (spent, expired) or the session's.
-    // important: counted like any reconnect, and only the first is immediate. A SPICE display whose
-    // main channel linked and whose other channel was refused 4401 (a ticket store failing over)
-    // otherwise went round refresh, four tickets and a new LXD operation with no wait at all.
+    // important: counted like any reconnect, and only the first is immediate. Otherwise a SPICE
+    // display whose main channel linked while another was refused 4401 (ex; a ticket store
+    // failing over) loops through a refresh, four tickets and a new LXD operation with no wait.
     if (this.attempts === 0) {
       this.attempts = 1;
       return { action: "retry", delayMs: 0, message: "" };

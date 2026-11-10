@@ -20,15 +20,10 @@ interface NodeFilterSelectProps {
 }
 
 /**
- * Which node the monitoring page is scoped to, and whether that node is actually answering.
+ * Which node the monitoring page is scoped to, and whether that node is answering.
  *
- * This was a plain Select over node names, so the page offered eight identical rows directly
- * above its own "Nodes Online 2 / 8" tile. The status was already in the payload these options
- * are built from; only the dropdown ignored it.
- *
- * A scope picker, not a target picker: nothing is ever disabled here. An operator opens
- * monitoring for the broken node far more often than for the healthy one, so removing it from
- * reach would defeat the page. Same reasoning as the policy scope pickers.
+ * A scope picker, not a target picker: nothing is disabled here. Operators often open monitoring
+ * for the broken node, so it stays reachable. Same reasoning as the policy scope pickers.
  */
 export function NodeFilterSelect({
   nodes,
@@ -41,9 +36,8 @@ export function NodeFilterSelect({
     const rows = nodes.map((node) => {
       const raw = clusterStatusMeta(node);
       // important: "Pending Trust" and "Error" are certificate-handshake and platform
-      // vocabulary a tenant cannot act on; the node card beside this filter already collapses
-      // every not-online state to "Unavailable" for them, one word in one colour, so the list
-      // must too.
+      // vocabulary a tenant cannot act on. The node card beside this filter collapses every
+      // not-online state to "Unavailable" for them, so the list must too.
       const meta =
         isPartner || raw.reachable
           ? raw
@@ -63,7 +57,7 @@ export function NodeFilterSelect({
       };
     });
 
-    // Reachable nodes lead. With two answering out of eight, alphabetical order buries both.
+    // Reachable nodes lead, then by name, so a few answering nodes are not buried.
     rows.sort((a, b) => a._rank - b._rank || a.label.localeCompare(b.label));
 
     return [
@@ -83,7 +77,7 @@ export function NodeFilterSelect({
       searchPlaceholder="Search clusters…"
       emptyText="No clusters found."
       // The trigger sits in a toolbar beside the pause and refresh buttons, so it keeps its own
-      // width and the 36px height those share rather than the form-field default.
+      // width and the 36px height those share instead of the form-field default.
       className="h-9 w-auto min-w-[160px] max-w-[300px]"
       // The panel inherits the trigger width, which is too narrow once a row carries a name and
       // a status word. Widened, and still capped to what the viewport can give it.

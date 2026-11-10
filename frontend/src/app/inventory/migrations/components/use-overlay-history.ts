@@ -8,11 +8,10 @@ type QueryPatch = Record<string, string | null>;
 /**
  * Query-string dialogs that the browser's Back closes.
  *
- * important: a dialog opened from the page is its own history entry, so Back closes it instead of
- * leaving the page, and Close steps back over that entry rather than stacking a second copy of the
- * page under it. A dialog the page was loaded with (a link from another page) has no entry of
- * ours, so its Close replaces the URL and Back leaves the page as before. Moving from one dialog to
- * another while one is open replaces the entry, so one Back always reaches the page.
+ * A dialog opened from the page pushes its own history entry, so Back closes it, and Close steps
+ * back over that entry rather than stacking a second copy of the page. A dialog the page was
+ * loaded with has no entry of ours, so its Close replaces the URL. Moving between dialogs replaces
+ * the entry, so one Back always reaches the page.
  */
 export function useOverlayHistory(
   pathname: string,

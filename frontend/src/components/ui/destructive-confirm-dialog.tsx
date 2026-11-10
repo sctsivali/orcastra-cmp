@@ -38,8 +38,8 @@ interface DestructiveConfirmDialogProps {
   pending: boolean;
   /**
    * A preflight is still running, so what depends on the target is not known yet. The confirm
-   * stays blocked until it settles: without this an operator can confirm inside that window
-   * and be answered by a refusal that the dialog was about to explain to them anyway.
+   * stays blocked until it settles, so the operator cannot confirm before the dialog has said
+   * what the action would refuse or take with it.
    */
   preparing?: boolean;
   /** What to say while `preparing`. */
@@ -62,10 +62,10 @@ interface DestructiveConfirmDialogProps {
   reasonPlaceholder?: string;
   /**
    * When set, the operator must type `value` exactly before the confirm unblocks. Use it where
-   * the operator has to prove WHICH row they are on, not merely that they accepted something.
+   * the operator has to prove which row they are on.
    */
-  // note: `prompt`, not `label`. It is an instruction to the operator and reads as a sentence,
-  // and check-heading-case treats every `label:` literal as a title that must be Title Case.
+  // Named `prompt`: it is an instruction that reads as a sentence, and check-heading-case
+  // treats every `label:` literal as a title that must be Title Case.
   confirmPhrase?: { prompt: React.ReactNode; value: string };
   /** Surfaced above the footer when an attempt failed but the dialog stayed open. */
   error?: string | null;
@@ -75,32 +75,14 @@ interface DestructiveConfirmDialogProps {
 const NAMES_SHOWN = 8;
 
 /**
- * One confirm-and-mutate dialog for a destructive row action.
+ * One confirm-and-mutate dialog for a destructive row action. The action's preventDefault keeps
+ * it open and populated during the request; Escape and an outside click are refused while
+ * pending, so a half-finished delete cannot be dismissed into an unknown state. The caller holds
+ * its display target one render longer than its real target, so the body does not blank on exit.
  *
- * Three details here are load-bearing and were each learned from a defect in this repo, so
- * they are not restated at call sites. The action's preventDefault keeps the dialog open and
- * populated for the length of the request rather than letting Radix close it mid-flight. The
- * dialog refuses Escape and an outside click while pending, so a half-finished delete cannot
- * be dismissed into an unknown state. And the caller holds its display target one render
- * longer than its real target, so the body does not blank during the exit fade.
- *
- * Three affordances, three different proofs, and they are not interchangeable. A typed
- * confirmation proves the operator read WHICH target; a checkbox proves they accepted a
- * consequence; a reason is the only one that says WHY.
- *
- * note: this docblock used to argue that typing belongs only to cascading deletions, on the
- * grounds that an image is re-uploadable and a 64-character fingerprint produces copy-paste
- * without reading. Both of those are true of the case it was written about and neither
- * generalises. A snapshot taken by hand on the host is not re-uploadable, nothing in this
- * console will make another one, and its name is short and human. The rule was drawn too wide
- * from one example, so it is corrected here rather than quietly dropped: type when the mistake
- * is WHICH ONE, and the target is short enough to be read rather than pasted.
- *
- * `reasonLabel` is a third thing again, and only for actions recorded as an override. A typed
- * confirmation proves the operator read WHICH target; a checkbox proves they accepted a
- * consequence; a reason is the only one that says WHY, and it is the one an audit trail is read
- * for. It is never composed by the caller: a canned sentence fills that field with something no
- * human meant, which is worse than leaving it empty.
+ * `confirmPhrase` proves the operator read which target (use it for a short name where the likely
+ * mistake is the wrong target), `acknowledgeLabel` that they accepted a consequence, and
+ * `reasonLabel` (override actions only, never composed by the caller) says why.
  */
 export function DestructiveConfirmDialog({
   open,
@@ -140,7 +122,7 @@ export function DestructiveConfirmDialog({
   const blocked =
     (!!acknowledgeLabel && !acknowledged) ||
     (!!reasonLabel && reason.trim().length === 0) ||
-    // Exact, and trimmed only at the ends. A near miss is a different snapshot.
+    // Exact, and trimmed only at the ends. A near miss is a different target.
     (!!confirmPhrase && typed.trim() !== confirmPhrase.value) ||
     pending ||
     !!preparing;
@@ -168,9 +150,8 @@ export function DestructiveConfirmDialog({
             <p className="text-sm font-medium text-foreground">{dependents.summary}</p>
             <ul className="mt-2 space-y-0.5">
               {shown.map((name) => (
-                // note: wraps rather than clips. This is the list the operator is being asked
-                // to accept losing, so a name cut off with no reveal is the one case where
-                // truncation costs the decision itself.
+                // Wraps rather than clips: this is the list the operator is asked to accept
+                // losing, so a name cut off with no reveal would cost the decision itself.
                 <li key={name} className="break-all font-mono text-xs text-muted-foreground">
                   {name}
                 </li>

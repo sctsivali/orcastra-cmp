@@ -40,10 +40,9 @@ function pendingLabel(pending: PendingCreate): string {
   return "Creating…";
 }
 
-// important: the full document reload this replaced did two jobs. It read the list again and,
-// because lib/pending-creates.ts persists no verdict, it read the durable job again too, clearing
-// pollingHalted on the way. The list read alone would leave a halted row stuck for good, and an
-// unknown one waiting out its poll delay, so the job is asked for here as well.
+// important: reading the list again is not enough. lib/pending-creates.ts persists no verdict,
+// so the durable job is asked for again too, clearing pollingHalted on the way. The list read
+// alone would leave a halted row stuck for good, and an unknown one waiting out its poll delay.
 function ReloadCurrentState({
   pending,
   onRefresh,
@@ -122,9 +121,8 @@ export function PendingCreateRows({ pending, onViewInstance, onRefresh }: Pendin
           <TableCell><TableEmptyValue /></TableCell>
           {/* Pinned like the live rows' actions cell; the row state carries the tint. */}
           <TableCell pinned="end" className="text-right">
-            {/* A failed create no longer disappears on a timer, because an operator who
-                looked away used to lose the only account of why it never arrived. It
-                needs a way out, so it gets an explicit one. A row still creating has
+            {/* A failed create stays until dismissed, so an operator who looked away still
+                has the only account of why it never arrived. A row still creating has
                 nothing to dismiss. */}
             {(p.status === "Error" || p.jobStatus === "failure" || p.jobStatus === "partial" || p.jobStatus === "unknown") && (
               <div className="flex justify-end gap-1">

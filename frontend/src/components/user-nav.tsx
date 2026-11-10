@@ -1,10 +1,8 @@
 "use client";
 
 /**
- * User Navigation Component
- *
- * Displays user avatar, name, a link to the identity provider's account settings, and sign-out.
- * Shows when user is authenticated.
+ * The signed-in user's menu: avatar, name, roles, a link to the identity provider's account
+ * settings, and sign-out.
  */
 
 import { useSession } from "next-auth/react";
@@ -27,7 +25,7 @@ export function UserNav() {
   const { data: session, status } = useSession();
   const [isSigningOut, setIsSigningOut] = useState(false);
 
-  // Don't render if not authenticated
+  // A spinner while the session loads; nothing once it is known there is no user.
   if (status === "loading") {
     return (
       <Button variant="ghost" size="sm" disabled>
@@ -100,7 +98,6 @@ export function UserNav() {
               </div>
             </div>
 
-            {/* Show groups/roles if available */}
             {user.groups && user.groups.length > 0 && (
               <div className="flex items-center gap-1 text-xs text-muted-foreground">
                 <Shield className="h-3 w-3" />
@@ -112,9 +109,9 @@ export function UserNav() {
 
         <DropdownMenuSeparator />
 
-        {/* note: the account lives on the identity provider, so Profile leaves the app in a new
-            tab and the console stays where the user was. noreferrer keeps the console URL out of
-            the IdP's logs and noopener stops the new tab reaching back into this one. */}
+        {/* The account lives on the identity provider, so Profile opens it in a new tab and the
+            console stays where the user was. noreferrer keeps the console URL out of the IdP's
+            logs and noopener stops the new tab reaching back into this one. */}
         {IDP_ACCOUNT_SETTINGS_URL ? (
           <DropdownMenuItem className="cursor-pointer" asChild>
             <a

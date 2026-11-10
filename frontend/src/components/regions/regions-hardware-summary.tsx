@@ -43,7 +43,6 @@ export function HardwareSummary({ hardware, compact = false }: { hardware: Exten
 
   return (
     <div className="grid grid-cols-2 gap-4">
-      {/* CPU */}
       <div className="space-y-1">
         <div className="flex items-center gap-2 text-sm font-medium">
           <Cpu className="h-4 w-4 text-foreground" />
@@ -56,7 +55,6 @@ export function HardwareSummary({ hardware, compact = false }: { hardware: Exten
         </div>
       </div>
 
-      {/* Memory */}
       <div className="space-y-1">
         <div className="flex items-center gap-2 text-sm font-medium">
           <MemoryStick className="h-4 w-4 text-foreground" />
@@ -68,7 +66,6 @@ export function HardwareSummary({ hardware, compact = false }: { hardware: Exten
         </div>
       </div>
 
-      {/* GPU */}
       <div className="space-y-1">
         <div className="flex items-center gap-2 text-sm font-medium">
           <Sparkles className="h-4 w-4 text-foreground" />
@@ -108,7 +105,6 @@ export function HardwareSummary({ hardware, compact = false }: { hardware: Exten
         </div>
       </div>
 
-      {/* Storage */}
       <div className="space-y-1">
         <div className="flex items-center gap-2 text-sm font-medium">
           <HardDrive className="h-4 w-4 text-foreground" />
@@ -127,5 +123,3 @@ export function HardwareSummary({ hardware, compact = false }: { hardware: Exten
     </div>
   );
 }
-
-// Region card component

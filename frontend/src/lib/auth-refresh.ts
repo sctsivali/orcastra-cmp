@@ -1,16 +1,15 @@
 /**
  * The identity provider's token endpoint, and what a failed refresh means.
  *
- * important: a refused refresh is not always worth retrying. Authentik (2026.2) deletes a refresh
- * token with the session it belongs to and rotates it on every grant, so `invalid_grant` means the
- * token is gone for good: the session ended at the IdP, or another copy already spent it. Treating
- * that as transient kept the expired access token in the cookie and retried every minute, so the
- * page looked signed in while every request and every socket ticket came back 401. Only that
- * answer ends the session; a timeout, a network failure, a 5xx or a 429 says nothing about the
- * token, and neither does a client misconfiguration (logged at error so it is seen).
+ * important: only `invalid_grant` ends the session. Authentik deletes a refresh token with its
+ * session and rotates it on every grant, so `invalid_grant` means the token is gone for good: the
+ * session ended at the IdP, or another copy already spent it. Retrying it would keep an expired
+ * access token in the cookie while every request and socket ticket came back 401. A timeout, a
+ * network failure, a 5xx or a 429 says nothing about the token, and neither does a client
+ * misconfiguration (logged at error so it is seen).
  *
  * Pure: fetch, the clock and the logger are passed in, so scripts/checks drive it directly.
- * note: a log line never carries token material; only the status, the OAuth error code and timing.
+ * A log line never carries token material; only the status, the OAuth error code and timing.
  */
 
 export type RefreshFailureKind = "revoked" | "transient";
@@ -63,7 +62,7 @@ export function classifyRefreshFailure(
   error: string | undefined,
 ): { kind: RefreshFailureKind; level: "warn" | "error" } {
   if ((status === 400 || status === 401) && error === "invalid_grant") return { kind: "revoked", level: "warn" };
-  // A client the IdP does not recognise is this deployment's fault, not the user's session.
+  // An unrecognised client is a deployment misconfiguration; the session may still be valid.
   if (error === "invalid_client" || error === "unauthorized_client") return { kind: "transient", level: "error" };
   return { kind: "transient", level: "warn" };
 }
@@ -75,8 +74,8 @@ class GrantFailure extends Error {
 }
 
 export function createIdpClient(options: IdpClientOptions) {
-  // note: called as plain fetch on purpose, so check-mutation-coherence audits the two POSTs below
-  // against its raw-fetch allowlist like any other.
+  // Called as plain fetch, so check-mutation-coherence audits the two POSTs below against its
+  // raw-fetch allowlist like any other.
   const { fetch } = options;
   let cachedDiscovery: Discovery | null = null;
 
@@ -91,8 +90,8 @@ export function createIdpClient(options: IdpClientOptions) {
       cachedDiscovery = { token_endpoint: found.token_endpoint, revocation_endpoint: found.revocation_endpoint };
       return cachedDiscovery;
     } catch (error) {
-      // important: only a discovery failure invalidates the cache. Clearing it on a failed grant
-      // made the next refresh pay a second round trip, 2.05 s instead of 1.27 s.
+      // Only a discovery failure invalidates the cache; a failed grant keeps it, so the next
+      // refresh does not pay a second round trip.
       cachedDiscovery = null;
       throw error;
     }
@@ -145,7 +144,7 @@ export function createIdpClient(options: IdpClientOptions) {
   }
 
   // RFC 7009: a signed-out refresh token is revoked at the IdP, so no copy of the cookie can use it.
-  // note: a 200 does not prove the token existed (RFC 7009 answers 200 for unknown tokens).
+  // A 200 does not prove the token existed (RFC 7009 answers 200 for unknown tokens).
   async function revoke(refreshToken: string): Promise<boolean> {
     try {
       const signal = AbortSignal.timeout(5_000);

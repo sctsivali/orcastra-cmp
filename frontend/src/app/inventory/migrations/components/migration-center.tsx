@@ -290,7 +290,7 @@ function MigrationCenterContent() {
             lastUpdatedAt={jobsQuery.dataUpdatedAt}
             onRefresh={() => Promise.all([jobsQuery.refetch(), plansQuery.refetch()])}
           />
-          {/* Planning is not a write: read-only mode refuses Start inside the wizard, not this. */}
+          {/* Planning is not a write, so read-only mode leaves it on; the wizard refuses Start. */}
           <Button
             className="min-h-11 sm:min-h-10"
             disabled={!centerEnabled}

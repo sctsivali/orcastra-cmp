@@ -9,11 +9,9 @@ import type {
 } from "@/types/api";
 
 /**
- * An owner key's state as the list shows it. "hidden" is a state the list does not show: the
- * caller is neither an administrator nor a partner of the key's own organization, which only a
- * sale through the key proves. A buyer's founder is a partner of the buyer, which carries the
- * seller's key, and still does not see it; before the key's first sale nobody but an
- * administrator does.
+ * An owner key's state as the list shows it. "hidden" means the caller is neither an
+ * administrator nor a partner of the key's own organization, which only a sale through the key
+ * proves. A partner of the buyer, which carries the seller's key, does not see it either.
  */
 export type OwnerStateShown = OwnerKeyState | "hidden";
 
@@ -52,8 +50,8 @@ export function ownerKeyState(org: Pick<IntegrationOrganization, "owner_key_stat
 /**
  * An owner that will never sync again, so the organization is frozen until it is transferred.
  *
- * note: unknown is not frozen. It means the key's record could not be read, which is a
- * question to retry, not a verdict. Unclaimed is not frozen either: any key may claim it.
+ * `unknown` is not frozen: the key's record could not be read, and the read can be retried.
+ * `unclaimed` is not frozen either: any key may claim it.
  */
 export function ownerKeyIsFrozen(state: OwnerStateShown): boolean {
   return state === "expired" || state === "revoked" || state === "inactive" || state === "missing";
@@ -115,13 +113,10 @@ const ENDING: Record<"revoke" | "delete", string> = { revoke: "Revoking it", del
 /**
  * The sentence the server answers a revoke or delete of this key with, composed before asking.
  *
- * note: mirrors _owned_message in backend/app/services/integration_key_ownership.py so the dialog
- * says what the refusal would say. The server stays the authority: a list that is out of date
- * still gets the server's own sentence in the error toast.
- *
- * important: with co-owners only the organizations no other key owns stop the end, and the key list
- * counts those without saying which they are. So that sentence counts them and names none, rather
- * than naming organizations another owner key keeps syncing as if they would freeze.
+ * Mirrors _owned_message in backend/app/services/integration_key_ownership.py. The server stays
+ * the authority: an out-of-date list still gets the server's own sentence in the error toast.
+ * With co-owners only organizations no other key owns block the action; the key list counts
+ * them without names, so that sentence does too.
  */
 export function ownedKeySentence(key: APIKeyInfo, action: "revoke" | "delete", isAdmin: boolean): string {
   const shown = key.owned_organization_slugs ?? [];
@@ -167,8 +162,8 @@ export function ownedKeySentence(key: APIKeyInfo, action: "revoke" | "delete", i
 /**
  * Bring the Synced Organizations panel into view, where an administrator transfers owners.
  *
- * note: focus moves with the scroll (the panel carries tabIndex -1), so a keyboard user lands on
- * the list rather than staying on a dialog button that has just closed.
+ * Focus moves with the scroll (the panel carries tabIndex -1), so a keyboard user lands on the
+ * list instead of a dialog button that has just closed.
  */
 export function openSyncedOrganizations(): void {
   const panel = document.getElementById("synced-organizations");

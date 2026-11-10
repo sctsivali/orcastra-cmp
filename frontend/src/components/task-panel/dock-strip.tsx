@@ -35,7 +35,7 @@ export interface DockStripProps {
   caretRef: React.RefObject<HTMLButtonElement>;
 }
 
-// note: globals.css forces every button to 44 px below md, so the list and its triggers take
+// globals.css forces every button to 44 px below md, so the list and its triggers take
 // the strip's full height there and only shrink to the 28 px row from md up.
 const TRIGGER_CLASS = "shrink-0 px-2 py-0 text-xs md:h-7";
 const COUNT_CLASS = "ml-1.5 px-1.5 py-0 tabular-nums";
@@ -79,7 +79,7 @@ export function DockStrip({
       </Button>
 
       {/* min-w-0 lets the tabs give way on a phone. With the default min-width the tab counts
-          pushed the refresh, expand and operator controls off a 390px screen. */}
+          push the refresh, expand and operator controls off a 390px screen. */}
       <TabsList className="h-11 min-w-0 justify-start overflow-x-auto p-0 md:h-8 md:p-0.5" aria-label="Task panel tabs">
         <TabsTrigger value="tasks" className={TRIGGER_CLASS} onClick={() => expandIfCollapsed("tasks")}>
           Tasks

@@ -1,8 +1,8 @@
 /**
- * Console Manager: every console window of the page, and the tray of minimized ones.
+ * Every console window on the page, and the tray of minimized ones.
  *
  * All windows render from one list whatever their state, so a window keeps its sessions when it
- * is minimized, restored or taken to full page (each used to remount it in another subtree).
+ * is minimized, restored or taken to full page; a separate subtree per state would remount it.
  */
 
 "use client";

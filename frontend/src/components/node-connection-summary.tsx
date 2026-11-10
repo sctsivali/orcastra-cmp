@@ -38,10 +38,9 @@ export function NodeConnectionSummary({
     return <p className="text-xs text-muted-foreground mt-1">All Connected</p>;
   }
 
-  // important: the tooltip below is a diagnosis, not a status. It carries the node id, the
-  // control-plane endpoint, the breaker state and the raw connection error. A tenant gets the
-  // same count as plain text rather than a control that opens onto operator detail, because a
-  // trigger that reveals nothing is worse than no trigger.
+  // important: the tooltip below carries the node id, the control-plane endpoint, the breaker
+  // state and the raw connection error. A tenant gets the same count as plain text, with no
+  // control that opens onto operator detail.
   if (!isPartner) {
     return (
       <p className="text-xs text-muted-foreground mt-1">

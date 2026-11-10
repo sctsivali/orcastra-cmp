@@ -1,16 +1,14 @@
 import { formatVcpuCount, plural } from "@/lib/utils";
 
 /**
- * CPU allocation as the console presents it. The figure the API calls cpu_used is the sum of
- * the running instances' CPU limits, which KVM lets exceed the host's CPU thread count: 307
- * vCPUs on 80 threads is a legitimate over-commit, not a fault, and it must not read as
- * "383.8 % used" with a bar that leaves its track. It is presented as a ratio, with a warning
- * tone only past the point a general-purpose fleet is normally sized to.
+ * CPU allocation as the console presents it. The API's cpu_used is the sum of the running
+ * instances' CPU limits, which KVM lets exceed the host's CPU thread count. Over-commit is
+ * normal, so it is shown as a ratio instead of a percentage past 100, with a warning tone only
+ * past the point a general-purpose fleet is normally sized to.
  */
 
 // 4:1 is the conventional ceiling for general workloads (the KVM and OpenStack default
-// cpu_allocation_ratio); latency-sensitive fleets tune lower. Kept here so a per-tenant
-// override later is one line.
+// cpu_allocation_ratio); latency-sensitive fleets tune lower.
 export const CPU_OVERCOMMIT_WARN_RATIO = 4;
 
 export type CpuTone = "within" | "overcommitted" | "warning";
@@ -66,8 +64,7 @@ export function cpuAllocation(src: CpuAllocationSource): CpuAllocationView {
 
 /**
  * The host capacity unit. "CPU thread" keeps the word a non-specialist knows (CPU) and the exact
- * kind (a thread, which is what LXD counts: cores x threads per core). It replaced "hardware
- * thread" on 2026-11-07, which read as jargon to anyone who knows their server as "a CPU".
+ * kind (a thread, which is what LXD counts: cores x threads per core).
  */
 export function formatCpuThreads(count: number): string {
   return plural(count, "CPU thread");

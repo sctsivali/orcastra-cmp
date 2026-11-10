@@ -24,9 +24,9 @@ import { instanceStatusDisplay } from "@/lib/instance-status";
 import { EmptyInstancesIllustration } from "@/components/illustrations/scenes/onboarding";
 
 
-// note: the facet fields are named `host` and `project` deliberately, matching both the
-// existing sort fields and the OrcaHub deep-link keys. That contract keeps working with no
-// translation layer. Only `?instance=` needs mapping, and it is handled in the component.
+// important: the facet fields are named `host` and `project` to match the sort fields
+// and the OrcaHub deep-link keys, so that contract needs no translation layer. Only
+// `?instance=` needs mapping, and it is handled in the component.
 export const INSTANCES = defineTable<any>()({
   searchPlaceholder: "Search instances",
   defaultSort: { field: "name", direction: "asc" },
@@ -152,9 +152,8 @@ export function InstancesTable(props: InstancesTableProps) {
                   ? "No instances found"
                   : "No instances yet"
               }
-              // The description was unconditional, so a deployment with no clusters at all
-              // was told its filters were wrong. Eight sibling tables already guard this;
-              // this is the most-visited one and was the outlier.
+              // Only an active filter gets the filter wording, so a deployment with no
+              // clusters at all is not told its filters are wrong.
               description={
                 activeFilterCount > 0
                   ? "No instance matches the current filters."

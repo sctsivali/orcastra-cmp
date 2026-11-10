@@ -32,7 +32,7 @@ function StatusBadge({ status }: { status: BreakGlassGrantStatus }) {
 
 /**
  * Break-glass governance view. Admins see all grants and can revoke an active one early;
- * partners/tenants see grants on their own organization's clusters (accountability).
+ * Partners and Tenants see the grants on their own organization's clusters.
  */
 export function BreakGlassPanel() {
   const { isAdmin } = usePermissions();
@@ -49,8 +49,8 @@ export function BreakGlassPanel() {
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(PANEL_PAGE_SIZE);
-  // note: clamped on read, never corrected in an effect. This list refetches every 15 seconds,
-  // so an effect would paint one wrong frame and then move the page under whoever is reading it.
+  // Clamped on read, never corrected in an effect. This list refetches every 15 seconds, so an
+  // effect would paint one wrong frame and then move the page under whoever is reading it.
   const totalPages = Math.max(1, Math.ceil(grants.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pagedGrants = grants.slice((currentPage - 1) * pageSize, currentPage * pageSize);

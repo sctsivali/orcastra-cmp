@@ -20,7 +20,7 @@ export interface TaskCancelDialogProps {
  * on success and stays open, with the error line, on a refusal.
  *
  * important: the in-flight ref is claimed synchronously before the request starts. React
- * state lands a render later, and a double click inside that window used to send two DELETEs.
+ * state lands a render later, so a double click inside that window would send two DELETEs.
  */
 export function TaskCancelDialog({ task, open, onOpenChange }: TaskCancelDialogProps) {
   const cancel = useCancelTask();
@@ -34,8 +34,8 @@ export function TaskCancelDialog({ task, open, onOpenChange }: TaskCancelDialogP
     message: string;
   } | null>(null);
   // Held one render past the real target so the body does not blank during the exit fade.
-  // The owner guard keeps that courtesy within one actor. A scope transition removes the old
-  // instance-identifying body immediately instead of leaving it mounted for the exit fade.
+  // Only within one actor: after a scope transition the previous actor's body, which names an
+  // instance, is dropped at once.
   const shown = React.useRef<{
     actorGuard: ActorMutationGuard;
     task: TaskRecord;

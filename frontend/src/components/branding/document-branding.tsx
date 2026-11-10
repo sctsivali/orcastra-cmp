@@ -21,8 +21,8 @@ export function DocumentBranding() {
 
   React.useEffect(() => {
     if (isLoading) return;
-    // note: Next may render the root metadata again on a navigation, replacing the title and the
-    // icon links with the server's. Whatever is there and was not written here is the server's.
+    // Next may render the root metadata again on a navigation, replacing the title and the icon
+    // links with the server's. Whatever is there and was not written here is the server's.
     if (document.title !== appliedTitleRef.current) serverTitleRef.current = document.title;
     const branded = appName && appName !== DEFAULT_PERSONALIZATION.branding.appName;
     const title = branded ? appName : serverTitleRef.current ?? document.title;

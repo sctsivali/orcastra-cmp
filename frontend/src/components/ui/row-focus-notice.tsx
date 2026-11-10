@@ -6,9 +6,8 @@ import { cn } from "@/lib/utils";
 /**
  * The created row exists but the active filters hide it.
  *
- * Information, not a fault: the operator's own filter is doing its job. So the shell is the
- * partial-read notice's without the amber, and the one action clears the filters, after which
- * useRowFocus brings the row into view.
+ * Informational, so it uses the partial-read notice's shell without the amber. Its one action
+ * clears the filters, after which useRowFocus brings the row into view.
  */
 export function RowFocusNotice({
   label,

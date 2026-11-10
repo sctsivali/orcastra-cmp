@@ -15,25 +15,13 @@ import { APIError } from "@/types/api";
 import { SNAPSHOT_SCHEDULES, SnapshotSchedulesTable } from "./snapshot-schedules-table";
 
 /**
- * The schedules half of the snapshots page.
+ * The schedules half of the snapshots page, with its own filter instance and page state. It reads
+ * Postgres rather than a cluster, so it renders even when the fleet snapshot read has failed,
+ * which is when an operator most needs to see and pause what is scheduled.
  *
- * Its own component, its own filter instance and its own page state. Three filter instances
- * already coexist on the warnings page for the same reason: one selection must not leak into
- * another, which the table id namespaces in the URL.
- *
- * important: this reads Postgres, not a cluster. It is rendered even when the fleet snapshot read
- * has failed, because a cluster outage is exactly the moment an operator wants to see what is
- * still scheduled against it and pause it. Coupling it to that read would hide the control at the
- * only time it matters.
- */
-/**
- * The boundary is here rather than only on the page.
- *
- * `useTableFilters` reads the query string, which opts a client component out of prerendering, and
- * Next then fails `next build` on the route unless a Suspense sits above it. The page already has
- * one, so this is redundant at runtime today. It is not redundant as a contract: this card is
- * self-contained and a second mount elsewhere would otherwise break a build minutes after a green
- * local run, which is the exact failure check-searchparams-suspense.mjs exists to move earlier.
+ * The Suspense boundary sits here as well as on the page: `useTableFilters` reads the query
+ * string, and `next build` fails a route with no boundary above it
+ * (check-searchparams-suspense.mjs).
  */
 export function SnapshotSchedulesCard() {
   return (
@@ -59,15 +47,14 @@ function SchedulesCardContent() {
   const [pageSize, setPageSize] = useState(PANEL_PAGE_SIZE);
   const resetPage = () => setCurrentPage(1);
 
-  // Two sources for one fact, and neither is redundant. The settings poll answers before a request
-  // is made, so a deployment that has said no is never asked; the 404 is what a backend too old to
-  // carry the field still tells us, and it is the authoritative one when they disagree.
+  // Two sources for one fact. The settings poll answers before a request is made, so a
+  // deployment with schedules off is never asked; a 404 covers a backend whose settings lack the
+  // field, and it is the authoritative one when they disagree.
   const schedulesEnabled = useSnapshotSchedulesEnabled();
   const { data, isFetching, isError, error } = useSnapshotSchedules({}, schedulesEnabled !== false);
   const rows = useMemo(() => data?.items ?? [], [data]);
   // SNAPSHOT_SCHEDULES_ENABLED is off by default and gates both the loop and the router
-  // (main.py:689), so a 404 here is not a failure to read: it is the deployment answering that it
-  // never mounted the routes, every time, forever.
+  // (app/main.py), so a 404 here means the routes are not mounted rather than a failed read.
   const switchedOff =
     schedulesEnabled === false || (isError && error instanceof APIError && error.status === 404);
 
@@ -91,22 +78,13 @@ function SchedulesCardContent() {
       </CardHeader>
       <CardContent>
         {/*
-          Four answers, and one line rather than a table for the three that have no rows.
+          Four answers, and one line rather than a table for the three that have no rows: a full
+          empty state would cost about 250px above the page's primary content on every visit.
 
-          A full empty state here costs about 250px above the primary content of a page called
-          Snapshots, on every visit, for a feature most instances will not use. It also renders a
-          <tbody> whose only row spans every column, which is a different shape from a data row and
-          which anything reading the page positionally would meet first.
-
-          "No schedules yet" used to be printed for all three, so a deployment that never mounted
-          the routes read as a deployment nobody had used yet, and the sentence then sent the
-          operator to a tab whose Schedule button would 404 the moment they submitted. The failed
-          read is separated from the switched-off one for the same reason: an outage an operator
-          could act on is not a deployment decision they cannot.
-
-          The error branch waits for `rows.length === 0` because a refetch can fail while the rows
-          from the last good read are still in hand, and dropping a list the operator can still use
-          is worse than showing it beside the failure.
+          Switched off, failed and empty each get their own sentence: a deployment without the
+          routes must not read as unused, and an outage an operator can act on is not a
+          deployment setting. The error branch waits for `rows.length === 0` because a refetch can
+          fail while the last good rows are still in hand, and those stay on screen.
         */}
         {switchedOff ? (
           <p className="text-sm text-muted-foreground">

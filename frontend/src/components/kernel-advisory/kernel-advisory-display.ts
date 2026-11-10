@@ -9,9 +9,9 @@ import type {
 } from "@/types/kernel-advisory";
 import { plural } from "@/lib/utils";
 
-// note: the wire values stay exposed/unverified/patched (backend, URL facets, the warning feed).
-// Only what an operator reads is CVE vocabulary. The icon and its token mirror the shape of
-// lib/cluster-status.ts ClusterStatusMeta, so the state never rides on colour alone.
+// The wire values stay exposed/unverified/patched (backend, URL facets, the warning feed); only
+// the labels use CVE vocabulary. The icon and its token mirror lib/cluster-status.ts
+// ClusterStatusMeta, so the state never rides on colour alone.
 export const KERNEL_STATE_DISPLAY: Record<
   KernelAdvisoryState,
   { label: string; tone: "negative" | "caution" | "positive"; icon: LucideIcon; iconClassName: string }
@@ -56,7 +56,7 @@ export interface OpenAdvisory {
   state: OpenAdvisoryState;
   affected: number;
   total: number;
-  /** Some member list could not be read, so `total` is the members read, not the cluster's size. */
+  /** Some member list could not be read, so `total` counts only the members read. */
   unlisted: boolean;
 }
 
@@ -69,7 +69,7 @@ function topScore(advisory: KernelAdvisoryInfo | null): number {
  *
  * A member with no finding for a CVE counts as unconfirmed for it, the same rule rowState applies
  * to a member with no findings at all. A cluster with no member read, or no CVE judged, has no
- * verdict (state null): calling that patched would turn "not read" into an all-clear.
+ * verdict (state null), so "not read" never reads as patched.
  */
 export function clusterVerdict(
   rows: readonly HostKernelRow[],

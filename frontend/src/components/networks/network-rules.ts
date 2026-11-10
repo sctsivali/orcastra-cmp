@@ -1,5 +1,5 @@
-// Pure rules for the Create Network dialog: what LXD will and will not accept, checked before
-// the request is built so the operator reads the reason next to the field, not in a toast.
+// Pure rules for the Create Network dialog: what LXD accepts, checked before the request is
+// built so the reason shows next to the field instead of in a toast.
 
 export type IpMode = "auto" | "none" | "custom";
 export type NetworkType = "bridge" | "ovn";

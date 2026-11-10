@@ -235,7 +235,7 @@ export function progressPercent(progress: string | null | undefined): number | n
   return Math.max(0, Math.min(100, Number(match[1])));
 }
 
-/** "Instance web-01 on nuc1", or just the node when the task names no resource. */
+/** "Instance web-01 on cluster-a", or "On cluster-a" when the task names no resource. */
 export function taskSubtitle(
   task: Pick<TaskRecord, "resource_type" | "resource_name" | "cluster_id">,
 ): string {

@@ -3,19 +3,11 @@
 /**
  * Whether an agent may see and drive this organization's guest desktops.
  *
- * important: four switches, not one. They are four separate disclosures and the backend composes
- * them separately. A screenshot leaves the deployment for a third-party model; a keystroke acts
- * as the logged-in desktop user, inheriting their unlocked keyring and validated sudo; the
- * clipboard is the highest-yield exfiltration primitive on the surface; and guest access is a
- * shell inside the container, which is root by default.
- *
- * The last two used to ride on the first, so an organization that agreed to screenshots was
- * silently agreeing to both. That is why they default to off here and why turning capture off
- * clears all three rather than remembering them for next time: the server does exactly that, and
- * a form that showed otherwise would be describing a state that does not exist.
- *
- * Until this existed the consent was settable only by an API call, which meant the one decision
- * the whole feature rests on was reachable by curl and by nothing else.
+ * important: four separate disclosures, which the backend composes separately. A screenshot
+ * leaves the deployment for a third-party model; a keystroke acts as the logged-in desktop user,
+ * with their unlocked keyring and validated sudo; the clipboard is the richest exfiltration path
+ * on the surface; and guest access is a shell inside the container, root by default. The last
+ * three default to off, and turning capture off clears them, as the server does.
  */
 
 import * as React from "react";
@@ -87,12 +79,11 @@ const sameDraft = (a: Draft, b: Draft) =>
  */
 const consentKey = (orgId: number | null) => ["organizations", orgId, "desktop-control"] as const;
 
-/** Each switch, with the sentence an operator needs to decide it.
+/**
+ * Each switch, with the sentence an operator needs to decide it.
  *
- * note: `prompt`, not `label`. `check-heading-case` reads a `label:` key as a column label and
- * requires Title Case, which is right for something that NAMES a thing and wrong for these:
- * every one of them says something rather than naming something, and the same guard's own rule
- * puts a sentence in sentence case. Renaming the key is the honest way to be in the right slot.
+ * The key is `prompt` because `check-heading-case` reads a `label:` key as a column label and
+ * requires Title Case, while these are sentences, which the same guard puts in sentence case.
  */
 const CONTROLS: {
   key: keyof Draft;
@@ -152,10 +143,8 @@ export function DesktopControlSettings() {
   });
   const saved = policyQuery.data ? toDraft(policyQuery.data) : null;
 
-  // important: unsaved edits belong to one organization and are never overwritten by a re-read.
-  // A refetch from any organization write elsewhere used to be able to land on top of them, and
-  // switching organizations used to carry the previous one's switches over, even into an
-  // organization whose read had failed, where Save would then have written them.
+  // important: unsaved edits belong to one organization. A re-read never overwrites them, and
+  // they never carry into another organization, where Save would write them.
   const [edits, setEdits] = React.useState<{ orgId: number; draft: Draft } | null>(null);
   const draft = edits && edits.orgId === orgId ? edits.draft : saved ?? EMPTY;
   const dirty = saved !== null && edits !== null && edits.orgId === orgId && !sameDraft(edits.draft, saved);
@@ -204,7 +193,7 @@ export function DesktopControlSettings() {
     },
   });
   const saving = saveMutation.isPending;
-  // important: claimed synchronously; a double click on Save sent the same consent twice.
+  // important: claimed synchronously, so a double click on Save cannot send the consent twice.
   const submitInFlightRef = React.useRef(false);
   const handleSave = async () => {
     if (submitInFlightRef.current || orgId === null) return;
@@ -212,7 +201,7 @@ export function DesktopControlSettings() {
     try {
       await saveMutation.mutateAsync({ id: orgId, values: draft });
     } catch {
-      // the mutation's onError toasts why
+      // The mutation's onError toasts why.
     } finally {
       submitInFlightRef.current = false;
     }
@@ -229,8 +218,8 @@ export function DesktopControlSettings() {
               clusters. Off unless you turn it on.
             </CardDescription>
           </div>
-          {/* The stored answer, and nothing until it has been read: "Not allowed" over a read
-              still in flight claimed a state nobody had seen. */}
+          {/* The stored answer, and nothing until it has been read: "Not allowed" during the read
+              would claim a state nobody has seen. */}
           <div className="flex shrink-0 items-start gap-3">
             {saved ? (
               saved.enabled ? (

@@ -31,8 +31,8 @@ interface CodeEditorProps {
 }
 
 // important: a guest's file can hide what it says. Beyond the control characters CodeMirror marks
-// by default, bidirectional overrides are shown, because they are how source reads as one thing
-// and runs as another.
+// by default, bidirectional overrides are shown: they make source read as one thing and run as
+// another.
 const HIDDEN = new RegExp("[\\u0000-\\u0008\\u000a-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u200b-\\u200f\\u2028-\\u202e\\u2060-\\u2069\\ufeff\\ufff9-\\ufffc]", "gu");
 
 const theme = EditorView.theme({
@@ -50,7 +50,7 @@ function lineEndingOf(text: string): string {
   return text.includes("\r\n") ? "\r\n" : "\n";
 }
 
-/** CodeMirror 6. Loaded on its own only when a person opens a file, so no other page pays for it. */
+/** CodeMirror 6, in its own chunk that loads only when a file is opened. */
 const CodeEditor = React.forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEditor(
   { fileName, initial, readOnly, onChange, onSave, ariaLabel },
   ref,
@@ -100,16 +100,16 @@ const CodeEditor = React.forwardRef<CodeEditorHandle, CodeEditorProps>(function 
             indentWithTab,
           ]),
           EditorView.updateListener.of((update) => {
-            // important: `doc.toString()` joins with \n whatever the separator, which rewrote
-            // every line of a Windows file on save.
+            // important: sliceDoc, never `doc.toString()`, which joins with \n whatever the
+            // separator and would rewrite every line of a Windows file on save.
             if (update.docChanged) callbacks.current.onChange(update.state.sliceDoc());
           }),
         ],
       }),
     });
     viewRef.current = view;
-    // important: Tab indents here, so without this a keyboard user cannot leave the editor. Escape
-    // then Tab moves on, which is CodeMirror's documented way out.
+    // Tab indents here. A keyboard user leaves the editor with Escape then Tab, CodeMirror's
+    // documented way out.
     view.setTabFocusMode(false);
     const match = LanguageDescription.matchFilename(languages, fileName);
     let disposed = false;

@@ -87,11 +87,9 @@ function parseRange(raw: string | null): TimeRange {
 }
 
 /**
- * The window's lower bound as an ISO timestamp, floored to the minute.
- *
- * note: the server takes a datetime, so the URL's `1h` has to become one somewhere. Flooring
- * keeps the React Query key stable across re-renders and a re-mount within the same minute;
- * the window then only ever grows, which is what an operator reading a live list expects.
+ * The window's lower bound as an ISO timestamp, floored to the minute. The server takes a
+ * datetime; flooring keeps the React Query key stable across re-renders and a re-mount within
+ * the same minute, so the window only grows while an operator reads the list.
  */
 function sinceIso(range: TimeRange): string {
   const ms = TIME_RANGES.find((option) => option.value === range)?.ms ?? 24 * HOUR_MS;
@@ -188,8 +186,8 @@ function TimeRangeSelect({ value, onChange }: { value: TimeRange; onChange: (nex
   const labelId = useId();
   return (
     <div className="flex items-center gap-2">
-      {/* note: a Radix trigger is a button, so htmlFor would associate with nothing;
-          aria-labelledby is what names it, the shape sort-select.tsx uses. */}
+      {/* A Radix trigger is a button, so htmlFor would associate with nothing;
+          aria-labelledby names it, as in sort-select.tsx. */}
       <span id={labelId} className="whitespace-nowrap text-sm font-medium">
         Time Range
       </span>
@@ -216,7 +214,7 @@ function OperationsContent() {
   const { isReadOnly } = useReadOnlyMode();
   const { scopeKey } = useActorQueryScope();
 
-  // important: both keys are URL state, read on every render and written on change through
+  // Both keys (`since`, `task`) are URL state, read on every render and written on change through
   // lib/url-state, never a navigation. The default range is left out of the URL so a plain
   // /inventory/operations link and the default view are the same address.
   const range = parseRange(searchParams.get("since"));
@@ -231,10 +229,10 @@ function OperationsContent() {
   );
   const since = useMemo(() => sinceIso(range), [range]);
 
-  // note: the id, not the row. The window is patched by feed frames and re-read on a poll, so an
-  // open dialog tracks status through its own detail query and never snaps shut when the row
-  // moves. Seeded from ?task= so a shared link opens straight onto the task, and kept in the
-  // URL while open so a refresh mid-read lands back on it.
+  // Holds the id rather than the row. The window is patched by feed frames and re-read on a
+  // poll, so an open dialog tracks status through its own detail query and stays open when the
+  // row moves. Seeded from ?task= so a shared link opens the task, and kept in the URL while
+  // open so a refresh lands back on it.
   const [detailTaskId, setDetailTaskId] = useState<string | null>(() => searchParams.get("task"));
   const openTask = useCallback(
     (id: string) => {
@@ -289,8 +287,8 @@ function OperationsContent() {
   );
   const sorted = useMemo(() => sortItems(filters.filteredRows), [filters.filteredRows, sortItems]);
 
-  // Clamped on read rather than corrected in an effect: rows arrive and leave live, so the page
-  // under the operator can shrink on its own, and an effect would fire after a wrong frame.
+  // Clamped on read rather than corrected in an effect: rows arrive and leave at any time, so the
+  // page under the operator can shrink on its own, and an effect would fire after a wrong frame.
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const paged = useMemo(

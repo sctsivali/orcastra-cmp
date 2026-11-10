@@ -22,7 +22,7 @@ export function AlarmStatistics({
   prefetchedWarnings?: unknown;
   prefetchedSystemWarnings?: SystemWarningsResponse | null;
 } = {}) {
-  // use prefetched data if available, otherwise fall back to own hooks (standalone usage)
+  // Prefetched data when the dashboard passes it; the card's own reads otherwise.
   const { data: warningsDataFetched } = useWarnings();
   const { data: systemWarningsFetched } = useSystemWarnings();
   const { isPartner } = usePermissions();
@@ -37,14 +37,12 @@ export function AlarmStatistics({
     [warningsData, systemWarnings],
   );
 
-  // Don't render if no warnings
   if (counts.total === 0) {
     return null;
   }
 
-  // important: this card is platform health, and every tile in it links to a page
-  // useRequireRole(Role.PARTNER) bounces a tenant away from. Certificate expiry and inactive
-  // nodes are not a tenant's concern, and offering them as navigation is a dead end.
+  // Platform health only: every tile links to a page useRequireRole(Role.PARTNER) sends a
+  // tenant away from, and certificate expiry and inactive nodes are not a tenant's concern.
   if (!isPartner) {
     return null;
   }

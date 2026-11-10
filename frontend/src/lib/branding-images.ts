@@ -1,10 +1,10 @@
 /**
  * The image sources branding may use, checked again where they are shown.
  *
- * The backend validates every new write (services/branding/validation.py), but rows written
- * before that check existed are still read, and an image source ends up in a CSS url(), a
- * favicon link and an <img>. A value is used only if it is an inline image, a path on this site
- * made of plain characters, or an https Cloudinary URL; anything else is shown as no image.
+ * The backend validates every write (services/branding/validation.py), but a stored row may
+ * predate that check, and an image source ends up in a CSS url(), a favicon link and an <img>.
+ * A value is used only if it is an inline image, a path on this site made of plain characters,
+ * or an https Cloudinary URL; anything else is shown as no image.
  */
 
 const DATA_IMAGE = /^data:image\/(?:png|jpeg|webp|svg\+xml|x-icon|vnd\.microsoft\.icon);base64,[A-Za-z0-9+/=\s]+$/;

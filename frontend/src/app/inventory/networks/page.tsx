@@ -62,8 +62,8 @@ const NETWORKS = defineTable<NetworkInfo>()({
       label: "Type",
       sort: (n) => n.type,
       facet: (n) => n.type,
-      // note: `type` means a different thing on five pages. Networks are LXD enums, so
-      // formatLabel is right here; instances need formatInstanceType instead.
+      // `type` means different things across pages. Network types are LXD enums, so
+      // formatLabel fits here; instances need formatInstanceType instead.
       facetSpec: { primary: true, format: formatLabel },
     },
     {
@@ -112,12 +112,11 @@ const NETWORKS = defineTable<NetworkInfo>()({
     },
     {
       // filter-coverage: this is not the project dimension. It answers which projects
-      // CONSUME the record, derived from used_by, while the "project" column above answers
-      // which one holds it, and that is the column carrying the project role.
+      // CONSUME the record, derived from used_by; the "project" column above answers which
+      // one holds it and carries the project role.
       field: "projects",
       label: "Used By Projects",
-      // Was a copy of the used_by accessor, so this column sorted by resource count while the
-      // cell showed a project count. It now sorts by what it displays.
+      // Sorts by the project count the cell displays rather than the used_by resource count.
       sort: (n) => projectsFromUsedBy(n.used_by).length,
       facet: (n) => projectsFromUsedBy(n.used_by),
       facetSpec: { emptyLabel: "(no project)" },
@@ -139,16 +138,16 @@ function NetworksContent() {
   const { isReadOnly } = useReadOnlyMode();
   const canCreateNetwork = hasRole(Role.PARTNER);
   const [createOpen, setCreateOpen] = useState(false);
-  // Nodes we could not reach: their networks are absent from the list, so warn
-  // rather than silently showing "0 networks" (indistinguishable from empty).
+  // Clusters the read could not reach: their networks are absent from the list, so warn
+  // rather than show a list that looks empty.
   const reach = reachabilityOf(data);
 
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const resetPage = () => setCurrentPage(1);
 
-  // note: derived from the rows, not from the fleet. It is empty exactly when the scope
-  // returns nothing, which is the state that used to leave the empty row one column too wide.
+  // Derived from the rows, so it is empty exactly when the scope returns nothing and the empty
+  // row's columnCount drops the Cluster column with it.
   const nodes = useMemo(
     () => Array.from(new Set(networks.map((n) => n.node).filter(Boolean))).sort(),
     [networks],
@@ -197,8 +196,8 @@ function NetworksContent() {
     currentPage * pageSize,
   );
 
-  // Derived from the headers actually rendered, so the empty row cannot span the wrong width
-  // when the conditional Node column is absent.
+  // Matches the rendered headers, so the empty row spans the right width when the conditional
+  // Cluster column is absent.
   const columnCount = nodes.length > 0 ? 10 : 9;
 
   if (isLoading) {
@@ -390,7 +389,7 @@ function NetworksContent() {
         <NetworkCreateDialog
           open={createOpen}
           onOpenChange={setCreateOpen}
-          // the create already succeeded; a refresh that fails is the list's own error state.
+          // The create already succeeded; a failed refresh shows as the list's own error state.
           // The focus intent is raised BEFORE the refresh so the list that arrives is newer.
           onSaved={(created) => {
             requestRowFocus("networks", networkRowKey(created), created.name);
@@ -412,9 +411,9 @@ export default function NetworksPage() {
   );
 }
 
-// note: the network dialog is the only one whose title links out, because /inventory/networks/
-// [name] is the app's one real detail route. The config panel surfaces ipv4.nat, dns.domain,
-// bridge.mtu, the OVN uplink and security.acls, none of which the table has a column for.
+// The network dialog is the only one whose title links out, because /inventory/networks/[name]
+// is the app's one detail route. The config panel shows keys the table has no column for,
+// ex; ipv4.nat, dns.domain, bridge.mtu, the OVN uplink and security.acls.
 function networkSubject(network: NetworkInfo): UsedBySubject {
   const config = network.config ?? {};
   return {

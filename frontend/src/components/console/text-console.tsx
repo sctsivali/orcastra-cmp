@@ -1,5 +1,5 @@
 /**
- * Text Console: the console window's shell on the instance (an exec, which needs the VM agent).
+ * The console window's shell on the instance (an exec, which needs the VM agent).
  * The Serial tab is the instance's serial console instead (serial-console.tsx).
  */
 

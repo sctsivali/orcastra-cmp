@@ -19,8 +19,8 @@ export function useNavigationProgress(): NavigationProgressValue {
   return React.useContext(NavigationProgressContext);
 }
 
-// Longest a navigation may hold the bar before we assume it was cancelled: blocked by
-// middleware, superseded by another click, or swallowed by an error boundary.
+// Longest a navigation may hold the bar before it counts as cancelled: blocked by middleware,
+// superseded by another click, or swallowed by an error boundary.
 const WATCHDOG_MS = 10_000;
 const SHOW_AFTER_MS = 150;
 
@@ -61,7 +61,7 @@ function NavigationProgressBar({ pending }: { pending: boolean }) {
           visible ? "opacity-100" : "opacity-0"
         )}
       >
-        {/* note: scaleX, not width, so the bar animates on the compositor and never forces
+        {/* scaleX, not width, so the bar animates on the compositor and never forces
             layout against the sticky header underneath it. */}
         <div
           className="h-full w-full origin-left bg-primary transition-transform duration-300 ease-out motion-reduce:transition-none"

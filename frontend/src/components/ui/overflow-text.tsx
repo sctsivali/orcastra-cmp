@@ -8,115 +8,84 @@ import { copyText } from "@/lib/clipboard";
 import { observeOverflow } from "@/lib/overflow-observer";
 import { cn } from "@/lib/utils";
 
-// One value that is longer than the space it was given.
+// One value that is longer than the space it was given: the scalar counterpart of
+// components/ui/overflow-cell.tsx, which handles a collection that does not fit a cell.
 //
-// It is the scalar counterpart of components/ui/overflow-cell.tsx: that one is a COLLECTION
-// that does not fit a cell, this one is a single value that does not fit its box. The two
-// replace the shapes this codebase grew independently in roughly ninety places.
+// important: this component never shortens `value`, and callers must not pass a pre-sliced
+// string. The whole value stays in the DOM, so find-in-page, text selection and assistive
+// technology have it and the clip is purely visual (a `title` would reach hover users only).
+// CSS clipping leaves the text in the accessibility tree, so the toggle is named for what it
+// does; repeating the value would make a screen reader read a 64 character fingerprint twice.
 //
-// The first shape sliced the string in JavaScript and glued three dots on the end. That does
-// not shorten a value, it destroys it: truncateFingerprint removed 52 of a fingerprint's 64
-// characters before the string ever reached the DOM, so no selection, no copy, no find-in-page
-// and no screen reader could recover them. Six further sites did the same and appended nothing
-// at all, leaving the operator no way to even tell the value had been cut.
+// important: the control is a real <button> in both modes. A span given an onClick or trigger
+// props takes no focus, gets no focus ring and ignores Enter.
 //
-// The second shape clipped with CSS and hung the whole value on a `title` attribute. A `title`
-// opens on hover and on nothing else, so no keyboard user and no touch user has ever seen one.
-// components/ui/overflow-cell.tsx already condemns that pattern; this component is what the
-// call sites reach for instead.
-//
-// important: this component NEVER shortens `value`. The whole string is always in the DOM, so
-// find-in-page, text selection and assistive technology have it at rest and the clip is purely
-// visual. CSS clipping does not remove text from the accessibility tree, which is why the
-// toggle is named for what it does rather than carrying the value a second time: a screen
-// reader that announced the value as content AND again as a button name would read a 64
-// character fingerprint twice on every row. The affordance exists for the sighted operator,
-// who is the only person a CSS clip actually blocks.
-//
-// important: handing this component a pre-sliced string puts the defect back, one level down,
-// where no guard is looking. Every call site that used to slice deletes the slice rather than
-// passing its result through.
-//
-// important: the control is a real <button>, in both modes. Not a <span> with an onClick and
-// not a bare span inside a TooltipTrigger. Two live screens did exactly that, and a span given
-// trigger props takes no focus, gets no focus ring and ignores Enter, so the reveal existed for
-// a mouse and for nobody else.
-//
-// note: no motion. Two icons rather than one rotating icon, so there is no transform to guard
-// and no new keyframe to wrap in a prefers-reduced-motion branch. A disclosure that snaps is
-// honest, and it is what the overflow-cell dialog already does.
+// No motion: two icons instead of one rotating icon, so there is no transform to guard behind
+// prefers-reduced-motion.
 export interface OverflowTextProps {
   /**
-   * The whole value. Never pre-sliced and never pre-ellipsised.
-   * `value.slice(0, 12)` passed here is a bug, not a shorter label.
+   * The whole value, never pre-sliced and never pre-ellipsised: `value.slice(0, 12)` passed here
+   * is a bug.
    */
   value: string;
   /**
    * What the value is, in the operator's words, ex; "fingerprint for ubuntu-24.04".
    * Names both buttons.
    *
-   * important: required, for the same reason it is required on CopyableText. An icon-only
-   * button renders as a bare "button" in the accessibility tree unless the element itself names
-   * it, a wrapping Tooltip contributes a description rather than a name, and twenty unnamed
-   * toggles down one column announce identically. check-icon-button-names.mjs enforces it.
+   * important: required, as on CopyableText. An icon-only button is a bare "button" in the
+   * accessibility tree unless the element itself names it (a wrapping Tooltip adds a
+   * description, not a name), and twenty unnamed toggles down one column announce identically.
+   * check-icon-button-names.mjs enforces it.
    */
   label: string;
   /**
-   * "inline" expands the value in place. Use it anywhere the container can grow taller without
-   * displacing something the operator is watching.
+   * "inline" expands in place, where the container can grow without displacing what the operator
+   * watches. "overlay" opens a Popover, for size-locked chrome (a console info panel over a live
+   * terminal); Radix tooltips do not open on touch, add a description rather than a name, and
+   * cannot hold a copy button.
    *
-   * "overlay" puts the value in a Popover, for chrome that is size locked: a console info panel
-   * pinned over a live terminal, a fixed height title bar.
-   *
-   * note: a Popover and not a Tooltip. Radix tooltips open on hover and on focus and do not
-   * open on touch, they contribute aria-describedby rather than a name, and their content
-   * cannot hold a real copy button.
-   *
-   * important: neither mode is correct when the clipped text already sits INSIDE a control. A
-   * button nested in a button is invalid markup, the two compete for the click, and inside a
-   * Radix menu the inner one is unreachable because roving focus only reaches menu items. For a
-   * SelectTrigger, a FilterTrigger, a tray button or a DropdownMenuItem, name the existing
-   * control with the whole value and make the surface it opens print the value in full.
+   * important: neither mode fits clipped text inside a control (SelectTrigger, FilterTrigger, a
+   * tray button, DropdownMenuItem): a nested button is invalid markup, competes for the click, and
+   * is unreachable in a Radix menu, whose roving focus reaches only menu items. Name the existing
+   * control with the whole value and print it in full in the surface it opens.
    */
   mode?: "inline" | "overlay";
   /**
    * Lines kept at rest. 1 clips an identifier to a single line. 2 and 3 clamp prose such as a
    * warning message or a project description. "none" never clips: the value always wraps, for a
-   * surface with room to show it, which is what a detail dialog is.
+   * surface with room to show it, such as a detail dialog.
    *
-   * note: 1 uses `truncate`, not `line-clamp-1`. They differ. `truncate` refuses to wrap at
-   * all, which is what a value in a dense grid wants; `line-clamp-1` lets the text wrap and then
-   * hides everything below the first line.
+   * 1 uses `truncate`, which refuses to wrap, as a value in a dense grid wants; `line-clamp-1`
+   * would let the text wrap and then hide everything below the first line.
    */
   lines?: 1 | 2 | 3 | "none";
   /** Monospace at rest and revealed. `font-mono` on the span, never a <code> element. */
   mono?: boolean;
   /**
    * Characters kept visible at rest on one line, ex; 12 for a certificate fingerprint, which is
-   * exactly what `lxc config trust list` prints, so the two can be matched by eye.
+   * what `lxc config trust list` prints, so the two can be matched by eye.
    *
-   * important: a CSS width, not a cut. The span is capped at exactly this many `ch` and the whole
-   * value stays in the DOM, which is the difference from the slice this component replaced. The
-   * clip carries no ellipsis: the trust list prints its 12 characters bare, the reveal control
-   * beside the value already says there is more, and the ellipsis glyph is wider than one cell in
-   * the house mono face, so it would eat the twelfth character. Only meaningful with `mono` and
-   * `lines={1}`: `ch` is a glyph width only in a monospace face.
+   * important: a CSS width; nothing is cut. The span is capped at exactly this many `ch` and the
+   * whole value stays in the DOM. The clip carries no ellipsis: the trust list prints its 12
+   * characters bare, the reveal control beside the value already says there is more, and the
+   * ellipsis glyph is wider than one cell in the house mono face, so it would eat the twelfth
+   * character. Only meaningful with `mono` and `lines={1}`: `ch` is a glyph width only in a
+   * monospace face.
    */
   visibleChars?: number;
   /**
-   * When the copy button appears. "expanded" costs nothing at rest, which is what keeps a table
-   * at its current rows per screen. "always" is the detail-field preset, where copying the value
-   * is the reason the field is on screen.
+   * When the copy button appears. "expanded" costs nothing at rest, so a table keeps its rows
+   * per screen. "always" is the detail-field preset, where copying the value is the reason the
+   * field is on screen.
    */
   copy?: "expanded" | "always" | "none";
   /**
-   * "auto" measures and drops the control when the value genuinely fits. "always" skips
-   * measurement for a value that is opaque and fixed length, ex; a 64 character fingerprint or a
-   * UUID, which never fits and so is work with a known answer.
+   * "auto" measures and drops the control when the value fits. "always" skips measurement for
+   * a value that is opaque, fixed length and never fits, ex; a 64 character fingerprint or a
+   * UUID.
    *
-   * note: "auto" is safe by construction because it starts pessimistic, so "always" is an
-   * optimisation and never a correctness lever. Reaching for it to fix a missing control means
-   * the measurement is wrong, and the measurement is the bug.
+   * "auto" starts pessimistic, so "always" is only an optimisation. If a control is missing,
+   * the measurement is the bug.
    */
   reveal?: "auto" | "always";
   /**
@@ -126,18 +95,17 @@ export interface OverflowTextProps {
    * measurement there. check-semantic-colour.mjs exempts that tree by path for the same reason.
    */
   tone?: "surface" | "chrome";
-  /** Reports the copy result. The container owns the live region, not this component. */
+  /** Reports the copy result; the container owns the live region. */
   onCopied?: (ok: boolean) => void;
   className?: string;
   /**
-   * A decorated rendering of the SAME value, ex; a highlighted search match, or a TableLink that
+   * A decorated rendering of the same value, ex; a highlighted search match, or a TableLink that
    * drills into the record. Pass a function to receive the expanded state, which a decorated
    * rendering needs when it does its own clipping: TableLink wraps its text in a `truncate` span,
    * so it has to be told to stop, or the toggle beside it would expand a box whose contents are
    * still clipped one element further in.
    *
-   * important: it must render `value` in full. A shortened form here reintroduces the defect one
-   * level down, where no guard is looking.
+   * important: it must render `value` in full.
    */
   children?: React.ReactNode | ((expanded: boolean) => React.ReactNode);
 }
@@ -170,9 +138,8 @@ export function OverflowText({
   const [copied, setCopied] = React.useState(false);
 
   // important: pessimistic. The control is present until a measurement proves the value fits,
-  // never the other way round, so a browser with no ResizeObserver and a first render before
-  // hydration both keep the reveal rather than losing it. It also makes the server HTML and the
-  // first client render identical, so there is nothing for hydration to mismatch on.
+  // so a browser with no ResizeObserver and the render before hydration both keep the reveal,
+  // and the server HTML matches the first client render.
   const [overflowing, setOverflowing] = React.useState(true);
 
   const clamped = lines !== "none" && !expanded;
@@ -209,10 +176,9 @@ export function OverflowText({
   // 24px is the target size WCAG 2.5.8 asks for, and -my-1 keeps it from growing the 20px line
   // box a table row is built on, so a column of these costs no rows per screen.
   //
-  // note: only where something is actually clipped. lines="none" is the detail-surface preset,
-  // which is not a table row and has room, and pulling four pixels off the top and bottom there
-  // tightened the gap between a dialog's header and its first section. A negative margin applied
-  // where it is not earning anything is just a layout bug waiting to be seen.
+  // Only where something is clipped. lines="none" is the detail-surface preset, not a table
+  // row, and the negative margin there would tighten the gap between a dialog's header and its
+  // first section.
   const buttonClass = cn("h-6 w-6 shrink-0", lines !== "none" && "-my-1", buttonTone);
 
   const valueClass = cn(
@@ -259,8 +225,8 @@ export function OverflowText({
   );
 
   if (mode === "overlay") {
-    // Nothing is clipped, so there is nothing behind this and it must not pretend otherwise.
-    // A Popover whose trigger never renders is also a Radix root with no anchor.
+    // Nothing is clipped, so no control. A Popover whose trigger never renders would also be
+    // a Radix root with no anchor.
     if (!showToggle) {
       return (
         <span className={rootClass} data-slot="overflow-text">
@@ -327,8 +293,8 @@ export function OverflowText({
           className={buttonClass}
           data-reveal-trigger=""
           // important: both ends of this relationship are owned here. A caller-supplied or
-          // Radix-injected aria-controls is how filter-trigger.tsx ended up pointing at an id no
-          // element carried.
+          // Radix-injected aria-controls can point at an id no element carries (see
+          // filter-trigger.tsx).
           aria-expanded={expanded}
           aria-controls={valueId}
           onClick={() => setExpanded((open) => !open)}

@@ -21,9 +21,8 @@ type UserGroupsSection = (typeof SECTIONS)[number];
 /**
  * Whether role changes reach the identity provider, in one line under the heading.
  *
- * note: nothing is claimed before the status has been read. A missing answer used to read as
- * "Not configured", and an unreachable one as "saved locally only", which a partner's assign
- * contradicts: it is refused (503) until the identity provider answers.
+ * Nothing is claimed before the status has been read. An unreachable identity provider does not
+ * read as "saved locally only": a partner's assign is refused (503) until it answers.
  */
 function IdentityProviderStatus({ status, isError }: { status?: AuthentikSyncStatus; isError: boolean }) {
   let icon = <WifiOff className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />;
@@ -50,11 +49,8 @@ function IdentityProviderStatus({ status, isError }: { status?: AuthentikSyncSta
 }
 
 /**
- * Settings > User Groups: who holds which role where, and the access policies tenants get.
- *
- * important: two sections behind a switcher. Stacked, Assigned Users sat under the identity
- * provider card and the policy table, and the list an operator came for was the last thing on
- * the page.
+ * Settings > User Groups: who holds which role where, and the access policies tenants get, as
+ * two sections behind a switcher so the user list is not buried under the policy table.
  */
 function UserGroupsSettingsContent() {
   const queryClient = useQueryClient();
@@ -78,8 +74,8 @@ function UserGroupsSettingsContent() {
     refetchInterval: 30000,
   });
 
-  // note: failures propagate to the refresh control, which reports them. Success
-  // is reported inline by the same control rather than by a toast.
+  // Failures propagate to the refresh control, which reports them. Success is reported
+  // inline by the same control rather than by a toast.
   async function handleRefreshAll() {
     await Promise.all([
       syncQuery.refetch({ throwOnError: true }),

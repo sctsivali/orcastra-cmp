@@ -10,7 +10,7 @@ const Tooltip = TooltipPrimitive.Root;
 
 const TooltipTrigger = TooltipPrimitive.Trigger;
 
-// note: TooltipContent renders in place. A trigger inside a box that clips (overflow-hidden) or
+// TooltipContent renders in place. A trigger inside a box that clips (overflow-hidden) or
 // holds a transform (the cards' fade-in keeps translateY(0)) wraps its content in this.
 const TooltipPortal = TooltipPrimitive.Portal;
 
@@ -21,15 +21,13 @@ const TooltipContent = React.forwardRef<
   <TooltipPrimitive.Content
     ref={ref}
     sideOffset={sideOffset}
-    // Ensure tooltip stays within viewport on mobile
+    // Keeps the tooltip inside a narrow viewport.
     collisionPadding={8}
     avoidCollisions={true}
     className={cn(
-      // z-[100002] to appear above dialogs (z-[100001])
+      // z-[100002] puts the tooltip above dialogs (z-[100001]).
       "z-[100002] overflow-hidden rounded-md border bg-popover px-3 py-1.5 text-sm text-popover-foreground shadow-md",
-      // Max width for mobile
       "max-w-[calc(100vw-2rem)]",
-      // Animations
       "animate-in fade-in-0 zoom-in-95",
       "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
       "data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2",

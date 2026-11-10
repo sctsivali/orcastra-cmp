@@ -18,18 +18,14 @@ import type { ExtensionDetail } from "@/types/api";
 import { plural } from "@/lib/utils";
 
 /**
- * The catalogue: a browsing surface, so cards rather than a table.
- *
- * The page sizes divide by one, two and three columns, which is what keeps a full page from ending
- * in a ragged row. The grid is two columns today and the option list is the project grid's, so
- * widening it later does not need a new set.
+ * Catalogue page sizes. Each divides by one, two and three columns, so a full page of cards never
+ * ends in a ragged row.
  */
 const PAGE_SIZES = [12, 24, 48, 96];
 
 const ADDON_CATALOGUE = defineTable<ExtensionDetail>()({
-  // important: an id, because two filtered lists share this page. Without one both write `q` and
-  // the facet keys into the same query string, so typing in either narrowed neither and the two
-  // fought over the same parameters on every keystroke.
+  // important: two filtered lists share this page. Without a distinct id both write `q` and the
+  // facet keys to the same query string and fight over them on every keystroke.
   id: "addons",
   searchPlaceholder: "Search add-ons",
   defaultSort: { field: "name", direction: "asc" },
@@ -59,8 +55,7 @@ const ADDON_CATALOGUE = defineTable<ExtensionDetail>()({
     {
       field: "capabilities",
       label: "Capabilities",
-      // The count rather than the names: an operator narrowing a catalogue is asking how much a
-      // given add-on wants, and the names are already searchable through `searchExtra`.
+      // Sorted and filtered by count; the names are already searchable through `searchExtra`.
       sort: (row) => row.requested_capabilities.length,
       filter: fromSort("number", { unit: "count" }),
     },
@@ -93,7 +88,7 @@ function AvailableAddonsContent({
   const [pageSize, setPageSize] = useState(PAGE_SIZES[0]);
   const resetPage = () => setPage(1);
 
-  // Both seams matter: without them a search lands on page 3 of 1 and paints nothing.
+  // Filter and sort changes reset the page, or a search can land past the last page.
   const filters = useTableFilters(ADDON_CATALOGUE, rows, { onFilterChange: resetPage });
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
     ADDON_CATALOGUE.sortAccessors,
@@ -119,8 +114,7 @@ function AvailableAddonsContent({
     );
   }
 
-  // A read that failed is not a catalogue that is empty, and the two need different words and a
-  // different control.
+  // A failed read gets its own message and a Retry, distinct from an empty catalogue.
   if (error) {
     return (
       <EmptyState
@@ -232,11 +226,8 @@ function AvailableAddonsContent({
 }
 
 /**
- * The boundary the query string requires.
- *
- * Reading the query string opts a client component out of prerendering, and Next then fails
- * `next build` on the route unless a boundary sits above it. Carrying its own means this can be
- * dropped anywhere without the caller having to know that about it.
+ * Carries its own Suspense boundary. Reading the query string opts a client component out of
+ * prerendering, and `next build` fails on the route unless a boundary sits above it.
  */
 export function AvailableAddons(props: AvailableAddonsProps) {
   return (

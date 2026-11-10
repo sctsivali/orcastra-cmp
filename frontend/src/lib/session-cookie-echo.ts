@@ -1,11 +1,11 @@
 import { getToken, type JWT } from "next-auth/jwt";
 
 // important: NextAuth re-encodes the session and sets it on every response that read it: every
-// middleware response (appended after our handler runs, next-auth/lib/index.js, "Preserve
+// middleware response (appended after the handler runs, next-auth/lib/index.js, "Preserve
 // cookies from the session response") and every /api/auth/session answer. A response that lands
 // after another one rotated the session puts the older session back, with a refresh token the
 // IdP has already revoked (Authentik rotates on every grant by default) or without a cooldown the
-// background path has just set. So a session cookie only leaves when the session in it changed.
+// background path has just set. So a session cookie is only sent when the session in it changed.
 
 const SESSION_COOKIES = ["__Secure-authjs.session-token", "authjs.session-token"];
 // Stamped by every encode, so they differ even when nothing in the session did.

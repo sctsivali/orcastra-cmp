@@ -20,18 +20,14 @@ interface AddonHealthPanelProps {
   install: ExtensionInstall;
   subscriptions: WebhookSubscription[];
   /**
-   * The server's own breakdown over every delivery on this installation.
-   *
-   * important: counts rather than rows. This panel used to reduce over the delivery array it was
-   * handed, which was one capped page, and then present the result as how many deliveries had
-   * given up altogether. Past fifty deliveries that sentence was simply wrong, and it was wrong in
-   * the reassuring direction.
+   * The server's breakdown over every delivery on this installation. Counts are used because the
+   * delivery rows the page holds are one capped page and would undercount past it.
    */
   deliveryCounts: Partial<Record<WebhookDeliveryState, number>>;
   deliveryTotal: number;
 }
 
-/** Nothing to show is not the same as a zero, so it is never rendered as one. */
+/** Shown for a value that could not be read, which is never rendered as zero. */
 const UNKNOWN = "Not recorded";
 
 function daysUntil(iso: string | null | undefined): number | null {
@@ -42,16 +38,9 @@ function daysUntil(iso: string | null | undefined): number | null {
 }
 
 /**
- * Whether this add-on is actually working, which the page could not answer before.
- *
- * Suspend was offered as an emergency stop with no signal telling an operator when to press it:
- * the page showed capabilities, clusters and a credential id, and nothing about whether the
- * credential was being used, whether deliveries were failing, or whether it was near expiry. All
- * of it was already recorded and none of it was rendered.
- *
- * Everything here is read from what the server already returns. Nothing is inferred, and an
- * unknown is shown as unknown rather than as a zero, because "never used" and "we could not read
- * the key" lead an operator to opposite conclusions.
+ * Whether this add-on is working: credential use and expiry, failing webhook endpoints and
+ * delivery outcomes, all read from the server response. An unknown is shown as unknown rather than
+ * zero, because "never used" and "could not read the key" call for opposite actions.
  */
 export function AddonHealthPanel({
   install,
@@ -69,8 +58,8 @@ export function AddonHealthPanel({
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(PANEL_PAGE_SIZE);
-  // note: clamped on read, never corrected in an effect. An endpoint recovering shortens this
-  // list under whoever is reading it, and an effect would paint one wrong frame before snapping.
+  // Clamped on read rather than corrected in an effect. An endpoint recovering shortens this list
+  // while it is open, and an effect would paint one wrong frame first.
   const totalPages = Math.max(1, Math.ceil(failing.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pagedFailing = failing.slice((currentPage - 1) * pageSize, currentPage * pageSize);
@@ -105,8 +94,7 @@ export function AddonHealthPanel({
       )}
 
       <dl className="grid gap-x-6 gap-y-3 rounded-lg border p-4 sm:grid-cols-2">
-        {/* Status reads as a state rather than a third button here, and it sits with the
-            suspension notice above that explains it. */}
+        {/* Status is a badge rather than a control; the suspension notice above explains it. */}
         <div>
           <dt className="text-sm text-muted-foreground">Status</dt>
           <dd className="text-sm">

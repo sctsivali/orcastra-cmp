@@ -30,15 +30,12 @@ import {
 import { plural } from "@/lib/utils";
 
 /**
- * The definition lives beside the rows it renders, for the reason snapshots-table.tsx records:
- * a file rendering <TableBody> without a `defineTable<` counts as an unmanaged table against a
- * baseline that may fall and never rise.
+ * The definition lives beside the rows it renders, for the reason snapshots-table.tsx records.
  *
- * important: `id: "schedules"` is load-bearing, not decoration. useTableFilters namespaces every
- * URL key by the table id, and SNAPSHOTS below deliberately has none, so it occupies the bare
- * keys. The page also reads `host` and `project` straight off searchParams to scope the fleet
- * read. Without an id here, filtering the schedules by cluster would silently re-scope the
- * snapshot list underneath it.
+ * important: keep `id: "schedules"`. useTableFilters namespaces every URL key by the table id,
+ * and SNAPSHOTS has none, so it occupies the bare keys, which the page also reads (`host`,
+ * `project`) to scope the fleet read. Without the id, filtering the schedules by cluster would
+ * re-scope the snapshot list underneath it.
  */
 export const SNAPSHOT_SCHEDULES = defineTable<SnapshotSchedule>()({
   id: "schedules",
@@ -196,8 +193,8 @@ export function SnapshotSchedulesTable({
                 </TableCell>
                 <TableCell className="whitespace-nowrap">{schedule.project || "default"}</TableCell>
                 <TableCell>
-                  {/* Plain text, not a Badge. Data cells carry the value and one subordinate
-                      tier; the tone chip belongs in the instance banner, which is not a table. */}
+                  {/* Plain text rather than a Badge: a data cell carries the value and one
+                      subordinate tier. The tone chip belongs in the instance banner. */}
                   {STATE_LABEL[state]}
                   {schedule.last_error ? (
                     <TableSubText>

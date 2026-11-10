@@ -33,8 +33,8 @@ interface PickerNoticeProps {
 /**
  * The line under a data-driven picker that says why it is not offering anything: reading,
  * failed with the reason and a Retry, or rate limited with a countdown. A disabled trigger is
- * not focusable, so this is where the reason and the action live, as a live region rather
- * than a tooltip.
+ * not focusable, so the reason and the action sit here, in a live region rather than a
+ * tooltip.
  */
 export function PickerNotice({ id, notice, onRetry, className }: PickerNoticeProps) {
   const [retrying, setRetrying] = React.useState(false);

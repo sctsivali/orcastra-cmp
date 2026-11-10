@@ -53,11 +53,8 @@ interface RestoreSnapshotDialogProps {
 
 /**
  * Restoring discards every write since the snapshot was taken, so this asks for the instance
- * name rather than a checkbox. Typing belongs to actions that destroy data the operator cannot
- * get back, which is exactly this one.
- *
- * The safety snapshot defaults on and is taken before the restore runs. Taken afterwards it
- * would capture the already-rolled-back state and protect nothing.
+ * name rather than a checkbox. The safety snapshot defaults on and is taken before the restore
+ * runs; taken afterwards it would capture the already rolled-back state.
  *
  * important: ZFS rolls back only to the newest snapshot, and a safety snapshot is always newer
  * than the target, so the storage plan is read on open. On ZFS the safety option is off and a
@@ -86,8 +83,8 @@ export function RestoreSnapshotDialog({
     open,
   );
   const safetySupported = plan.data?.safety_snapshot_supported !== false;
-  // note: a Tenant's plan carries no storage driver (the pool is the provider's storage, owner
-  // decision 2026-10-26), so the copy names the driver only when it was sent.
+  // A Tenant's plan carries no storage driver (the pool is the provider's storage), so the copy
+  // names the driver only when it was sent.
   const storage = plan.data?.storage_driver ? `${formatLabel(plan.data.storage_driver)} storage` : "this instance's storage";
   const restorable = plan.data?.restorable !== false;
   const planChecking = plan.isFetching && !plan.data;
@@ -104,12 +101,10 @@ export function RestoreSnapshotDialog({
   }, [open]);
 
   const nameMatches = confirmName.trim() === snapshot.source_name;
-  // Both halves required together, same rule as the create dialog.
-  // The same union the delete path uses. A restore can be gated because the SOURCE is billed
-  // elsewhere, because the SNAPSHOT belongs to the upstream product, or both, and the two are
-  // independent facts. The hand-taken class needs no extra field here: this dialog already makes
-  // the operator type the instance name, and a second typed string in one dialog is what
-  // produces copy-paste without reading.
+  // Reason and acknowledgement are required together, as in the create dialog. The gate is the
+  // union the delete path uses: the SOURCE is billed elsewhere, the SNAPSHOT belongs to the
+  // upstream product, or both. A hand-taken snapshot needs no extra field: the typed instance
+  // name already covers it, and a second typed string invites copy-paste without reading.
   const { origin, needsAcknowledgement } = snapshotGates(snapshot, billingLinked);
   const overrideReady = !needsAcknowledgement || (acknowledged && reason.trim().length > 0);
   const canSubmit = nameMatches && overrideReady && restorable && !planChecking && !restore.isPending;
@@ -157,10 +152,10 @@ export function RestoreSnapshotDialog({
         </DialogHeader>
 
         <DialogBody className="space-y-4">
-          {/* note: role="note" because this stands from the moment the dialog opens, and Alert's
-              default would announce a standing consequence as a failure beside the real one
-              DialogSubmitError raises. The body stays on --foreground: this is the sentence the
-              operator has to read, and text-destructive is 3.42:1 on a light ground. */}
+          {/* role="note" because this stands from the moment the dialog opens; Alert's default
+              would announce a standing consequence as a failure beside the real one
+              DialogSubmitError raises. The body stays on --foreground because text-destructive
+              is 3.42:1 on a light background. */}
           <Alert variant="destructive" role="note">
             <AlertTriangle className="h-4 w-4" aria-hidden />
             <AlertDescription className="text-foreground">

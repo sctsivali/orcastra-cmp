@@ -42,8 +42,8 @@ export function RunningIllustration(props: IllustrationProps) {
     <IllustrationFrame {...props} view={[14, 10.5, 132.5, 99.5]}>
       <IsoShadow box={[-20, -15, 40, 30]} />
       <IsoBox at={BLOCK.at} size={BLOCK.size} material="tint" />
-      {/* note: the apex is lifted by half its run to undo the face's skew, so the mark reads as a
-          play sign at 64px instead of a corner wedge. */}
+      {/* The apex is lifted by half its run to undo the face's skew, so the mark reads as a play
+          sign at 64px instead of a corner wedge. */}
       <IsoFlat plane="left" origin={FRONT} outline={[[15, 4], [15, 20], [29, 19]]} kind="detail" />
     </IllustrationFrame>
   );

@@ -3,13 +3,8 @@
 /**
  * Per-interface IPv4 addressing on an existing instance.
  *
- * LXD's own web UI has no control for a fixed address, so
- * pinning one meant `lxc config device set` on the hypervisor over SSH. An operator on the NOC
- * desk has no business needing a root shell to give a database node the address it was planned
- * with.
- *
- * The interfaces are read from the expanded device set, because a NIC an instance inherits
- * from a profile is not in its own devices at all and is still the interface the operator sees.
+ * Interfaces are read from the expanded device set: a NIC inherited from a profile is not in
+ * the instance's own devices but is still the interface the operator sees.
  */
 
 import * as React from "react";

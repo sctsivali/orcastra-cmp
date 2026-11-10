@@ -38,10 +38,9 @@ export function ApiKeyConnectionGuide({
 }: ApiKeyConnectionGuideProps) {
   const [checking, setChecking] = useState(false);
   const [result, setResult] = useState<APIKeyValidateResponse | null>(null);
-  // important: the secret is masked in the rendered snippet by default, matching the field above.
-  // Without this the dialog masks the secret in one place and prints it in plain text two inches
-  // below, so a screenshot taken by an operator who deliberately kept it hidden leaks it anyway.
-  // Copy always copies the real value: hiding is about what is on screen, not what is pasted.
+  // important: the secret is masked in the rendered snippet by default, matching the field above,
+  // so a screenshot of a dialog with the secret hidden does not leak it. Copy always copies the
+  // real value: hiding is about what is on screen.
   const [revealed, setRevealed] = useState(false);
 
   const baseUrl = publicApiBaseUrl();
@@ -61,9 +60,8 @@ export function ApiKeyConnectionGuide({
         `ORCASTRA_API_KEY_ID=${id}`,
         `ORCASTRA_API_KEY_SECRET=${secret}`,
       ].join("\n"),
-      // note: a REMOTE http entry, not a spawned binary. This used to emit
-      // `command: "orcastra-mcp"`, which was a program that never existed, so every operator who
-      // followed it got "spawn orcastra-mcp ENOENT". Orcastra serves MCP itself, at this URL.
+      // A remote http entry: Orcastra serves MCP itself, at this URL, so there is no local
+      // binary to spawn.
       mcp: JSON.stringify(
         {
           mcpServers: {

@@ -156,8 +156,8 @@ const DEFAULT_FORM = DEFAULT_INSTANCE_CREATE_FORM;
 const isPositiveInt = isPositiveInteger;
 
 function InstanceCreateFormContent() {
-  // note: navigate() rather than a bare push, so the leaving transition raises the
-  // global progress bar. These hops follow a mutation and are the slowest in the app.
+  // navigate() rather than a bare push, so the leaving transition raises the global
+  // progress bar. These hops follow a mutation and are among the slowest in the app.
   const { navigate } = useNavigationProgress();
   const { toast } = useToast();
   const { scopeKey } = useActorQueryScope();
@@ -179,18 +179,16 @@ function InstanceCreateFormContent() {
   const preflightCreate = usePreflightInstanceCreate();
   const isSubmitting = createInstance.isPending || preflightCreate.isPending;
   // important: `isSubmitting` is derived from the mutation's isPending, which only flips
-  // after React re-renders. Two clicks landing in the same tick therefore both pass the
+  // after React re-renders. Two clicks landing in the same tick would both pass the
   // disabled check and each fire a create, provisioning two instances. This ref is the
   // synchronous half of the guard; the disabled prop stays for the visible state.
   const submitInFlightRef = useRef(false);
   // A row action on the Images or ISO Images table lands here with the node and boot source
-  // already chosen. The contract lives in components/instance-create/prefill.ts so the two
-  // halves cannot drift.
+  // already chosen. The contract lives in components/instance-create/prefill.ts.
   //
   // important: seeded through a lazy initialiser rather than an effect. selectNode, selectType
-  // and selectProject clear the boot source whenever one of them changes, and they are the
-  // pickers' own handlers, so seeding the initial state cannot trip them. An effect that wrote
-  // the same values after mount would.
+  // and selectProject clear the boot source whenever one of them changes; seeding the initial
+  // state does not trip them, while an effect writing the same values after mount would.
   const searchParams = useSearchParams();
   const seedRef = useRef(readCreateSeed(searchParams));
   const [form, setForm] = useState<FormState>(() => ({
@@ -266,7 +264,7 @@ function InstanceCreateFormContent() {
     formRevisionRef.current += 1;
     setPendingSubmission(null);
     idempotencyRef.current = null;
-    // The old async attempt is fenced by its captured revision/target. Release this form's local
+    // The earlier async attempt is fenced by its captured revision and target. Release the local
     // click lock so the edited target can submit once React Query reports that attempt settled.
     submitInFlightRef.current = false;
   };
@@ -455,9 +453,9 @@ function InstanceCreateFormContent() {
   const { refetch: refetchNetworks } = networksQuery;
   const { refetch: refetchDefaultProfile } = defaultProfileQuery;
 
-  // Attach is deliberately two-phase. The click first enables both reads; only a successful,
-  // settled default-profile response may prove there is no inherited NIC and justify a fresh
-  // interface name. A failed read stays pending with Retry rather than fabricating eth0.
+  // Attach is two-phase. The click first enables both reads; only a successful, settled
+  // default-profile response may prove there is no inherited NIC and justify a fresh interface
+  // name. A failed read stays pending with Retry rather than inventing eth0.
   const addNic = () => {
     if (pendingNicAdd) return;
     invalidatePreparedSubmission();
@@ -573,7 +571,7 @@ function InstanceCreateFormContent() {
     ) && new Set(gpuNames).size === gpuNames.length
     : gpus.length === 0;
 
-  // --- Advanced options (collapsible: security/snapshots/migration/boot/cloud-init)
+  // --- Advanced options (collapsible: security/migration/boot/cloud-init) ---------
   const [adv, setAdv] = useState<Record<AdvKey, string>>(() => ({ ...ADV_DEFAULT }));
   const [advOpen, setAdvOpen] = useState(false);
   const updateAdv = (key: AdvKey, value: string) => {
@@ -675,7 +673,7 @@ function InstanceCreateFormContent() {
   });
 
   const openImageDialog = () => {
-    setFType(wantedImageType); // default to the instance type being created
+    setFType(wantedImageType); // Defaults to the instance type being created.
     openImageSources();
     setImageDialogOpen(true);
   };
@@ -707,12 +705,12 @@ function InstanceCreateFormContent() {
     cpuValid && memoryValid && storageValid && diskPriorityValid && maxProcessesValid;
   // LXD instance name rules (mirrors the name input's pattern/maxLength). The
   // Create buttons are type=button, so native validation doesn't run. Gate here
-  // too, otherwise e.g. "bad name" reaches LXD and fails with an opaque error.
+  // too, otherwise a name like "bad name" reaches LXD and fails opaquely.
   const nameValid =
     /^[a-zA-Z][a-zA-Z0-9-]*$/.test(form.name) && form.name.length <= 63;
   // A blank VM has no base image to pick, so it must not gate submit on one.
-  // sourceType "none" now means "boot from ISO": an empty root disk plus a
-  // required ISO (no bare blank VM). Kept named `bootFromIso` for clarity.
+  // sourceType "none" means "boot from ISO": an empty root disk plus a required
+  // ISO (there is no bare blank VM).
   const bootFromIso = form.sourceType === "none" && canUseAdvancedCreate;
   const requestedCpu = cpuValid ? parseInt(form.cpu.trim(), 10) : null;
   const requestedMemoryBytes = memoryValid
@@ -1072,11 +1070,10 @@ function InstanceCreateFormContent() {
       return;
     }
 
-    // important: devices.root is only built when a pool has resolved, and LXD rejects a create
-    // whose root disk carries a size but no pool (verified against a live cluster). Submitting
-    // before the pool list answered therefore either dropped the requested size silently or
-    // produced a create that reported success and never materialised. Refused here rather than
-    // on the button, so the operator gets a message instead of a control that looks broken.
+    // important: devices.root is only built once a pool has resolved, and LXD rejects a create
+    // whose root disk carries a size but no pool. Submitting before the pool list answers would
+    // drop the requested size or produce a create that never materialises. Refused here rather
+    // than on the button, so the operator gets a message instead of a control that looks broken.
     if (!effectivePool) {
       setError(
         loadingPools
@@ -1136,7 +1133,7 @@ function InstanceCreateFormContent() {
       }
     });
     // NIC devices, keyed by interface name (so a matching name overrides the
-    // profile's, e.g. eth0; a new name adds an extra interface).
+    // profile's, ex; eth0; a new name adds an extra interface).
     nics.forEach((n) => {
       const device: Record<string, string> = {
         type: "nic",
@@ -1386,9 +1383,8 @@ function InstanceCreateFormContent() {
         }}
         className="space-y-6"
       >
-        {/* A deep link from the Images or ISO Images table could not be honoured in full. Said
-            here rather than silently: a form that looks pre-filled and is not is worse than
-            one that is plainly empty. */}
+        {/* Shown when a deep link from the Images or ISO Images table could not be honoured in
+            full, so the form never looks pre-filled when it is not. */}
         {seedDropped && (
           <Alert variant="warning" role="status">
             <AlertTriangle className="h-4 w-4" aria-hidden />
@@ -1396,7 +1392,6 @@ function InstanceCreateFormContent() {
           </Alert>
         )}
 
-        {/* Main configuration */}
         <Card
           ref={configurationSectionRef}
           tabIndex={-1}
@@ -1407,7 +1402,6 @@ function InstanceCreateFormContent() {
               <CardTitle>Configuration</CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
-              {/* Instance type */}
               <div className="flex gap-4">
                 <button
                   type="button"
@@ -1453,7 +1447,6 @@ function InstanceCreateFormContent() {
                 </button>
               </div>
 
-              {/* Name + description */}
               <div className="grid gap-2">
                 <Label htmlFor="name">Instance Name *</Label>
                 <Input
@@ -1534,7 +1527,6 @@ function InstanceCreateFormContent() {
                 )}
               </div>
 
-              {/* Node + project */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label htmlFor="create-node">Cluster *</Label>
@@ -1756,7 +1748,6 @@ function InstanceCreateFormContent() {
             </CardContent>
           </Card>
 
-        {/* Resources */}
         <Card
           ref={resourcesSectionRef}
           tabIndex={-1}
@@ -1886,7 +1877,6 @@ function InstanceCreateFormContent() {
                 </p>
               )}
 
-              {/* Memory swap, containers only */}
               {form.type === "container" && canUseAdvancedCreate && (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -1934,7 +1924,6 @@ function InstanceCreateFormContent() {
                 )}
               </div>
 
-              {/* Max number of processes, containers only */}
               {form.type === "container" && (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -1974,7 +1963,6 @@ function InstanceCreateFormContent() {
           </Alert>
         )}
 
-        {/* Storage */}
         <Card
           ref={storageSectionRef}
           tabIndex={-1}
@@ -2074,7 +2062,6 @@ function InstanceCreateFormContent() {
                 />
               </div>
 
-              {/* Additional disk devices */}
               <div className="space-y-3 pt-2 border-t">
                 <div className="flex items-center justify-between">
                   <Label className="text-sm font-medium">Additional Disks</Label>
@@ -2132,7 +2119,6 @@ function InstanceCreateFormContent() {
             </CardContent>
           </Card>
 
-        {/* Network */}
         <Card
           ref={networkSectionRef}
           tabIndex={-1}
@@ -2389,7 +2375,6 @@ function InstanceCreateFormContent() {
             </CardContent>
           </Card>}
 
-        {/* Advanced Options (collapsible) */}
         <Card>
           <Collapsible open={advOpen} onOpenChange={setAdvOpen}>
             <CollapsibleTrigger asChild>
@@ -2409,7 +2394,6 @@ function InstanceCreateFormContent() {
                 )}
                 {canUseAdvancedCreate && (
                   <>
-                {/* Security policies */}
                 <section className="space-y-3">
                   <h3 className="text-sm font-semibold">Security Policies</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2439,7 +2423,6 @@ function InstanceCreateFormContent() {
                   )}
                 </section>
 
-                {/* Migration */}
                 <section className="space-y-3">
                   <h3 className="text-sm font-semibold">Migration</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2470,7 +2453,6 @@ function InstanceCreateFormContent() {
                   </div>
                 </section>
 
-                {/* Boot */}
                 <section className="space-y-3">
                   <h3 className="text-sm font-semibold">Boot</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2484,7 +2466,6 @@ function InstanceCreateFormContent() {
                   </>
                 )}
 
-                {/* Cloud init */}
                 <section className="space-y-3">
                   <h3 className="text-sm font-semibold">Cloud-Init</h3>
                   <p className="text-xs text-muted-foreground">
@@ -2598,7 +2579,6 @@ function InstanceCreateFormContent() {
           </DialogHeader>
 
           <div className="flex gap-6 min-h-0 flex-1">
-            {/* Filters */}
             <div className="w-52 shrink-0 space-y-3 overflow-y-auto px-1 py-1">
               {[
                 { label: "Distribution", value: fDistribution, set: setFDistribution, opts: distributionOptions },
@@ -2645,7 +2625,6 @@ function InstanceCreateFormContent() {
               </label>
             </div>
 
-            {/* Search + results */}
             <div className="flex-1 min-w-0 flex flex-col gap-3">
               <Input
                 value={imgSearch}
@@ -2743,9 +2722,7 @@ function InstanceCreateFormContent() {
                   )}
                 </TableBody>
               </Table>
-              {/* note: this replaced a hard `.slice(0, 500)` and the words "(showing first 500)".
-                  The remote catalogue runs to thousands of rows, so image 501 was reachable only
-                  by guessing a search term that narrowed the list under the cap. */}
+              {/* Paged rather than capped: the remote catalogue runs to thousands of rows. */}
               {imageTotalPages > 1 && (
                 <DataTablePagination
                   currentPage={imageCurrentPage}
@@ -2771,10 +2748,9 @@ function InstanceCreateFormContent() {
   );
 }
 
-// important: the boundary lives with the reader, not with the route. useSearchParams below
-// opts this subtree out of prerendering, and without a <Suspense> above it `next build` fails
-// on whichever route mounts this component. Putting it here means a future call site cannot
-// forget it. Guarded by scripts/checks/check-searchparams-suspense.mjs.
+// important: the boundary lives with the reader rather than the route. useSearchParams opts this
+// subtree out of prerendering, and without a <Suspense> above it `next build` fails on whichever
+// route mounts this component. Guarded by scripts/checks/check-searchparams-suspense.mjs.
 export function InstanceCreateForm() {
   return (
     <Suspense fallback={<LoadingLottiePage />}>

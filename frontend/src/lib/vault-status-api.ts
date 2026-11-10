@@ -1,6 +1,6 @@
 import { fetchRead, type ReadOptions } from "@/lib/api";
 
-/** GET /system/vault-status: what the Vault notice shows (issue #15). */
+/** GET /system/vault-status: what the Vault notice shows. */
 export type VaultState = "ok" | "sealed" | "uninitialized" | "unreachable" | "unavailable" | "not_configured";
 
 export interface VaultStatus {

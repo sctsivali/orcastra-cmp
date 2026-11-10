@@ -14,8 +14,8 @@ export function mergeWithDefaults(data: Partial<PersonalizationSettings>): Perso
   return {
     ...DEFAULT_PERSONALIZATION,
     ...data,
-    // Image sources are checked again here: rows written before the server validated them are
-    // still read, and these end up in a CSS url(), a favicon link and an <img>.
+    // Image sources are checked again here: a stored row may predate server-side validation,
+    // and these end up in a CSS url(), a favicon link and an <img>.
     logo: {
       lightModeLogo: safeImageSrc(logo.lightModeLogo),
       darkModeLogo: safeImageSrc(logo.darkModeLogo),
@@ -66,7 +66,7 @@ async function readPreferences(
       }
       if (response.status >= 400 && response.status < 500) return { ok: false };
     } catch {
-      // Read failures may be retried. Mutation helpers deliberately do not replay writes.
+      // Read failures may be retried; the mutation helpers never replay a write.
     }
   }
   return { ok: false };

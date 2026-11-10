@@ -1,11 +1,8 @@
 /**
- * Terminal Store - Zustand state management for terminal windows.
- * Handles terminal state, positions, and persistence.
- * 
- * Storage Notes:
- * - Uses localStorage with safe error handling and quota management
- * - Only persists the most recent N terminal sessions (configurable)
- * - Cleans up stale sessions on load
+ * Zustand store for terminal windows: state, positions and persistence.
+ *
+ * Persists to localStorage through createSafeStorage (quota-safe), keeps the five most recent
+ * sessions and drops stale ones on load.
  */
 
 import { create } from 'zustand';
@@ -18,7 +15,7 @@ import {
 } from './storage-utils';
 import { useBreakGlassStore } from './break-glass-store';
 
-// Terminal window position and size
+/** Viewport pixels; terminal windows use position: fixed. */
 export interface TerminalPosition {
   x: number;
   y: number;
@@ -26,16 +23,14 @@ export interface TerminalPosition {
   height: number;
 }
 
-// Terminal session state
 export type TerminalStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
-// Snap layout modes
 export type SnapLayout = 'none' | 'left' | 'right' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'full';
 
-// LXD instance status (actual container/VM state)
+/** The instance's own LXD state, separate from the terminal connection status. */
 export type LXDInstanceStatus = 'Running' | 'Stopped' | 'Frozen' | 'Error' | 'Unknown' | 'Starting' | 'Stopping' | 'Restarting';
 
-// Single terminal instance
+/** One terminal window. */
 export interface TerminalInstance {
   id: string;
   instanceName: string;
@@ -43,13 +38,13 @@ export interface TerminalInstance {
   project: string;
   title: string;
   status: TerminalStatus;
-  instanceStatus: LXDInstanceStatus; // Actual LXD instance state
+  instanceStatus: LXDInstanceStatus;
   minimized: boolean;
   maximized: boolean;
   focused: boolean;
-  sticky: boolean; // Sticky mode - terminal stays fixed on screen when scrolling
+  sticky: boolean; // Stays fixed on screen while the page scrolls.
   position: TerminalPosition;
-  preMaximizePosition?: TerminalPosition; // Store position before maximize
+  preMaximizePosition?: TerminalPosition;
   snapLayout: SnapLayout;
   createdAt: number;
   lastActiveAt: number;
@@ -57,22 +52,15 @@ export interface TerminalInstance {
   sessionId?: string;
 }
 
-// Store state
 interface TerminalState {
-  // Terminal instances
   terminals: TerminalInstance[];
-  // Currently focused terminal
   focusedTerminalId: string | null;
-  // Z-index ordering
+  // Terminal ids, back to front.
   zIndexOrder: string[];
-  // Maximum terminals allowed
   maxTerminals: number;
-  // Default terminal size
   defaultSize: { width: number; height: number };
-  // Tray expanded state
   trayExpanded: boolean;
 
-  // Actions
   openTerminal: (instance: {
     instanceName: string;
     host: string;
@@ -110,13 +98,11 @@ function readDockHeight(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
-// Generate unique terminal ID
 function generateTerminalId(): string {
   return `term_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
 
-// Calculate viewport-centered position for new windows
-// Since terminals use position: fixed, coordinates are relative to viewport (not document)
+// Terminals use position: fixed, so coordinates are relative to the viewport.
 function getViewportCenteredPosition(index: number, defaultSize: { width: number; height: number }): TerminalPosition {
   const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1200;
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
@@ -124,19 +110,17 @@ function getViewportCenteredPosition(index: number, defaultSize: { width: number
   // Cascade offset for multiple windows
   const offset = (index % 5) * 30;
   
-  // Center in viewport (no scroll offset needed for fixed positioning)
   const x = (viewportWidth - defaultSize.width) / 2 + offset;
   const y = (viewportHeight - defaultSize.height) / 2 + offset;
   
   return {
     x: Math.max(10, x),
-    y: Math.max(60, y), // At least 60px from top for header
+    y: Math.max(60, y), // Below the 60px header.
     width: defaultSize.width,
     height: defaultSize.height,
   };
 }
 
-// Create the store
 export const useTerminalStore = create<TerminalState>()(
   persist(
     (set, get) => ({
@@ -150,13 +134,12 @@ export const useTerminalStore = create<TerminalState>()(
       openTerminal: async ({ instanceName, host, project = 'default' }) => {
         const state = get();
 
-        // Check if terminal already exists for this instance
+        // One terminal per instance and host: restore and focus an open one.
         const existing = state.terminals.find(
           t => t.instanceName === instanceName && t.host === host
         );
         
         if (existing) {
-          // Restore and focus existing terminal
           set(s => ({
             terminals: s.terminals.map(t =>
               t.id === existing.id
@@ -169,7 +152,6 @@ export const useTerminalStore = create<TerminalState>()(
           return existing;
         }
         
-        // Check max terminals limit
         if (state.terminals.length >= state.maxTerminals) {
           if (process.env.NODE_ENV !== 'production') {
             console.warn(`Maximum terminals (${state.maxTerminals}) reached`);
@@ -182,7 +164,6 @@ export const useTerminalStore = create<TerminalState>()(
         const bgAllowed = await useBreakGlassStore.getState().request(host, instanceName);
         if (!bgAllowed) return null;
 
-        // Create new terminal
         const id = generateTerminalId();
         const position = getViewportCenteredPosition(state.terminals.length, state.defaultSize);
         
@@ -193,11 +174,11 @@ export const useTerminalStore = create<TerminalState>()(
           project,
           title: `${instanceName}@${host}`,
           status: 'connecting',
-          instanceStatus: 'Running', // Assume running since we're opening terminal to it
+          instanceStatus: 'Running', // Assumed: a terminal is only opened on a running instance.
           minimized: false,
           maximized: false,
           focused: true,
-          sticky: true, // Default pinned - terminal stays fixed on screen
+          sticky: true,
           position,
           snapLayout: 'none',
           createdAt: Date.now(),
@@ -262,11 +243,10 @@ export const useTerminalStore = create<TerminalState>()(
             return s;
           }
           
-          // Get current viewport dimensions
           const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1200;
           const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
           
-          // For fixed positioning, center in viewport (no scroll offset)
+          // Restoring re-centers the window in the viewport.
           const newPosition = {
             ...terminal.position,
             x: Math.max(20, (viewportWidth - terminal.position.width) / 2),
@@ -290,7 +270,6 @@ export const useTerminalStore = create<TerminalState>()(
           const minimized = s.terminals.filter(t => t.minimized);
           if (minimized.length === 0) return s;
           
-          // Restore all minimized terminals
           const lastRestoredId = minimized[minimized.length - 1].id;
           return {
             terminals: s.terminals.map(t =>
@@ -425,7 +404,7 @@ export const useTerminalStore = create<TerminalState>()(
             return s;
           }
           
-          // Reorder minimized array
+          // Minimized terminals move to the end of the list, in their new tray order.
           const [removed] = minimized.splice(fromIndex, 1);
           minimized.splice(toIndex, 0, removed);
           
@@ -437,17 +416,14 @@ export const useTerminalStore = create<TerminalState>()(
 
       arrangeAllTerminals: () => {
         set(s => {
-          // Get non-minimized terminals
           const activeTerminals = s.terminals.filter(t => !t.minimized);
           if (activeTerminals.length === 0) return s;
 
-          // Get viewport dimensions
           const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1200;
           const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
           const padding = 10;
           const headerHeight = 60;
           
-          // Calculate grid layout based on terminal count
           const count = activeTerminals.length;
           let cols: number, rows: number;
           
@@ -466,7 +442,6 @@ export const useTerminalStore = create<TerminalState>()(
           const cellWidth = (viewportWidth - padding * (cols + 1)) / cols;
           const cellHeight = (viewportHeight - headerHeight - padding * (rows + 1)) / rows;
           
-          // Map terminal IDs to new positions
           const positionMap = new Map<string, TerminalPosition>();
           activeTerminals.forEach((terminal, index) => {
             const col = index % cols;
@@ -501,8 +476,7 @@ export const useTerminalStore = create<TerminalState>()(
         set(s => ({
           terminals: s.terminals.map(t => {
             if (t.id !== id) return t;
-            // Simply toggle sticky - position stays the same
-            // Scroll tracking is handled by the component
+            // Position stays; the component handles scroll tracking.
             return {
               ...t,
               sticky: !t.sticky,
@@ -519,35 +493,31 @@ export const useTerminalStore = create<TerminalState>()(
         }));
       },
       ensureWithinViewport: () => {
-        // Called when viewport changes (resize/rotation) to ensure terminals are visible
+        // Called on viewport resize and rotation.
         const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1200;
         const viewportHeight = (typeof window !== 'undefined' ? window.innerHeight : 800) - readDockHeight();
         const padding = 20;
-        const minVisible = 100; // Minimum pixels that must be visible
+        const minVisible = 100;
 
         set(s => ({
           terminals: s.terminals.map(t => {
             if (t.minimized) return t;
 
-            // Calculate adjusted position to ensure visibility
             let { x, y, width, height } = t.position;
             
-            // On mobile (small screens), resize window to fit viewport
             const isMobileViewport = viewportWidth < 768;
             if (isMobileViewport) {
               width = Math.min(width, viewportWidth - padding * 2);
-              height = Math.min(height, viewportHeight - 80); // Account for header
+              height = Math.min(height, viewportHeight - 80); // Leave room for the header.
             }
 
-            // Ensure window is not positioned beyond viewport
-            // At minimum, minVisible pixels should be within viewport
+            // At least minVisible px of the window stays inside the viewport.
             const maxX = viewportWidth - minVisible;
             const maxY = viewportHeight - minVisible;
             
             x = Math.max(padding, Math.min(x, maxX));
-            y = Math.max(60, Math.min(y, maxY)); // 60px for header
+            y = Math.max(60, Math.min(y, maxY)); // Below the 60px header.
 
-            // If window extends beyond viewport, adjust size
             if (x + width > viewportWidth - padding) {
               width = Math.max(300, viewportWidth - x - padding);
             }
@@ -555,7 +525,6 @@ export const useTerminalStore = create<TerminalState>()(
               height = Math.max(200, viewportHeight - y - padding);
             }
 
-            // Check if position changed
             if (x === t.position.x && y === t.position.y && 
                 width === t.position.width && height === t.position.height) {
               return t;
@@ -577,11 +546,9 @@ export const useTerminalStore = create<TerminalState>()(
           console.warn('[TerminalStore] Storage quota exceeded, some sessions may not be persisted');
         },
         cleanupFn: (data) => {
-          // clean up and limit terminal sessions before persisting
           if (data?.state?.terminals) {
-            // remove stale sessions (older than 24h)
+            // Drops sessions idle longer than MAX_STALE_AGE in storage-utils (one hour).
             let terminals = cleanupStaleSessions(data.state.terminals);
-            // keep only most recent 5 sessions
             terminals = limitSessionCount(terminals, 5);
             return {
               ...data,
@@ -598,16 +565,15 @@ export const useTerminalStore = create<TerminalState>()(
         },
       })),
       partialize: (state) => ({
-        // Only persist these fields
-        // Also limit to 5 most recent sessions to prevent storage bloat
+        // Only these fields persist, capped at the five most recent sessions to bound storage use.
         terminals: limitSessionCount(
           cleanupStaleSessions(state.terminals),
           5
         ).map(t => ({
           ...t,
-          // Reset status on reload
+          // Connection state does not survive a reload.
           status: 'disconnected' as TerminalStatus,
-          instanceStatus: 'Unknown' as LXDInstanceStatus, // Will be refreshed on reconnect
+          instanceStatus: 'Unknown' as LXDInstanceStatus, // Refreshed on reconnect.
           focused: false,
           sessionId: undefined,
           errorMessage: undefined,
@@ -615,10 +581,8 @@ export const useTerminalStore = create<TerminalState>()(
         zIndexOrder: state.zIndexOrder,
         trayExpanded: state.trayExpanded,
       }),
-      // clean up on rehydration
       onRehydrateStorage: () => (state) => {
         if (state) {
-          // clean up stale terminals on load
           const cleaned = cleanupStaleSessions(state.terminals);
           const limited = limitSessionCount(cleaned, 5);
           if (limited.length !== state.terminals.length) {
@@ -633,7 +597,6 @@ export const useTerminalStore = create<TerminalState>()(
   )
 );
 
-// Helper hook to get Z-index for a terminal
 export function useTerminalZIndex(terminalId: string): number {
   const zIndexOrder = useTerminalStore(s => s.zIndexOrder);
   const baseZIndex = 1000;
@@ -641,7 +604,6 @@ export function useTerminalZIndex(terminalId: string): number {
   return index === -1 ? baseZIndex : baseZIndex + index;
 }
 
-// Helper to get viewport-aware snap positions
 export function getSnapPosition(
   layout: SnapLayout,
   viewportWidth: number,
@@ -651,7 +613,7 @@ export function getSnapPosition(
   const halfWidth = (viewportWidth - padding * 3) / 2;
   const halfHeight = (viewportHeight - padding * 3) / 2;
   const fullWidth = viewportWidth - padding * 2;
-  const fullHeight = viewportHeight - padding * 2 - 60; // Account for header
+  const fullHeight = viewportHeight - padding * 2 - 60; // Minus the 60px header.
 
   switch (layout) {
     case 'left':

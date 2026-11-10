@@ -16,13 +16,10 @@ export interface UsageBarProps {
 /**
  * The capacity bar itself: track, fill, and the meter semantics.
  *
- * important: the fill is a severity signal, not decoration, so the colour comes from
- * usageTone and nothing else. No animation either: a bar that is not moving must not look
- * like it is.
+ * The fill is a severity signal, so its colour comes from usageTone and nothing else. No
+ * animation either: a bar that is not moving must not look like it is.
  *
- * Lives in ui/ rather than beside UsageMeter because the storage pools table needs the bar
- * without the label row above it, and a second hand-rolled track is exactly how this console
- * ended up with three hues for one semantic.
+ * Separate from UsageMeter because the storage pools table needs the bar without the label row.
  */
 export function UsageBar({ percent, label, valueText, className }: UsageBarProps) {
   const { fill } = usageTone(percent);

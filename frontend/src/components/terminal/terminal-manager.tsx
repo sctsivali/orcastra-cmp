@@ -1,7 +1,4 @@
-/**
- * Terminal Manager - Global container for terminal windows.
- * Manages all terminal windows and the tray.
- */
+/** Global container for the floating terminal windows and the tray. */
 
 "use client";
 
@@ -11,21 +8,18 @@ import { TerminalWindow } from "./terminal-window";
 import { TerminalTray } from "./terminal-tray";
 
 export function TerminalManager() {
-  // Subscribe to terminals array
   const terminals = useTerminalStore((s) => s.terminals);
   const ensureWithinViewport = useTerminalStore((s) => s.ensureWithinViewport);
   const [mounted, setMounted] = React.useState(false);
   
-  // Client-side mount detection
   React.useEffect(() => {
     setMounted(true);
   }, []);
 
-  // Handle viewport resize (orientation change, window resize)
+  // Keep every window inside the viewport after a resize or an orientation change.
   React.useEffect(() => {
     if (!mounted) return;
 
-    // Debounce resize handler
     let resizeTimer: NodeJS.Timeout;
     const handleResize = () => {
       clearTimeout(resizeTimer);
@@ -34,11 +28,9 @@ export function TerminalManager() {
       }, 150);
     };
 
-    // Listen for resize and orientation change
     window.addEventListener('resize', handleResize);
     window.addEventListener('orientationchange', handleResize);
     
-    // Also check on initial mount
     ensureWithinViewport();
 
     return () => {
@@ -48,16 +40,15 @@ export function TerminalManager() {
     };
   }, [mounted, ensureWithinViewport]);
 
-  // SSR safety - don't render terminals until client-side
+  // Windows render only after mount, so the server render holds the tray alone.
   if (!mounted) {
     return <TerminalTray />;
   }
 
-  // Render terminals directly in a fixed container (no portal)
-  // This avoids portal timing issues with zustand state updates
+  // A fixed container instead of a portal, which avoids portal timing issues with zustand
+  // state updates.
   return (
     <>
-      {/* Fixed container for all terminals */}
       <div 
         id="terminal-layer"
         style={{

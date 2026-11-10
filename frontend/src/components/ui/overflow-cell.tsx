@@ -5,26 +5,19 @@ import { TableLink } from "@/components/ui/table-link";
 import { TableEmptyValue } from "@/components/ui/table-text";
 import { DetailListDialog } from "@/components/detail/detail-list-dialog";
 
-// A table cell holding a collection that does not fit. It replaces the pattern this codebase
-// grew independently in six places: slice a few items, append a bare `+N` span, and put the
-// rest in a `title` attribute where no keyboard or touch user will ever find them. One cell
-// even sliced with no indicator at all, so the hidden values were not merely hard to reach,
-// they were invisible.
+// A table cell holding a collection that does not fit: a preview, a `+N` trigger and a dialog
+// with every item, so no value is left in a `title` that keyboard and touch users cannot reach.
 //
-// important: by default the WHOLE cell is the trigger, preview text included, not just the
-// `+N`. A three character click target at the end of a dense row is a target nobody hits on
-// purpose.
+// By default the whole cell is the trigger, preview text included. A three character `+N` at
+// the end of a dense row is too small a target to hit reliably.
 //
-// important: `triggerMode: "indicator"` exists for one reason, and it is a correctness one
-// rather than a taste one. TableLink renders a real <button>, whose content model is phrasing
-// content, and Badge renders a <div>. Nesting the preview inside the trigger is therefore
-// invalid markup for any cell that previews badges rather than text. Those cells keep the
-// badges outside the trigger and get a worded link instead of a bare "+3", so the target is
-// still something a person can hit.
+// important: `triggerMode: "indicator"` is a correctness rule. TableLink renders a real
+// <button>, whose content model is phrasing content, and Badge renders a <div>, so a preview
+// of badges inside the trigger is invalid markup. Those cells keep the badges outside the
+// trigger and get a worded link ("+3 more") instead of a bare "+3".
 //
-// note: the dialog subtree is not mounted until the cell is opened once. A cell renders per
-// row, so mounting a dialog eagerly costs one Radix root per row per column, which is the cost
-// this component exists to avoid, not to reproduce.
+// The dialog subtree mounts only once the cell is first opened. A cell renders per row, so an
+// eager dialog would cost one Radix root per row per column.
 export interface OverflowCellProps<T> {
   items: readonly T[] | null | undefined;
   /** How many render inline before the overflow indicator. 1 for wide values, 3 for short labels. */
@@ -79,11 +72,10 @@ export function OverflowCell<T>({
     </React.Fragment>
   ));
 
-  // Nothing is hidden, so there is nothing behind the cell and it must not pretend otherwise.
+  // Nothing is hidden, so the cell is not a trigger.
   //
-  // note: indicator mode still needs its flex wrapper here. Badges laid out by that wrapper's
-  // gap sit flush against each other without it, so a cell with three tags would look different
-  // from the same cell with four purely because the fourth added a trigger.
+  // Indicator mode still needs its flex wrapper here: without the wrapper's gap the badges sit
+  // flush, and a cell with three tags would look different from the same cell with four.
   if (list.length <= preview) {
     return triggerMode === "indicator" ? (
       <span className="inline-flex flex-wrap items-center gap-1.5">{inline}</span>

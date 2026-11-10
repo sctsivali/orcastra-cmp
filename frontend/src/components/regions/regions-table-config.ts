@@ -14,10 +14,9 @@ export const REGIONS = defineTable<any>()({
       label: "Continent",
       sort: (r) => r.continent,
       facet: (r) => r.continent,
-      // The facet value stays the code, because it is what travels in the shared filter URL.
-      // Only the label changes: formatLabel title-cased the code into "As" and "Na", which is
-      // neither the code nor the name. "XX" is the backend's marker for a cluster with no
-      // recorded location, and it reads the same way as an outright empty one.
+      // The facet value stays the code, which travels in the shared filter URL; only the label
+      // is the continent name (formatLabel would title-case "AS" into "As"). "XX" is the
+      // backend's marker for a cluster with no recorded location and reads as Unknown.
       facetSpec: { primary: true, format: (value) => formatContinent(value) ?? "Unknown", emptyLabel: "Unknown" } },
     {
       field: "country",

@@ -19,7 +19,7 @@ export interface RefreshButtonProps
   label?: string;
   /**
    * React Query's dataUpdatedAt. Renders a live "Updated 5s ago" beside the
-   * icon, which is what lets an operator confirm the click actually landed.
+   * icon, so an operator can confirm the click landed.
    */
   lastUpdatedAt?: number | null;
   /** Toast title used when the refresh fails. */
@@ -32,10 +32,9 @@ export interface RefreshButtonProps
 /**
  * The single refresh control for the console.
  *
- * It owns its own pending state rather than accepting one, because the previous
- * contract let call sites bind `disabled` to a query's isFetching, which is also
- * true during background polling. Those buttons disabled themselves every few
- * seconds and silently swallowed clicks.
+ * It owns its pending state instead of accepting one. A query's isFetching is
+ * also true during background polling, so a button bound to it would disable
+ * itself every few seconds and swallow clicks.
  */
 export function RefreshButton({
   className,
@@ -65,7 +64,7 @@ export function RefreshButton({
       : `Refreshing… ${elapsedSeconds}s`
     : `Updated ${relative}`;
 
-  // note: keyed on the timestamp, not on showTimestamp, so a compact control with no room for
+  // Keyed on the timestamp, not on showTimestamp, so a compact control with no room for
   // the label (the task dock) still answers "when" on hover and focus.
   const tooltip = pending
     ? "Refreshing…"

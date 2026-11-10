@@ -7,16 +7,10 @@ import { capabilityNote } from "@/lib/extension-display";
 import type { ExtensionCapabilityInfo } from "@/types/api";
 
 /**
- * What an add-on is asking to be allowed to call.
- *
- * important: the capabilities that reach inside a guest are hoisted into their own block above
- * the rest, rather than sorted alphabetically among ten equal-looking rows. Running a command as
- * root inside a customer's container is a different decision from reading an inventory, and
- * burying it in a list is how it gets clicked through. The split is taken from the server's own
- * `reaches_inside_a_guest`, not from a list held here.
- *
- * Every marked capability shows the server's own reason. There are five distinct ones, and the
- * single label this replaced was accurate for two of them.
+ * What an add-on asks to be allowed to call. Capabilities that reach inside a guest get their
+ * own block above the rest, split on the server's `reaches_inside_a_guest`, so running a command
+ * inside an instance is never buried among inventory reads. Each marked capability shows the
+ * server's own reason.
  */
 function CapabilityRow({ capability }: { capability: ExtensionCapabilityInfo }) {
   const note = capabilityNote(capability.elevated, capability.elevated_reason);

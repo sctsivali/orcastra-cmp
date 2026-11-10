@@ -6,8 +6,8 @@
  * what a person reads: control and bidirectional characters become visible escapes. This is for
  * display only. The API always receives the raw name.
  *
- * note: bytes that are not UTF-8 arrive as U+10FC80 to U+10FCFF (see backend paths.py), and show as
- * the `\xNN` a terminal would print.
+ * Bytes that are not UTF-8 arrive as U+10FC80 to U+10FCFF (see backend paths.py), and show as the
+ * `\xNN` a terminal would print.
  */
 
 const INVISIBLE = new RegExp("[\\u0000-\\u001f\\u007f-\\u009f\\u200b-\\u200f\\u2028-\\u202f\\u2060-\\u2069\\ufeff]", "gu");

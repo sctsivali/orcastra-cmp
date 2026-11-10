@@ -1,18 +1,12 @@
 "use client";
 
 /**
- * Auth Provider Component
+ * Session provider that keeps the API client's bearer token in step with the next-auth session.
  *
- * Wraps the application with SessionProvider for client-side session access.
- * Automatically syncs the Authentik access token into the API client
- * so all backend requests include a valid Bearer token.
- *
- * Key features:
- * - Proactive token refresh via SessionProvider refetchInterval (4 min)
- * - 401 handling: triggers session refresh instead of immediate redirect
- * - Gates children rendering until token is ready (prevents race conditions)
- * - A session the IdP ended signs in again: on its own in a tab that never worked (a deep link
- *   opened in a new tab), behind a Sign In Again banner in one that did
+ * The session is polled every 4 minutes, a 401 asks for a session refresh instead of
+ * redirecting, and children render only once the token is installed. A session the IdP ended
+ * signs in again on its own in a tab that never worked (ex; a deep link opened in a new tab),
+ * and behind a Sign In Again banner in one that did.
  */
 
 import { SessionProvider, useSession, signIn, __NEXTAUTH } from "next-auth/react";
@@ -33,20 +27,15 @@ import { REFRESH_FAILED, REFRESH_TOKEN_REVOKED } from "@/lib/auth-refresh";
 import { noteSessionWorked, reauthenticate } from "@/lib/reauth";
 import { SOCKET_MESSAGES } from "@/lib/ws-close";
 
-// Session refresh interval (seconds) - refresh token before it expires.
-// Authentik default access token lifetime is ~5 min, so refresh every 4 min.
+// Polls inside Authentik's default access token lifetime of about 5 minutes.
 const SESSION_REFRESH_INTERVAL_S = 4 * 60;
 
 /**
- * Inner component that syncs session accessToken → API client.
- * Must be inside SessionProvider to use useSession().
+ * Installs the session's access token in the API client. Must render inside SessionProvider.
  *
- * Gates children rendering until the session is resolved and the
- * access token is set, preventing React Query from firing requests
- * before the Bearer token is available (race condition → 401s).
- *
- * Also handles RefreshAccessTokenError - shows a re-login prompt
- * when the IdP is reachable, but avoids redirect loops when it's down.
+ * Children wait until the session is resolved and the token is set, so React Query never sends
+ * a request without the bearer. A failed refresh keeps the stale token behind a sign-in banner
+ * and never redirects, which would loop while the IdP is down.
  */
 function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: boolean }) {
   const { data: session, status, update: updateSession } = useSession();
@@ -75,19 +64,19 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
     );
   }, []);
 
-  // Register session refresh callback so api.ts can trigger re-auth on 401
+  // Lets api.ts refresh the session on a 401.
   useEffect(() => {
     const refreshFn = async () => {
       try {
         await updateSession();
       } catch {
-        // session update failed - will show error on next render
+        // The failed session shows on the next render.
       }
     };
     onSessionRefreshNeeded(refreshFn);
     // A socket whose ticket was refused asks for a fresh token and needs to know what it got.
-    // note: the new token is installed here, before the socket mints again, when it belongs to
-    // the same actor; another actor goes through the effect below, which remounts the page.
+    // A token for the same actor is installed here, before the socket mints again; another
+    // actor goes through the effect below, which remounts the page.
     onForceSessionRefresh(async () => {
       const before = getAccessToken();
       const next = await updateSession({ forceRefresh: true }).catch(() => null);
@@ -101,11 +90,11 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
     });
   }, [updateSession]);
 
-  // api.ts no longer redirects on repeated 401s - it asks for the banner instead,
-  // so the operator keeps the page they were on and can re-auth from there.
+  // api.ts raises the banner on repeated 401s instead of redirecting, so the operator keeps the
+  // page they were on and can sign in again from there.
   useEffect(() => {
     onAuthFailure(() => setAuthError(true));
-    // cleared only when a request actually succeeds, never by an effect re-running
+    // Cleared only when a request succeeds, never by an effect re-running.
     onAuthRecovered(() => setAuthError(false));
   }, []);
 
@@ -129,38 +118,33 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
         return;
       }
 
-      // Check if token refresh failed - the IdP may be unreachable
+      // The refresh failed; the IdP may be unreachable.
       if (session.error === REFRESH_FAILED) {
         retryCountRef.current += 1;
 
-        // Don't auto-redirect - it causes visible "random refresh" to the user.
-        // Let them continue with the stale token; show an error banner instead.
-        // api.ts no longer redirects on a 401 either: it raises the same banner.
+        // No redirect, which reads as a random page reload. The page continues on the stale
+        // token behind the same banner api.ts raises on a 401.
         console.warn("[Auth] Token refresh failed, using stale token");
         setAuthError(true);
         synchronizeAuth(session.accessToken, actorScope); // stale but non-null
         return;
       }
 
-      // Successful token - reset counters
       retryCountRef.current = 0;
       wasAuthenticatedRef.current = true;
       signOutConfirmedRef.current = false;
-      // important: clear the banner here too. This branch raises it above without going
-      // through api.ts, so onAuthRecovered never fires for it, and the destructive bar
-      // stayed pinned to the top of the viewport for the life of the tab after the
-      // session had fully recovered.
+      // important: clear the banner here too. The branch above raises it without going through
+      // api.ts, so onAuthRecovered never fires for it and the bar would stay for the life of
+      // the tab.
       setAuthError(false);
       setSessionEnd(null);
       noteSessionWorked();
       synchronizeAuth(session.accessToken, actorScope);
     } else if (status === "unauthenticated") {
-      // important: next-auth's fetchData() returns null on ANY failure, including a
-      // transient network error, and SessionProvider commits that null verdict. Once
-      // it does, _getSession short-circuits on the null session and the refetch poll
-      // is gated behind it, so the tab stays wedged as signed-out until a reload.
-      // A laptop waking before its wifi is enough to trigger it. Confirm once before
-      // believing an unauthenticated verdict we did not previously hold.
+      // important: next-auth's fetchData() returns null on any failure, including a transient
+      // network error, and SessionProvider commits that null. _getSession then short-circuits
+      // and the refetch poll is gated behind it, so the tab stays signed out until a reload.
+      // Confirm once before accepting an unauthenticated verdict after an authenticated one.
       if (wasAuthenticatedRef.current && !signOutConfirmedRef.current) {
         signOutConfirmedRef.current = true;
         void (async () => {
@@ -173,7 +157,7 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
           cancelled = true;
         };
       }
-      synchronizeAuth(null, null); // resolved - no token needed
+      synchronizeAuth(null, null); // resolved, no token needed
     }
 
     return () => {
@@ -195,10 +179,9 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
     isAuthContextSynchronized(null, null);
   const authContextReady = authenticatedContextReady || unauthenticatedContextReady;
 
-  // A session hydrated from the server skips next-auth's mount fetch, which is also what used to
-  // refresh a token inside the 120 s background skew at load. Read it once, in the background, so
-  // the token is in the same state it always was after a load and the 4-minute poll stays aligned
-  // with it. Nothing waits on this read.
+  // A session hydrated from the server skips next-auth's mount fetch, which refreshes a token
+  // inside the 120 s background skew at load. Read it once in the background so the 4-minute poll
+  // stays aligned with the token. Nothing waits on this read.
   //
   // important: gated on authenticatedContextReady, which is first true on the second commit.
   // Effects run child first, so on the first commit SessionProvider has not yet installed
@@ -266,11 +249,10 @@ export function AuthProvider({ children, session }: AuthProviderProps) {
     <SessionProvider
       session={session}
       refetchInterval={SESSION_REFRESH_INTERVAL_S}
-      // the 4-minute poll already keeps the token inside Authentik's ~5-minute
-      // lifetime. Refetching on tab focus adds nothing and is actively harmful:
-      // it is the entry point to the null-session wedge described in TokenSync.
+      // The 4-minute poll already keeps the token inside Authentik's lifetime. A refetch on
+      // tab focus can commit the null session described in TokenSync.
       refetchOnWindowFocus={false}
-      // and do not poll while offline, for the same reason
+      // No poll while offline, for the same reason.
       refetchWhenOffline={false}
     >
       <TokenSync hydrated={session !== undefined}>{children}</TokenSync>

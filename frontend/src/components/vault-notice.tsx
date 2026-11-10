@@ -8,9 +8,9 @@ import { UnsealVaultDialog } from "@/components/host-health/unseal-vault-dialog"
 import { usePermissions } from "@/hooks/use-permissions";
 import { useVaultStatus } from "@/hooks/use-vault-status";
 
-// Issue #15: a sealed Vault made the dashboard look like a deployment with no clusters. This says
-// what is actually wrong, on every page, and clears on its own when Vault answers again. A notice
-// rather than a lock: whatever still works keeps working, and nothing is hidden from an operator.
+// A sealed Vault makes the dashboard look like a deployment with no clusters. This says what is
+// wrong, on every page, and clears on its own when Vault answers again. It is a notice rather
+// than a lock: whatever still works keeps working, and nothing is hidden from an operator.
 
 const ADMIN_COPY: Record<NonNullable<ReturnType<typeof useVaultStatus>["state"]>, { title: string; body: ReactNode }> = {
   sealed: {

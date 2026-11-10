@@ -19,8 +19,8 @@ import {
 } from "./projection";
 
 // Every fill and stroke comes from illustrations.css through these class names, never from a
-// colour literal here: the look is a stylesheet decision, and both themes resolve their own
-// tokens. scripts/checks/check-illustrations.mjs holds this.
+// colour literal here, so both themes resolve their own tokens. Enforced by
+// scripts/checks/check-illustrations.mjs.
 
 /** paper: light body. tint: lavender accent. ink: the one solid hero piece. ghost: dashed outline. */
 export type Material = "paper" | "tint" | "ink" | "ghost";

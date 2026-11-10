@@ -27,15 +27,15 @@ import { APIError } from "@/types/api";
 const STALE_MS = 15_000;
 const GC_MS = 60_000;
 
-// A refusal is an answer: asking a stopped instance again a second later tells nobody anything,
-// and every read spends the person's per-minute budget on the server.
+// No retry on a refusal: a stopped instance gives the same answer a second later, and every read
+// spends the person's per-minute budget on the server.
 function retryRead(failures: number, error: unknown): boolean {
   if (credentialErrorCode(error) !== undefined) return false;
   if (error instanceof APIError && error.status >= 400 && error.status < 500) return false;
   return failures < 1;
 }
 
-// note: no polling and no refetch on focus. Each read runs a script inside the guest, so the
+// No polling and no refetch on focus. Each read runs a script inside the guest, so the
 // panel reads when it is opened, after a change, and when the person asks.
 const READ_OPTIONS = { staleTime: STALE_MS, gcTime: GC_MS, retry: retryRead, refetchOnWindowFocus: false } as const;
 

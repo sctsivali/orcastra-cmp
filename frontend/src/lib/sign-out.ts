@@ -16,8 +16,8 @@ export async function federatedSignOut(): Promise<void> {
   const endSession = idpEndSessionUrl(IDP_LOGOUT_URL, signInPage);
   if (!endSession) {
     // important: without a usable end-session URL only the console session ends. The IdP session
-    // stays, so the next sign-in on this browser may not ask for a password. Landing on the
-    // sign-in page beats navigating to the unreplaced build placeholder, which is a dead host.
+    // stays, so the next sign-in on this browser may not ask for a password. The sign-in page is
+    // the fallback because the unreplaced build placeholder is a dead host.
     console.warn(
       "[sign-out] NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL is not a usable URL; only the console session was ended"
     );

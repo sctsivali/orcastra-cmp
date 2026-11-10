@@ -50,7 +50,7 @@ export function capacityScope(data: MonitoringDashboardResponse, selectedNode: s
       partial: null,
     };
   }
-  // note: an older backend sends no counts. online_nodes is the nearest it has, and it can only
+  // A backend without these counts falls back to online_nodes, the nearest it has. It can only
   // overstate, so the fallback never invents an outage.
   const reporting = data.clusters_reporting ?? data.online_nodes;
   const total = data.clusters_total ?? data.total_nodes;

@@ -1,14 +1,11 @@
 // Clipboard writes that also work outside a secure context.
 //
 // `navigator.clipboard` is secure-context only, so on a plain-HTTP LAN deployment
-// (ex; http://10.0.1.5) it is undefined and `navigator.clipboard.writeText(...)` throws.
-// Three screens already carried their own copy of the guard plus an execCommand
-// fallback, each subtly different, and two more had no fallback at all. This is the one
-// implementation they all share now.
+// it is undefined and `navigator.clipboard.writeText(...)` throws. This is the
+// shared guard, with an execCommand fallback.
 //
-// It reports success instead of raising, and it raises no toast of its own, because the
-// call sites word their feedback differently and two of them also flip an icon on
-// success. Callers own their own messaging.
+// It reports success instead of raising and shows no toast of its own: call sites
+// word their feedback differently, and some also flip an icon on success.
 
 function fallbackCopy(text: string): boolean {
   const textarea = document.createElement("textarea");
@@ -24,7 +21,7 @@ function fallbackCopy(text: string): boolean {
     textarea.focus();
     textarea.select();
     textarea.setSelectionRange(0, textarea.value.length);
-    // note: deprecated, and the only programmatic copy available over plain HTTP.
+    // Deprecated, but the only programmatic copy available over plain HTTP.
     return document.execCommand("copy");
   } catch {
     return false;

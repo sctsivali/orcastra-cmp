@@ -10,7 +10,7 @@ import { clusterStatusMeta, type ClusterStatusMeta } from "@/lib/cluster-status"
 import { cn, formatHypervisorType, plural } from "@/lib/utils";
 import { ClusterStatus, type AvailableCluster } from "@/types";
 
-// note: search box appears only past this count so short cluster lists stay uncluttered
+// The search box appears only past this many clusters.
 const SEARCH_THRESHOLD = 6;
 
 interface ClusterAccessSelectorProps {
@@ -46,8 +46,8 @@ function toRow(cluster: AvailableCluster): Row {
     name: String(cluster.name || id),
     endpoint: String(cluster.endpoint || ""),
     typeLabel: formatHypervisorType(cluster.server_type),
-    // important: undefined, not clusterStatusMeta(undefined). That resolves to Unknown, which is
-    // a claim about the cluster; this is a gap in what we know and must render as nothing.
+    // Keep undefined: clusterStatusMeta(undefined) resolves to Unknown, a claim about the
+    // cluster, while a missing status must render as nothing.
     meta: cluster.status ? clusterStatusMeta(cluster.status) : undefined,
     orphan: false,
   };
@@ -59,8 +59,8 @@ function orphanRow(clusterId: string, checking: boolean): Row {
     name: clusterId,
     endpoint: "",
     typeLabel: formatHypervisorType(null),
-    // important: no status while the list is being read. "Unknown" is a claim about the
-    // cluster, and a cluster registered a moment ago is exactly the case it would get wrong.
+    // No status while the list is being read: the grant may name a cluster registered a moment
+    // ago, which "Unknown" would misdescribe.
     meta: checking ? undefined : clusterStatusMeta(undefined),
     orphan: true,
   };
@@ -69,14 +69,10 @@ function orphanRow(clusterId: string, checking: boolean): Row {
 /**
  * Multi-select cluster picker used when scoping an API key.
  *
- * Selection is tracked by id, so a cluster that is selected and then filtered out of view stays
- * selected; the counter below always reflects the full selection, not just what is visible.
- *
- * Two things it deliberately does not do. It does not disable a cluster that is not answering:
- * this grants durable permission rather than creating anything, so a host being down right now is
- * not a reason to refuse the grant, and the credential works the moment it comes back. And it
- * does not hide one either, because a grant on a cluster that is not listed cannot be unticked,
- * and access nobody can revoke is the worse failure on a credentials surface.
+ * Selection is tracked by id, so a cluster filtered out of view stays selected and the counter
+ * always counts the full selection. A cluster that is not answering is neither disabled nor
+ * hidden: the grant is durable and works once the host is back, and a grant on a hidden cluster
+ * could not be unticked.
  */
 export function ClusterAccessSelector({
   clusters,
@@ -93,10 +89,9 @@ export function ClusterAccessSelector({
     [clusters],
   );
 
-  // An orphan row exists because a grant names it, so unticking one would normally unmount it
-  // mid-click: the row an operator was looking at vanishes, and a misclick cannot be undone
-  // before saving. Once shown, it stays for the life of the dialog and behaves like every other
-  // row. The dialog unmounts on close, so nothing accumulates across visits.
+  // An orphan row exists only while a grant names it, so unticking would unmount it mid-click and
+  // a misclick could not be undone. Once shown it stays for the life of the dialog, which
+  // unmounts on close, so nothing accumulates across visits.
   const seenOrphans = React.useRef<Set<string>>(new Set());
   const rows = React.useMemo(() => {
     const listed = safeClusterList.map(toRow);
@@ -111,12 +106,11 @@ export function ClusterAccessSelector({
     return [...listed, ...orphans];
   }, [safeClusterList, selectedClusterIds, listChecking]);
 
-  // Reachable clusters lead, so the ones an operator can act on are not buried mid-list.
+  // Reachable clusters lead.
   //
   // important: the order is recomputed only when the membership changes, never when a status
-  // flips. Status arrives on a refetch, and a window refocus is enough to trigger one, so
-  // re-sorting a live list moves a row out from under the pointer between the eye and the click.
-  // On a control that grants credentials that is the wrong cluster, not a cosmetic glitch.
+  // flips. A refetch (ex; on window refocus) would otherwise move a row under the pointer between
+  // reading and clicking, and on a credentials control that grants the wrong cluster.
   const membershipKey = rows.map((row) => row.id).join(" ");
   const orderRef = React.useRef<{ key: string; ids: string[] }>({ key: "", ids: [] });
   if (orderRef.current.key !== membershipKey) {
@@ -135,8 +129,7 @@ export function ClusterAccessSelector({
     const query = search.trim().toLowerCase();
     if (!query) return ordered;
     return ordered.filter((row) => {
-      // The status word is in the haystack on purpose: typing "offline" narrows the list to the
-      // broken clusters, which is how an operator finds them rather than only avoids them.
+      // The status word is searchable, so typing "offline" lists the clusters that are down.
       const haystack = [row.id, row.name, row.endpoint, row.typeLabel, row.meta?.label]
         .filter(Boolean)
         .join(" ")
@@ -148,15 +141,13 @@ export function ClusterAccessSelector({
   const showSearch = rows.length > SEARCH_THRESHOLD;
   const withStatus = ordered.filter((row) => row.meta && !row.orphan);
   const onlineCount = withStatus.filter((row) => row.meta?.reachable).length;
-  // Absent on every row means reachability itself is unavailable, which is a different statement
-  // from a fleet that is down and must never be rendered as one.
+  // No status on any row means reachability itself is unavailable; it must never render as a
+  // fleet that is down.
   const statusUnavailable = safeClusterList.length > 0 && withStatus.length === 0;
 
   const selected = new Set(selectedClusterIds ?? []);
-  // important: orphans are excluded. Their status is Unknown, so they would otherwise be swept
-  // into the sentence below and told the grant "takes effect once the cluster is reachable",
-  // which is false: the cluster is not in this scope at all and reachability is not what is
-  // missing. The row says the true thing about itself.
+  // Orphans are excluded: their cluster is not in this scope at all, so "takes effect once the
+  // cluster is reachable" would be false for them. The orphan row explains itself.
   const unreachableSelected = ordered.filter(
     (row) =>
       !row.orphan && selected.has(row.id) && row.meta && row.meta.status !== ClusterStatus.ONLINE,
@@ -193,12 +184,9 @@ export function ClusterAccessSelector({
           <div className="space-y-2">
             {filtered.map((row) => {
               const isSelected = selected.has(row.id);
-              // The id is what a grant stores and what every table and URL uses, so it stays
-              // visible when it differs from the name. Two clusters on this fleet share one
-              // endpoint, so with the id hidden the endpoint cannot tell them apart either.
-              //
-              // note: one line, not two. Density is the product here, and use-node-picker-options
-              // already joins the same pair into a single sublabel.
+              // The id is what a grant stores and what tables and URLs use, so it stays visible
+              // when it differs from the name; two clusters can share one endpoint. One line,
+              // joined the way use-node-picker-options builds its sublabel.
               const sublabel = [row.name !== row.id ? row.id : null, row.endpoint]
                 .filter(Boolean)
                 .join("  ");
@@ -222,9 +210,8 @@ export function ClusterAccessSelector({
                     className="h-4 w-4 shrink-0 rounded border-primary text-primary focus:ring-primary"
                   />
                   <div className="min-w-0 flex-1 space-y-0.5">
-                    {/* Wrapping rather than a breakpoint. The status and the type sit beside the
-                        name when there is room and drop to their own line when there is not, so
-                        this reads the width it actually has instead of the viewport's. */}
+                    {/* Wraps instead of using a breakpoint: status and type sit beside the name
+                        when the row has room and drop to their own line when it does not. */}
                     <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                       <p className="break-words text-sm font-medium">{row.name}</p>
                       <span className="flex shrink-0 items-center gap-2">
@@ -269,9 +256,8 @@ export function ClusterAccessSelector({
           <span>Cluster reachability is unavailable. Clusters are listed without status.</span>
         </p>
       )}
-      {/* note: not NodeStatusNotice. Its copy says creating here will fail, which is true on a
-          create form and false here: the grant is stored either way and starts working when the
-          cluster does. Same visual grammar, honest sentence. */}
+      {/* Not NodeStatusNotice, whose copy says creating will fail. A grant is stored either way
+          and starts working when the cluster does. */}
       {unreachableSelected.length > 0 && (
         <p role="status" className="flex items-start gap-2 text-xs">
           <AlertTriangle

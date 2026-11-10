@@ -2,7 +2,7 @@ import { safeImageSrc } from "@/lib/branding-images";
 import type { PublicBranding } from "@/types/branding";
 import { isIllustrationPreference } from "@/types/personalization";
 
-// note: server components only (the root layout's metadata and the auth layout). It reads the
+// Server components only (the root layout's metadata and the auth layout): it reads the
 // Docker-internal backend address, which the browser has no route to.
 const BACKEND_URL =
   process.env.INTERNAL_BACKEND_URL ||
@@ -58,8 +58,8 @@ async function read(): Promise<PublicBranding | null> {
 
 /** The deployment default branding, or null when it is unset or did not answer in time. */
 export async function getPublicBranding(): Promise<PublicBranding | null> {
-  // note: the deadline races the read instead of aborting it, so a slow answer still lands in
-  // the data cache for the next request rather than being thrown away.
+  // The deadline races the read instead of aborting it, so a slow answer still lands in the
+  // data cache for the next request.
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<null>((resolve) => {
     timer = setTimeout(() => resolve(null), DEADLINE_MS);

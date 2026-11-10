@@ -5,25 +5,20 @@ import { useEffect, useMemo, useRef } from "react";
 export interface LiveRecord<T> {
   /** The row as the list last reported it, or the last one seen if it has since left. */
   record: T | null;
-  /** The id is no longer in the list. What is on screen is the last known state. */
+  /** The id has left the list. What is on screen is the last known state. */
   isOrphaned: boolean;
 }
 
 /**
  * Re-derives a selected row from the live list on every render, so a dialog opened from a
- * table moves when the table moves.
+ * table moves when the table moves instead of showing the row captured at click time.
  *
- * The pattern this replaces stored the clicked row in useState. React Query kept the list
- * fresh underneath and the dialog kept rendering the object captured at click time, so a
- * modal titled Memory sat on one number for as long as it stayed open.
+ * important: the fallback is keyed on the id. A bare "last value" fallback renders the
+ * previous row's numbers under the new row's title when an operator opens a second row
+ * while a poll is in flight.
  *
- * important: the fallback is keyed on the id, not a bare "last value". A bare fallback renders
- * the previous row's numbers under the new row's title when an operator opens a second row
- * while a poll is in flight, which is a worse failure than the freeze it replaces.
- *
- * note: `getId` belongs at module scope or behind useCallback. It is a real memo dependency
- * rather than being hidden behind a ref, because a ref would make a wrong accessor silently
- * permanent instead of merely re-running the find.
+ * `getId` belongs at module scope or behind useCallback. It is a memo dependency rather than a
+ * ref, because a ref would make a wrong accessor silently permanent.
  */
 export function useLiveRecord<T>(
   rows: readonly T[] | undefined,

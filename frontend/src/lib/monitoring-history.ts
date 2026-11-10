@@ -2,10 +2,8 @@ import { format } from "date-fns";
 import type { MetricsHistoryPoint, NodeMetricsPoint } from "@/types/api";
 
 /**
- * Chart ranges, in seconds of history.
- *
- * important: time, not a point count. These were point counts that assumed one point every 5 s
- * while the collector writes one about every 30 s, so "5m" drew roughly half an hour.
+ * Chart ranges, in seconds of history rather than point counts: the collector writes a point
+ * about every 30 s.
  */
 export const HISTORY_WINDOWS = [
   { label: "5m", seconds: 300, description: "Last 5 minutes" },
@@ -47,8 +45,8 @@ function rates(
   previous: typeof point | undefined,
   seconds: number,
 ): [number | null, number | null] {
-  // note: points written since network became a rate carry it; older points carry lifetime
-  // counters, which only make a rate between two points that both have them.
+  // Newer points carry a network rate; older points carry lifetime counters, which give a rate
+  // only between two points that both have them.
   if (point.network_rx_bytes_per_sec !== undefined || point.network_tx_bytes_per_sec !== undefined) {
     return [point.network_rx_bytes_per_sec ?? null, point.network_tx_bytes_per_sec ?? null];
   }
@@ -124,8 +122,8 @@ export function toChartPoints(
 /**
  * When a dashboard payload was collected, from its own timestamp; 0 when it carries none.
  *
- * important: the payload's time, not the browser's receive time. The dashboard is served from a
- * 35 s cache rebuilt by a collector, so a body received "just now" can be half a minute old.
+ * The browser's receive time would mislead: the dashboard is served from a 35 s cache rebuilt
+ * by a collector, so a body received just now can be half a minute old.
  */
 export function collectedAtOf(data?: { timestamp?: string | null } | null): number {
   const parsed = data?.timestamp ? Date.parse(data.timestamp) : Number.NaN;

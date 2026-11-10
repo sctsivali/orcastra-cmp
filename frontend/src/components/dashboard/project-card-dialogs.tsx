@@ -148,15 +148,13 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
   const [editMaxStorageSource, setEditMaxStorageSource] = React.useState<string | null>(null);
   const [storageLimitDirty, setStorageLimitDirty] = React.useState(false);
 
-  // Parse existing resource limits when dialog opens
   React.useEffect(() => {
     if (open) {
       const config = project.config ?? {};
-      // Set name and description
       setEditName(project.name);
       setEditDescription(project.description || "");
 
-      // Parse CPU limit (0 = unlimited/no limit set)
+      // 0 means no CPU limit.
       const cpuLimitStr = config["limits.cpu"];
       setEditMaxCpu(cpuLimitStr ? parseInt(cpuLimitStr) || 0 : 0);
 
@@ -174,8 +172,8 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
     }
   }, [open, project.config, project.description, project.name]);
 
-  // important: isPending is React state, so the disabled prop only updates on the next render.
-  // Two clicks inside one tick both fire the mutation. Claimed synchronously, before any await.
+  // important: isPending is React state, so the disabled prop only updates on the next render
+  // and two clicks inside one tick would both fire the mutation. Claimed before any await.
   const submitInFlightRef = React.useRef(false);
 
   const handleSave = async () => {
@@ -197,12 +195,10 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
         max_storage?: string;
       } = {};
 
-      // Always include description
       updateData.description = editDescription;
 
-      // CPU: 0 = unlimited (send 0 to clear limit), >0 = set limit
-      // null/undefined = no change (field omitted)
-      updateData.max_cpu = editMaxCpu; // always send - 0 clears the limit
+      // Always sent: 0 clears the CPU limit.
+      updateData.max_cpu = editMaxCpu;
 
       // Omit untouched limits so a valid legacy SI/raw-byte value keeps its exact meaning.
       if (ramLimitDirty) {
@@ -224,7 +220,7 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
         variant: "success" });
 
       onOpenChange(false);
-      refetch(); // Refresh the project list
+      refetch();
     } catch (error) {
       toast({
         title: "Could not update project",
@@ -247,7 +243,6 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
         </DialogHeader>
         
         <div className="space-y-4 py-4">
-          {/* Project Name */}
           <div className="space-y-2">
             <Label htmlFor="edit-name">Project Name</Label>
             <Input
@@ -262,7 +257,6 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
             </p>
           </div>
 
-          {/* Description */}
           <div className="space-y-2">
             <Label htmlFor="edit-description">Description</Label>
             <Textarea
@@ -274,7 +268,6 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
             />
           </div>
 
-          {/* Max CPU */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label htmlFor="edit-max-cpu">Max vCPUs</Label>
@@ -290,7 +283,6 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
             />
           </div>
 
-          {/* Max Memory */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label htmlFor="edit-max-ram">Max Memory</Label>
@@ -334,7 +326,6 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
             )}
           </div>
 
-          {/* Max Storage */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label htmlFor="edit-max-storage">Max Storage</Label>

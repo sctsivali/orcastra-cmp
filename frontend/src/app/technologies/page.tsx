@@ -33,10 +33,9 @@ function PageHeader({ tenant = false }: { tenant?: boolean }) {
 }
 
 function PlatformTechnologies() {
-  // important: through the owning hook, not a bare useQuery on the same key. This page
-  // subscribed to ["nodes"] with no options at all, so whether its hardware totals ever
-  // refreshed depended on whether some other component happened to be mounted in the same
-  // tab session to carry the interval.
+  // important: read through the owning hook, not a bare useQuery on the same key. Without the
+  // hook's options, whether the hardware totals refresh depends on which other component is
+  // mounted to carry the interval.
   const { data: nodesResponse, isLoading, isFetching, isError, refetch } = useNodesStatus();
 
   const nodes = nodesResponse?.nodes || [];
@@ -54,13 +53,12 @@ function PlatformTechnologies() {
     );
   }
 
-  // important: a read that failed is not a fleet that is empty. `data` is undefined either
-  // way, so without this branch the page falls through to the no-node empty state and tells
-  // the operator their nodes are gone when the dashboard simply got no answer.
+  // important: a read that failed is not an empty fleet. `data` is undefined either way, so
+  // without this branch the page falls through to the no-node empty state.
   //
-  // note: only when there is nothing to show. A refetch can fail while the previous response
-  // is still held (refetchOnReconnect is on), and replacing readable data with an error is
-  // worse than showing it. Same rule as the sessions list.
+  // Only when there is nothing to show. A refetch can fail while the previous response is still
+  // held (refetchOnReconnect is on), and readable data is better than an error. Same rule as the
+  // sessions list.
   if (isError && !nodesResponse) {
     return (
       <div className="container py-8 space-y-8">
@@ -94,7 +92,6 @@ function PlatformTechnologies() {
           <TabsTrigger value="software" className="py-2.5">Software</TabsTrigger>
         </TabsList>
 
-        {/* Hardware Tab */}
         <TabsContent value="hardware" className="space-y-6 mt-6">
           <UnreachableNodesBanner
             nodes={unreachable.map((node) => node.name)}
@@ -127,7 +124,6 @@ function PlatformTechnologies() {
           )}
         </TabsContent>
 
-        {/* Software Tab */}
         <TabsContent value="software" className="space-y-6 mt-6">
           <SoftwareInventory nodes={nodes} />
         </TabsContent>
@@ -213,8 +209,7 @@ export default function TechnologiesPage() {
     );
   }
 
-  // Separate mounted trees are a security boundary as well as a presentation choice. A Tenant
-  // never mounts useNodesStatus, so the browser does not request platform inventory and briefly
-  // hide it after the response arrives.
+  // Separate trees by role are a security boundary: a Tenant never mounts useNodesStatus, so the
+  // browser never requests platform inventory at all.
   return isPartner ? <PlatformTechnologies /> : <TenantTechnologies />;
 }

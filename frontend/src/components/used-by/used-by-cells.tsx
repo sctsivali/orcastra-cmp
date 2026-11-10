@@ -6,12 +6,12 @@ import { TableEmptyValue } from "@/components/ui/table-text";
 import { projectsFromUsedBy } from "@/lib/used-by";
 import { plural, singular } from "@/lib/utils";
 
-// The two cells that open the shared dialog. They stay two, because the columns behind them
-// carry different sort and facet accessors and different URL keys, and merging them would take
-// out the `projects` facet and its role pin along with any shared link that uses it.
+// The two cells that open the shared dialog. They stay two because the columns behind them
+// carry different sort and facet accessors and different URL keys, including the `projects`
+// facet and its role pin.
 //
-// note: neither cell owns a dialog. They set state on a controller that a single hoisted
-// UsedByDialog reads, which is why a 25-row table now mounts one Radix root instead of fifty.
+// Neither cell owns a dialog. They set state on a controller that a single hoisted
+// UsedByDialog reads, so a table mounts one Radix root.
 
 interface UsedByCellProps {
   usedBy: readonly string[] | null | undefined;

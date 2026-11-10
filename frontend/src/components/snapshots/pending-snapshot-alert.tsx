@@ -21,7 +21,7 @@ interface PendingSnapshotAlertProps {
   onDismiss: () => void;
 }
 
-/** A pending create is accepted work, not a completed restore point. Keep that distinction visible. */
+/** Shows a pending create as accepted work, visibly distinct from a completed restore point. */
 export function PendingSnapshotAlert({
   notice,
   onRefresh,

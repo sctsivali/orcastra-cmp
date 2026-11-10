@@ -4,7 +4,7 @@
 
 export type SortDirection = "asc" | "desc";
 
-// note: severity rank for enum columns (warnings). Lower index sorts first in asc.
+// Severity rank for enum columns (warnings). Lower ranks sort first ascending.
 export const SEVERITY_RANK: Record<string, number> = {
   critical: 0,
   error: 0,
@@ -36,14 +36,13 @@ function isEmpty(value: unknown): boolean {
 }
 
 // Type-aware comparator. Empty values always sort last regardless of direction.
-// Dates must be normalized to a number (getTime()) by the column accessor before
-// reaching here - we never sniff arbitrary strings as dates to avoid mis-parsing
-// enum values like "tls" as a date.
+// Dates must be normalized to a number (getTime()) by the column accessor. Strings
+// are never sniffed as dates, which would mis-parse enum values like "tls".
 export function compareValues(a: unknown, b: unknown, direction: SortDirection): number {
   const aEmpty = isEmpty(a);
   const bEmpty = isEmpty(b);
   if (aEmpty && bEmpty) return 0;
-  if (aEmpty) return 1; // empties last, direction-independent
+  if (aEmpty) return 1; // Empties last in either direction.
   if (bEmpty) return -1;
 
   const sign = direction === "asc" ? 1 : -1;

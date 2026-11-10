@@ -59,9 +59,8 @@ interface ProjectCardProps {
   /**
    * The page of the expanded instance list.
    *
-   * important: owned by ProjectsSection, not by this component. The grid pager slices the card
-   * list, so a card off the current page unmounts and loses its own state while the expanded set
-   * survives, and a card held page would bring the card back open but showing different rows.
+   * important: owned by ProjectsSection. The grid pager unmounts cards off the current page
+   * while the expanded set survives, so a page held in the card would reopen it on other rows.
    */
   instancePage: number;
   onInstancePageChange: (key: string, page: number) => void;
@@ -155,11 +154,8 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, coun
     }
   };
 
-  // important: limits only. The used side of these chips summed `vm.resources`, which the
-  // instance list never carries, so memory and storage always read "0 of" their limit, and the
-  // vCPU side counted instance-local config only. LXD counts project usage on allocation, so a
-  // live figure would answer a different question anyway.
-  // parse project limits
+  // Limits only: the instance list carries no per-instance usage, and LXD counts project usage
+  // on allocation, so a live "used" figure would answer a different question.
   const limits = React.useMemo(() => {
     const cpuLimit = project.config?.["limits.cpu"] ? parseInt(project.config["limits.cpu"]) : null;
     
@@ -173,13 +169,11 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, coun
 
   // important: clamped on read, never corrected in an effect. getProjectInstances builds a new
   // array on every ProjectsSection render and useInstances polls, so an effect keyed on
-  // `instances` would reset every open card twice per tick while the operator was mid-task, and
-  // one keyed on the overflow would still paint an empty frame before it caught up.
+  // `instances` would reset every open card twice per tick, and one keyed on the overflow would
+  // still paint an empty frame first.
   //
-  // note: the stored page is deliberately left alone. A node that fails to answer drops its
-  // instances from the list and they come back on the next poll, so clamping on read returns the
-  // card to where the operator left it, where correcting the stored page would strand it lower
-  // after one flaky fan-out.
+  // The stored page is left alone: a cluster that misses one poll drops its instances until the
+  // next, and clamping on read returns the card to where the operator left it.
   const instanceCurrentPage = Math.min(instancePage, instanceTotalPages);
   const visibleInstances = instances.slice(
     (instanceCurrentPage - 1) * INSTANCE_PAGE_SIZE,
@@ -199,8 +193,8 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, coun
             <CardTitle className="text-base min-w-0 break-words">{project.name}</CardTitle>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {/* An identifier, not a status: the node it runs on links into Clusters through the
-                same component every table cell uses, and reads as text for a Tenant. */}
+            {/* The cluster it runs on, linked through the same component every table cell uses;
+                plain text for a Tenant. */}
             <NodeLink clusterId={project.host} className="text-xs shrink-0" />
             {isPartner && (
               <>
@@ -234,7 +228,6 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, coun
           </div>
         )}
 
-        {/* Tags */}
         <div className="pt-1">
           <TagManager
             tags={project.tags || []}
@@ -245,16 +238,11 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, coun
           />
         </div>
         
-        {/* Resource Usage */}
-        {/* important: the chip grid sizes itself from the card, not from a viewport breakpoint.
-            The sidebar collapses, so one viewport gives two different card widths and an `lg:`
-            rule would lie about the room available. `auto-fit` measures the real container: three
-            chips across a 385px card at 1728, two then one as the card narrows, so a chip is
-            never handed less room than its text needs. The 104px floor is measured rather than
-            guessed. Chip chrome costs 36px (padding, icon, gap, border) and the widest short
-            value, "Unlimited", is 59px in Geist 12px/600, so even the narrowest chip clears it.
-            note: the value wraps, it does not truncate. A limit is what an operator acts on, and
-            a wrapped value still says 512 where a clipped one says 5. */}
+        {/* The chip grid sizes itself from the card, not from a viewport breakpoint: the sidebar
+            collapses, so one viewport gives two card widths. auto-fit fits three chips, then two,
+            then one as the card narrows. The 104px floor covers 36px of chip chrome (padding,
+            icon, gap, border) plus "Unlimited" at 59px in Geist 12px/600. The value wraps instead
+            of truncating, so a limit never reads 5 where it is 512. */}
         <div className="grid gap-2 pt-2 grid-cols-[repeat(auto-fit,minmax(104px,1fr))]">
           {[
             {
@@ -301,12 +289,9 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, coun
         <div className="space-y-2 pt-2 border-t">
           <div className="flex items-center justify-between">
             <span className="text-xs text-muted-foreground">Instances</span>
-            {/* important: one real button. The count badge carried the onClick and the chevron
-                beside it was a bare div, and Badge renders a div (ui/badge.tsx), so neither took
-                focus and the only way to open this card was a mouse. Everything inside the
-                expanded region, the instance actions and now its pager, was therefore unreachable
-                by keyboard. The badge passes asChild so a span carries the chip styling, because
-                a div inside a button is invalid per the HTML content model. */}
+            {/* One real button around the badge and the chevron, so the card opens by keyboard.
+                The badge passes asChild so a span carries its styling: Badge renders a div
+                (ui/badge.tsx), and a div inside a button is invalid HTML. */}
             {count > 0 ? (
               <button
                 type="button"
@@ -351,16 +336,14 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, coun
           )}
         </div>
 
-        {/* Expanded Instance List */}
         {isExpanded && count > 0 && (
           <div id={instancesRegionId} className="mt-3 pt-3 border-t space-y-2">
             {visibleInstances.map((vm) => (
               <InstanceRow key={vm.name} vm={vm} onTagsUpdate={refetch} isReadOnly={isReadOnly} />
             ))}
-            {/* note: no count sentence beside this pager, unlike the cluster access panel. There
-                the denominator moves under a search so the count had to be spoken. Here nothing
-                filters, the badge above already carries the total, and one aria-live region per
-                card across a dozen cards would re-announce all of them on every poll tick. */}
+            {/* No count sentence beside this pager: nothing filters here, the badge above holds
+                the total, and an aria-live region per card would re-announce every card on each
+                poll. */}
             {instanceTotalPages > 1 && (
               <DataTablePagination
                 variant="compact"

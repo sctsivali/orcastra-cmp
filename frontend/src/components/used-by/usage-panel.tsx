@@ -24,13 +24,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { UsageRow } from "./usage-row";
 import type { UsageView } from "./types";
 
-// The references treated as a dataset rather than a list of chips.
-//
-// important: it uses defineTable rather than a hand-rolled table for two reasons beyond taste.
-// check-table-filters.mjs counts any file outside components/ui that renders a TableBody
-// without defineTable against a ratchet, and it flags hand-rolled search inputs against another.
-// The groups page already ships this exact combination inside a DialogContent, so the pattern
-// is proven here, not novel.
+// The references treated as a dataset rather than a list of chips. defineTable rather than a
+// hand-rolled table: check-table-filters.mjs ratchets a TableBody outside components/ui that
+// bypasses defineTable, and hand-rolled search inputs too.
 const USED_BY = defineTable<LxdReference>()({
   searchPlaceholder: "Search references",
   defaultSort: { field: "resource", direction: "asc" },
@@ -55,21 +51,21 @@ const USED_BY = defineTable<LxdReference>()({
       label: "Project",
       sort: (r) => r.project,
       facet: (r) => r.project,
-      // required: check-table-filters.mjs flags any field named `project` with no declared role.
+      // check-table-filters.mjs flags any field named `project` with no declared role.
       facetSpec: { role: "project", primary: true },
     },
     {
       field: "attribution",
       label: "Attribution",
-      // No sort accessor on purpose: this is a two-value flag, and the facet is the useful
-      // control. It lets an operator isolate every inferred attribution in one click.
+      // No sort accessor: this is a two-value flag, and the facet isolates every inferred
+      // attribution in one click.
       facet: (r) => (r.projectExplicit ? "Explicit" : "Inferred"),
       facetSpec: {},
     },
     {
-      // important: fromSort() derives the filter FROM the sort accessor, so a column using it
+      // important: fromSort() derives the filter from the sort accessor, so a column using it
       // must declare one. Omitting it throws at module scope, which takes down every page that
-      // imports this panel, and neither the typechecker nor the structural guards can see it.
+      // imports this panel, and neither the typechecker nor the structural guards catch it.
       field: "reference",
       label: "Reference",
       sort: (r) => r.raw,
@@ -96,8 +92,8 @@ function UsagePanelContent({ usedBy, node, view, onViewChange, onCopied }: Usage
 
   const references = React.useMemo(() => referencesFromUsedBy(usedBy), [usedBy]);
 
-  // note: syncUrl false. A dialog's filter keys must not outlive it in the address bar, where
-  // they would filter a table the operator can no longer see.
+  // syncUrl false: a dialog's filter keys must not stay in the address bar after it closes,
+  // where they would filter a table the operator cannot see.
   const filters = useTableFilters(USED_BY, references, {
     onFilterChange: resetPage,
     syncUrl: false,
@@ -119,8 +115,8 @@ function UsagePanelContent({ usedBy, node, view, onViewChange, onCopied }: Usage
   const totalPages = Math.max(1, Math.ceil(ordered.length / pageSize));
   const pageRows = ordered.slice((page - 1) * pageSize, page * pageSize);
 
-  // Group sizes come from the whole FILTERED set, not the page. A header reading "4213
-  // references, continued" on page twelve tells the truth; one reading "50" would not.
+  // Group sizes come from the whole filtered set, not the page, so a group header shows its
+  // full count on every page.
   const groupTotals = React.useMemo(() => {
     const totals = new Map<string, number>();
     for (const reference of ordered) {
@@ -131,10 +127,9 @@ function UsagePanelContent({ usedBy, node, view, onViewChange, onCopied }: Usage
 
   const kindCounts = React.useMemo(() => countsByKind(references), [references]);
 
-  // important: whether the first group on this page is a continuation is decided by the LAST
-  // ROW OF THE PREVIOUS PAGE, not by "is this page > 1". Keying it on the page number labels
-  // every page-2-and-later opening group as continued, including one that genuinely starts
-  // there, which is a small lie told confidently on every single page.
+  // Whether the first group on this page is a continuation is decided by the last row of the
+  // previous page, not by the page number, so a group that starts on this page is not labelled
+  // as continued.
   const previousRow = page > 1 ? ordered[(page - 1) * pageSize - 1] : undefined;
 
   const rows: React.ReactNode[] = [];
@@ -144,8 +139,8 @@ function UsagePanelContent({ usedBy, node, view, onViewChange, onCopied }: Usage
       const total = groupTotals.get(reference.project) ?? 0;
       const continued = lastProject === null && previousRow?.project === reference.project;
       rows.push(
-        // The tint lives on the row, not the cell: check-table-typography.mjs whitelists cell
-        // classes and bg-muted/50 is not among them.
+        // The tint is on the row because check-table-typography.mjs whitelists cell classes and
+        // bg-muted/50 is not among them.
         <TableRow key={`group-${reference.project}`} className="bg-muted/50 hover:bg-muted/50">
           <TableCell colSpan={4} className="font-medium">
             {reference.project}
@@ -158,9 +153,8 @@ function UsagePanelContent({ usedBy, node, view, onViewChange, onCopied }: Usage
       lastProject = reference.project;
     }
     rows.push(
-      // note: index in the key, not the raw reference alone. The grouping helper this replaces
-      // deduplicated through a Set, which is only worth doing if a repeated reference has been
-      // seen, and two rows sharing a React key drop one of them silently.
+      // Index in the key, not the raw reference alone: a repeated reference must still render,
+      // and two rows sharing a React key drop one of them silently.
       <UsageRow
         key={`${reference.raw}-${index}`}
         reference={reference}
@@ -235,11 +229,10 @@ function UsagePanelContent({ usedBy, node, view, onViewChange, onCopied }: Usage
 }
 
 /**
- * "412 references across 7 projects. 380 instances, 24 profiles and 8 more."
+ * "412 references. 380 instances, 24 profiles, 5 networks, 3 more."
  *
- * note: only the top three kinds, and the remainder is NAMED rather than dropped. The full
- * breakdown with per-kind counts is already in the Type facet, so restating it here would be a
- * second control two inches from the first.
+ * Only the top three kinds, with the remainder counted rather than dropped. The full per-kind
+ * breakdown is in the Type facet.
  */
 function summarise(total: number, kinds: readonly { label: string; count: number }[]): string {
   if (total === 0) return "No references";
@@ -249,11 +242,9 @@ function summarise(total: number, kinds: readonly { label: string; count: number
   return `${plural(total, "reference")}. ${shown.join(", ")}.`;
 }
 
-// important: its own boundary, not the host page's. useTableFilters reads the query string
-// even with syncUrl false, which opts the subtree out of prerendering, and Next then fails
-// `next build` for any route that renders it without a Suspense above. A panel is a leaf that
-// can be dropped into any dialog on any page, so it carries the boundary itself rather than
-// relying on every future host to remember.
+// important: the panel carries its own Suspense boundary. useTableFilters reads the query string
+// even with syncUrl false, which opts the subtree out of prerendering, and `next build` fails for
+// any route that renders it without a Suspense above. A panel can land in any dialog on any page.
 export function UsagePanel(props: React.ComponentProps<typeof UsagePanelContent>) {
   return (
     <Suspense fallback={<Skeleton className="h-64 w-full" />}>

@@ -9,9 +9,9 @@ import { plural } from "@/lib/utils";
 
 // A config map, rendered whole.
 //
-// note: a description list rather than a Table, deliberately. check-table-filters.mjs counts a
-// TableBody outside components/ui that does not go through defineTable, and a key/value map is
-// not a dataset with columns to facet: it is a record's own fields.
+// A description list rather than a Table: a key/value map is a record's own fields, not a
+// dataset with columns to facet, and check-table-filters.mjs counts a TableBody outside
+// components/ui that does not go through defineTable.
 export function ConfigPanel({ entries }: { entries?: Record<string, string> }) {
   const [query, setQuery] = React.useState("");
   const all = React.useMemo(() => Object.entries(entries ?? {}).sort(([a], [b]) => a.localeCompare(b)), [entries]);
@@ -53,6 +53,5 @@ export function ConfigPanel({ entries }: { entries?: Record<string, string> }) {
   );
 }
 
-// note: the same renderer under the name a non-config caller wants, ex; cluster labels.
-// A key/value map is a key/value map; naming it twice is cheaper than a second component.
+// The same renderer under the name a non-config caller wants, ex; cluster labels.
 export const KeyValueList = ConfigPanel;

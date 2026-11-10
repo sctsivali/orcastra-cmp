@@ -1,5 +1,5 @@
 /**
- * Graphics Console: a VM's display over SPICE (spice-html5 driven by lib/spice/session.ts).
+ * A VM's display over SPICE (spice-html5 driven by lib/spice/session.ts).
  *
  * The picture fits the space it is given (shrinking only, so it stays sharp), or follows a manual
  * zoom. With the guest agent running the guest's resolution follows the space instead, which is
@@ -93,7 +93,7 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
   const sessionRef = useRef<SpiceSession | null>(null);
   const [status, setStatus] = useState<SpiceStatus>("loading");
   const [detail, setDetail] = useState<string>("");
-  // The session behind the page ended: the way forward is signing in, not reconnecting.
+  // The session behind the page ended, so the console offers a sign-in instead of a reconnect.
   const [signIn, setSignIn] = useState(false);
   const [surface, setSurface] = useState<{ width: number; height: number } | null>(null);
   const [viewport, setViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
@@ -251,8 +251,8 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
             transform: scale !== 1 ? `scale(${scale})` : undefined,
             visibility: status === "connected" || status === "reconnecting" ? "visible" : "hidden",
             touchAction: "none",
-            // note: no cursor here. cursor.js sets the guest's shape on this element, and the
-            // browser hides it under pointer lock on its own.
+            // No cursor here: cursor.js sets the guest's shape on this element, and the browser
+            // hides it under pointer lock on its own.
           }}
           onPointerDown={(event) => event.stopPropagation()}
           onMouseDown={(event) => event.stopPropagation()}

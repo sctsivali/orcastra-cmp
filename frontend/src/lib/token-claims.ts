@@ -1,11 +1,11 @@
 /**
  * The `groups` claim of an access token the IdP just issued, or null when it cannot be read.
  *
- * note: decoded, not verified. The token arrives straight from the token endpoint in the same
- * server-side request, and the backend verifies every token it is shown. This only keeps the
- * session's copy of the groups in step with the claim the backend decides on (issue #17), so a
- * role an administrator grants or removes reaches the page at the next refresh, not the next sign-in.
- * Edge-safe: atob and TextDecoder only.
+ * The payload is decoded without verification: the token comes straight from the token endpoint in
+ * the same server-side request, and the backend verifies every token it is shown. This keeps the
+ * session's copy of the groups in step with the claim the backend decides on, so a role change
+ * reaches the page at the next refresh instead of the next sign-in. Edge-safe: atob and
+ * TextDecoder only.
  */
 export function readGroupsClaim(jwt: string | null | undefined): string[] | null {
   const payload = jwt?.split(".")[1];
@@ -23,7 +23,7 @@ export function readGroupsClaim(jwt: string | null | undefined): string[] | null
   }
 }
 
-/** The role_* subset the session has always carried beside the groups. */
+/** The role_* subset the session carries beside the groups. */
 export function roleGroups(groups: string[]): string[] {
   return groups.filter((group) => group.startsWith("role_"));
 }

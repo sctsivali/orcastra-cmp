@@ -6,12 +6,11 @@ import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
 
 /**
- * Add-ons, as a route rather than a settings tab.
+ * Add-ons, as a route instead of a settings tab.
  *
- * Settings is one page with uncontrolled tabs and no URL state, so a refresh drops you back to
- * General. That is survivable for a preferences panel and not survivable here: the credential an
- * install issues is shown once, and an accidental refresh inside a tab would destroy the only
- * copy of a secret. A route also makes the role gate visible to the harness that reads
+ * Settings tabs keep no URL state, so a refresh drops back to General. The credential an install
+ * issues is shown once, and a refresh inside a tab would destroy the only copy of that secret. A
+ * route also makes the role gate visible to scripts/checks/check-role-gates.mjs, which reads
  * `useRequireRole` out of page files.
  */
 export default function ExtensionsPage() {

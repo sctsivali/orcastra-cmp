@@ -17,20 +17,17 @@ const badgeVariants = cva(
         outline: "text-foreground",
         muted:
           "border-transparent bg-muted text-muted-foreground",
-        // The four state tones. Solid --status-* under its paired foreground, because a
-        // translucent tint under saturated same-hue text is the pattern this replaces and it
-        // measured 2.73:1 for the amber one on --card in light mode, against the 4.5:1 AA
-        // floor the base class below sets by asking for 12px semibold. Measured light then
-        // dark: positive 5.18 and 8.70, caution 5.09 and 9.96, negative 6.40 and 5.51,
-        // neutral 4.72 and 7.75.
+        // The four state tones: solid --status-* under its paired foreground. A translucent
+        // tint under same-hue text misses the 4.5:1 AA floor that the base class's 12px
+        // semibold needs (amber on --card measures 2.73:1 in light mode). Light then dark:
+        // positive 5.18 and 8.70, caution 5.09 and 9.96, negative 6.40 and 5.51, neutral
+        // 4.72 and 7.75.
         //
         // important: not --success/--warning/--destructive. Those are tuned for a white
-        // foreground and do not survive it. bg-warning under text-warning-foreground is
-        // 2.14:1, worse than the tint it would replace. See app/globals.css.
+        // foreground: bg-warning under text-warning-foreground is 2.14:1. See app/globals.css.
         //
         // The names are lib/cluster-status.ts ClusterStatusTone, which every status entry
-        // already carries, so a call site reads variant={meta.tone} with no new field and no
-        // second vocabulary.
+        // carries, so a call site reads variant={meta.tone}.
         positive: "border-transparent bg-status-online text-status-online-foreground",
         caution: "border-transparent bg-status-pending text-status-pending-foreground",
         neutral: "border-transparent bg-status-unknown text-status-unknown-foreground",
@@ -59,15 +56,13 @@ export interface BadgeProps
    * important: a badge is a div, and a div inside a button is invalid per the HTML content
    * model. A chip that has to sit inside a real control, such as the instance count inside the
    * project card's disclosure button, passes asChild with a span so the markup stays valid.
-   * Same device as button.tsx, and for the same reason.
    */
   asChild?: boolean;
 }
 
 function Badge({ className, variant, asChild = false, ...props }: BadgeProps) {
-  // note: data-slot is the stable handle for "this is a chip". The QA harness used to select
-  // pills by the base class string, which turns four assertions into silent no-ops the moment
-  // that string is restyled.
+  // data-slot is the stable handle for "this is a chip". Tests select chips by it, because a
+  // selector on the class string silently matches nothing once the chip is restyled.
   const Comp = asChild ? Slot : "div";
   return (
     <Comp

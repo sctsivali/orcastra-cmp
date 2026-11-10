@@ -54,8 +54,8 @@ const projectCreateSchema = z.object({
 type ProjectCreateFormData = z.infer<typeof projectCreateSchema>;
 
 export function ProjectCreateForm() {
-  // note: the router is still needed for back(). Forward hops go through navigate() so
-  // the leaving transition raises the global progress bar.
+  // The router serves back(). Forward hops go through navigate() so the leaving transition
+  // raises the global progress bar.
   const router = useRouter();
   const { navigate } = useNavigationProgress();
   const nodePicker = useNodePickerOptions();
@@ -66,14 +66,13 @@ export function ProjectCreateForm() {
   const [maxRamInBytes, setMaxRamInBytes] = React.useState<number | null>(null);
   const [maxStorageInBytes, setMaxStorageInBytes] = React.useState<number | null>(null);
 
-  // block non-numeric characters in number inputs (e, +, -, .)
+  // A number input accepts e, +, - and ., which none of these counts can use.
   const blockNonNumeric = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (["e", "E", "+", "-", "."].includes(e.key)) {
       e.preventDefault();
     }
   };
 
-  // show error if node names failed to load
   React.useEffect(() => {
     if (error) {
       toast({
@@ -109,8 +108,8 @@ export function ProjectCreateForm() {
   });
 
   const selectedHost = watch("host");
-  // note: Incus gives a project its own networks only through OVN and refuses the project
-  // otherwise, so on Incus the default is the default project's networks.
+  // Incus gives a project its own networks only through OVN and refuses the project otherwise,
+  // so on Incus the default is the default project's networks.
   const hostIsIncus = isIncusType(selectedHost ? nodePicker.availabilityOf(selectedHost)?.node_type : null);
   React.useEffect(() => {
     if (selectedHost) setValue("enableNetworks", !hostIsIncus);
@@ -121,7 +120,7 @@ export function ProjectCreateForm() {
   const maxStorageValueInput = watch("maxStorageValue");
   const maxStorageUnitInput = watch("maxStorageUnit");
 
-  // validate and auto-correct CPU input
+  // Clamp the vCPU limit to the threads the cluster has available.
   React.useEffect(() => {
     if (!maxCpuValue || !nodeResources?.cpu_available) return;
     
@@ -136,7 +135,7 @@ export function ProjectCreateForm() {
     }
   }, [maxCpuValue, nodeResources?.cpu_available, setValue]);
 
-  // validate and auto-correct RAM input
+  // Clamp the memory limit to the memory the cluster has available.
   React.useEffect(() => {
     if (!maxRamValueInput || !maxRamInBytes || !maxRamUnitInput) return;
     
@@ -154,7 +153,7 @@ export function ProjectCreateForm() {
     }
   }, [maxRamValueInput, maxRamUnitInput, maxRamInBytes, setValue]);
 
-  // validate and auto-correct Storage input
+  // Clamp the storage limit to the storage the cluster has available.
   React.useEffect(() => {
     if (!maxStorageValueInput || !maxStorageInBytes || !maxStorageUnitInput) return;
     
@@ -172,7 +171,7 @@ export function ProjectCreateForm() {
     }
   }, [maxStorageValueInput, maxStorageUnitInput, maxStorageInBytes, setValue]);
 
-  // fetch node resources when host is selected
+  // Read the selected cluster's resources.
   React.useEffect(() => {
     const fetchResources = async () => {
       if (!selectedHost) {
@@ -185,7 +184,7 @@ export function ProjectCreateForm() {
         const { nodeAPI } = await import("@/lib/api");
         const resources = await nodeAPI.resources(selectedHost);
         setNodeResources(resources);
-        // set max values in bytes for validation (use available, not total)
+        // The clamps use available bytes, not totals.
         setMaxRamInBytes(resources.memory_available);
         setMaxStorageInBytes(resources.storage_available);
       } catch (error) {
@@ -201,17 +200,16 @@ export function ProjectCreateForm() {
     fetchResources();
   }, [selectedHost]);
 
-  // important: the disabled flag is React state, so it only reaches the button on the next
-  // render. Two clicks inside one tick both pass it and both fire the mutation. react-hook-form
-  // does not help here: its handleSubmit has no re-entry guard and awaits the resolver before
-  // calling this, so the window is wider, not narrower. The ref is claimed synchronously.
+  // important: the disabled flag is React state and reaches the button only on the next render,
+  // so two clicks in one tick would both fire the mutation. react-hook-form's handleSubmit has
+  // no re-entry guard and awaits the resolver first. The ref is claimed synchronously.
   const submitInFlightRef = React.useRef(false);
 
   const onSubmit = async (data: ProjectCreateFormData) => {
     if (submitInFlightRef.current) return;
     submitInFlightRef.current = true;
     try {
-      // build config - explicitly set all features
+      // Every feature is set explicitly, true or false.
       const config: Record<string, string> = {
         "features.images": data.enableImages ? "true" : "false",
         "features.profiles": data.enableProfiles ? "true" : "false",
@@ -219,7 +217,6 @@ export function ProjectCreateForm() {
         "features.networks": data.enableNetworks ? "true" : "false",
       };
 
-      // construct RAM and storage strings
       const maxRam = `${data.maxRamValue}${data.maxRamUnit}`;
       const maxStorage = `${data.maxStorageValue}${data.maxStorageUnit}`;
 
@@ -255,8 +252,8 @@ export function ProjectCreateForm() {
         variant: "destructive",
       });
     } finally {
-      // note: released even on the success path, which has already navigated away. Leaving it
-      // claimed would lock the form if the user comes back to it via the browser history.
+      // Released even on the success path, which has already navigated away. Left claimed, it
+      // would lock the form if the user comes back to it through the browser history.
       submitInFlightRef.current = false;
     }
   };
@@ -282,7 +279,6 @@ export function ProjectCreateForm() {
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Main Configuration */}
           <Card className="lg:col-span-2">
             <CardHeader>
               <CardTitle>
@@ -290,7 +286,6 @@ export function ProjectCreateForm() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
-              {/* Project Name */}
               <div className="space-y-2">
                 <Label htmlFor="name">Project Name</Label>
                 <Input
@@ -307,7 +302,6 @@ export function ProjectCreateForm() {
                 </p>
               </div>
 
-              {/* Cluster Selection */}
               <div className="space-y-2">
                 <Label>Target Cluster</Label>
                 <SearchableSelect
@@ -334,7 +328,6 @@ export function ProjectCreateForm() {
                 )}
               </div>
 
-              {/* Description */}
               <div className="space-y-2">
                 <Label htmlFor="description">Description (Optional)</Label>
                 <Textarea
@@ -348,7 +341,6 @@ export function ProjectCreateForm() {
                 </p>
               </div>
 
-              {/* Resource Limits */}
               <div className="space-y-4 pt-4 border-t">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-medium">Resource Limits</h3>
@@ -357,7 +349,6 @@ export function ProjectCreateForm() {
                   )}
                 </div>
 
-                {/* Show available resources */}
                 {selectedHost && nodeResources && (
                   <div className="p-3 bg-muted/50 rounded-md space-y-1 text-xs">
                     <div className="font-medium text-foreground mb-1">Available Resources on {selectedHost}:</div>
@@ -373,15 +364,14 @@ export function ProjectCreateForm() {
                   </div>
                 )}
                 
-                {/* Max CPU */}
                 <div className="space-y-2">
                   <Label htmlFor="maxCpu">Max vCPUs *</Label>
                   <Input
                     id="maxCpu"
                     type="number"
                     min="1"
-                    // note: zero on an over-committed cluster, which is no cap: the API checks the
-                    // total, and max={0} under min="1" stops the browser submitting at all.
+                    // Zero on an over-committed cluster means no cap: the API checks the total,
+                    // and max={0} under min="1" would stop the browser submitting at all.
                     max={nodeResources?.cpu_available || undefined}
                     placeholder="2"
                     onKeyDown={blockNonNumeric}
@@ -396,7 +386,6 @@ export function ProjectCreateForm() {
                   </p>
                 </div>
 
-                {/* Max memory */}
                 <div className="space-y-2">
                   <Label htmlFor="maxRamValue">Max Memory *</Label>
                   <div className="flex gap-2">
@@ -432,7 +421,6 @@ export function ProjectCreateForm() {
                   </p>
                 </div>
 
-                {/* Max Storage */}
                 <div className="space-y-2">
                   <Label htmlFor="maxStorageValue">Max Storage *</Label>
                   <div className="flex gap-2">
@@ -471,7 +459,6 @@ export function ProjectCreateForm() {
             </CardContent>
           </Card>
 
-          {/* Sidebar Options */}
           <div className="space-y-6">
             <Card>
               <CardHeader>

@@ -10,14 +10,7 @@ interface CertificateStatusMeta {
   tone: BadgeTone;
 }
 
-/**
- * A certificate's status as a label, a glyph and a state tone.
- *
- * The map this replaces also carried `color` and `bgColor` fields holding raw palette steps.
- * Nothing ever read them: the page reads variant, icon and label only. They were ten lines of
- * dead decoration, which is why the file kept matching a sweep for the tinted-pill pattern
- * while rendering none of it.
- */
+/** A certificate's status as a label, a glyph and a state tone. */
 const ENTRIES: Record<CertificateStatus, CertificateStatusMeta> = {
   [CertificateStatus.VALID]: { label: "Valid", icon: CheckCircle, tone: "positive" },
   [CertificateStatus.EXPIRING]: { label: "Expiring Soon", icon: Clock, tone: "caution" },

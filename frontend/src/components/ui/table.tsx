@@ -6,29 +6,14 @@ const EDGE_SLACK = 1;
 
 type ScrollX = "none" | "start" | "middle" | "end";
 
-// Where the container currently sits on its horizontal scroll range, so the shadow can mark the
-// edge that still has content behind it, and whether it scrolls at all, so only a container that
-// does takes a tab stop.
+// Where the container sits on its horizontal scroll range (for the edge shadow) and whether it
+// scrolls at all (only a container that does takes a tab stop). Local rather than
+// lib/overflow-observer.ts, which reports only when the clipped state changes; the shadow needs a
+// value on every scroll and resize.
 //
-// note: local and unexported rather than lib/overflow-observer.ts. That module reports only when
-// the clipped state CHANGES, which is right for a reveal control and wrong here: an edge shadow
-// needs a value on every scroll, and the edges have to be recomputed on a resize that does not
-// flip the overflow state at all. Two different contracts, so they stay two mechanisms rather
-// than one broadened past what its own docblock allows. Unexported so no screen can reach for it
-// and start inventing its own scroll treatment.
-//
-// The two consumers want opposite defaults before the first measurement, so this returns both.
-//
-// important: `scrollable` starts TRUE. The tab stop hangs off it, and a control that appears only
-// once JavaScript has decided it is needed is missing in exactly the window where it is needed.
-// Same reasoning as the pessimistic default in lib/overflow-observer.ts. An unnecessary tab stop
-// for one frame costs nothing; a missing one strands a keyboard user.
-//
-// important: `scrollX` starts "none". The shadow hangs off it, and the server renders this
-// attribute into the HTML, which the browser paints before hydration. Starting it at "start"
-// drew a shadow on every table on the page, including the ones that fit, until the effect ran.
-// A hint that says there are more columns when there are none is worse than a hint that arrives
-// a frame late, which is the opposite trade to the tab stop above.
+// important: `scrollable` starts true, so a keyboard user is never stranded before the first
+// measurement. `scrollX` starts "none" because the server renders it and the browser paints it
+// before hydration; "start" would shadow every table, including the ones that fit.
 function useHorizontalScrollState(ref: React.RefObject<HTMLDivElement>): {
   scrollX: ScrollX;
   scrollable: boolean;
@@ -40,12 +25,12 @@ function useHorizontalScrollState(ref: React.RefObject<HTMLDivElement>): {
     const el = ref.current;
     if (!el) return;
 
-    // note: setState with an unchanged value does not re-render, so a scroll that stays inside
-    // one bucket costs a read and nothing else. Only crossing an edge re-renders.
+    // setState with an unchanged value does not re-render, so a scroll that stays inside one
+    // bucket costs a read and nothing else. Only crossing an edge re-renders.
     const read = () => {
       setMeasured(true);
       // The visible width, for a full-width empty row that must stay in view while the table
-      // scrolls sideways (TableEmptyRow in table-text.tsx). A style write, not state: no render.
+      // scrolls sideways (TableEmptyRow in table-text.tsx). A style write, so it costs no render.
       el.style.setProperty("--table-visible-width", `${el.clientWidth}px`);
       const max = el.scrollWidth - el.clientWidth;
       if (max <= EDGE_SLACK) {
@@ -75,15 +60,13 @@ function useHorizontalScrollState(ref: React.RefObject<HTMLDivElement>): {
   return { scrollX: state, scrollable: !measured || state !== "none" };
 }
 
-// Tailwind preflight sets `border-collapse: collapse`, and a collapsed border belongs to the table
-// grid rather than to the cell it was written on. So a sticky `th` leaves its `border-b` behind and
-// the pinned header ends up with no separator while a line slides away underneath it. Draw the
-// separator as an inset shadow on the `th`, which travels with the sticky cell, and drop the row
-// border so there is never a doubled line.
+// Tailwind preflight sets `border-collapse: collapse`, so a border belongs to the table grid rather
+// than to its cell, and a sticky `th` leaves its `border-b` behind. The separator is drawn as an
+// inset shadow on the `th`, which travels with the sticky cell, and the row border is dropped so
+// the line is never doubled.
 //
-// note: `bg-background` because a sticky header needs an opaque ground or the rows read straight
-// through it, and every surface this is used on is a dialog, whose ground is --background.
-// --card is a different colour in both themes, so a table pinned on a card ground has to say so on
+// `bg-background` because a sticky header needs an opaque ground, and every surface this is used
+// on is a dialog, whose ground is --background. A table pinned on a --card ground sets that on
 // its own TableHeader.
 const STICKY_HEADER =
   "[&_thead_tr]:border-b-0 [&_thead_th]:sticky [&_thead_th]:top-0 [&_thead_th]:z-10 " +
@@ -92,34 +75,19 @@ const STICKY_HEADER =
   // on the same pixel row as the rest of the header rather than one below it.
   "[&_thead_th[data-pinned]]:before:bottom-0";
 
-// A column pinned to the trailing edge while the rest of the table scrolls under it, for the
-// row-actions column of a table wider than its container: the control an operator reaches for
-// most is never the one behind a horizontal scroll.
+// A column pinned to the trailing edge, so the row-actions column of a wide table is never behind
+// a horizontal scroll.
 //
-// A sticky cell paints above the row, so everything the row draws (its background tints, its
-// collapsed bottom border) vanishes under the cell unless the cell draws it again. Two pseudo
-// layers do that inside the cell's own stacking context: `before` is the opaque ground and the
-// row separator, `after` carries the row tints the tr applies (hover, selected, post-create
-// focus) and, from globals.css, the edge shadow that says rows are sliding underneath. Tints on
-// `after` so they sit over the ground; the shadow on the same layer so it sits over the tint.
+// A sticky cell paints above the row, so it redraws what the row draws: `before` is the opaque
+// ground (`--pinned-ground`, else `--card`) and the row separator; `after` carries the row tints
+// and, from globals.css, the edge shadow. Only TableRow's own tints are mirrored, so a row with
+// its own bg-* or hover:bg-* class needs a TableRow state instead.
 //
-// note: the ground is `--pinned-ground`, falling back to `--card` because almost every list table
-// lives on a card. A table on another surface sets the variable on its container (the task dock
-// does), so the column never paints a second colour beside the rows.
+// The ground reaches one pixel below the cell, because Chromium paints a collapsed row border in
+// the next cell's top strip.
 //
-// note: the ground reaches one pixel below the cell. With `border-collapse`, the row's 1 px
-// border is painted on the grid line, which Chromium allocates to the top strip of the next
-// cell, outside this cell's box, so a ground that stops at the box edge leaves that line
-// visible under the pseudo's own line and the pinned column shows a doubled separator.
-//
-// important: the last body row stops at its box and drops its separator, keyed on tbody so the
-// header row, also a last child, keeps its line. There is no next cell there, so the pixel below
-// is outside the table, and that pixel was enough to raise a 10 px vertical scrollbar on the
-// scroll container of every pinned table.
-//
-// note: only the tints TableRow itself applies are mirrored (hover, selected, pending, the
-// post-create focus). A row that carries its own bg-* or hover:bg-* class gets a pinned cell
-// painted on the plain ground; give such a row a TableRow state instead.
+// important: the last body row stops at its box (keyed on tbody, so the header keeps its line).
+// There is no next cell there, and the extra pixel would raise a 10 px vertical scrollbar.
 const PINNED_END =
   "sticky end-0 z-[1] " +
   "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:-bottom-px before:-z-[2] before:border-b before:border-border before:bg-[var(--pinned-ground,hsl(var(--card)))] " +
@@ -130,11 +98,8 @@ const PINNED_END =
 
 type PinnedEdge = "end";
 
-// Two densities, and only two. `compact` exists because nested tables inside a dialog
-// genuinely need shorter rows to fit a max-height, and the alternative that grew here
-// organically was ~23 per-cell `text-xs px-3 py-1.5` overrides that opted individual cells
-// out of the shared baseline. A named density keeps one typography system with one
-// deliberate second step, instead of every call site inventing its own.
+// Two densities. `compact` is for nested tables inside a dialog that need shorter rows to fit a
+// max-height, so call sites do not override cell padding and size one by one.
 type TableDensity = "default" | "compact";
 
 const TableDensityContext = React.createContext<TableDensity>("default");
@@ -152,14 +117,11 @@ const HEAD_DENSITY: Record<TableDensity, string> = {
 export interface TableProps extends React.HTMLAttributes<HTMLTableElement> {
   density?: TableDensity;
   /**
-   * Classes for the scroll container, NOT for the table. Height, border and radius belong here.
+   * Classes for the scroll container: height, border and radius. The table takes `className`.
    *
-   * important: this element is the only scroll container a table gets, and that is the whole
-   * point of the prop. Wrapping `<Table>` in a second `overflow-*` div splits the two axes
-   * across two boxes: the outer one is the one with a bounded height, so it owns vertical
-   * scroll, while the inner one stretches to the full height of the table and therefore paints
-   * its horizontal scrollbar below the last row, off screen at every scroll position but the
-   * very bottom. That shipped in the image picker and is what this prop exists to prevent.
+   * important: this element is the only scroll container a table gets. Wrapping `<Table>` in a
+   * second `overflow-*` div splits the axes: the outer box owns vertical scroll, and the inner
+   * one paints its horizontal scrollbar below the last row, off screen until the very bottom.
    * `scripts/checks/check-table-scroll.mjs` enforces it.
    */
   containerClassName?: string;
@@ -173,9 +135,8 @@ export interface TableProps extends React.HTMLAttributes<HTMLTableElement> {
    * What the operator is scrolling, in their words, ex; "base image catalogue". Names the scroll
    * region for a screen reader.
    *
-   * note: optional, and the tab stop does not depend on it. An unnamed `role="region"` is not
-   * exposed as a landmark at all, so a container that scrolls without a label takes focus (which
-   * is what WCAG 2.1.1 is about) and declares no region, rather than declaring an anonymous one.
+   * Optional; the tab stop does not depend on it. An unnamed `role="region"` is not a landmark,
+   * so a scrolling container without a label takes focus (WCAG 2.1.1) and declares no region.
    */
   scrollLabel?: string;
 }
@@ -193,27 +154,24 @@ const Table = React.forwardRef<HTMLTableElement, TableProps>(
         <div
           ref={containerRef}
           data-slot="table-container"
-          // Read by the edge shadow in globals.css and by the Playwright geometry spec.
+          // Read by the edge shadow in globals.css and by the browser specs in frontend/e2e.
           data-scroll-x={scrollX}
-          // important: a box an operator can only pan with a mouse drag or a shift-wheel is
-          // unreachable from the keyboard, which is WCAG 2.1.1. A tab stop gives it the arrow
-          // keys, Home and End. Added only when it actually scrolls, so a table that fits does
-          // not cost a stop on the way to the next control.
+          // A box that pans only by mouse drag or shift-wheel is unreachable from the keyboard
+          // (WCAG 2.1.1); a tab stop gives it the arrow keys, Home and End. Added only when it
+          // scrolls, so a table that fits costs no stop.
           tabIndex={scrollable ? 0 : undefined}
           role={scrollable && scrollLabel ? "region" : undefined}
           aria-label={scrollable && scrollLabel ? scrollLabel : undefined}
           className={cn(
-            // important: only a call site that bounds the height gets vertical scroll. A table
-            // that grows with its rows has nothing to scroll, so a stray pixel can never raise a
-            // scrollbar on it.
+            // Only a call site that bounds the height gets vertical scroll, so a stray pixel can
+            // never raise a scrollbar on a table that grows with its rows.
             "relative w-full",
             containerClassName ? "overflow-auto" : "overflow-x-auto overflow-y-hidden",
             stickyHeader && "scroll-pt-12",
-            // important: an outline, not the house `ring-2`. Tailwind implements a ring AS a
-            // box-shadow, and the edge shadow keyed off data-scroll-x in globals.css is also a
-            // box-shadow on this same element, at equal specificity and declared after
-            // `@tailwind utilities`. The shadow would win and the focus indicator would silently
-            // not paint. An outline is a different property, so the two coexist.
+            // important: focus uses an outline. Tailwind implements the house `ring-2` as a
+            // box-shadow, and the edge shadow keyed off data-scroll-x in globals.css is a
+            // box-shadow on this element too, declared later at equal specificity, so a ring would
+            // silently not paint.
             scrollable &&
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-ring",
             containerClassName,
@@ -291,9 +249,8 @@ const TableRow = React.forwardRef<
 ));
 TableRow.displayName = "TableRow";
 
-// note: exported so SortableTableHead can put the head's own height and padding on the BUTTON
-// it renders, rather than on the th around it. A th is not focusable, so the click target has to
-// be a real control, and it has to fill the cell or the hover band shrinks to the text.
+// Exported so SortableTableHead can put the head's height and padding on its button rather than
+// on the th, so the click target fills the cell.
 export function useTableDensity(): TableDensity {
   return React.useContext(TableDensityContext);
 }
@@ -324,10 +281,8 @@ const TableCell = React.forwardRef<
   React.TdHTMLAttributes<HTMLTableCellElement> & { pinned?: PinnedEdge }
 >(({ className, pinned, ...props }, ref) => {
   const density = React.useContext(TableDensityContext);
-  // One typography baseline for every data cell. Stated here rather than repeated at
-  // ~190 call sites, which is how the sizes, weights and colours drifted apart in the
-  // first place. Call sites add only font-medium (identifier column), font-mono,
-  // alignment, width and responsive-visibility classes.
+  // One typography baseline for every data cell. Call sites add only font-medium (identifier
+  // column), font-mono, alignment, width and responsive-visibility classes.
   return (
     <td
       ref={ref}

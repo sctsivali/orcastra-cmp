@@ -42,10 +42,9 @@ function QueryInvalidationBridge() {
   );
   React.useEffect(() => {
     onTokenRefreshed(() => {
-      // important: only the queries that actually failed under the old token.
-      // A bare invalidateQueries() refetches the entire cache on every rotation,
-      // which fires N concurrent requests, reads to the operator as a page
-      // reload, and manufactures the 401 burst that used to redirect them away.
+      // important: only the queries that failed with a 401 under the previous token.
+      // A bare invalidateQueries() would refetch the entire cache on every
+      // rotation: N concurrent requests that read to the operator as a reload.
       queryClient.invalidateQueries({
         predicate: (query) =>
           query.state.status === "error" &&
@@ -94,20 +93,15 @@ function makeQueryClient() {
     }),
     defaultOptions: {
       queries: {
-        // Increase staleTime to reduce refetching
-        staleTime: 60 * 1000, // 1 minute (data is considered fresh for 1 minute)
-        // Cache data for 5 minutes
-        gcTime: 5 * 60 * 1000, // 5 minutes (formerly cacheTime in v4)
-        // Disable aggressive refetching
-        refetchOnWindowFocus: false, // Don't refetch when switching tabs
+        staleTime: 60 * 1000,
+        gcTime: 5 * 60 * 1000,
+        refetchOnWindowFocus: false,
         // important: true refetches on mount only when the data is stale or was invalidated.
-        // false never refetches on mount, even after a mutation invalidated the query, so a
-        // list opened on another page kept showing what the write had just changed until a
-        // reload (a deleted instance, a new project on the Overview, a removed cluster in
-        // every picker).
+        // Turning it off would skip the refetch even after a mutation invalidated the query, so
+        // a list opened on another page would show what a write just changed until a reload.
         refetchOnMount: true,
-        refetchOnReconnect: true, // Still refetch on reconnect
-        // Smart retry: skip 401/403/429 (won't resolve by retrying)
+        refetchOnReconnect: true,
+        // No retry on 401, 403 or 429: retrying cannot change the answer.
         retry: (failureCount, error) => {
           if (error instanceof APIError) {
             if (error.status === 401 || error.status === 429 || error.status === 403) {
@@ -122,10 +116,8 @@ function makeQueryClient() {
   });
 
   // important: liveness belongs to the key, not to whichever component happens to be mounted.
-  // Three pages subscribed to ["nodes"] with no options at all, so whether their numbers moved
-  // depended on the dashboard being open in the same tab session. Those call sites now go
-  // through the owning hooks; this is the net underneath, so a future one that forgets still
-  // polls. Observer options always win over these, so it cannot fight an explicit hook.
+  // A subscriber that passes no options still polls through these defaults. Observer options
+  // always win over them, so they cannot fight an explicit hook.
   client.setQueryDefaults(["nodes"], {
     refetchInterval: POLL_MS.fleet,
     refetchIntervalInBackground: false,
@@ -142,10 +134,10 @@ let browserQueryClient: QueryClient | undefined = undefined;
 
 function getQueryClient() {
   if (typeof window === "undefined") {
-    // Server: always make a new query client
+    // Server: a new client per request, so no cache is shared between requests.
     return makeQueryClient();
   } else {
-    // Browser: make a new query client if we don't already have one
+    // Browser: one client, so a render that suspends does not drop the cache.
     if (!browserQueryClient) browserQueryClient = makeQueryClient();
     return browserQueryClient;
   }
@@ -159,10 +151,10 @@ export function Providers({
   children: React.ReactNode;
   // Read from the hint cookie by the root layout, which is the only server component in this
   // tree, and handed down so the server and the browser render the same sidebar on the first
-  // pass. See the note on PersonalizationProvider's initialSettings prop.
+  // pass.
   initialPersonalization?: PersonalizationSettings | null;
   // A comfortably valid session read by the root layout (auth-session.ts), its token masked, or
-  // undefined to let the browser fetch one as before. Never null.
+  // undefined to let the browser fetch one. Never null.
   initialSession?: HydratedSession;
 }) {
   // Unmasked in memory only; the document carries the masked form (lib/hydrated-session.ts).

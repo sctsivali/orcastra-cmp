@@ -72,15 +72,12 @@ const SelectContent = React.forwardRef<
     <SelectPrimitive.Content
       ref={ref}
       className={cn(
-        // z-[100002] to appear above dialogs (z-[100001])
+        // z-[100002] puts the list above dialogs (z-[100001]).
         "relative z-[100002] min-w-[8rem] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md",
-        // Max height - use min() for browser compatibility (dvh with fallback)
+        // Half the dynamic viewport height, capped at 24rem.
         "max-h-[min(50dvh,24rem)]",
-        // Max width for mobile
         "max-w-[calc(100vw-2rem)]",
-        // Prevent scroll issues
         "overscroll-contain",
-        // Animations
         "data-[state=open]:animate-in data-[state=closed]:animate-out",
         "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
         "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",

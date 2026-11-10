@@ -68,7 +68,6 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
   const activeActorScopeRef = React.useRef(scopeKey);
   activeActorScopeRef.current = scopeKey;
 
-  // tenant permission checks for this instance
   const canOperate = hasPermission(vm.host, vm.project || "default", vm.name, "operate");
   const canConsole = hasPermission(vm.host, vm.project || "default", vm.name, "console");
   // A paid term that ended says why the controls are off, rather than a bare "no permission".
@@ -76,10 +75,9 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
   const noOperate = termReason ?? "No operate permission";
   const noConsole = termReason ?? "No console permission";
 
-  // important: an instance name is unique only within one project on one host, and the projects
-  // grid can hold two expanded cards at once, so `Start instance web-01` was capable of naming
-  // two different buttons on one screen. check-icon-button-names.mjs counts buttons with no name,
-  // never buttons whose name is ambiguous, so nothing was catching it.
+  // An instance name is unique only within one project on one host, and the projects grid can
+  // hold two expanded cards at once, so button names carry the project and host too.
+  // check-icon-button-names.mjs catches a missing name, never an ambiguous one.
   const rowLabel = `${vm.name} in ${vm.project || "default"} on ${vm.host}`;
   // One row renders both kinds, so a toast names the one that was acted on.
   const instanceNoun = vm.type === "virtual-machine" ? "virtual machine" : "container";
@@ -243,24 +241,17 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
       data-slot="project-instance-row"
       className="p-2 md:p-3 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors border"
     >
-      {/* important: the wrap is decided by this row's own container, where the `sm:flex-row` it
-          replaces was decided by the viewport. The row lives inside a project card, and measured on
-          the live app that card gives it 359px of content at 1728 and 233px at 1280 while `sm`
-          reports a 640px viewport throughout, so the info block was squeezed to 159px at 1728 and
-          92px at 768 beside an action bar that will not shrink.
+      {/* The wrap follows this row's own width, not the viewport: inside a project card the row
+          gets far less room than an `sm` breakpoint assumes.
 
-          note: flex-wrap rather than an auto-fit grid. auto-fit builds tracks of EQUAL width, which
-          is right for the three quota chips above and wrong here, where one child flexes and the
-          other is fixed: a 173px track at 1728 cannot hold the 188px bar, and the bar drew 3px over
-          the column beside it. Flex items never overlap, so the bar moves to its own line instead.
+          flex-wrap rather than an auto-fit grid: auto-fit builds equal-width tracks, and here one
+          child flexes while the action bar is fixed, so a track narrower than the bar would let
+          it overlap the column beside it. Flex items never overlap.
 
-          The 180px basis is the wrap threshold, not a width. Measured, the bar is 188px at six
-          h-7 buttons, and 284px at or below a 768px viewport where globals.css raises every button
-          to a 44px touch target. Both are wider than any track a card of this size can offer, so
-          today the row stacks at every width the grid produces and goes side by side on its own if
-          a card ever gets wider. */}
+          The 180px basis is the wrap threshold, not a width. The action bar is 188px at six h-7
+          buttons and 284px at or below a 768px viewport, where globals.css raises every button to
+          a 44px touch target, so the row stacks whenever its card is narrower than that. */}
       <div className="flex flex-wrap items-start gap-2 md:gap-3">
-        {/* Left: Instance Info - Clickable */}
         <div
           className="min-w-0 flex-1 basis-[180px] space-y-2 cursor-pointer"
           onClick={() => setShowMonitoring(true)}
@@ -284,13 +275,11 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
           </div>
           
           <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-            {/* Type */}
             <div className="flex items-center gap-1">
               <span className="font-medium">Type:</span>
               <span>{formatInstanceType(vm.type)}</span>
             </div>
             
-            {/* Architecture */}
             {vm.architecture && (
               <div className="flex items-center gap-1">
                 <span className="font-medium">Arch:</span>
@@ -298,7 +287,6 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
               </div>
             )}
             
-            {/* IP Address */}
             {vm.ip_addresses && vm.ip_addresses.length > 0 && (
               <div className="flex items-center gap-1">
                 <span className="font-medium">IP:</span>
@@ -307,7 +295,6 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
             )}
           </div>
 
-          {/* Tags */}
           <div className="mt-2" onClick={(e) => e.stopPropagation()}>
             <TagManager
               tags={vm.tags || []}
@@ -319,10 +306,8 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
           </div>
         </div>
 
-        {/* Right: Actions */}
         <TooltipProvider>
           <div className="flex items-center gap-1 shrink-0 ml-auto">
-            {/* Start */}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -343,7 +328,6 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
               <TooltipContent>{!canOperate ? noOperate : isReadOnly ? "Disabled in read-only mode" : "Start"}</TooltipContent>
             </Tooltip>
 
-            {/* Stop */}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -364,7 +348,6 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
               <TooltipContent>{!canOperate ? noOperate : isReadOnly ? "Disabled in read-only mode" : "Stop"}</TooltipContent>
             </Tooltip>
 
-            {/* Restart */}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -385,7 +368,6 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
               <TooltipContent>{!canOperate ? noOperate : isReadOnly ? "Disabled in read-only mode" : "Restart"}</TooltipContent>
             </Tooltip>
 
-            {/* Terminal */}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -408,7 +390,6 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
               <TooltipContent>{!canConsole ? noConsole : !isRunning ? "Instance must be running" : "Open Terminal"}</TooltipContent>
             </Tooltip>
 
-            {/* Console */}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -432,7 +413,6 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
               <TooltipContent>{!canConsole ? noConsole : !isRunning ? "Instance must be running" : "Open Console"}</TooltipContent>
             </Tooltip>
 
-            {/* Delete - Partner+ only */}
             {isPartner && (
             <AlertDialog>
               <Tooltip>
@@ -478,7 +458,6 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
         </TooltipProvider>
       </div>
       
-      {/* Monitoring Modal */}
       <InstanceDetailDialog
         instance={vm}
         isOpen={showMonitoring}

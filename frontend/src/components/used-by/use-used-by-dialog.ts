@@ -3,11 +3,8 @@
 import * as React from "react";
 import { USAGE_PANEL_ID, type UsedBySubject, type UsageView } from "./types";
 
-// One dialog per page, driven by whichever cell was clicked.
-//
-// important: this exists so a page mounts ONE Radix Dialog root instead of one per cell. The
-// six pages this replaces mounted two per row, so a 25-row page carried fifty. The dialog is
-// hoisted next to the table and the cells only set state.
+// One dialog per page, driven by whichever cell was clicked. The page mounts one Radix Dialog
+// root next to the table instead of one per cell; the cells only set state.
 export interface UsedByDialogState {
   subject: UsedBySubject | null;
   panelId: string;

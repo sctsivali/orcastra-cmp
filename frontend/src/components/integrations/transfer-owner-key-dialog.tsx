@@ -42,10 +42,9 @@ interface TransferOwnerKeyDialogProps {
 /**
  * Move a synced organization to another owner key. Administrators only; the server enforces it.
  *
- * The owner is the only key that may sync the organization, update its members and policies and
- * provision tenant access for it, so the picker offers only keys that could do all of that: active
- * OrcaHub keys holding inventory.read and org.sync, never an add-on's credential. The slug has to
- * be typed, because a move to the wrong key hands one integration another's organization.
+ * The picker offers only keys that can do an owner's work: active OrcaHub keys holding
+ * inventory.read and org.sync, never an add-on's credential. The slug has to be typed, because a
+ * move to the wrong key hands one integration another's organization.
  */
 export function TransferOwnerKeyDialog({ organization, keys, onOpenChange }: TransferOwnerKeyDialogProps) {
   const queryClient = useQueryClient();

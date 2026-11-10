@@ -14,27 +14,15 @@ import { MapPin } from "lucide-react";
 import type { ClusterInfo } from "@/types/api";
 import { ClusterCertificatePanel } from "./cluster-certificate-panel";
 
-// Everything the clusters table already receives and shows none of.
+// What the clusters table receives but has no room for: the error reason, check and
+// registration times, location and certificate.
 //
-// `error_message`, `last_checked`, `certificate_common_name`, `has_certificate` and `created_at`
-// are all in the list payload and none of them reach the screen, so an operator looking at a
-// cluster in an error state can see that it is unhappy and not why. `location` is the starkest:
-// the full GeoLocation arrives and is used only as a boolean tint on a button.
-//
-// note: `merchant_id` IS rendered, and the reasoning is worth keeping because the cautious
-// instinct points the other way. It carries no authorization meaning: it appears nowhere in
-// app/core or db_models, and scope comes from organization_clusters bindings instead. It is a
-// free-text label captured at registration and stored in the cluster's Vault metadata
-// (services/lxd_cert_manager.py:58). Meanwhile the list it comes from is org-scoped by
-// apply_cluster_filter (routers/cluster_registration.py:636), so a partner only ever sees
-// clusters bound to their own organization and the value shown is their own. Hiding a
-// non-secret from the person who owns it protects nothing and costs them a support ticket when
-// they need to correlate a cluster with its registration.
-//
-// The rejected alternative is worth naming too: gating it on Admin would put the only role
-// branch inside these dialog components, and it is the absence of role branches that makes
-// fixture-based tests sufficient for all three roles. That is a large price for hiding
-// something that is not sensitive.
+// `merchant_id` is rendered for every role. It carries no authorization meaning (scope comes
+// from organization_clusters bindings); it is a free-text label captured at registration and
+// stored in the cluster's Vault metadata (services/lxd_certs/storage.py). The list it comes from
+// is org-scoped by apply_cluster_filter (routers/cluster_registration.py, list_clusters), so a
+// partner only sees its own organization's value. Gating it on Admin would add the only role
+// branch to these dialogs, which keep fixture-based tests sufficient for all three roles.
 export function ClusterDetailDialog({
   cluster,
   open,
@@ -70,7 +58,7 @@ export function ClusterDetailDialog({
       status={
         <Badge variant={statusMeta.tone}>{statusMeta.label}</Badge>
       }
-      // The reason a cluster is unreachable, which the table has never had room for.
+      // The reason a cluster is unreachable, which the table has no room for.
       error={cluster.error_message || null}
       footer={footer}
       tabs={[
@@ -83,7 +71,7 @@ export function ClusterDetailDialog({
                 <DetailGrid cols={3}>
                   <DetailField label="Zone" value={cluster.zone} />
                   {/* Free text supplied at registration, so it is often absent or stale. The
-                      shared placeholder says so rather than rendering an empty field. */}
+                      shared placeholder says so instead of rendering an empty field. */}
                   <DetailField label="Merchant ID" value={cluster.merchant_id} mono copyable />
                   <DetailField label="Registered" value={formatDateTime(cluster.created_at)} />
                   <DetailField label="Last Checked" value={formatDateTime(cluster.last_checked)} />
@@ -105,8 +93,8 @@ export function ClusterDetailDialog({
               <DetailField label="Region" value={location.region_name} />
               {location.province && <DetailField label="Province" value={location.province} />}
               <DetailField label="Country" value={location.country_name} />
-              {/* A country stands for all of it: a stored city there is at most the capital an
-                  older catalogue used, never where the cluster runs. */}
+              {/* A country stands for all of it: a stored city there is at most a capital from
+                  an older catalogue, never where the cluster runs. */}
               {wholeCountry ? (
                 <DetailField label="Placement" value="Whole country, exact site not recorded" />
               ) : (

@@ -31,11 +31,10 @@ function AvailabilitySkeleton() {
 }
 
 /**
- * Tenant-safe cluster availability for Overview.
+ * Tenant-safe cluster availability for the Overview.
  *
- * This surface deliberately never mounts the privileged /nodes inventory query and offers
- * no hardware dialog or node controls. Tenants only need to know where their workloads live
- * and whether that cluster can currently answer.
+ * Never mounts the privileged /nodes inventory query and offers no hardware dialog or node
+ * controls: a tenant needs only where its workloads live and whether that cluster answers.
  */
 export function TenantClusterStatusCards() {
   const { data, isLoading, isError, dataUpdatedAt, refreshNow } = useNodeAvailability();

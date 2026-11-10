@@ -23,11 +23,10 @@ export interface ActiveFilterChipsProps {
  * Every filter currently narrowing the table, each removable.
  *
  * important: a chip is rendered for an active filter even when its facet control is not on
- * the toolbar. That is what stops a deep link filtering the view with no way to see or undo
- * it, which is the defect the warnings page shipped with.
+ * the toolbar, so a deep link can never filter the view with no way to see or undo it.
  *
- * note: Badge belongs here. Table conventions allow it in a filter toolbar and ban it from
- * data cells, and the typography guard only counts badges inside a table body.
+ * Badge belongs here: table conventions allow it in a filter toolbar and ban it from data
+ * cells, and the typography guard only counts badges inside a table body.
  */
 export function ActiveFilterChips({
   chips,

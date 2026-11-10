@@ -1,11 +1,8 @@
 /**
- * RBAC (Role-Based Access Control) Types & Constants - Three-Tier Model
+ * RBAC roles, permissions and the Authentik group mapping, mirroring the backend's three
+ * tiers: Admin, Partner, Tenant. Hooks and components use them to decide what to render.
  *
- * Mirrors the backend three-tier RBAC: Admin, Partner, Tenant.
- * Used by hooks and components for role-based UI rendering.
- *
- * IMPORTANT: Authorization is ALWAYS enforced on the backend.
- * These types are for UX convenience only.
+ * important: the backend enforces authorization; nothing here is a security boundary.
  */
 
 // ---------------------------------------------------------------------------
@@ -18,14 +15,13 @@ export enum Role {
   TENANT = "tenant",
 }
 
-/** Hierarchy level - higher = more privileged */
+/** Hierarchy level; higher is more privileged. */
 export const ROLE_HIERARCHY: Record<Role, number> = {
   [Role.TENANT]: 0,
   [Role.PARTNER]: 1,
   [Role.ADMIN]: 2,
 };
 
-/** Human-readable labels */
 export const ROLE_LABELS: Record<Role, string> = {
   [Role.ADMIN]: "Administrator",
   [Role.PARTNER]: "Partner",
@@ -129,16 +125,16 @@ export const ROLE_PERMISSIONS: Record<Role, Set<Permission>> = {
 // ---------------------------------------------------------------------------
 
 export const AUTHENTIK_GROUP_MAP: Record<string, Role> = {
-  // canonical names (recommended - create these in Authentik)
+  // Canonical names; create these groups in Authentik.
   role_admin: Role.ADMIN,
   role_partner: Role.PARTNER,
   role_tenant: Role.TENANT,
-  // short aliases
+  // Short aliases.
   admin: Role.ADMIN,
   partner: Role.PARTNER,
   tenant: Role.TENANT,
   admins: Role.ADMIN,
-  // common Authentik default groups
+  // Authentik's own admin group and other common group names.
   "authentik admins": Role.ADMIN,
   "orcastra-admins": Role.ADMIN,
   "orcastra-partners": Role.PARTNER,
@@ -172,18 +168,17 @@ export function hasMappedRole(groups: string[]): boolean {
 }
 
 /**
- * Resolve Authentik groups to internal roles.
+ * Resolve Authentik groups to roles, falling back to Tenant.
  *
- * note: a caller with no role group still resolves to Tenant here, because permission checks
- * need a role to compare against. Whether the caller may use the dashboard at all is
- * hasMappedRole, which the access gate in MainLayout decides on first.
+ * The fallback only gives permission checks a role to compare against. Whether the caller
+ * may use the dashboard at all is hasMappedRole, checked first by MainLayout's access gate.
  */
 export function resolveRoles(groups: string[]): Role[] {
   const roles = resolveMappedRoles(groups);
   return roles.length > 0 ? roles : [Role.TENANT];
 }
 
-/** Get highest-privilege role. */
+/** The most privileged of these roles; Tenant when there are none. */
 export function getHighestRole(roles: Role[]): Role {
   if (roles.length === 0) return Role.TENANT;
   return roles.reduce((a, b) =>

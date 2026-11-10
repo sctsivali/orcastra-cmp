@@ -11,10 +11,7 @@ const VARIANT = {
   unknown: "muted",
 } as const;
 
-/**
- * Always rendered. An absent badge is indistinguishable from an unclassified card, which is
- * the ambiguity this whole surface exists to remove.
- */
+/** Always rendered: an absent badge would read the same as an unclassified card. */
 export function GpuClassBadge({ card }: { card: GPUCardInfo }) {
   const cls = gpuClassOf(card);
   return <Badge variant={VARIANT[cls]}>{GPU_CLASS_LABEL[cls]}</Badge>;

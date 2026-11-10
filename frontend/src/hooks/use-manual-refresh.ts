@@ -31,15 +31,14 @@ export interface UseManualRefreshResult {
 }
 
 /**
- * Owns the full interaction contract for a user-triggered refresh: a
- * double-click guard, a pending state that is always visible long enough to
- * read, a success confirmation, an elapsed counter for slow fan-out endpoints,
- * and an error toast. Call sites supply only the async work.
+ * The interaction contract for a user-triggered refresh: a double-click guard, a
+ * pending state visible long enough to read, a success confirmation, an elapsed
+ * counter for slow fan-out endpoints, and an error toast. Call sites supply only
+ * the async work.
  *
- * important: pending is scoped to this control's own click. Binding a refresh
- * button's disabled state to a query's isFetching (which is also true during
- * background polling) makes the button disable itself every few seconds and
- * swallow real clicks.
+ * important: pending is scoped to this control's own click. A query's isFetching
+ * is also true during background polling, so a button disabled on it disables
+ * itself every few seconds and swallows real clicks.
  */
 export function useManualRefresh(
   refresh: () => Promise<unknown> | unknown,
@@ -55,7 +54,7 @@ export function useManualRefresh(
   const minDelayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // keep the latest closures without making `run` unstable
+  // Keep the latest closures without making `run` unstable.
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
   const optionsRef = useRef(options);

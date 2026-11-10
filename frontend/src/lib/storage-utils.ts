@@ -1,17 +1,12 @@
 /**
- * Storage Utilities for Enterprise-Grade localStorage Management
- * 
- * Handles:
- * - Quota management with LRU eviction
- * - Safe localStorage operations with error handling
- * - Automatic cleanup of stale data
- * - Size estimation and limits
- * 
- * IMPORTANT: localStorage has a ~5-10MB limit (browser dependent).
- * This module ensures we stay within limits and gracefully handle quota errors.
+ * localStorage access that never throws, size estimates, and cleanup of
+ * persisted console and terminal sessions.
+ *
+ * localStorage holds roughly 5-10 MB depending on the browser. A write that
+ * hits the quota falls back to progressively wider cleanup.
  */
 
-// storage keys we manage
+// Storage keys this module manages.
 export const STORAGE_KEYS = {
   CONSOLE_STORE: 'orcastra-console-store',
   TERMINAL_STORE: 'orcastra-terminals',
@@ -19,31 +14,27 @@ export const STORAGE_KEYS = {
   THEME: 'theme',
 } as const;
 
-// maximum age for stale data (1 hour in ms - reduced from 24h)
+// Persisted console and terminal sessions idle longer than this are dropped.
 const MAX_STALE_AGE = 1 * 60 * 60 * 1000;
 
-// maximum number of consoles/terminals to persist (reduced from 5)
+// Most consoles and terminals persisted at once.
 const MAX_PERSISTED_SESSIONS = 3;
 
-// rough size limit for localStorage usage by our app (2MB to be safer)
+// Rough localStorage budget, kept well below the smallest browser quota.
 const APP_STORAGE_LIMIT = 2 * 1024 * 1024;
 
-/**
- * Estimate the size of a value in bytes when stored as JSON in localStorage
- */
+/** Estimated bytes for a value stored as JSON in localStorage. */
 export function estimateStorageSize(value: unknown): number {
   try {
     const json = JSON.stringify(value);
-    // localStorage uses UTF-16, so each character is 2 bytes
+    // localStorage stores UTF-16, so each character is 2 bytes.
     return json.length * 2;
   } catch {
     return 0;
   }
 }
 
-/**
- * Get the current size of all our app's localStorage usage
- */
+/** Bytes used by every key in this origin's localStorage. */
 export function getAppStorageSize(): number {
   if (typeof window === 'undefined') return 0;
   
@@ -62,9 +53,7 @@ export function getAppStorageSize(): number {
   return totalSize;
 }
 
-/**
- * Get the size of our managed keys only
- */
+/** Bytes used by the keys this module manages, matched by prefix. */
 export function getManagedStorageSize(): number {
   if (typeof window === 'undefined') return 0;
   
@@ -84,9 +73,7 @@ export function getManagedStorageSize(): number {
   return totalSize;
 }
 
-/**
- * Get detailed storage breakdown for debugging
- */
+/** Bytes per localStorage key, for debugging. */
 export function getStorageBreakdown(): Record<string, number> {
   if (typeof window === 'undefined') return {};
   
@@ -105,9 +92,7 @@ export function getStorageBreakdown(): Record<string, number> {
   return breakdown;
 }
 
-/**
- * Clean up stale console/terminal sessions from store data
- */
+/** Drop console and terminal sessions inactive for longer than `maxAge`. */
 export function cleanupStaleSessions<T extends { lastActiveAt?: number; createdAt?: number }>(
   sessions: T[],
   maxAge: number = MAX_STALE_AGE
@@ -119,16 +104,13 @@ export function cleanupStaleSessions<T extends { lastActiveAt?: number; createdA
   });
 }
 
-/**
- * Limit the number of persisted sessions (keep most recent)
- */
+/** Keep only the `maxCount` most recently active sessions. */
 export function limitSessionCount<T extends { lastActiveAt?: number; createdAt?: number }>(
   sessions: T[],
   maxCount: number = MAX_PERSISTED_SESSIONS
 ): T[] {
   if (sessions.length <= maxCount) return sessions;
   
-  // sort by lastActiveAt (newest first)
   const sorted = [...sessions].sort((a, b) => {
     const aTime = a.lastActiveAt || a.createdAt || 0;
     const bTime = b.lastActiveAt || b.createdAt || 0;
@@ -138,10 +120,7 @@ export function limitSessionCount<T extends { lastActiveAt?: number; createdAt?:
   return sorted.slice(0, maxCount);
 }
 
-/**
- * Safe localStorage setItem with quota handling
- * Returns true if successful, false if quota exceeded
- */
+/** setItem that never throws; false when the write failed (ex; quota). */
 export function safeSetItem(key: string, value: string): boolean {
   if (typeof window === 'undefined') return false;
   
@@ -157,9 +136,6 @@ export function safeSetItem(key: string, value: string): boolean {
   }
 }
 
-/**
- * Safe localStorage getItem
- */
 export function safeGetItem(key: string): string | null {
   if (typeof window === 'undefined') return null;
   
@@ -170,9 +146,6 @@ export function safeGetItem(key: string): string | null {
   }
 }
 
-/**
- * Safe localStorage removeItem
- */
 export function safeRemoveItem(key: string): void {
   if (typeof window === 'undefined') return;
   
@@ -183,10 +156,7 @@ export function safeRemoveItem(key: string): void {
   }
 }
 
-/**
- * Clear all console and terminal data from localStorage
- * Useful when storage is full
- */
+/** Remove the persisted console and terminal stores from localStorage. */
 export function clearSessionStorage(): void {
   if (typeof window === 'undefined') return;
   
@@ -195,33 +165,30 @@ export function clearSessionStorage(): void {
 }
 
 /**
- * Emergency cleanup when quota is exceeded
- * More aggressive - clears all orcastra-* keys except current theme
- * Also clears other potentially large non-essential keys
+ * First fallback when the quota is exceeded: removes every `orcastra-` key,
+ * plus any other key over 100,000 characters that looks like regenerable
+ * cache or state.
  */
 export function emergencyCleanup(): void {
   if (typeof window === 'undefined') return;
   
-  // Keys to always preserve (essential for user experience)
   const preserveKeys = new Set(['theme', 'sidebar-collapsed']);
-  
-  // Get all keys to remove (can't modify while iterating)
+
+  // Collect first: removing while iterating shifts the indexes.
   const keysToRemove: string[] = [];
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
     if (key) {
-      // Remove orcastra- keys except critical ones
       if (key.startsWith('orcastra-')) {
         if (!preserveKeys.has(key)) {
           keysToRemove.push(key);
         }
       }
-      // Also check for large non-essential keys from other sources
-      // that commonly cause quota issues
+      // Large keys from other sources are a common cause of quota errors.
       else {
         const value = localStorage.getItem(key);
-        if (value && value.length > 100000) { // > 100KB per key
-          // Large keys that are likely cache/state that can be regenerated
+        if (value && value.length > 100000) { // About 200 KB in UTF-16.
+          // Names that usually hold cache or state that can be regenerated.
           const largeKeyPatterns = [
             /^persist:/,        // redux-persist
             /^cache/i,          // general cache
@@ -237,45 +204,37 @@ export function emergencyCleanup(): void {
     }
   }
   
-  // Remove collected keys
   for (const key of keysToRemove) {
     try {
       localStorage.removeItem(key);
     } catch {
-      // ignore
+      // Ignored: the remaining keys are still tried.
     }
   }
-  
-  // Also try clearing session storage
+
+  // Also drop the persisted console and terminal stores.
   clearSessionStorage();
 
 }
 
-/**
- * Check if we're approaching storage limit and proactively cleanup
- */
+/** Clear the console and terminal stores past 80% of APP_STORAGE_LIMIT. */
 export function checkAndCleanupStorage(): void {
   if (typeof window === 'undefined') return;
-  
+
   const currentSize = getAppStorageSize();
-  const warningThreshold = APP_STORAGE_LIMIT * 0.8; // 80%
+  const warningThreshold = APP_STORAGE_LIMIT * 0.8;
   
   if (currentSize > warningThreshold) {
     clearSessionStorage();
   }
 }
 
-/**
- * Nuclear option - clear ALL localStorage except essential keys
- * Use when emergencyCleanup doesn't free enough space
- */
+/** Last resort after emergencyCleanup: remove every key but the preserved. */
 export function nuclearCleanup(): void {
   if (typeof window === 'undefined') return;
-  
-  // Keys to absolutely preserve
+
   const preserveKeys = new Set(['theme', 'sidebar-collapsed']);
-  
-  // Get all keys
+
   const keysToRemove: string[] = [];
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
@@ -284,19 +243,19 @@ export function nuclearCleanup(): void {
     }
   }
   
-  // Remove all
   for (const key of keysToRemove) {
     try {
       localStorage.removeItem(key);
     } catch {
-      // ignore
+      // Ignored: the remaining keys are still tried.
     }
   }
 }
 
 /**
- * Create a safe storage adapter for Zustand persist middleware
- * Handles quota errors gracefully and applies data cleanup
+ * A storage adapter for Zustand's persist middleware. Applies `cleanupFn`
+ * before each write and, on a failed write, retries after emergencyCleanup
+ * and then nuclearCleanup.
  */
 export function createSafeStorage<T>(options?: {
   onQuotaExceeded?: () => void;
@@ -307,28 +266,24 @@ export function createSafeStorage<T>(options?: {
       return safeGetItem(name);
     },
     setItem: (name: string, value: string): void => {
-      // try to apply cleanup if provided
       if (options?.cleanupFn) {
         try {
           const parsed = JSON.parse(value);
           const cleaned = options.cleanupFn(parsed);
           value = JSON.stringify(cleaned);
         } catch {
-          // ignore parsing errors
+          // An unparseable value is stored as given.
         }
       }
       
       const success = safeSetItem(name, value);
       
       if (!success) {
-        // quota exceeded - try emergency cleanup first
         emergencyCleanup();
-        
-        // retry
+
         let retrySuccess = safeSetItem(name, value);
-        
+
         if (!retrySuccess) {
-          // still failing - try nuclear cleanup as last resort
           nuclearCleanup();
           retrySuccess = safeSetItem(name, value);
         }

@@ -31,9 +31,8 @@ const toastVariants = cva(
         default: "border bg-background text-foreground",
         destructive:
           "destructive group border-destructive bg-destructive text-destructive-foreground",
-        // note: an opaque toast with --foreground prose and the online tone on its border. It was
-        // a 10% emerald wash under emerald-600 text: see-through over the page behind it, and
-        // the tint-under-same-hue-text pair check-semantic-colour.mjs exists to ban.
+        // Opaque, with --foreground prose and the online tone on its border. A tint under
+        // same-hue text would show the page through it, and check-semantic-colour.mjs bans it.
         success:
           "border-status-online/60 bg-background text-foreground",
       },

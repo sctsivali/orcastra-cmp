@@ -172,7 +172,7 @@ function ContainerCpuCard({
         ? ` Not throttled in the last ${formatWindow(throttle.windowSeconds)}.`
         : ` Throttled ${plural(throttle.count, "time")} in the last ${formatWindow(throttle.windowSeconds)}: the backend reached its CPU limit.`;
   const since = "since container start";
-  // without a readable cpu.stat there is nothing to measure, so no reading is on its way
+  // Without a readable cpu.stat there is nothing to measure, so no reading is on its way.
   const counting = c?.usage_usec !== null && c?.usage_usec !== undefined;
   return (
     <Card>

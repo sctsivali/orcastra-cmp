@@ -46,24 +46,19 @@ const nodeRegisterSchema = z.object({
         }
         try {
           const url = new URL(val);
-          // Enforce http or https scheme only
           if (url.protocol !== "https:" && url.protocol !== "http:") {
             return false;
           }
-          // Validate IP address format if hostname looks like an IP
           const ipMatch = url.hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
           if (ipMatch) {
-            // Validate each octet is 0-255
             const octets = [ipMatch[1], ipMatch[2], ipMatch[3], ipMatch[4]];
             if (octets.some(o => parseInt(o) > 255)) {
               return false;
             }
-            // Require port for IP addresses
             if (!url.port) {
               return false;
             }
           }
-          // Validate hostname has valid characters (no commas, etc.)
           if (!/^[a-zA-Z0-9.-]+$/.test(url.hostname)) {
             return false;
           }
@@ -84,8 +79,8 @@ const nodeRegisterSchema = z.object({
 type NodeRegisterFormData = z.infer<typeof nodeRegisterSchema>;
 
 export function NodeRegisterForm() {
-  // note: the router is still needed for back(). Forward hops go through navigate() so
-  // the leaving transition raises the global progress bar.
+  // The router serves back(). Forward hops go through navigate() so the leaving transition
+  // raises the global progress bar.
   const router = useRouter();
   const { navigate } = useNavigationProgress();
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -105,8 +100,6 @@ export function NodeRegisterForm() {
     cluster_id?: string;
     cluster_type?: string;  // Auto-detected: "LXD", "MicroCloud", or "Incus"
   } | null>(null);
-
-  // Generate unique identity name: orca-{clustername}-{datetime}
 
   const {
     register,
@@ -157,7 +150,7 @@ export function NodeRegisterForm() {
         });
       }
     } catch (error: any) {
-      // distinguish timeout (504) from other errors for better UX
+      // Tell a timeout (504) apart from other errors.
       const isTimeout = error instanceof APIError && error.status === 504;
       toast({
         title: isTimeout ? "Connection timed out" : "Could not check authentication",
@@ -171,10 +164,9 @@ export function NodeRegisterForm() {
     }
   };
 
-  // important: the disabled flag is React state, so it only reaches the button on the next
-  // render. Two clicks inside one tick both pass it and both fire the mutation. react-hook-form
-  // does not help here: its handleSubmit has no re-entry guard and awaits the resolver before
-  // calling this, so the window is wider, not narrower. The ref is claimed synchronously.
+  // important: the disabled flag is React state and reaches the button only on the next render,
+  // so two clicks in one tick would both fire the mutation. react-hook-form's handleSubmit has
+  // no re-entry guard and awaits the resolver first. The ref is claimed synchronously.
   const submitInFlightRef = React.useRef(false);
 
   const onSubmit = async (data: NodeRegisterFormData) => {
@@ -183,11 +175,9 @@ export function NodeRegisterForm() {
     setIsSubmitting(true);
     setRegistrationResult(null);
 
-    // Generate unique identity name
     const uniqueIdentityName = generateIdentityName(data.cluster_id);
     setIdentityName(uniqueIdentityName);
 
-    // Get region info for location data
     const regionInfo = resolveRegion(await loadRegionCatalog(), data.region_id);
     const locationData = regionInfo
       ? toGeoLocation(regionInfo, { facility_name: data.facility_name, facility_provider: data.facility_provider })
@@ -198,7 +188,7 @@ export function NodeRegisterForm() {
         cluster_id: data.cluster_id,
         display_name: data.display_name,
         endpoint: data.endpoint,
-        zone: regionInfo?.name || undefined,  // use region name as zone for backwards compat
+        zone: regionInfo?.name || undefined,  // Region name as zone, for backwards compatibility.
         location: locationData,
       });
 
@@ -209,8 +199,8 @@ export function NodeRegisterForm() {
         certificate_generated: response.certificate_generated,
         certificate: response.certificate,
         cluster_id: data.cluster_id,
-        // note: the pre-trust probe answers null unless the host names itself (older Incus did,
-        // through public dev_incus extensions); the form then offers both commands.
+        // The pre-trust probe answers null unless the host names itself (older Incus releases
+        // do, through public dev_incus extensions); the form then offers both commands.
         cluster_type: response.cluster_type ?? undefined,
       });
 
@@ -220,12 +210,11 @@ export function NodeRegisterForm() {
           description: "Certificate generated successfully. Follow the steps below to complete setup.",
         });
         
-        // Auto scroll to top to show certificate
+        // Scroll up to show the certificate.
         setTimeout(() => {
           containerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
         }, 100);
       } else if (!response.success) {
-        // Backend returned success=false
         toast({
           title: "Could not register cluster",
           description: response.message || "Could not generate certificate.",
@@ -278,7 +267,6 @@ export function NodeRegisterForm() {
         </p>
       </div>
 
-      {/* Certificate Copy-Paste UI */}
       {registrationResult?.success && registrationResult.certificate && (
         <Card className="mb-6">
           <CardHeader>
@@ -291,7 +279,6 @@ export function NodeRegisterForm() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            {/* Step 1: Add Trust via CLI */}
             <div className="space-y-3">
               <Label className="text-base font-semibold flex items-center gap-2">
                 <Terminal className="h-5 w-5" />
@@ -325,7 +312,7 @@ export function NodeRegisterForm() {
                         </>
                       );
                     }
-                    // note: before trust the type is usually unknown. Incus 6.0.7 and 7.6 tell an
+                    // Before trust the type is usually unknown. Incus 6.0.7 and 7.6 tell an
                     // untrusted caller nothing about themselves, so both commands are offered and
                     // Check Authentication confirms which one it was.
                     return (
@@ -350,7 +337,6 @@ export function NodeRegisterForm() {
               </Alert>
             </div>
 
-            {/* Step 2: Verify */}
             <div className="space-y-3">
               <Label className="text-base font-semibold">
                 Step 2: Verify Connection
@@ -380,7 +366,6 @@ export function NodeRegisterForm() {
         </Card>
       )}
 
-      {/* Registration Form */}
       <Card>
         <CardHeader>
           <CardTitle>Cluster Information</CardTitle>
@@ -391,7 +376,6 @@ export function NodeRegisterForm() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-            {/* Cluster ID */}
             <div className="space-y-2">
               <Label htmlFor="cluster_id">
                 Cluster ID <span className="text-destructive">*</span>
@@ -410,7 +394,6 @@ export function NodeRegisterForm() {
               </p>
             </div>
 
-            {/* Display Name */}
             <div className="space-y-2">
               <Label htmlFor="display_name">
                 Display Name <span className="text-destructive">*</span>
@@ -429,7 +412,6 @@ export function NodeRegisterForm() {
               </p>
             </div>
 
-            {/* Endpoint */}
             <div className="space-y-2">
               <Label htmlFor="endpoint">
                 Endpoint URL <span className="text-destructive">*</span>
@@ -448,14 +430,12 @@ export function NodeRegisterForm() {
               </p>
             </div>
 
-            {/* Location - Region Selector */}
             <div className="space-y-4">
               <div className="flex items-center gap-2">
                 <MapPin className="h-4 w-4 text-muted-foreground" />
                 <Label className="text-base font-semibold">Location <span className="text-destructive">*</span></Label>
               </div>
 
-              {/* Region / City Selector */}
               <div className="space-y-2">
                 <Label htmlFor="region_id">Region</Label>
                 <Controller
@@ -480,7 +460,6 @@ export function NodeRegisterForm() {
                 </p>
               </div>
 
-              {/* Facility / Data Center (optional, free text + autocomplete) */}
               <div className="space-y-3 rounded-md border border-dashed p-3">
                 <div className="flex items-center gap-2">
                   <Building2 className="h-4 w-4 text-muted-foreground" />
@@ -526,7 +505,6 @@ export function NodeRegisterForm() {
               </div>
             </div>
 
-            {/* Info Alert */}
             <Alert>
               <Info className="h-4 w-4" />
               <AlertDescription className="text-sm">
@@ -534,7 +512,6 @@ export function NodeRegisterForm() {
               </AlertDescription>
             </Alert>
 
-            {/* Submit Button */}
             <div className="flex gap-3 pt-4">
               <Button
                 type="submit"

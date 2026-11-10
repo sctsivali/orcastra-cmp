@@ -64,7 +64,7 @@ export async function sendCombo(conn: SpiceInputConnection | null | undefined, c
       try {
         if (inputsReady(conn)) send(conn, g, key, false);
       } catch {
-        // the connection went away; the guest releases on its own when the channel closes
+        // The connection went away; the guest releases on its own when the channel closes.
       }
     }
   }

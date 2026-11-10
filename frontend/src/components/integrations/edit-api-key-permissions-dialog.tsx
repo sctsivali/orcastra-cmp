@@ -42,10 +42,9 @@ interface SeededGrant {
 /**
  * Read one editable shape out of a stored grant array.
  *
- * The console has only ever written the same permission level and project list to every cluster
- * on a key, but the API takes a list and an integration may have written something else. Rather
- * than silently flattening that, the divergence is detected and the dialog says so before the
- * operator overwrites it.
+ * The console writes the same permission level and project list to every cluster on a key, but
+ * the API takes a list and an integration may have written something else. A divergence is
+ * flagged so the dialog can say so before the operator overwrites it.
  */
 function seedFromGrants(permissions: ClusterPermission[] | undefined): SeededGrant {
   const grants = (permissions ?? []).filter((grant) => grant && grant.cluster_id);
@@ -83,10 +82,8 @@ interface EditAPIKeyPermissionsDialogProps {
 /**
  * Change which clusters and projects an existing key may reach, without reissuing it.
  *
- * The endpoint behind this has existed since the key surface was built and had no caller, so
- * narrowing an over-broad grant meant revoking the credential and asking the integrator for a
- * new one. Its authorization is the same as every other single-key handler: the key must overlap
- * the caller's clusters, and the requested clusters are re-checked against them.
+ * The server authorizes it like every other single-key handler: the key must overlap the
+ * caller's clusters, and the requested clusters are re-checked against them.
  */
 export function EditAPIKeyPermissionsDialog({
   apiKey,
@@ -98,8 +95,8 @@ export function EditAPIKeyPermissionsDialog({
 }: EditAPIKeyPermissionsDialogProps) {
   const [open, setOpen] = useState(false);
   const seed = useMemo(() => seedFromGrants(apiKey.cluster_permissions), [apiKey]);
-  // note: by content, not identity. Opening reads the key list again, and a refetch that changes
-  // only a last use or a registered flag must not wipe what the operator is typing.
+  // Compared by content, not identity. Opening reads the key list again, and a refetch that
+  // changes only a last use or a registered flag must not wipe what the operator is typing.
   const seedKey = JSON.stringify(seed);
 
   const [selectedClusterIds, setSelectedClusterIds] = useState<string[]>(seed.clusterIds);
@@ -113,9 +110,8 @@ export function EditAPIKeyPermissionsDialog({
     [apiKey],
   );
 
-  // Re-seed each time it opens. The key can change under the dialog between visits (another
-  // session, or this one after a successful save), and a stale form would silently write the
-  // grant back to what it was when the page loaded.
+  // Re-seed each time it opens. The key can change between visits (another session, or a save
+  // here), and a stale form would write the grant back to what it was when the page loaded.
   useEffect(() => {
     if (!open) return;
     setSelectedClusterIds(seed.clusterIds);

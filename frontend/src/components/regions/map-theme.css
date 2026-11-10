@@ -1,10 +1,7 @@
-/* Leaflet chrome on the product tokens.
-   Leaflet ships a light-only palette for the container, controls, attribution and popups,
-   which reads as grey and white boxes dropped onto a themed map. These selectors mirror
-   Leaflet's own shapes rather than out-specifying them, because this file is imported after
-   leaflet.css in regions-map.tsx and equal specificity then resolves on order. Putting them
-   here rather than in globals.css is what makes that true: a component-level stylesheet is
-   injected after the global one, so the same rules there lost the cascade. */
+/* Leaflet chrome on the product tokens; Leaflet's own palette is light-only.
+   important: these selectors match Leaflet's specificity and win on source order, so this file
+   must stay imported after leaflet.css (regions-map.tsx). In globals.css they would lose, because
+   a component stylesheet is injected after the global one. */
 
 .leaflet-container {
   background: hsl(var(--background));
@@ -72,10 +69,8 @@
   color: hsl(var(--foreground));
 }
 
-/* Cluster spider legs. The class comes from spiderLegPolylineOptions in regions-map.tsx, not
-   from markercluster: it only adds .leaflet-cluster-spider-leg while animating, so targeting
-   that selector styled nothing once the legs settled. Verified in the browser: four SVG paths,
-   zero elements carrying markercluster's class. */
+/* Cluster spider legs. The class comes from spiderLegPolylineOptions in regions-map.tsx, because
+   markercluster sets .leaflet-cluster-spider-leg only while the legs animate. */
 .orcastra-spider-leg {
   stroke: hsl(var(--primary));
 }

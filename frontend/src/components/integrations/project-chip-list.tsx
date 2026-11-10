@@ -14,11 +14,8 @@ export interface ProjectChipListProps {
   onRemove: (name: string) => void;
   onClearAll: () => void;
   /**
-   * Where focus goes when the last chip is removed.
-   *
-   * important: without it, removing the final chip leaves focus on a node React has just
-   * detached, the browser resets it to <body>, and the next Tab restarts at the top of the
-   * document rather than continuing into the form.
+   * Where focus goes when the last chip is removed. Without it focus stays on a detached node,
+   * the browser resets it to <body>, and the next Tab restarts at the top of the document.
    */
   returnFocusRef: React.RefObject<HTMLButtonElement>;
   disabled?: boolean;
@@ -27,10 +24,8 @@ export interface ProjectChipListProps {
 /**
  * The picked projects, each removable, as one tab stop.
  *
- * A roving tabindex rather than one stop per chip: a grant can name dozens of projects, and N
- * chips between the field and the submit button is a keyboard user tabbing through the whole
- * selection to reach Create. ActiveFilterChips takes the simpler route because a toolbar carries
- * one to four chips and nothing sits behind it.
+ * A roving tabindex instead of one stop per chip: a grant can name dozens of projects, and a
+ * keyboard user should not tab through all of them to reach Create.
  */
 export function ProjectChipList({
   projects,
@@ -44,9 +39,8 @@ export function ProjectChipList({
   const chipRefs = React.useRef<(HTMLButtonElement | null)[]>([]);
   const pendingFocus = React.useRef<number | null>(null);
 
-  // important: clamped on read rather than corrected in an effect. focusIndex can outlive the
-  // chip it points at, and a roving group whose only tabbable member has been removed is a hole
-  // in the tab order: Tab from the trigger would skip the group and land past it.
+  // important: clamped on read instead of corrected in an effect. focusIndex can outlive the
+  // chip it points at, and a roving group with no tabbable member drops out of the tab order.
   const active = Math.min(focusIndex, Math.max(projects.length - 1, 0));
 
   React.useEffect(() => {
@@ -114,8 +108,8 @@ export function ProjectChipList({
               >
                 {isOrphaned && (
                   <>
-                    {/* The icon and the sr-only sentence carry the state. Colour never does:
-                        the destructive token is not the only signal a chip is broken. */}
+                    {/* The icon and the sr-only sentence carry the state, so colour is not the
+                        only signal that a chip is broken. */}
                     <AlertTriangle aria-hidden="true" className="h-3 w-3 shrink-0" />
                     <span className="sr-only">Not on any selected cluster: </span>
                   </>

@@ -22,11 +22,8 @@ import { cpuAllocation, cpuAllocationFigure, cpuAllocationText, formatCpuThreads
 import { CpuAllocationInfo } from "@/components/cpu/cpu-allocation-info";
 
 /**
- * The four tabs that read NodeResources.
- *
- * They share a file because they share a data source: whatever the modal decides is the
- * freshest NodeResources it has, whether that came from the list row or from the live
- * per-cluster read. The System tab is separate for the same reason, in the other direction.
+ * The four tabs that read NodeResources: the freshest copy the modal has, from the list row or
+ * from the live per-cluster read. The System tab reads no resources and lives in its own file.
  */
 
 const UNAVAILABLE = "did not report its hardware";
@@ -83,8 +80,8 @@ export function NodeCpuPanel({
                 <CpuAllocationInfo cpu={cpu} />
               </h4>
               <div className="space-y-3">
-                {/* The card's allocation meter, not UsageMeter: that one turns red past 90%, and
-                    an over-commit is a ratio to read, not a fault (lib/cpu-allocation.ts). */}
+                {/* The card's allocation meter instead of UsageMeter, which turns red past 90%.
+                    An over-commit is a ratio to read and no fault (lib/cpu-allocation.ts). */}
                 <div className="space-y-1">
                   <div className="flex justify-between gap-4 text-sm">
                     <span className="text-muted-foreground">Allocated</span>
@@ -195,11 +192,9 @@ export function NodeMemoryPanel({ resources }: { resources: NodeResources | null
 /**
  * Storage for one registered cluster.
  *
- * important: on a clustered host `storage_total` is USABLE capacity, with a shared backing
- * store counted once however many members report it, while `storage_raw_total` keeps the
- * per-member sum. On the three-member reference cluster those differ by 400 GB, so the panel
- * shows the raw figure whenever it disagrees rather than letting an operator meet the gap in
- * the middle of a capacity decision. Backend: services/lxd/storage_model.py.
+ * On a clustered host `storage_total` is usable capacity, counting a shared backing store once
+ * however many members report it, while `storage_raw_total` keeps the per-member sum. The panel
+ * shows the raw figure whenever the two differ. Backend: services/lxd/storage_model.py.
  */
 export function NodeStoragePanel({
   resources,
@@ -271,14 +266,11 @@ export function NodeStoragePanel({
                             Driver: {formatLabel(pool.driver)}
                             {pool.scope === "shared" && " · shared by the members below"}
                           </p>
-                          {/* important: member hostnames are operator detail, gated the same
-                              way the control-plane endpoint is on the node card. A tenant sees
-                              how many machines the pool spans, not what they are called.
-                              /cluster-members, the other place these names appear, is
-                              require_partner() on the backend.
-
-                              note: a standalone host reports one member, itself, so the line
-                              would only repeat the name in the dialog title. */}
+                          {/* important: member hostnames are operator detail, gated like the
+                              control-plane endpoint on the node card; /cluster-members is
+                              require_partner() on the backend. A tenant sees only how many
+                              machines the pool spans. A standalone host reports only itself,
+                              so the line is skipped there. */}
                           {pool.members &&
                             pool.members.length > 0 &&
                             !(pool.members.length === 1 && pool.members[0] === nodeName) && (

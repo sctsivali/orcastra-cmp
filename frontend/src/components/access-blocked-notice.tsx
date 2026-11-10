@@ -11,9 +11,9 @@ import type { AccessGateState, AccessRecheck } from "@/hooks/use-access-gate";
 import { federatedSignOut } from "@/lib/sign-out";
 import { formatDateTime } from "@/lib/utils";
 
-// Issue #17: a signed-in account Orcastra has given nothing used to see an empty dashboard that
-// read as a broken deployment. This replaces the whole shell, so none of the dashboard's global
-// reads (task panel, read-only mode, create menu) fire for a caller the backend refuses anyway.
+// Shown to a signed-in account with no access in place of an empty dashboard. It replaces the
+// whole shell, so none of the dashboard's global reads (task panel, read-only mode, create
+// menu) fire for a caller the backend refuses anyway.
 
 const COPY: Record<Exclude<AccessGateState, "allowed" | "checking">, { title: string; body: string }> = {
   no_role: {

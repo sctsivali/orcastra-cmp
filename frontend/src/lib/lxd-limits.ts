@@ -31,9 +31,9 @@ export const FORM_UNIT_BYTES: Record<FormSizeUnit, number> = { MB: 1e6, GB: 1e9,
 /**
  * An absolute LXD size as the edit control shows it.
  *
- * important: `preservedRaw` stays set until the operator changes the control, so opening and saving
- * a project cannot rewrite a limit stored as `8GiB` into a rounded `8.59GB`. A value the control
- * cannot show, such as a percentage, is preserved and identified rather than read as unlimited.
+ * important: `preservedRaw` stays set until the operator changes the control, so saving a project
+ * cannot rewrite a limit stored as `8GiB` into a rounded `8.59GB`. A value the control cannot
+ * show, such as a percentage, is preserved as is and never read as unlimited.
  */
 export function editableLimit(raw: string | undefined): {
   value: number;

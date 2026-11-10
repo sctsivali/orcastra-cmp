@@ -74,9 +74,9 @@ export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDia
   const [progress, setProgress] = useState(0); // 0..100 (upload bytes)
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  // Tracks the live session so we can release its server-side slot on
-  // cancel/error/teardown instead of leaving it for the idle sweep. Held in a
-  // ref (not state) so the unmount/pagehide handlers see the latest value.
+  // The live session, so cancel, error and teardown release its server-side
+  // slot instead of leaving it for the idle sweep. A ref, not state, so the
+  // unmount and pagehide handlers see the latest value.
   const sessionRef = useRef<ActiveUploadSession | null>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
   const runInFlightRef = useRef(false);
@@ -148,7 +148,7 @@ export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDia
   const reset = () => {
     uploadAbortRef.current?.abort();
     uploadAbortRef.current = null;
-    abortActive(); // release a session only when finalization has not started
+    abortActive(); // Releases a session only when finalization has not started.
     runInFlightRef.current = false;
     clearFormState();
   };
@@ -244,7 +244,7 @@ export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDia
       });
       if (!isCurrentRequest()) return;
 
-      sessionRef.current = null; // terminal: nothing to release
+      sessionRef.current = null; // Terminal: nothing to release.
       // Mark create-form volume and capacity caches stale only after the import is terminal-ready.
       if (!(await reconcileOutcome())) return;
       setPhase("done");
@@ -297,7 +297,7 @@ export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDia
     <Dialog
       open={open}
       onOpenChange={(o) => {
-        if (busy) return; // don't let it close mid-upload
+        if (busy) return; // No closing mid-upload.
         if (!o) reset();
         onOpenChange(o);
       }}

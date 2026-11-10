@@ -23,23 +23,15 @@ interface CreateMenuProps {
 const READ_ONLY_REASON = "Disabled in read-only mode";
 
 /**
- * The console's only global create affordance. One trigger at every width, in the sticky header.
+ * The console's only global create control: one trigger at every width, in the sticky header.
  *
- * important: this used to render a floating action button below `sm`, fixed to the bottom right
- * corner. Measured at 390px across 24 scroll positions, that button sat on top of "Refresh
- * overview" at one of them, so a tap meant for refresh opened the create menu instead, and it
- * grazed two more controls. A fixed overlay can also hide the control a keyboard user has just
- * focused, which WCAG 2.2 SC 2.4.11 is about. The header is sticky at every width and carries
- * only a menu button and the avatar on a phone, so the control lives there instead: always
- * reachable, never on top of anything. It also used to vanish while the sidebar drawer was open,
- * which the header button does not.
+ * No floating action button: a fixed overlay covers other controls on a phone and can hide the
+ * control a keyboard user just focused (WCAG 2.2 SC 2.4.11). The sticky header is always
+ * reachable and covers nothing.
  *
  * important: a read-only item is marked with aria-disabled, never with Radix's `disabled` prop.
- * @radix-ui/react-menu passes `focusable: !disabled` to the roving-focus item and filters
- * disabled items out of the collections that drive arrow keys and typeahead, and the house item
- * class adds data-[disabled]:pointer-events-none on top. A `disabled` item is therefore
- * unreachable by keyboard and emits no hover, so the reason it is unavailable could never be
- * surfaced to anyone. Here the item stays focusable and explains itself instead.
+ * @radix-ui/react-menu drops a disabled item from roving focus and typeahead, and the house item
+ * class adds data-[disabled]:pointer-events-none, so it could never show why it is unavailable.
  */
 export function CreateMenu({ actions, isReadOnly }: CreateMenuProps) {
   const reasonId = React.useId();
@@ -57,8 +49,8 @@ export function CreateMenu({ actions, isReadOnly }: CreateMenuProps) {
   const menu = (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
-      {/* note: the shared DropdownMenuContent animates in and out with no reduced-motion guard.
-          Fixing the primitive would touch every menu in the app, so the override is scoped here. */}
+      {/* The shared DropdownMenuContent animates with no reduced-motion guard. Fixing the
+          primitive would touch every menu in the app, so the override is scoped here. */}
       <DropdownMenuContent align="end" side="bottom" className="w-56 motion-reduce:animate-none">
         {isReadOnly && (
           <>
@@ -86,7 +78,7 @@ export function CreateMenu({ actions, isReadOnly }: CreateMenuProps) {
               {isReadOnly ? (
                 // important: no IntentLink in this branch. onSelect is Radix's own select
                 // event; preventing it stops the menu closing but would not stop an underlying
-                // anchor from navigating, so the href must simply not exist.
+                // anchor from navigating, so there must be no href at all.
                 <DropdownMenuItem
                   aria-disabled="true"
                   aria-describedby={reasonId}

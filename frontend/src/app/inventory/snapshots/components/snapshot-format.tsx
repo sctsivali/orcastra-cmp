@@ -5,7 +5,7 @@ import { formatDateTime } from "@/lib/utils";
 import type { SnapshotInfo } from "@/types/api";
 
 /**
- * The cluster and project a snapshot actually lives on.
+ * The cluster and project a snapshot lives on.
  *
  * important: never the page's scope. The listing spans clusters and projects, so a page-level
  * host deletes or restores against the wrong one. `host` is optional on the type because the
@@ -15,7 +15,7 @@ export function snapshotScope(snapshot: SnapshotInfo): { host: string; project: 
   return { host: snapshot.host ?? "", project: snapshot.project || "default" };
 }
 
-/** Whole units only. A snapshot's age is read to decide whether it is still useful, not to the second. */
+/** Age in whole units; a snapshot's age is read to judge whether it is still useful. */
 export function relativeAge(iso: string): string {
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return iso;
@@ -34,10 +34,9 @@ export function relativeAge(iso: string): string {
 /**
  * Time remaining, in the same whole units `relativeAge` reads back.
  *
- * One ladder, every caller. A snapshot's expiry and a schedule's next run are the same question
- * asked forwards, and two implementations of "in 6h" would drift into two spellings on one screen.
- * What differs is only what a past instant MEANS, so that is the parameter. A string rather than
- * a node so the prose callers and the table cells share one spelling.
+ * Shared by a snapshot's expiry and a schedule's next run so "in 6h" has one spelling on screen;
+ * only the meaning of a past instant differs, so that is the parameter. Returns a string so prose
+ * callers and table cells share the spelling.
  */
 export function timeUntilLabel(iso: string, pastLabel: string): string {
   const seconds = Math.floor((Date.parse(iso) - Date.now()) / 1000);
@@ -58,11 +57,12 @@ export function timeUntil(
   return label === pastLabel ? <span className="text-muted-foreground">{label}</span> : label;
 }
 
-/** Expiry as time remaining.
+/**
+ * Expiry as time remaining.
  *
- * A missing expiry is stated plainly rather than left blank: on this surface it means the
- * snapshot belongs to the metered product upstream, which keeps it until its own retention says
- * otherwise. Nothing this console creates is ever without one.
+ * A missing expiry is stated rather than left blank: every snapshot this console creates has
+ * one, so here it means the snapshot belongs to the metered product upstream, which keeps it
+ * under its own retention.
  */
 export function expiryLabel(iso?: string | null): React.ReactNode {
   return timeUntil(iso, { emptyLabel: "No expiry", pastLabel: "due to be pruned" });
@@ -71,9 +71,9 @@ export function expiryLabel(iso?: string | null): React.ReactNode {
 /**
  * When a schedule fires next.
  *
- * Deliberately not `expiryLabel` with different words. A missing next run means the schedule is
- * paused, which is a state rather than an absence, and a next run in the past means the tick has
- * not reached it yet rather than that anything is being deleted.
+ * A missing next run means the schedule is paused, and a next run in the past means the tick has
+ * not reached it yet; neither means anything is being deleted, so the labels differ from
+ * `expiryLabel`.
  */
 export function nextRunLabel(iso?: string | null): React.ReactNode {
   return timeUntil(iso, { emptyLabel: "Paused", pastLabel: "due now" });
@@ -82,9 +82,8 @@ export function nextRunLabel(iso?: string | null): React.ReactNode {
 /**
  * A timestamp cell: the absolute instant as the value, the relative reading beneath it.
  *
- * The absolute stamp is what an operator compares against a change window or a log line; the
- * age or countdown is what they scan for. One tier each, in the house spelling, so the fleet
- * table, the per-instance tab and the schedules table cannot drift apart.
+ * The absolute stamp is compared against a change window or a log line; the age or countdown is
+ * scanned. Shared by the fleet table, the per-instance tab and the schedules table.
  */
 export function AbsoluteWithRelative({
   iso,

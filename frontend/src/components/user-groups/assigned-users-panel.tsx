@@ -46,9 +46,8 @@ import type {
 import { UsersIllustration } from "@/components/illustrations/scenes/onboarding";
 
 /**
- * Every assigned user across every organization the caller runs lands in this one list, so an
- * operator looking for one person is scanning a set that grows with the fleet. Search is what
- * makes a row findable once the list is longer than a screen; sorting alone stops helping there.
+ * Every assigned user across every organization the caller runs, in one list that grows with the
+ * fleet, so it has search as well as sorting.
  *
  * important: an id, and one that is not "policies". The Access Policies section renders its own
  * filtered table under the same tab, and two tables without a namespace write `q` into the same
@@ -75,9 +74,8 @@ const USERS = defineTable<UserGroupEntry>()({
       facetSpec: { primary: true, format: formatLabel },
     },
     {
-      // note: sorted by how many organizations a user reaches, filtered by which ones. The
-      // count is what the column answers at a glance; the names are what an operator narrows
-      // by, and "who can see org X" is the question this list is worst at answering by eye.
+      // Sorted by how many organizations a user reaches, filtered by which ones, so an operator
+      // can narrow the list to who can see a given organization.
       field: "organizations",
       label: "Organizations",
       sort: (user) => user.organizations?.length ?? 0,
@@ -120,8 +118,8 @@ function AssignedUsersPanelContent() {
   });
 
   // The organizations a role is assigned in: those synced from OrcaHub and the local ones an
-  // administrator created here. The list's default leaves local organizations out, so a partner
-  // could never be given the partner row that lets them run an organization made in the console.
+  // administrator created here. The list's default leaves local organizations out, so without the
+  // second read a partner could not be given the row to run an organization made in the console.
   const { data: orgs } = useQuery({
     queryKey: ["integration-organizations", "with-local"],
     queryFn: async () => {
@@ -134,8 +132,7 @@ function AssignedUsersPanelContent() {
     },
   });
 
-  // note: memoised. A fresh array every render hands the filter engine a new identity each
-  // time and re-runs the whole pass over rows that did not change.
+  // Memoised: a fresh array every render would re-run the filter pass over unchanged rows.
   const userRows = useMemo<UserGroupEntry[]>(() => users ?? [], [users]);
 
   const [page, setPage] = useState(1);
@@ -171,8 +168,8 @@ function AssignedUsersPanelContent() {
     onSuccess: (answer) => {
       void reconcileMutationImpact(queryClient, "user-group.write").catch(() => undefined);
       setAssignOpen(false);
-      // note: two outcomes the list cannot show by itself. An administrator with no organization
-      // has no membership row, so it never appears here, and a role the identity provider did not
+      // Two outcomes the list cannot show by itself. An administrator with no organization has
+      // no membership row, so it never appears here, and a role the identity provider did not
       // confirm is saved here but not yet in force.
       const notes: string[] = [];
       if (answer.organization_id == null) notes.push("An administrator with no organization is not listed here.");
@@ -202,7 +199,7 @@ function AssignedUsersPanelContent() {
   });
 
   // important: claimed synchronously. isPending reaches the button only on the next render, so a
-  // double click (or Enter twice) used to send two requests; the e2e spec caught two DELETEs.
+  // double click (or Enter twice) would otherwise send two requests.
   const submitInFlightRef = useRef(false);
   const removeInFlightRef = useRef(false);
 
@@ -215,7 +212,7 @@ function AssignedUsersPanelContent() {
     setEmail("");
     setRole("tenant");
     setOrgId("");
-    // important: a failed attempt's message belongs to that attempt, not to the next dialog.
+    // Clear the previous attempt's error before the dialog opens again.
     assignMutation.reset();
     setAssignOpen(true);
   }
@@ -230,7 +227,7 @@ function AssignedUsersPanelContent() {
         organization_id: orgId ? Number(orgId) : undefined,
       });
     } catch {
-      // shown in the dialog from assignMutation.error
+      // Shown in the dialog from assignMutation.error.
     } finally {
       submitInFlightRef.current = false;
     }
@@ -242,7 +239,7 @@ function AssignedUsersPanelContent() {
     try {
       await removeMutation.mutateAsync(userEmail);
     } catch {
-      // shown in the dialog from removeMutation.error
+      // Shown in the dialog from removeMutation.error.
     } finally {
       removeInFlightRef.current = false;
     }
@@ -336,8 +333,8 @@ function AssignedUsersPanelContent() {
                           />
                         </TableCell>
                         <TableCell>
-                          {/* note: right-aligned, so the remove control sits in one column whether
-                              or not the row has an Access button before it. */}
+                          {/* Right-aligned, so the remove control sits in one column whether or
+                              not the row has an Access button before it. */}
                           <div className="flex items-center justify-end gap-1.5">
                             {/* Access governs tenant memberships, which a partner elsewhere may also hold. */}
                             {accessOrgIds.length > 0 && (
@@ -438,8 +435,8 @@ function AssignedUsersPanelContent() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {/* important: the server refuses any other role from a partner with 403, so it
-                      is not offered rather than offered and refused. */}
+                  {/* The server refuses any other role from a partner with 403, so a partner is
+                      offered Tenant only. */}
                   {isAdmin && <SelectItem value="admin">Admin</SelectItem>}
                   {isAdmin && <SelectItem value="partner">Partner</SelectItem>}
                   <SelectItem value="tenant">Tenant</SelectItem>
@@ -527,8 +524,8 @@ function AssignedUsersPanelContent() {
           <AlertDialogFooter>
             <AlertDialogCancel disabled={removeMutation.isPending}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              // note: held open until the answer, so a refusal (a 409 for a synced partner row, a
-              // 502 when the identity provider did not confirm) is read here, not lost with the dialog
+              // Held open until the answer, so a refusal (a 409 for a synced partner row, a 502
+              // when the identity provider did not confirm) shows in this dialog.
               onClick={(event) => {
                 event.preventDefault();
                 if (removing) void handleRemove(removing);

@@ -1,18 +1,12 @@
 /**
- * useTerminalSession: one interactive text session (an exec shell or the serial console) drawn
- * in xterm.
+ * useTerminalSession: one interactive text session (an exec shell or the serial console) in xterm.
  *
  * Wire protocol (backend terminal_proxy.py / console_proxy.py): binary frames are raw PTY bytes
- * both ways, so xterm's streaming decoder stitches characters split across frames; text frames
- * are JSON control (resize, ack, ping out; session, ready, error, closed, pong in).
- *
- * How a session ended decides what follows: 1000 (the shell exited) waits for the operator, Enter
- * starts a new session; 4404 is final. After the instance powered down (1012) or a live session
- * dropped, "not running" (4404) means "not yet": it tries every few seconds until the instance is
- * back, so the serial console follows a reboot. Everything else goes through lib/socket-recovery.ts:
- * a refused ticket or a 4401 refreshes the session once (or signs in again), 4403 / 4428 / 4423 stop
- * and say why, and a dropped network or a 1011 reconnects with backoff, at once when the network or
- * tab returns.
+ * both ways, so xterm's streaming decoder stitches split characters; text frames are JSON control
+ * (resize, ack, ping out; session, ready, error, closed, pong in). 1000 (the shell exited) waits
+ * for Enter. After a power-down (1012) or a dropped live session, 4404 is retried within the return
+ * window so the serial console follows a reboot; otherwise it is final. Every other close goes
+ * through lib/socket-recovery.ts.
  */
 
 "use client";
@@ -83,8 +77,8 @@ const SESSION_ID = /^[\w.:-]{1,128}$/;
 // Abort any half-read sequence, then end mouse reporting, bracketed paste and a hidden cursor. A
 // dropped vim leaves all of that on, and the new shell would start inside it.
 const END_DEAD_PROGRAM = "\x18\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?25h\x1b[0m";
-// important: only from the alternate screen. On the normal one this restores the saved cursor,
-// which is the top left corner, and the next line overwrites the connect box.
+// important: send only from the alternate screen. On the normal one this restores the saved
+// cursor, which is the top left corner, and the next line overwrites the connect box.
 const LEAVE_ALT_SCREEN = "\x1b[?1049l";
 
 function note(term: Terminal | undefined, text: string, color = DIM): void {
@@ -271,8 +265,8 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
         case "session": {
           const term = bundleRef.current?.term;
           const sessionId = String(msg.session_id ?? "");
-          // note: not on serial. That line is the guest's own console, and the program is still
-          // running behind it.
+          // Not on serial: that line is the guest's own console, and its program is still running
+          // behind it.
           if (kind === "shell" && sessionsRef.current > 0) {
             term?.write(END_DEAD_PROGRAM);
             if (term?.buffer.active.type === "alternate") term.write(LEAVE_ALT_SCREEN);
@@ -290,14 +284,14 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
           if (replacingRef.current) note(bundleRef.current?.term, SOCKET_MESSAGES.newShell, YELLOW);
           replacingRef.current = false;
           bundleRef.current?.term.writeln(`${GREEN}✓ Connected${RESET}`);
-          // note: nothing is typed for the operator. On a serial line an Enter could pick a boot
-          // menu entry.
+          // Nothing is typed for the operator: on a serial line an Enter could pick a boot menu
+          // entry.
           if (kind === "serial") bundleRef.current?.term.writeln(`${DIM}Press Enter for a prompt.${RESET}`);
           setStatus("connected");
           callbacks.current.onReady?.();
           break;
         case "error":
-          // note: kept for the close, so it prints once, and in full where a close reason may be cut.
+          // Kept for the close, so it prints once, and in full where a close reason may be cut.
           refusalRef.current = { message: String(msg.message), code: typeof msg.code === "number" ? msg.code : undefined };
           break;
         case "pong":
@@ -326,7 +320,7 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
         droppedAt !== null &&
         Date.now() - droppedAt < INSTANCE_RETURN_WINDOW_MS
       ) {
-        // Said once as the wait begins, not on every poll while the instance is down.
+        // Printed once when the wait begins; the polls that follow stay quiet.
         if (wasLive || event.code === WS_CLOSE.POWERED_DOWN) note(term, `${reason || "The instance went away"}. Reconnecting when it starts again…`, YELLOW);
         setStatus("reconnecting", WAITING_FOR_INSTANCE);
         retryTimerRef.current = setTimeout(() => connectRef.current(), INSTANCE_RETURN_POLL_MS);

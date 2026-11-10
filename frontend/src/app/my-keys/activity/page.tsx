@@ -35,7 +35,7 @@ import { activityLabel, clientText } from "../components/key-activity-line";
 
 // Every key's activity at once: the dashboard trail (created, downloaded, deleted, refused) and
 // what LXD did under each key's certificate. The server window is read whole, up to a ceiling,
-// and filtered in the browser, as the Sessions audit trail is (documentation/ui/pagination.md).
+// and filtered in the browser, as the Sessions audit trail is.
 
 const PAGE = 500;
 const CEILING = 5000;
@@ -104,7 +104,7 @@ function KeyActivityContent() {
         rows.push(...page.entries);
         total = page.total;
         offset += page.entries.length;
-        // note: the empty page ends it too; has_more comes from a count taken before the read.
+        // An empty page ends it too: has_more comes from a count taken before the read.
         if (!page.has_more || page.entries.length === 0 || rows.length >= CEILING) break;
       }
       return { rows, total };

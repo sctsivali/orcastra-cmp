@@ -40,8 +40,8 @@ const errorMessage = (error: unknown, fallback: string) =>
  * dashboard to it once the cluster trusts it; Discard drops it. Closing keeps it pending, and the
  * Certificates page can finish it later.
  *
- * note: when the cluster had no certificate at all there is nothing pending (no
- * `pending_cert_id`), the new one is already active, and the old Check Authentication applies.
+ * When the cluster had no certificate at all there is nothing pending (no `pending_cert_id`):
+ * the new one is already active, and Check Authentication applies.
  */
 export function RegenerateCertificateDialog({
   cluster,

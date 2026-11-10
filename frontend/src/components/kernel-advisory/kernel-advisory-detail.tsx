@@ -58,7 +58,7 @@ export function KernelAdvisorySummary({
   );
 }
 
-/** A CVE a finding names but the response carries no record for: say so rather than drop it. */
+/** A CVE a finding names but the response carries no record for: say so, never drop it. */
 export function UnknownAdvisorySummary({ id }: { id: string }) {
   return (
     <DetailSection title={id}>
@@ -71,8 +71,7 @@ export function UnknownAdvisorySummary({ id }: { id: string }) {
  * Every member's kernel and verdict, the commands that settle an unconfirmed one, and what
  * could not be read.
  *
- * important: no mitigation is offered beyond a reboot into a fixed kernel. The vendors list no
- * workaround, and inventing one here would be worse than saying nothing.
+ * No mitigation is offered beyond a reboot into a fixed kernel: the vendors list no workaround.
  */
 export function KernelAdvisoryMembers({
   rows,
@@ -117,7 +116,7 @@ export function KernelAdvisoryMembers({
                   </DetailGrid>
                   {row.findings.map((finding) => (
                     <p key={finding.advisory_id} className="text-sm text-muted-foreground">
-                      {/* the CVE id keeps each reason attributable once a member carries two */}
+                      {/* The CVE id keeps each reason attributable when a member has two. */}
                       <span className="font-medium text-foreground">{finding.advisory_id}</span>: {finding.reason}
                     </p>
                   ))}

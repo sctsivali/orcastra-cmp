@@ -46,16 +46,15 @@ export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[]
     return sum + (node.resources?.memory_total || 0);
   }, 0);
 
-  // Get real architecture from node environment
   const cpuArchitectures = new Set<string>(
     reportingNodes
       .map((node: NodeStatus) => node.environment?.kernel_architecture)
       .filter((arch): arch is string => Boolean(arch))
   );
 
-  // Compute GPUs (sellable capacity) and detected cards are different numbers about the
-  // same hardware. Both are derived from /nodes, the endpoint this page already reads: two
-  // endpoints for one fact is how the counts came to disagree in the first place.
+  // Compute GPUs (sellable capacity) and detected cards are different numbers about the same
+  // hardware. Both come from /nodes, the endpoint this page already reads; a second endpoint
+  // for the same hardware could disagree with it.
   const totalGPUs = reportingNodes.reduce((sum: number, node: NodeStatus) => {
     return sum + (node.resources?.gpu_total || 0);
   }, 0);
@@ -229,9 +228,8 @@ export function HardwareAggregate({
       <section className="space-y-3">
         <div>
           <h2 className="text-xl font-semibold">Fleet Totals</h2>
-          {/* note: --foreground, not --muted-foreground. On --background the muted token measures
-              4.27:1 where AA wants 4.5:1, which is why the page subtitle is a declared exception
-              in the contrast sweep. One exception is enough. */}
+          {/* --foreground rather than --muted-foreground: on --background the muted token
+              measures 4.27:1, below the 4.5:1 AA needs. */}
           <p className="text-sm text-foreground">
             {reportingNodeCount === nodes.length
               ? `Summed across all ${plural(nodes.length, "reporting cluster")}.`
