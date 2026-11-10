@@ -210,6 +210,21 @@ def test_a_wait_cannot_be_used_to_hold_a_worker() -> None:
     assert build_action("wait", {"duration": 9999}).duration == DESKTOP_WAIT_MAX
 
 
+def test_a_held_key_cannot_hold_a_worker_longer_than_a_wait() -> None:
+    """A hold runs on a desktop worker until it ends, whatever budget the caller was answered in."""
+    from app.services.desktop.runtime import DESKTOP_WAIT_MAX
+
+    assert build_action("hold_key", {"text": "a", "duration": 3600}).duration == DESKTOP_WAIT_MAX
+
+
+@pytest.mark.parametrize("name", ["hold_key", "wait"])
+@pytest.mark.parametrize("value", [float("inf"), float("nan"), 10**400], ids=["inf", "nan", "huge"])
+def test_a_duration_that_is_not_a_finite_number_is_refused(name: str, value: float) -> None:
+    """JSON bodies may carry Infinity and NaN, and the guest's `sleep inf` never returns."""
+    with pytest.raises(HTTPException):
+        build_action(name, {"text": "a", "duration": value})
+
+
 def test_typed_text_is_bounded() -> None:
     from app.services.desktop.runtime import DESKTOP_TYPE_MAX
 

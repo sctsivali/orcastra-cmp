@@ -7,12 +7,13 @@ expect improves accuracy. Three differ from it, each to bound a resource or prot
             let ten concurrent five-second waits hold the whole desktop pool doing nothing.
   hold_key  the caller is answered within the desktop_input budget (DESKTOP_ACTION_TIMEOUT), but
             `run_blocking` frees the caller on timeout and not the thread, so a hold keeps its
-            desktop worker for its full duration. `duration` has no upper bound here.
+            desktop worker for its full duration. `duration` is capped at DESKTOP_WAIT_MAX.
   type      the text travels on stdin where the tool allows it, because argv is visible in the
             guest's process table to every user on it, and an agent at a login prompt types a
             password.
 """
 
+import math
 from typing import Any, Dict, Optional, Set
 
 from fastapi import HTTPException
@@ -111,6 +112,17 @@ def _bounded_int(params: Dict[str, Any], field: str, default: int, low: int, hig
     return max(low, min(high, value))
 
 
+def _finite(raw: Any) -> Optional[float]:
+    """A number as a finite float, or None. JSON bodies may carry Infinity, NaN and huge integers."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    try:
+        value = float(raw)
+    except OverflowError:
+        return None
+    return value if math.isfinite(value) else None
+
+
 def build_action(name: str, params: Dict[str, Any]) -> Action:
     """One validated action, or a 400 naming the field that is wrong."""
     if name not in ACTIONS:
@@ -145,10 +157,10 @@ def build_action(name: str, params: Dict[str, Any]) -> Action:
         modifiers, key = split_combination(combination if isinstance(combination, str) else "")
         duration = 0.0
         if name == "hold_key":
-            raw = params.get("duration", 1.0)
-            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            seconds = _finite(params.get("duration", 1.0))
+            if seconds is None:
                 raise HTTPException(status_code=400, detail="params.duration must be a number")
-            duration = max(0.1, float(raw))
+            duration = min(max(0.1, seconds), DESKTOP_WAIT_MAX)
         return Action(
             name=name,
             text=validate_key(key),
@@ -189,10 +201,10 @@ def build_action(name: str, params: Dict[str, Any]) -> Action:
         )
 
     if name == "wait":
-        raw = params.get("duration", 1.0)
-        if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw <= 0:
+        seconds = _finite(params.get("duration", 1.0))
+        if seconds is None or seconds <= 0:
             raise HTTPException(status_code=400, detail="params.duration must be a positive number")
-        return Action(name=name, duration=min(float(raw), DESKTOP_WAIT_MAX))
+        return Action(name=name, duration=min(seconds, DESKTOP_WAIT_MAX))
 
     if name == "zoom":
         region = params.get("region")
