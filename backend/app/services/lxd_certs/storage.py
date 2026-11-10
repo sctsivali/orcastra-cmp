@@ -232,7 +232,10 @@ class VaultStorageMixin:
             return False
     
     def get_cluster_info(self, cluster_id: str, include_cert_content: bool = False) -> Dict[str, Any]:
-        """Cluster metadata from Vault, and whether a trust password and certificate exist."""
+        """Cluster metadata from Vault, whether a trust password exists, and the certificate's name.
+
+        has_certificate is read from Vault only with include_cert_content; otherwise it is assumed.
+        """
         try:
             metadata = self.vault.vault_read(f"{self.clusters_path}/{cluster_id}/metadata")
 

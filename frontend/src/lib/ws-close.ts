@@ -21,7 +21,8 @@ export const WS_CLOSE = {
   SESSION_ENDED: 4401,
   /** No access to this instance, at connect or lost while open. It must not reconnect on its own. */
   ACCESS_REVOKED: 4403,
-  /** The session cannot start (not running, not found, no agent); reconnecting will not help. */
+  /** The session cannot start (not running, not found, no agent). Recovery does not retry it, except
+   *  that a SPICE display that was on screen waits INSTANCE_RETURN_WINDOW_MS for the instance. */
   UNAVAILABLE: 4404,
   /** Another viewer opened this display (QEMU serves one). Taking it back is the operator's call. */
   TAKEN_OVER: 4409,

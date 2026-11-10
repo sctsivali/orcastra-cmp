@@ -316,9 +316,10 @@ class OrganizationService:
     async def get_user_cluster_ids(self, user_email: str, user_role: str) -> list[str]:
         """Cluster ids bound to the user's organizations; [] for admin means no filter.
 
-        important: unused; never wire it into a live scope path. It scopes by organization
-        membership only and ignores OrganizationCluster.registered_by, so it misses a partner's
-        own unbound clusters. Use app.core.org_scope.get_user_allowed_clusters instead.
+        important: unused; never wire it into a live scope path. It scopes by membership and, for
+        a partner, the organizations it created, and ignores OrganizationCluster.registered_by, so
+        it misses a partner's own unbound clusters. Use app.core.org_scope.get_user_allowed_clusters
+        instead.
         """
         if user_role == "admin":
             return []  # empty means no filter

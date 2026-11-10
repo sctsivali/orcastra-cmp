@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 #
 # important: an allowlist. The raw block also carries the cluster's certificate PEM, its
 # fingerprint, every listen address and the server PID. NodeStatus.environment is typed
-# Dict[str, Any], so response_model filters nothing, and it rides GET /nodes, which every role,
-# Tenants included, may read. Nothing in the backend reads status.environment (consumers use
+# Dict[str, Any], so response_model filters nothing, and it rides GET /nodes, which every Partner
+# in scope may read. Nothing in the backend reads status.environment (consumers use
 # host_info), so this only narrows the wire. Same shape as
 # routers/integrations.py:_public_location_data.
 PUBLIC_ENVIRONMENT_KEYS = frozenset(

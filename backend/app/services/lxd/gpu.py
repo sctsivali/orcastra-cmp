@@ -141,8 +141,8 @@ def scan_gpu_allocations(
             if holds_compute:
                 alloc.compute_holders.add(name)
     except Exception as e:
-        # A failed scan must not read as "nothing is allocated": usage counts only the instances
-        # walked before the failure, so scan_failed flags it. Capacity stays intact.
+        # Usage counts only the instances walked before the failure. scan_failed records that, but
+        # no caller reads it yet, so a partial count is reported as is. Capacity stays intact.
         logger.debug(f"GPU allocation scan failed: {e}")
         alloc.scan_failed = True
     return alloc

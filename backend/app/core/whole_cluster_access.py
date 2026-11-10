@@ -7,9 +7,10 @@ no one outside their party holds the cluster. This is decided by party (services
 rather than by binding count, so a partner's own buyer organizations do not make the partner's
 cluster foreign.
 
-important: the party is asked for every non-admin, whether or not org_scope.visible_projects_for
-has a bound. The bound says which projects a request may see; it does not say who holds the
-cluster, so an early return on "unbounded" would hand a caller a cluster another party holds.
+important: the party is asked for every non-admin (only a dev-mode call with no user and no scope
+skips it), whether or not org_scope.visible_projects_for has a bound. The bound says which
+projects a request may see; it does not say who holds the cluster, so an early return on
+"unbounded" would hand a caller a cluster another party holds.
 """
 
 import logging

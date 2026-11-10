@@ -43,7 +43,8 @@ class Refusal:
     """Why this schedule must not fire now.
 
     `terminal` pauses the schedule and shows the message to an operator. A non-terminal refusal is
-    retried after the scheduler's failure backoff, ex; the cluster was unreachable.
+    retried after the scheduler's failure backoff, ex; the cluster was unreachable, until repeated
+    failures pause the schedule too.
     """
 
     code: str
