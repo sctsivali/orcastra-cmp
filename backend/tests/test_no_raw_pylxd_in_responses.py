@@ -26,9 +26,15 @@ def _offenders(tree: ast.AST) -> List[int]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Return) or node.value is None:
             continue
+        serialised = {
+            id(inner)
+            for call in ast.walk(node.value)
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id in SERIALISERS
+            for inner in ast.walk(call)
+        }
         for sub in ast.walk(node.value):
             # A bare `something.state()` inside the returned expression.
-            if (
+            if id(sub) not in serialised and (
                 isinstance(sub, ast.Call)
                 and isinstance(sub.func, ast.Attribute)
                 and sub.func.attr in MODEL_ACCESSORS
@@ -68,7 +74,32 @@ def _wrapped_names(fn: ast.AST) -> set:
     return out
 
 
+def _failures_in(tree: ast.AST, name: str) -> List[str]:
+    failures: List[str] = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        assigned = _assigned_from_accessor(fn)
+        wrapped = _wrapped_names(fn)
+        for ret in ast.walk(fn):
+            if not isinstance(ret, ast.Return) or ret.value is None:
+                continue
+            for sub in ast.walk(ret.value):
+                if isinstance(sub, ast.Name) and sub.id in assigned and sub.id not in wrapped:
+                    failures.append(f"{name}:{ret.lineno} returns {sub.id}")
+    failures.extend(f"{name}:{line}" for line in _offenders(tree))
+    return failures
+
+
 class NoRawPylxdInResponsesTest(unittest.TestCase):
+    def test_a_model_accessor_called_inside_a_return_is_flagged(self) -> None:
+        tree = ast.parse('def f(x):\n    return {"state": x.state()}\n')
+        self.assertEqual(["probe.py:2"], _failures_in(tree, "probe.py"))
+
+    def test_a_model_accessor_passed_through_a_serialiser_is_not_flagged(self) -> None:
+        tree = ast.parse('def f(x):\n    return {"state": jsonable_lxd(x.state())}\n')
+        self.assertEqual([], _failures_in(tree, "probe.py"))
+
     def test_no_handler_returns_an_unserialisable_pylxd_model(self) -> None:
         failures: List[str] = []
         for path in sorted(ROUTERS.rglob("*.py")):
@@ -76,19 +107,7 @@ class NoRawPylxdInResponsesTest(unittest.TestCase):
                 tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             except SyntaxError:  # pragma: no cover
                 continue
-            for fn in ast.walk(tree):
-                if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    continue
-                assigned = _assigned_from_accessor(fn)
-                wrapped = _wrapped_names(fn)
-                for ret in ast.walk(fn):
-                    if not isinstance(ret, ast.Return) or ret.value is None:
-                        continue
-                    for sub in ast.walk(ret.value):
-                        if isinstance(sub, ast.Name) and sub.id in assigned and sub.id not in wrapped:
-                            failures.append(f"{path.name}:{ret.lineno} returns {sub.id}")
-                for line in _offenders(tree) if False else []:
-                    failures.append(f"{path.name}:{line}")
+            failures.extend(_failures_in(tree, path.name))
 
         self.assertEqual(
             [],
