@@ -17,6 +17,7 @@ from app.core.database import get_db
 from app.core.dependencies import AuthenticatedUser, check_read_only_mode, require_partner
 from app.core.rbac import Role, resolve_roles, get_highest_role
 from app.models.db_models import OrganizationMember, Organization
+from app.services.authentik_role_reading import ENDED_REASONS
 from app.services.authentik_sync import get_authentik_sync
 from app.services.cluster_parties import RUNNING_ROLES, run_orgs
 from app.services.organization_roster import synced_partner_orgs, synced_partner_refusal
@@ -58,6 +59,33 @@ def _match_key(email: str) -> str:
 
 def _plausible_address(email: str) -> bool:
     return 0 < len(email) <= 255 and "@" in email and not any(c.isspace() for c in email)
+
+
+async def refuse_unless_a_partner_may_move(target_email: str) -> None:
+    """Raise unless Authentik confirms the target holds neither Admin nor Partner.
+
+    important: the push that follows strips every other role group, so an answer Authentik could
+    not give must never read as "holds nothing". The strict read resolves alias groups the way
+    the request path does; only an email no account carries counts as holding no role.
+    """
+    reading = await get_authentik_sync().read_current_roles(target_email)
+    if reading.roles is None:
+        if reading.reason == "user_not_found":
+            return
+        if reading.reason in ENDED_REASONS:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only an admin can change the role of this account",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Cannot verify the target user's current role right now; try again later",
+        )
+    if reading.roles & {Role.ADMIN, Role.PARTNER}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only an admin can change the role of an admin or a partner",
+        )
 
 
 class AssignRoleRequest(BaseModel):
@@ -206,18 +234,7 @@ async def assign_user_role(
         # important: the checks above validate the organisation only. Naming an admin's email
         # with role "tenant" would make the Authentik push below strip that user's role_admin
         # globally, so a partner may only move someone who is not already an admin or partner.
-        # An unknown answer is refused, so an Authentik outage is no opening.
-        current_groups = await get_authentik_sync().get_user_role_groups(target_email)
-        if current_groups is None:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Cannot verify the target user's current role right now; try again later",
-            )
-        if current_groups & {"role_admin", "role_partner"}:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only an admin can change the role of an admin or a partner",
-            )
+        await refuse_unless_a_partner_may_move(target_email)
 
     # admin role doesn't require org assignment
     if body.role in ("partner", "tenant") and not body.organization_id:

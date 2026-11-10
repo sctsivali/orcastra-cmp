@@ -117,14 +117,23 @@ def _calls(node: ast.AST, attr: str) -> List[ast.Call]:
 
 def test_assign_user_role_checks_the_target_before_it_pushes() -> None:
     fn = _function("routers/user_groups.py", "assign_user_role")
-    reads = _calls(fn, "get_user_role_groups")
+    checks = [
+        sub for sub in ast.walk(fn)
+        if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
+        and sub.func.id == "refuse_unless_a_partner_may_move"
+    ]
     pushes = _calls(fn, "sync_user_role")
-    assert reads and pushes
-    assert min(r.lineno for r in reads) < min(p.lineno for p in pushes)
+    assert checks and pushes
+    assert min(c.lineno for c in checks) < min(p.lineno for p in pushes)
     source = ast.unparse(fn)
     assert "if highest != Role.ADMIN:" in source and "body.role != 'tenant'" in source
-    assert '{"role_admin", "role_partner"}' in source or "{'role_admin', 'role_partner'}" in source
-    assert "HTTP_403_FORBIDDEN" in source and "HTTP_503_SERVICE_UNAVAILABLE" in source
+
+    # The check reads roles strictly: a failed search or an alias Admin group is never "no role".
+    guard = ast.unparse(_function("routers/user_groups.py", "refuse_unless_a_partner_may_move"))
+    assert _calls(_function("routers/user_groups.py", "refuse_unless_a_partner_may_move"), "read_current_roles")
+    assert "get_user_role_groups" not in guard
+    assert "{Role.ADMIN, Role.PARTNER}" in guard
+    assert "HTTP_403_FORBIDDEN" in guard and "HTTP_503_SERVICE_UNAVAILABLE" in guard
 
 
 def test_the_global_revoke_runs_only_for_an_admin() -> None:
