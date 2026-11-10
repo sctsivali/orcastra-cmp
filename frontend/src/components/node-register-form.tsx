@@ -418,7 +418,7 @@ export function NodeRegisterForm() {
               </Label>
               <Input
                 id="endpoint"
-                placeholder="https://192.149.59.169:8443"
+                placeholder="https://203.0.113.10:8443"
                 disabled={isSubmitting}
                 {...register("endpoint")}
               />
