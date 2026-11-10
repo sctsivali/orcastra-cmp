@@ -1,24 +1,16 @@
 """Add the add-on registry and per-organization installations.
 
-An add-on is an external application holding a credential this deployment issued. These two
-tables are the record of what was published and what an operator consented to; the credential
-itself stays in Vault, because Vault is the keystore and Postgres is the index.
+An add-on is an external application holding a credential this deployment issued. These tables
+record what was published and what an operator consented to; the credential stays in Vault.
 
-Both foreign keys on `extension_installations` are RESTRICT, which deviates from the CASCADE that
-every other organization child uses. Those children are pure Postgres state. This one owns Vault
-credential material, and a CASCADE would drop the row while leaving a live key pair authenticating
-against this deployment with nothing left to describe it or find it. RESTRICT forces the teardown
-to run first, which is the behaviour wanted anyway.
+Both foreign keys on `extension_installations` are RESTRICT, unlike the CASCADE of other
+organization children: an installation owns Vault credential material, and a CASCADE would leave a
+live key pair authenticating with nothing left to describe or find it. The teardown runs first.
 
-`ck_ext_install_caps_nonempty` is the important one. An API key whose `capabilities` field is
-absent reads as unrestricted, which is how the pre-capability keys still in Vault work. Expressing
-"an installation always names at least one capability" as a table constraint means no second
-writer, and no future validator regression, can produce an installation credential that grants
-everything.
-
-Downgrade refuses while installations exist rather than stranding their credentials. Dropping the
-table does not revoke anything: the keys keep authenticating and nothing is left that says who
-they belong to or how to find them.
+`ck_ext_install_caps_nonempty` matters most. An API key with no `capabilities` field reads as
+unrestricted (legacy keys), so the constraint stops any writer producing an installation
+credential that grants everything. Downgrade refuses while installations exist: dropping the
+table revokes nothing, and the keys would keep authenticating with no record of whose they are.
 """
 
 from alembic import op

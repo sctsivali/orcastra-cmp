@@ -1,39 +1,16 @@
-"""Make a grant able to name an API key, and record whether an organization consents to desktop control.
+"""Let a grant name an API key, and record whether an organization consents to desktop control.
 
-Two changes, both prerequisites for letting an AI agent see and drive a guest's desktop.
+`break_glass_grants` gains `api_key_id`, so an integration key needs the same justified,
+time-boxed, revocable, tenant-visible grant as a human admin. `admin_email` becomes nullable and
+`ck_bgg_one_principal` requires exactly one of the two: a grant with neither names no principal, and
+one with both would be ambiguous. `cluster_fingerprint` pins the server certificate the grant was
+issued against: `cluster_id` is free text, so a cluster re-registered under another owner would
+otherwise match an old grant. It is nullable, so earlier grants keep working without that check.
 
-The first is that `break_glass_grants` could only ever name a person. A human admin cannot open a
-console into a cluster they do not own without a justified, time-boxed, revocable grant that the
-tenant can see. An API key had no equivalent and no way to acquire one: the table is keyed on
-`admin_email`, and `enforce_sensitive_access` takes an authenticated user. So a partner could
-issue a key, tick a capability, and hold permanent unattended access to a tenant's guests with no
-reason recorded, no expiry, and nothing for the tenant to revoke. Rather than build a second
-grant table with its own expiry, revocation and watchdog, the existing one learns a second kind of
-principal.
-
-`admin_email` therefore becomes nullable and `ck_bgg_one_principal` requires exactly one of the
-two. A grant with neither authorizes nobody; a grant with both would be ambiguous about who it
-covers, and the enforcement query would match on either.
-
-`cluster_fingerprint` closes a separate hole. `cluster_id` is a free-text Vault key with no
-foreign key anywhere in this schema, so a cluster deleted and re-registered under a different
-owner matches an old grant by string alone. Pinning the server certificate fingerprint at issue
-means the grant dies with the registration it was issued against, because a re-registration cannot
-reproduce the key pair. Nullable, so grants issued before this migration keep working and are
-simply not covered by that check.
-
-The second change is `desktop_control_policy`. A capability on a key says what the integration may
-attempt. This says whether the organization owning the cluster consents at all. They are different
-consents given by different people, and screen contents leaving for a third-party model is a
-disclosure to a sub-processor rather than an ordinary API call.
-
-It gets its own table rather than a field in `organization_preferences.settings`, which is the
-personalization JSONB the branding editor writes. This repository has already shipped bugs where
-one code path overwrote another's keys in that column, and a security consent cleared by somebody
-saving a logo is not a failure mode worth inviting back.
-
-Both defaults are false and an absent row reads the same as false, so an organization that has
-never been asked is never treated as having agreed.
+`desktop_control_policy` records whether the organization owning the cluster consents at all, which
+a capability on a key cannot say. It is a table of its own because the branding editor writes the
+`organization_preferences.settings` JSONB, and saving a logo must never clear a security consent.
+Both flags default to false and an absent row reads as false.
 """
 
 from alembic import op
@@ -109,9 +86,8 @@ def downgrade() -> None:
     op.drop_index("ix_break_glass_grants_api_key_id", table_name="break_glass_grants")
     op.drop_column("break_glass_grants", "cluster_fingerprint")
     op.drop_column("break_glass_grants", "api_key_id")
-    # important: any key-principal grant must go before admin_email can be NOT NULL again, or the
-    # ALTER fails on rows this migration made possible. Deleting them is correct rather than
-    # destructive: without api_key_id they no longer authorize anything.
+    # important: key-principal grants must go before admin_email is NOT NULL again, or the ALTER
+    # fails. Without api_key_id they authorize nothing, so deleting them removes no access.
     op.execute("DELETE FROM break_glass_grants WHERE admin_email IS NULL")
     op.alter_column(
         "break_glass_grants",

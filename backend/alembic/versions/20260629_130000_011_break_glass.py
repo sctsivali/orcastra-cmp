@@ -1,9 +1,8 @@
-"""Break-glass grants + session-audit org/grant attribution.
+"""Break-glass grants, and organization and grant attribution on session audit rows.
 
-Adds the break_glass_grants table (time-boxed, justified admin access to a tenant's
-console/terminal) and three accountability columns on session_audit_logs so every
-session is attributable to a tenant org and, when applicable, the grant that authorized
-a platform admin's access.
+Adds break_glass_grants (time-boxed, justified admin access to a tenant's console or
+terminal) and three columns on session_audit_logs that attribute every session to a
+tenant organization and, for a platform admin, to the grant that authorized the access.
 """
 
 from alembic import op

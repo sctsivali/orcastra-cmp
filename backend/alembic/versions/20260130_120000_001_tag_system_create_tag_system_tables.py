@@ -1,10 +1,8 @@
-"""Create tag system tables
+"""Create the tag system tables.
 
-This migration creates the foundational tables for a tagging system, including:
-- tag_categories: Category definitions with prefixes (loc_, vend_, env_, etc.)
-- tags: Master tag definitions with auto-categorization
-- tag_assignments: Tag-to-resource assignments (nodes, projects, instances)
-- user_tag_visibility: Per-user tag visibility settings
+tag_categories (keyed by prefix, ex; loc_, vend_, env_), tags, tag_assignments
+(tags on nodes, projects and instances) and user_tag_visibility (per-user
+visibility settings).
 """
 from typing import Sequence, Union
 
@@ -22,9 +20,6 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     """Create tag system tables."""
     
-    # ============================================
-    # 1. Tag Categories Table
-    # ============================================
     op.create_table(
         "tag_categories",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -53,9 +48,6 @@ def upgrade() -> None:
     )
     op.create_index("ix_tag_categories_prefix", "tag_categories", ["prefix"])
     
-    # ============================================
-    # 2. Tags Table
-    # ============================================
     op.create_table(
         "tags",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -91,9 +83,6 @@ def upgrade() -> None:
     op.create_index("ix_tags_category_id", "tags", ["category_id"])
     op.create_index("ix_tags_created_by", "tags", ["created_by"])
     
-    # ============================================
-    # 3. Tag Assignments Table
-    # ============================================
     op.create_table(
         "tag_assignments",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -125,9 +114,6 @@ def upgrade() -> None:
     op.create_index("ix_tag_assignment_project", "tag_assignments", ["resource_project"])
     op.create_index("ix_tag_assignment_tag_id", "tag_assignments", ["tag_id"])
     
-    # ============================================
-    # 4. User Tag Visibility Table
-    # ============================================
     op.create_table(
         "user_tag_visibility",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -155,9 +141,6 @@ def upgrade() -> None:
     )
     op.create_index("ix_user_tag_visibility_user_id", "user_tag_visibility", ["user_id"])
     
-    # ============================================
-    # 5. Insert Default Tag Categories
-    # ============================================
     op.execute("""
         INSERT INTO tag_categories (prefix, name, description, color, icon, sort_order, is_system, is_active)
         VALUES

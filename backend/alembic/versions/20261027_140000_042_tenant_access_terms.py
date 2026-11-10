@@ -1,10 +1,10 @@
 """Paid-term dates on a tenant access policy, so access ends when the purchase does.
 
 OrcaHub provisions a buyer's access as one `auto:<project>` policy and, at the end of the paid
-term, narrows it or (optionally) revokes it. Orcastra kept no record of the term, so a buyer whose
-revoke never arrived kept the project, and the cluster it sits on, indefinitely. `term_ended_at`
-narrows the policy to viewing once it passes; `access_ends_at` ends it outright; `term_as_of`
-orders replays; `term_phase_recorded` lets the sweeper audit each boundary once.
+term, narrows it or optionally revokes it. Recording the term here means a lost revoke cannot leave
+a buyer holding the project, and the cluster it sits on, indefinitely. `term_ended_at` narrows the
+policy to viewing once it passes; `access_ends_at` ends it outright; `term_as_of` orders replays;
+`term_phase_recorded` lets the sweeper audit each boundary once.
 
 Revision ID: 042_tenant_access_terms
 Revises: 041_cluster_registrations
@@ -46,8 +46,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # important: the older code knows expiry only as an assignment's expires_at. Copy every hard
-    # end there first, so a rollback never reopens access a buyer's term already closed.
+    # important: code at revision 041 reads expiry only from an assignment's expires_at. Copy
+    # every hard end there first, so a rollback never reopens access a buyer's term already closed.
     op.execute(
         """
         UPDATE tenant_policy_assignments AS a

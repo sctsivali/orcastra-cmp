@@ -1,19 +1,11 @@
 """Give the clipboard and guest access their own consent.
 
-Both used to ride on `enabled`, which is the switch an operator is told means "whether an agent
-may capture this organization's screens".
-
-Reading a guest's clipboard was authorized by that alone, while `services/desktop/actions.py`
-calls the clipboard the highest-yield exfiltration primitive on the surface and the capability is
-already separate on the key.
-
-Worse, the add-on install path gated `instance.exec` and `instance.files` on the same switch. So
-an organization that enabled screenshots silently authorized a third-party application to take a
-shell inside a renting customer's container, and an organization that wanted an exec add-on had to
-enable screen capture it did not want.
-
-Both default to false, so this migration grants nothing. Existing rows keep view and input exactly
-as they were and lose two powers they were never asked about, which is the safe direction.
+`allow_clipboard` and `allow_guest_access` take two powers off `enabled`, the switch an operator
+reads as "whether an agent may capture this organization's screens". The clipboard is a high-yield
+exfiltration path (`services/desktop/actions.py`), and the add-on install path gates
+`instance.exec` and `instance.files` on guest access, so enabling screenshots does not authorize a
+shell inside a customer's container. Both default to false: existing rows keep view and input and
+gain nothing.
 
 Revision ID: 021_desktop_consent_split
 Revises: 020_extension_webhooks

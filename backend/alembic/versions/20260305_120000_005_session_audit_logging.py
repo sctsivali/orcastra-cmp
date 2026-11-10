@@ -16,20 +16,17 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
         sa.Column("session_id", sa.String(100), nullable=False),
         sa.Column("event_type", sa.String(20), nullable=False, comment="connect | disconnect"),
-        # Instance context
         sa.Column("instance_name", sa.String(200), nullable=False),
         sa.Column("host", sa.String(200), nullable=False),
         sa.Column("project", sa.String(100), nullable=False, server_default="default"),
         sa.Column("protocol", sa.String(50), nullable=False, comment="websocket-terminal | spice-graphics"),
-        # User context
         sa.Column("user_id", sa.String(200), nullable=False),
         sa.Column("user_email", sa.String(200), nullable=False),
         sa.Column("user_role", sa.String(100), nullable=False, server_default="unknown"),
-        # Session metrics (populated on disconnect)
+        # Set on disconnect.
         sa.Column("duration_seconds", sa.Integer(), nullable=True),
         sa.Column("download_bytes", sa.Integer(), nullable=True),
         sa.Column("upload_bytes", sa.Integer(), nullable=True),
-        # Timestamps
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -38,7 +35,6 @@ def upgrade() -> None:
         ),
     )
 
-    # Indexes for query performance
     op.create_index("ix_session_audit_session_id", "session_audit_logs", ["session_id"])
     op.create_index("ix_session_audit_user_id", "session_audit_logs", ["user_id"])
     op.create_index("ix_session_audit_instance", "session_audit_logs", ["instance_name"])

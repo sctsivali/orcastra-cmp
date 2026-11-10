@@ -1,7 +1,7 @@
 """Create metrics_snapshots table for persistent resource metrics history.
 
-Stores time-series resource metrics collected by the background collector
-every ~30 seconds. Survives backend restarts and ensures gap-free charts.
+Time-series resource metrics from the background collector (about every 30
+seconds), kept across backend restarts so charts have no gaps.
 """
 
 from alembic import op
@@ -49,21 +49,20 @@ def upgrade() -> None:
         ),
     )
 
-    # primary query path: recent snapshots for a scope
+    # Primary query path: recent snapshots for a scope.
     op.create_index(
         "ix_metrics_snap_scope_time",
         "metrics_snapshots",
         ["scope", "collected_at"],
     )
 
-    # retention cleanup: delete old rows efficiently
+    # Retention cleanup deletes by age.
     op.create_index(
         "ix_metrics_snap_collected",
         "metrics_snapshots",
         ["collected_at"],
     )
 
-    # scope lookup
     op.create_index(
         "ix_metrics_snap_scope",
         "metrics_snapshots",

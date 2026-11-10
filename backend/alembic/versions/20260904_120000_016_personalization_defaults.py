@@ -1,41 +1,17 @@
-"""Move rows still on the old personalization defaults onto the new ones.
+"""Move rows still on the previous personalization defaults onto the current ones.
 
-The product's default sidebar changed from "follow the theme, painting bg-card" to a
-violet ground, `#321f6f`, and the accent moved from `#8b5cf6` to `#8467e4` in the same
-hue family. Changing the code defaults alone would have reached almost nobody: every
-account and organization that has ever opened Settings carries a stored `colors` object,
-and the API merges the stored object over the defaults, so a saved copy of the OLD
-default wins over the new one forever.
+The defaults are a violet sidebar (`#321f6f`) and accent `#8467e4`. The API merges a
+stored `colors` object over the defaults, so a saved copy of the previous default would
+outrank the current one. Only rows still on that default move:
 
-This migration moves those saved copies, and nothing else. The predicate is deliberately
-narrow, because "still on the shipped default" and "chose a colour that happens to look
-like the default" are the same bytes, and only the first should move:
+  sidebar   `useCustomSidebarBg` false or absent AND `sidebarBgColor` '#ffffff' or
+            absent. A row with the toggle on and a white colour asked for white.
+  accent    `accentColor` exactly '#8b5cf6' or absent. Not keyed on `useCustomAccent`,
+            which tracks only the freeform hex field: a preset can carry the flag false.
 
-  sidebar   `useCustomSidebarBg` is false or absent AND `sidebarBgColor` is '#ffffff'
-            or absent. Both conditions, because a row that turned the toggle ON while
-            leaving the colour white asked for a white sidebar.
-  accent    `accentColor` is exactly '#8b5cf6' or absent. NOT keyed on
-            `useCustomAccent`, which turns out to track only the freeform hex field:
-            rows exist that picked the Indigo preset with the flag still false, and
-            keying on the flag would have overwritten a deliberate choice.
-
-Two carve-outs.
-
-`logo` first. `useCurrentLogo` in the frontend swaps to `logo.darkModeLogo` once the
-sidebar's relative luminance falls below 0.5, and `#321f6f` measures 0.028. A row that
-uploaded only a light-mode mark would therefore be flipped onto a dark ground and fall
-through to the stock `/orca-logo-white.png`, replacing a customer's own logo with ours.
-Those rows keep their white sidebar until somebody chooses otherwise in the UI.
-
-`ops@sivali.co.id` second, in the opposite direction: it carries a deliberate `#2c3539`
-and is moved anyway, by explicit request of the account owner. It is the first partner
-of an organization that has no `organization_preferences` row, and
-`services/organization_preferences.py` hands such an organization its first partner's
-PERSONAL settings, so that one row was silently acting as the branding for every tenant
-in the org.
-
-Data only. No schema change, no lock of consequence, and re-running it is a no-op
-because the predicate stops matching after the first pass.
+A row with a light-mode logo and no dark-mode logo keeps its white sidebar: on a dark
+ground `useCurrentLogo` would swap the logo for the stock `/orca-logo-white.png`.
+Data only; re-running is a no-op because the predicate stops matching.
 """
 
 from alembic import op
@@ -56,7 +32,8 @@ NEW_SIDEBAR_TEXT = "#f8fafc"
 
 TABLES = ("user_preferences", "organization_preferences")
 
-# Reset by explicit owner instruction. See the module docstring.
+# Moved even off a non-default value: this row served as the branding of an organization
+# that had no preferences row of its own.
 FORCED_RESET_EMAILS = ("ops@sivali.co.id",)
 
 # A row that has a light-mode logo and no dark-mode logo would lose its mark to the stock
@@ -83,24 +60,21 @@ def _table_exists(name: str) -> bool:
 
 
 def _bind(sql: str, **params) -> sa.TextClause:
-    """text() with only the parameters the statement actually names."""
+    """text() bound with only the parameters the statement names."""
     stmt = sa.text(sql)
-    # important: ask the compiled statement which names it actually found, rather than
-    # substring-matching the SQL. SQLAlchemy skips `:name` when a ':' follows it, so that
-    # a PostgreSQL cast keeps working, and a naive `":" + name in sql` test disagrees with
-    # the parser on exactly the shape that caused this helper to raise.
+    # Read the names the compiled statement found instead of substring-matching the SQL:
+    # SQLAlchemy skips `:name` when a ':' follows it (a PostgreSQL cast), so a
+    # `":" + name in sql` test disagrees with the parser.
     defined = set(stmt._bindparams)
     present = {k: v for k, v in params.items() if k in defined}
     return stmt.bindparams(**present) if present else stmt
 
 
 def _move_sidebar(table: str, *, bg: str, text: str, use_custom: str, extra_where: str = "") -> None:
-    # jsonb_set creates the key when it is missing, so a row whose colours object predates
-    # one of these fields is filled in rather than skipped. sidebarTextColor is only touched
-    # when the operator has not pinned it, because pinning it is the one way to say "this
-    # exact text colour"; autoTextColor rows get the right value from the provider anyway,
-    # and writing it keeps the stored row honest instead of carrying dark text on a dark
-    # ground for anything that reads the row without deriving.
+    # jsonb_set creates a missing key, so a colours object without one of these fields is
+    # filled in. sidebarTextColor changes only where the operator has not pinned it
+    # (useCustomSidebarText); writing it keeps the stored row consistent for any reader
+    # that does not derive the text colour.
     sql = f"""
             UPDATE {table}
                SET settings = jsonb_set(
@@ -120,9 +94,8 @@ def _move_sidebar(table: str, *, bg: str, text: str, use_custom: str, extra_wher
              WHERE jsonb_exists(settings, 'colors')
                AND ({extra_where})
             """
-    # important: bind only the placeholders this particular WHERE actually spells. text()
-    # rejects a bindparam it cannot find in the string, and the forced-reset call below uses a
-    # predicate that names no :old_bg at all.
+    # Bind only the placeholders this WHERE spells: text() rejects a bindparam it cannot
+    # find, and the forced-reset predicate below names no :old_bg.
     op.execute(_bind(sql, bg=bg, text=text, use_custom=use_custom, old_bg=OLD_SIDEBAR_BG))
 
 
@@ -150,8 +123,7 @@ def upgrade() -> None:
         )
         _move_accent(table, accent=NEW_ACCENT, extra_where=_ACCENT_IS_OLD_DEFAULT)
 
-    # The one row moved off a deliberate value, and only in user_preferences: the address
-    # column does not exist on the organization table.
+    # Only in user_preferences: organization_preferences has no email column.
     if _table_exists("user_preferences") and FORCED_RESET_EMAILS:
         emails = ", ".join(f"'{e}'" for e in FORCED_RESET_EMAILS)
         _move_sidebar(
@@ -165,10 +137,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Mirrors the predicate against the new values. It cannot distinguish a row this
-    # migration moved from one that later chose the same colours by hand, which is the
-    # same limitation the upgrade has in the other direction and is stated rather than
-    # hidden: a downgrade restores the previous DEFAULT, not a per-row history.
+    # Mirrors the predicate against the new values. A row that later chose the same colours
+    # by hand cannot be told apart, so a downgrade restores the previous default, not a
+    # per-row history.
     for table in TABLES:
         if not _table_exists(table):
             continue

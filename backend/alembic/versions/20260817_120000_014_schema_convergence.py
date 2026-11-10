@@ -1,21 +1,15 @@
 """Converge legacy create_all schemas with the migration-built schema.
 
-Databases created before this release got their schema from `Base.metadata.create_all`
-at startup rather than from Alembic, so they are missing objects that only the
-migrations ever declared: `user_preferences` has never had a migration at all,
-`organizations` never got `uq_org_source_external_id` (the dedup key the OrcaHub sync
-in `routers/integrations.py` depends on) nor `ix_organizations_source`, `tag_assignments`
-never got `ix_tag_assignment_tag_id`, and two boolean columns stayed nullable.
+A database whose schema came from `Base.metadata.create_all` at startup lacks objects
+only the migrations declare: `user_preferences`, `uq_org_source_external_id` (the dedup
+key of the OrcaHub sync in `routers/integrations.py`) and `ix_organizations_source` on
+`organizations`, `ix_tag_assignment_tag_id`, and NOT NULL on two boolean columns.
+Cosmetic differences (server defaults the ORM always fills, same-column indexes under
+other names) are left alone: they change no behaviour and would only lengthen the lock.
 
-Closing that gap is the precondition for retiring `create_all` at startup, which is what
-stops the drift recurring. Cosmetic differences (server defaults on columns the ORM always
-populates, and index names that differ while covering the same columns) are deliberately
-left alone: they change no behaviour and would only lengthen the lock.
-
-important: every step is guarded by an inspector check. Unlike the rest of this tree this
-revision has to run against three different starting shapes - a fresh migration-built
-database, an RC2 database stamped by `app/core/db_bootstrap.py`, and a mixed
-create_all-plus-migrations database - so each object may or may not already be there.
+important: every step is guarded by an inspector check. This revision runs against three
+starting shapes, so each object may or may not exist: a fresh migration-built database,
+one stamped by `app/core/db_bootstrap.py`, and a mixed create_all-plus-migrations one.
 """
 
 from alembic import op
@@ -126,17 +120,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # This revision heals rather than adds: every object above except `user_preferences`
-    # is already owned by an earlier revision (002_org_external_source owns the unique
-    # constraint and ix_organizations_source, 001_tag_system owns ix_tag_assignment_tag_id,
-    # 002_rbac_orgs and 004_tenant_acl own the two boolean columns), and upgrade() only
-    # creates them when a legacy create_all database left them out. Dropping them here
-    # would steal them from their real owner, so `downgrade base` would then fail when that
-    # owner tries to drop them again. Only `user_preferences` has no other owner.
+    # Every object above except `user_preferences` belongs to an earlier revision
+    # (002_org_external_source: the unique constraint and ix_organizations_source;
+    # 001_tag_system: ix_tag_assignment_tag_id; 002_rbac_orgs and 004_tenant_acl: the two
+    # boolean columns), and upgrade() only creates them where create_all left them out.
+    # Dropping them here would make `downgrade base` fail when their owner drops them.
     #
-    # important: dropping it discards saved personalization on databases where create_all,
-    # not this migration, originally created the table. Same trade-off, and the same
-    # explicit warning, as 010_org_cluster_nullable's downgrade.
+    # important: dropping `user_preferences` discards saved personalization where create_all
+    # created the table, the same trade-off as 010_org_cluster_nullable's downgrade.
     if _has_table("user_preferences"):
         if _has_index("user_preferences", "ix_user_preferences_email"):
             op.drop_index("ix_user_preferences_email", table_name="user_preferences")

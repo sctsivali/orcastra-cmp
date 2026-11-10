@@ -1,21 +1,12 @@
 """Let a session audit row name an integration key instead of a person.
 
-`session_audit_logs.user_id` and `.user_email` are NOT NULL, and `SessionProtocol` has exactly two
-members, both of which describe a human at a browser. That was true of every session the table had
-ever recorded.
+An agent driving a guest's desktop through an API key has no human to name, and a fabricated
+actor in the table a tenant reads would be indistinguishable from a real one. `user_id` and
+`user_email` become nullable; readers fall back to the protocol and the key recorded in the
+activity index. Dropping NOT NULL is not a rewrite and takes no lock of consequence.
 
-An agent driving a guest's desktop through an API key has no human to name. Writing one anyway
-would mean fabricating an identity into the table a tenant reads to see who reached their
-instances, which is worse than leaving the column empty: a fabricated actor is indistinguishable
-from a real one afterwards.
-
-So both columns become nullable, and the reader is expected to fall back to the protocol and the
-key recorded in the activity index. Widening a NOT NULL to nullable is not a rewrite and takes no
-lock of consequence.
-
-Downgrade deletes the rows this made possible before restoring the constraint, because an
-API-key session has no email to backfill and inventing one on the way out would be the same
-fabrication in the other direction.
+Downgrade deletes those rows before restoring the constraint: an API-key session has no email to
+backfill.
 """
 
 from alembic import op

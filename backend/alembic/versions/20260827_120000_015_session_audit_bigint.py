@@ -1,19 +1,13 @@
 """Widen session audit byte and duration counters to 64-bit.
 
-`session_audit_logs.download_bytes` and `.upload_bytes` were 32-bit integers, so a
-session moving more than 2 GiB overflowed on INSERT. That failure is invisible: the
-disconnect row is written fire-and-forget with a short retry
-(`app/services/session_audit.py`), so the retries fail the same way and the session
-simply has no disconnect record - no duration, no totals, and a connect row that
-looks like a session that never ended. A SPICE console shifting 2 GiB is an ordinary
-afternoon, not an edge case.
+As 32-bit integers, `download_bytes` and `upload_bytes` overflow on INSERT for a
+session moving more than 2 GiB, which a SPICE console reaches easily. The disconnect
+row is written fire-and-forget with a short retry (`app/services/session_audit.py`),
+so the failure is silent: no duration, no totals, and a connect row that looks like a
+session that never ended. `duration_seconds` is widened with them.
 
-`duration_seconds` is widened alongside them. It is the same column family and the
-same class of silent truncation, and doing it now avoids a second migration later.
-
-Widening integer to bigint in PostgreSQL rewrites the column in place under an ACCESS
-EXCLUSIVE lock. The table only ever receives two small rows per session, so it is
-small and the lock is brief.
+Widening integer to bigint rewrites the column under an ACCESS EXCLUSIVE lock; the
+table gets two small rows per session, so the lock is brief.
 """
 
 from alembic import op
@@ -37,8 +31,7 @@ def _column_types() -> dict:
 
 
 def upgrade() -> None:
-    # guarded the same way as 014: this has to be a no-op on a database that already
-    # has the wider type, rather than an error.
+    # Guarded like 014: a no-op on a database that already has the wider type.
     types = _column_types()
     for name in COLUMNS:
         current = types.get(name)
@@ -54,9 +47,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # note: narrowing is lossy. Any row already holding a value above 2^31-1 would
-    # fail the cast, which is the correct outcome - it refuses rather than silently
-    # corrupting an audit record.
+    # Narrowing is lossy: a row holding a value above 2^31-1 fails the cast, so the
+    # downgrade refuses instead of corrupting an audit record.
     types = _column_types()
     for name in COLUMNS:
         current = types.get(name)

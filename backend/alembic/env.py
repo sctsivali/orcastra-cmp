@@ -1,8 +1,4 @@
-"""
-Alembic Environment Configuration for Orcastra CMP.
-
-Supports both online and offline migrations with async PostgreSQL.
-"""
+"""Alembic environment: online and offline migrations against async PostgreSQL."""
 
 import asyncio
 import os
@@ -14,15 +10,14 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-# Add app directory to Python path
+# Put backend/ on sys.path so `app` imports from any working directory.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Import models and database configuration
 from app.core.database import Base
 from app.models import db_models
-# important: a model module Base.metadata never sees produces no autogenerate diff and no
-# schema-parity failure, so a new table would simply never exist. Every module holding
-# tables must be imported here.
+# important: Base.metadata only sees model modules imported here. A missing one produces
+# no autogenerate diff and no schema-parity failure, so its tables never get created.
+# Import every module that holds tables.
 from app.models import api_key_usage_models  # noqa: F401
 from app.models import cluster_registration_models  # noqa: F401
 from app.models import extension_models  # noqa: F401
@@ -35,17 +30,15 @@ from app.models import tenant_rule_models  # noqa: F401
 from app.models import my_key_models  # noqa: F401
 from app.models import branding_models  # noqa: F401
 
-# Alembic Config object
 config = context.config
 
-# Interpret the config file for Python logging
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Add model's MetaData object here for 'autogenerate' support
+# Autogenerate compares the database against this metadata.
 target_metadata = Base.metadata
 
-# Get database URL from environment (REQUIRED - no hardcoded fallback for security)
+# Required. There is no hardcoded fallback, so no credential lives in the source.
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError(
@@ -53,24 +46,17 @@ if not DATABASE_URL:
         "Format: postgresql+asyncpg://user:password@host:port/database"
     )
 
-# Convert postgres:// to postgresql+asyncpg:// if needed
+# The async engine needs the asyncpg driver named in the URL scheme.
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
 elif DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-# Set the sqlalchemy.url in config
 config.set_main_option("sqlalchemy.url", DATABASE_URL)
 
 
 def run_migrations_offline() -> None:
-    """
-    Run migrations in 'offline' mode.
-
-    This configures the context with just a URL and not an Engine,
-    though an Engine is acceptable here as well. By skipping the Engine
-    creation we don't even need a DBAPI to be available.
-    """
+    """Offline mode: emit SQL from the URL alone, with no Engine and no DBAPI."""
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
@@ -86,7 +72,6 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    """Execute migrations with the given connection."""
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
@@ -99,12 +84,7 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    """
-    Run migrations in 'online' mode with async engine.
-
-    In this scenario we need to create an Engine and associate a
-    connection with the context.
-    """
+    """Online mode: run the migrations on a connection from an async engine."""
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
@@ -118,7 +98,6 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode."""
     asyncio.run(run_async_migrations())
 
 

@@ -1,15 +1,12 @@
 """Forget the tag assignments and snapshot schedules of clusters that were deregistered.
 
-Deleting a cluster registration did not remove the tag assignments and snapshot schedules naming
-it, so the scheduler kept trying schedules for clusters that no longer exist, and a cluster
-registered again under the same id would show the old tags on new instances reusing a name. The
-delete route now forgets them (services/cluster_records.forget_cluster_records); this revision
-sweeps what earlier deregistrations left (owner decision 2026-11-05).
+The delete route forgets these rows (services/cluster_records.forget_cluster_records); this
+revision sweeps the ones earlier deregistrations left. Kept, they make the scheduler retry
+schedules for clusters that are gone, and a cluster registered again under the same id shows the
+old tags on new instances that reuse a name.
 
 Only a cluster id whose every registration has ended counts as deregistered. An id with an active
-registration, or one that never had a registration row, keeps its rows.
-
-Downgrade restores nothing: the rows named clusters that no longer exist.
+registration, or one that never had a registration row, keeps its rows. Downgrade restores nothing.
 
 Revision ID: 046_forget_deregistered_records
 Revises: 045_branding_inheritance
@@ -40,5 +37,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # note: nothing to restore; the rows named clusters whose registration had ended.
+    # Nothing to restore: the rows named clusters whose registration had ended.
     pass

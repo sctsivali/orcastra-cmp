@@ -1,8 +1,8 @@
 """Create image_upload_sessions table for resumable custom-image uploads.
 
-Tracks each partner image upload (started by OrcaHub via the API key) across the 4 uvicorn
-workers and restarts: the resumable offset, the staging file, and the import result. Bytes are
-staged on a host-mounted dir; rows are the cross-worker source of truth for tus HEAD/PATCH.
+Tracks each image upload started through an API key (ex; by OrcaHub) across uvicorn workers
+and restarts: the resumable offset, the staging file and the import result. Bytes are staged on
+a host-mounted directory; the rows are the cross-worker source of truth for tus HEAD/PATCH.
 """
 
 from alembic import op

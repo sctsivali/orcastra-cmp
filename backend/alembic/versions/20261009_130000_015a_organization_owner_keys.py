@@ -13,9 +13,8 @@ rows makes the database refuse a primary that is not in the set. A NULL primary 
 organization) is not checked (MATCH SIMPLE). It is deferred so an organization and its first owner
 row can be written in one transaction in either order.
 
-note: the 1.0.0-RC4 line's revision of the dev line's 038_organization_owner_keys, with the same
-schema. It branches from 015 so that a database that took it can still be upgraded to a release
-whose chain runs 016 to 037: that chain carries this revision too and merges it.
+It branches from 015 so a database from a maintenance release line that ran it can still upgrade
+through 016 to 037; 038_organization_owner_keys merges it into that chain.
 
 important: deploy with old workers drained, and downgrade before old code starts. A worker without
 this code inserts a claimed organization without its owner row, which the foreign key refuses at
@@ -58,8 +57,8 @@ def upgrade() -> None:
     op.create_index("ix_organization_owner_keys_api_key_id", "organization_owner_keys", ["api_key_id"])
     op.create_index("ix_org_owner_key_org_id", "organization_owner_keys", ["organization_id"])
 
-    # Every source and inactive organizations too: an inactive organization still counts as claimed
-    # by its key.
+    # Every source, inactive organizations included: an inactive organization still counts as
+    # claimed by its key.
     op.execute(
         "INSERT INTO organization_owner_keys (organization_id, api_key_id, added_at, added_via, added_by) "
         "SELECT id, api_key_id, created_at, 'backfill', 'migration' FROM organizations "

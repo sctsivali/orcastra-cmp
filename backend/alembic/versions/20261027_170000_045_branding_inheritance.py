@@ -1,28 +1,24 @@
 """Branding follows the organization that sold to you, and the deployment has a default of its own.
 
-Until now a buyer organization received a one-time copy of its seller's branding at its first
-provision, so a later change never reached it, and an organization with no row of its own was
-handed the personal settings of whoever created it. This revision:
+A buyer follows its seller's branding live instead of keeping a one-time copy from its first
+provision, and an organization without a row of its own stops showing its creator's personal
+settings. This revision:
 
-  * adds organizations.provider_organization_id (and how the link was made), filled below from the
-    same fact the seller's proof of sale reads: the seller registered the cluster (a binding with a
-    registrant who is a member of the seller), the buyer's binding there was made by provisioning
-    (no registrant). Failing that, from a copy provisioning made whose settings still equal exactly
-    one other organization's. Anything ambiguous stays unlinked;
+  * adds organizations.provider_organization_id (and how the link was made), filled from the
+    seller's proof of sale: the seller registered the cluster (a binding whose registrant is a
+    member of the seller) and the buyer's binding there came from provisioning (no registrant).
+    Failing that, from a provisioning copy equal to exactly one other organization's row.
+    Anything ambiguous stays unlinked;
   * adds deployment_branding, a single row, empty until an Administrator sets it;
-  * promotes a branded personal row that an unlinked organization without a row of its own was
-    showing through the old fallback into that organization's own row (updated_by 'migration:045'),
-    so what its members see does not change;
-  * sets aside, in organization_preferences_retired, every empty '{}' row (a reset, which from now
-    on deletes the row) and the copy provisioning made into a buyer that is now linked;
+  * turns a branded personal row an unlinked organization without a row was showing into that
+    organization's own row (updated_by 'migration:045'), so its members see no change;
+  * sets aside, in organization_preferences_retired, every empty '{}' row (a reset deletes the
+    row) and the provisioning copy in each buyer that is now linked;
   * adds CHECK settings <> '{}' so an empty row cannot come back.
 
-A row a person wrote is never changed or moved.
-
-Downgrade puts the set-aside rows back where the organization has no row by then, drops the
-promoted ones, and gives every still-linked organization without a row a copy of its provider's
-row, which is what the old provisioning did. The deployment default has nowhere to go in the old
-schema and is dropped.
+A row a person wrote is never changed or moved. Downgrade restores the set-aside rows where the
+organization has no row, drops the promoted ones, gives each linked organization without a row a
+copy of its provider's row, and drops the deployment default.
 
 Revision ID: 045_branding_inheritance
 Revises: 044_my_key_records
@@ -42,9 +38,8 @@ depends_on = None
 PROMOTED_BY = "migration:045"
 PROVISION_COPY_BY = "orcahub-provisioning"
 
-# The look a personal row had when nobody changed it, across the versions that wrote one. A row
-# that differs only in tagline is not counted as branded: older builds shipped other default
-# taglines.
+# An untouched personal row, across the versions that wrote one. A row that differs only in
+# tagline is not branded: earlier builds had other default taglines.
 _DEFAULT_NAMES = {"orcastra", "orcastra cmp", ""}
 _DEFAULT_FOOTER = "© {year} orcastra"
 _DEFAULT_COLOURS = {
@@ -200,7 +195,7 @@ def _link_by_copy(bind) -> None:
 
 
 def _promote_personal_rows(bind) -> None:
-    """The old fallback, run once: an unlinked organization with no row showed a personal row."""
+    """Keep what an unlinked organization without a row showed: a branded personal row."""
     orgs = bind.execute(sa.text("""
         SELECT o.id, o.created_by
         FROM organizations o
@@ -218,7 +213,7 @@ def _promote_personal_rows(bind) -> None:
             ORDER BY joined_at ASC
         """), {"org": org_id}).scalars().all()
         candidates.extend(email for email in partners if email not in candidates)
-        # note: exact-case match and the first non-empty row, as the old fallback chose.
+        # Exact-case email match and the first non-empty row: the row members were shown.
         for email in candidates:
             settings = bind.execute(sa.text("""
                 SELECT settings FROM user_preferences
@@ -271,7 +266,7 @@ def downgrade() -> None:
     bind = op.get_bind()
     op.drop_constraint("ck_organization_preferences_not_empty", "organization_preferences", type_="check")
     bind.execute(sa.text("DELETE FROM organization_preferences WHERE updated_by = :by"), {"by": PROMOTED_BY})
-    # The newest set-aside row per organization, only where nobody wrote a row since.
+    # The newest set-aside row per organization, only where no row has been written since.
     bind.execute(sa.text("""
         INSERT INTO organization_preferences (organization_id, settings, updated_by, created_at, updated_at)
         SELECT DISTINCT ON (r.organization_id)

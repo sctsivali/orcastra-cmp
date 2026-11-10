@@ -1,12 +1,9 @@
 """An installation keeps the manifest it agreed to.
 
-An add-on may now publish a new version, which replaces the manifest on the extension row. The
-installation already records `consent_version` and `consent_manifest_digest`, so what it agreed to
-is identified, but the document itself was overwritten and could not be read back. That is the
-question an audit asks: not "which digest" but "what did this organization actually approve".
-
-One nullable column, no backfill. Rows written before this keep their digest and lose only the
-text, which is the state they were already in.
+Publishing a new add-on version replaces the manifest on the extension row.
+`consent_version` and `consent_manifest_digest` identify what an installation approved;
+`consented_manifest` keeps the document itself, so an audit can read it back. One nullable column,
+no backfill: earlier rows keep only their digest.
 
 Revision ID: 022_install_keeps_its_manifest
 Revises: 021_desktop_consent_split

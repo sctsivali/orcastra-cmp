@@ -1,10 +1,9 @@
-"""Durable project-delete follow-ups, and API key usage kept out of the key document.
+"""Durable tracking of project deletes, and API key usage kept out of the key document.
 
-A project delete whose outcome was unknown was followed in the worker's memory, so a restart lost
-the follow-up and the access rules it was going to revoke. `project_delete_followups` holds that
-work where any worker can finish it (app/models/project_delete_models.py). `api_key_usage` takes
-`last_used_at` off the request path's whole-document Vault rewrite
-(app/models/api_key_usage_models.py).
+`project_delete_followups` holds the pending work of a project delete whose outcome is unknown,
+including the access rules it will revoke, where any worker can finish it after a restart
+(app/models/project_delete_models.py). `api_key_usage` keeps `last_used_at` out of the request
+path's whole-document Vault rewrite (app/models/api_key_usage_models.py).
 
 Revision ID: 040_followups_and_key_usage
 Revises: 039_lxd_trust_cleanup

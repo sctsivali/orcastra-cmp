@@ -1,12 +1,11 @@
 """The task journal, the cluster log, and the follower's per-cluster upstream state.
 
-LXD reaps a finished operation within seconds and every worker's events hub is per process, so
-until now the dashboard could show what was running on a cluster but never what had run, who
-started it, or what it left behind. These three tables are the durable record behind the bottom
-panel: one row per task, one row per log line, one row per followed cluster.
+LXD reaps a finished operation within seconds and each worker's events hub is per process, so
+these tables are the durable record of what ran on a cluster, who started it and what it left
+behind: one row per task, one per log line, one per followed cluster.
 
-Every id and timestamp has a server default for the same reason 023 gives: the follower and the
-activity sink write these rows with raw SQL, not through the ORM.
+Every id and timestamp has a server default because the follower and the activity sink write
+these rows with raw SQL.
 
 Revision ID: 024_task_journal
 Revises: 023_a_schedule_orcastra_owns
@@ -24,7 +23,7 @@ depends_on = None
 
 def upgrade() -> None:
     # `seq` is bumped on every change a row goes through, so a WebSocket tailer can order and
-    # dedupe deltas without trusting `updated_at`, which four writers can produce out of order.
+    # dedupe deltas without trusting `updated_at`, which concurrent writers can produce out of order.
     op.execute("CREATE SEQUENCE IF NOT EXISTS task_journal_seq")
 
     op.create_table(
@@ -100,8 +99,8 @@ def upgrade() -> None:
             "source IN ('dashboard', 'events', 'cli', 'mcp', 'integration', 'schedule')",
             name="ck_task_journal_source",
         ),
-        # A blank operation id is not a key. The partial unique index below only sees non-null ids,
-        # and the writers refuse '' before any SQL, so the two cannot meet in the middle.
+        # A blank operation id is not a key: the partial unique index below covers only non-null
+        # ids, and the writers refuse '' before any SQL.
         sa.CheckConstraint("operation_id IS NULL OR operation_id <> ''", name="ck_task_journal_op_nonblank"),
     )
     op.create_index(

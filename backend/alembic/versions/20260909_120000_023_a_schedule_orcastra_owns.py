@@ -1,9 +1,8 @@
 """A snapshot schedule this console owns, beside the one it only reads.
 
-The four `snapshots.*` config keys on an instance are the metered product's retention mechanism and
-stay read-only. This table is the other kind of schedule: created here, executed here, and never
-written into the instance's config, so `externally_managed` keeps meaning what eighteen consumers
-already read it to mean.
+The four `snapshots.*` config keys on an instance belong to the metered snapshot product and stay
+read-only. This table holds schedules created and executed here and never written into the
+instance's config, so `externally_managed` keeps its meaning for every reader.
 
 Revision ID: 023_a_schedule_orcastra_owns
 Revises: 022_install_keeps_its_manifest
@@ -49,10 +48,9 @@ def upgrade() -> None:
         sa.Column("last_error", sa.Text(), nullable=True),
         sa.Column("consecutive_failures", sa.Integer(), server_default="0", nullable=False),
         sa.Column("missed_runs", sa.Integer(), server_default="0", nullable=False),
-        # important: server defaults on the timestamps, unlike the two neighbouring migrations.
-        # The scheduler updates these rows with raw SQL through a claim statement, and a NOT NULL
-        # column whose only default is an ORM lambda is a constraint violation the first time
-        # anything other than the ORM inserts.
+        # important: server defaults on the timestamps. The scheduler writes these rows with raw
+        # SQL through a claim statement, and a NOT NULL column whose only default is an ORM lambda
+        # fails the first insert that does not go through the ORM.
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -65,9 +63,9 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        # important: SET NULL, never CASCADE. Deleting an organization must make the schedule fail
-        # re-authorization and pause loudly, not erase the evidence that it was still writing
-        # snapshots onto a live cluster.
+        # important: SET NULL, never CASCADE. Deleting an organization makes the schedule fail
+        # re-authorization and pause visibly, and keeps the evidence that it was writing snapshots
+        # onto a live cluster.
         sa.ForeignKeyConstraint(
             ["organization_id"], ["organizations.id"], ondelete="SET NULL"
         ),

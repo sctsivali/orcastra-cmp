@@ -1,10 +1,10 @@
 """Make organization_clusters.organization_id nullable.
 
 A partner who registers a cluster before their organization is synced from OrcaHub
-owns that cluster via registered_by. Until reconcile binds it to an org, the row has
-organization_id NULL so the registrant can still see (and grant API-key access to) it.
-A partial unique index keeps at most one unbound row per cluster - uq_org_cluster does
-not, because Postgres treats NULLs as distinct.
+owns it through registered_by. Until reconcile binds it to an organization the row has
+organization_id NULL, so the registrant can still see it and grant API-key access to it.
+A partial unique index keeps at most one unbound row per cluster; uq_org_cluster cannot,
+because Postgres treats NULLs as distinct.
 """
 
 from alembic import op

@@ -1,8 +1,8 @@
 """Remember the client certificates the dashboard superseded, so their trust entries can go.
 
-Renew, regenerate and cancel each leave an LXD trust entry behind that nothing removed. This table
-is the dashboard's own record of which fingerprints it replaced on which cluster, which is what
-makes removing exactly those entries safe. See app/models/trust_cleanup_models.py.
+Renewing, regenerating or cancelling a client certificate leaves an LXD trust entry behind. This
+table records which fingerprints the dashboard replaced on which cluster, so exactly those entries
+can be removed safely. See app/models/trust_cleanup_models.py.
 
 Revision ID: 039_lxd_trust_cleanup
 Revises: 038_organization_owner_keys

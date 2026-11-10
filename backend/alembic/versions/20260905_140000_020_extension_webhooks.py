@@ -1,19 +1,13 @@
 """Durable outbound webhook delivery for add-ons.
 
-Replaces a detached task with a row. The emitter this generalises created an unreferenced
-`asyncio.create_task` per event, which CPython may collect mid-flight, held a database session
-across up to three ten-second HTTP calls, and performed two blocking Vault reads per recipient on
-the event loop. None of that is visible when it goes wrong: the event simply does not arrive, and
-there is nothing to look at afterwards.
+Each event is a row, so a delivery survives a restart and leaves a trace when it fails; an
+unreferenced `asyncio.create_task` may be collected mid-flight. Rows are claimed with FOR UPDATE
+SKIP LOCKED instead of through leader election: the existing lease fails open, so during a Redis
+outage every worker would believe it leads and deliver each event once per worker.
 
-Rows are claimed with FOR UPDATE SKIP LOCKED, which is this schema's first use of it. Leader
-election would be worse here than no coordination at all: the existing lease fails open by
-design, so during a Redis outage all four workers would believe they lead and every event would
-be delivered four times.
-
-The unique constraint on (subscription_id, event_id) is what makes an enqueue safe to retry, and
-`event_id` stays stable across attempts because it is the receiver's idempotency key. Delivery is
-at-least-once and says so.
+The unique constraint on (subscription_id, event_id) makes an enqueue safe to retry, and
+`event_id` stays stable across attempts because it is the receiver's idempotency key. Delivery
+is at-least-once.
 """
 
 from alembic import op

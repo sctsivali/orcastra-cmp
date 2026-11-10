@@ -1,7 +1,8 @@
 """Registration generations, so an API key grant reaches only the registration it was given for.
 
-A deregistered cluster id registered again, possibly by another organization, used to be reached
-by every key grant still naming the id. See app/models/cluster_registration_models.py.
+Without them, a cluster id deregistered and registered again, possibly by another organization,
+would be reached by every key grant still naming the id. See
+app/models/cluster_registration_models.py.
 
 Revision ID: 041_cluster_registrations
 Revises: 040_followups_and_key_usage
