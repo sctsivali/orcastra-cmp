@@ -1,7 +1,4 @@
-"""
-API Router for Instance operations.
-Provides endpoints for managing LXD instances (containers and VMs).
-"""
+"""Instance endpoints: list, create and manage LXD containers and VMs."""
 
 from fastapi import APIRouter, HTTPException, Depends, Header, Query
 from typing import Dict, Literal, Optional
@@ -123,7 +120,7 @@ router = APIRouter(
 
 
 class InstanceWritePolicyResponse(BaseModel):
-    """The safe UI projection of the actor's instance-write surface on one cluster."""
+    """What the caller may write to instances on one cluster."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -214,10 +211,9 @@ def _instance_specification(vm: VMInfo) -> InstanceSpecification:
 def _validate_image_server(image_server: Optional[str], engine: Optional[str] = None) -> None:
     """Guard against SSRF on instance creation, and refuse a server the target cannot read.
 
-    `image_server` is handed straight to the daemon, which then fetches the image from that URL.
-    Since `POST /instances` only requires Partner, an unvalidated value lets a Partner point the
-    daemon at internal/metadata endpoints, so it must be one of the public simplestreams catalogs
-    the picker uses, over https (services/remote_image_catalog.py).
+    The daemon fetches the image from `image_server`, and a Partner may create instances, so only
+    the public simplestreams catalogs the picker uses, over https, are accepted
+    (services/remote_image_catalog.py).
     """
     validate_image_server(image_server, engine)
 
@@ -236,7 +232,7 @@ async def get_instance_write_policy(
     user: AuthenticatedUser = Depends(require_tenant()),
     db: AsyncSession = Depends(get_db),
 ) -> InstanceWritePolicyResponse:
-    """Project the central server policy without exposing organization membership details."""
+    """Report full, safe or view-only instance writes on one cluster, without membership details."""
     verify_cluster_access(host)
     policy = await resolve_cluster_write_policy(user, host, db)
     if policy.has_full_access:
@@ -278,10 +274,9 @@ async def list_instances(
         not project_is_visible(host, project)
         or not filter_projects_by_acl(host, [project])
     ):
-        # Keep the list endpoint's established anti-enumeration behavior: a project outside
-        # the Partner bound or Tenant grant is indistinguishable from an empty project. This
-        # gate must precede the scoped LXD read; per-instance Tenant permissions are still
-        # applied to the returned rows below.
+        # Anti-enumeration: a project outside the Partner bound or Tenant grant reads as an empty
+        # project. This gate must precede the scoped LXD read; per-instance Tenant permissions
+        # still apply to the returned rows below.
         return VMListResponse(
             total=0,
             vms=[],
@@ -291,12 +286,10 @@ async def list_instances(
             limit=limit,
             has_more=False,
         )
-    # Scope+ACL aware: get_scope_cache_key inside swr.serve() adds the caller's scope. The project
-    # is part of the key, as it is for profiles: two callers asking for two projects must not
-    # share one body.
-    # v3: the body moved into the stale-while-revalidate envelope and gained collected_at. v2
-    # kept rolling deployments from serving a scoped-host 200/empty response cached by a build
-    # that could not distinguish an empty project from an unreachable selected cluster.
+    # swr.serve() adds the caller's scope to the key (get_scope_cache_key). The project is part of
+    # the key so two callers asking for two projects never share one body. The version segment
+    # changes with the cached body's shape, so a rolling deployment never serves an entry written
+    # by an older build.
     cache = get_cache_manager()
     base_key = (
         f"instances:list:v3:host={host}:project={project or '*'}:status={status}"
@@ -310,15 +303,14 @@ async def list_instances(
                 await lxd_service.list_vms_in_project_with_failures(host, project)
             )
         else:
-            # important: the fleet read names a cluster that ran past the inventory wall instead of
-            # raising for the whole fleet. One slow cluster (central-1's list arriving past 30 s)
-            # made every viewer's list and the Overview answer 503. The late cluster is in
-            # incomplete, so it lands in unreachable_nodes below and its rows are not claimed.
+            # The fleet read names a cluster that ran past the inventory wall instead of failing
+            # the whole fleet, so one slow cluster cannot turn every list into a 503. The late
+            # cluster is in incomplete_nodes, so it lands in unreachable_nodes below and its rows
+            # are not claimed.
             all_vms, connected_nodes, incomplete_nodes, late = (
                 await lxd_service.read_fleet_inventory()
             )
     
-        # Filter by host if provided
         if host:
             all_vms = [vm for vm in all_vms if vm.host == host]
             # The caller already passed verify_cluster_access above. Echo only that authorized
@@ -334,13 +326,12 @@ async def list_instances(
                 else []
             )
         else:
-            # An unreadable registry with nothing known is not an empty fleet (issue #15): the
-            # denominator is empty too, so the answer would be 200, zero rows, nothing unreachable.
+            # An unreadable registry with nothing known raises here. With an empty denominator the
+            # answer would otherwise be 200, zero rows, nothing unreachable.
             require_known_registry(lxd_service.get_node_names())
             response_nodes = connected_nodes
-            # Keep the established denominator as a compatibility guard for service doubles and
-            # older mixed-version workers. The detailed fan-out also names clusters that answered
-            # only partially, which the former two-value contract silently lost.
+            # Every registered cluster that did not connect, which also covers a service that
+            # reports no failures, plus clusters that answered only partially.
             unreachable_nodes = sorted(
                 (set(lxd_service.get_node_names()) - set(connected_nodes))
                 | set(incomplete_nodes)
@@ -351,23 +342,17 @@ async def list_instances(
         if project:
             all_vms = [vm for vm in all_vms if (vm.project or "default") == project]
     
-        # Filter by status if provided
         if status:
             all_vms = [vm for vm in all_vms if vm.status == status]
     
-        # Filter by instance type if provided
         if instance_type:
             all_vms = [vm for vm in all_vms if vm.type == instance_type]
     
-        # Apply tenant ACL filtering (project + instance level)
-        #
-        # important: the ACL alone does not cover a Partner. get_tenant_acl_rules returns None
-        # for Admin and Partner, so check_tenant_permission passes everything for them, and a
-        # Partner is scoped by cluster rather than by project. This list has always spanned
-        # every project, so on a cluster carrying two organizations it named the other
-        # organization's instances. project_is_visible answers True whenever no bound applies,
-        # so this is inert for an Admin and on any single-org cluster, and only narrows where
-        # the bound is real. The same gate already guards the network, profile and ACL lists.
+        # important: the tenant ACL alone does not cover a Partner. get_tenant_acl_rules returns
+        # None for Admin and Partner, so check_tenant_permission passes everything for them, and a
+        # Partner is scoped by cluster rather than by project. Without project_is_visible a cluster
+        # shared by two organizations would list the other one's instances. It is True wherever
+        # no bound applies, so it narrows only where the bound is real.
         all_vms = [
             vm for vm in all_vms
             if project_is_visible(vm.host, vm.project or "default")
@@ -398,22 +383,18 @@ async def list_instances(
             collected_at=datetime.now(timezone.utc),
         )
 
-        # important: do not remember an answer nobody gave. When every cluster is
-        # unreachable the connection breaker short-circuits the fan-out and this
-        # endpoint still returns 200 with an empty list, so caching it would pin
-        # emptiness for the whole TTL and, on a forced refresh, overwrite good
-        # data the operator could still see. No node answered means no result.
-        # For a scoped request, an answer from some other cluster is irrelevant. Caching that
-        # empty response would hide recovery of the selected host for the full TTL.
+        # important: cache only an answer a cluster gave. When every cluster is unreachable the
+        # connection breaker short-circuits the fan-out and this endpoint still returns 200 with
+        # an empty list; caching it would pin emptiness for the whole TTL and, on a forced
+        # refresh, overwrite good data. A scoped request counts only the selected host's answer.
         cacheable_answer = (
             host in connected_nodes if host is not None else bool(connected_nodes)
         )
         if not cacheable_answer:
             logger.warning("Not caching instances list: no cluster answered")
-        # note: an invalidation while this read was in flight (a create landed, a background
-        # start finished) is refused by swr.serve through the instance list generation.
-        # A late cluster is kept briefly: the body says it did not answer in time, which is true
-        # for those seconds, and the next read tries it again soon.
+        # swr.serve does not store a body read across an invalidation (ex; a create landed); the
+        # instance list generation tells it. A body naming a late cluster stays fresh only briefly,
+        # so the next read tries that cluster again soon.
         ttl = _LATE_CLUSTER_FRESH_SECONDS if late.keys() & set(unreachable_nodes) else 30
         return Built(value=response, body=response.model_dump(), fresh_for=ttl if cacheable_answer else None)
 
@@ -451,7 +432,7 @@ async def list_instance_specifications(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
 ):
-    """List actual LXD specifications without exposing raw instance configuration."""
+    """List effective LXD specifications without exposing raw instance configuration."""
     cache = get_cache_manager()
     cache_key = get_scope_cache_key("instances:specifications")
     cached = None if fresh else cache.get("api_responses", cache_key)
@@ -472,9 +453,8 @@ async def list_instance_specifications(
             (_instance_specification(vm) for vm in visible),
             key=lambda item: (item.host, item.project, item.name),
         )
-        # The bounded inventory fan-out already names every registered cluster that failed or
-        # answered partially. Reading get_node_names() here repeated a synchronous Vault call on
-        # the event loop after all LXD work had been offloaded.
+        # The fan-out already names every registered cluster that failed or answered partially.
+        # get_node_names() is not used here: it makes a synchronous Vault call on the event loop.
         unreachable = sorted(set(incomplete_nodes))
         response = InstanceSpecificationsResponse(
             total=len(specifications),
@@ -488,8 +468,8 @@ async def list_instance_specifications(
             collected_at=datetime.now(timezone.utc),
         )
 
-        # No cluster answer is an outage report, not a stable empty inventory. A partial answer
-        # is cacheable because `unreachable_nodes` preserves exactly what was missing.
+        # With no cluster answering, the response reports an outage and is not cached. A partial
+        # answer is cacheable because `unreachable_nodes` records what was missing.
         if connected_nodes:
             if cache.instance_list_generation() != generation:
                 logger.info(
@@ -530,7 +510,7 @@ async def get_instance(
     ),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
-    """Get one visible instance, searching only authorized projects when omitted."""
+    """Get one visible instance. Without `project`, only visible projects are searched."""
     scoped_project: Optional[str] = None
     project_filter = None
     if project is None:
@@ -624,10 +604,9 @@ def _create_request_hash(request: InstanceCreateRequest) -> str:
 def _normalize_create_tags(request: InstanceCreateRequest) -> InstanceCreateRequest:
     """Canonicalize ``user.tags`` before preflight, hashing, or daemon submission.
 
-    LXD stores tags as one comma-separated config value while PostgreSQL stores one row per
-    tag. Normalizing once at the request boundary keeps both representations and the durable
-    idempotency hash aligned. An explicitly present but empty segment is malformed; callers
-    that do not want tags should omit ``user.tags``.
+    LXD stores tags as one comma-separated value and PostgreSQL as one row per tag; normalizing
+    once here keeps both and the idempotency hash aligned. An empty segment is malformed:
+    callers that want no tags omit ``user.tags``.
     """
     config = dict(request.config or {})
     if "user.tags" not in config:
@@ -788,10 +767,10 @@ async def create_instance(
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Create a new instance."""
-    # important: bound the project before anything reads it. The NIC pre-flight's refusal
-    # names the networks available in the target project, which without this gate turns a
-    # deliberately bad create into an enumeration oracle for another organization's networks.
+    """Queue an instance create as a durable job. A repeated Idempotency-Key returns that job."""
+    # important: bound the project before anything reads it. The NIC preflight's refusal names
+    # the networks in the target project, so without this gate a bad create would enumerate
+    # another organization's networks.
     project = verify_project_access(request.host, request.project)
     request = request.model_copy(update={"project": project})
     request = _normalize_create_tags(request)
@@ -824,8 +803,8 @@ async def create_instance(
             job_id=replay.job_id,
             status="unknown" if replay.status == "unknown" else "accepted",
         )
-    # note: after the replay lookup, which must not reach the daemon service; the SSRF allowlist
-    # above already ran without it.
+    # After the replay lookup, which must not reach the daemon service. The SSRF allowlist above
+    # already ran without the engine.
     _validate_image_server(request.image_server, _target_engine(lxd_service, request.host))
 
     # The ownership lock closes the race between an exclusive Partner write and another
@@ -1038,14 +1017,12 @@ async def start_instance(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
 ):
-    """Start an instance."""
-    # important: ONE project value is authorized and acted on. This checked the ACL against
-    # `request.project or "default"` and then handed `request.project` to the service, which
-    # searches EVERY project when it is None and returns the first hit. A caller holding
-    # `operate` on `default` was therefore authorized there while the action ran against
-    # whichever project LXD listed first, which on a shared cluster is another tenant's instance.
+    # important: authorize and act on the same resolved project. Given None, the service searches
+    # every project and takes the first hit, so checking `request.project or "default"` and then
+    # passing `request.project` would authorize `default` and act on whichever project LXD lists
+    # first, on a shared cluster another tenant's instance.
     project = verify_instance_view_access(request.host, request.project, instance_name)
-    # important: enforce BEFORE the try - a 403 raised inside it would be swallowed and re-raised 500.
+    # important: enforce before the try. A 403 raised inside it is re-raised as a 500.
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(request.host, project, instance_name, "operate")
     try:
@@ -1062,7 +1039,6 @@ async def start_instance(
             )
         get_cache_manager().invalidate_instance_cache()
         
-        # Log activity: instance start success
         activity_logger.log_activity(
             action="instance.start",
             target_type="instance",
@@ -1087,12 +1063,8 @@ async def start_instance(
         # offline cluster.
         raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
-        # important: map the daemon's answer instead of blanket-500ing it, the same way delete
-        # already does. The case that made this visible is a create/start race: LXD answers
-        # `Instance is busy running a "create" operation`, which is a conflict the caller can
-        # retry, and DELETE returned 409 for it while START returned 500 for the identical
-        # condition. An operator clicking Start a moment too early should not be told the
-        # server broke.
+        # Map the daemon's answer to a status, as delete does. ex; in a create/start race LXD
+        # answers `Instance is busy running a "create" operation`, a conflict the caller can retry.
         activity_logger.log_activity(
             action="instance.start",
             target_type="instance",
@@ -1106,7 +1078,6 @@ async def start_instance(
     except Exception as e:
         logger.error(f"Error starting instance {instance_name}: {e}")
         
-        # Log activity: instance start failure
         activity_logger.log_activity(
             action="instance.start",
             target_type="instance",
@@ -1119,7 +1090,7 @@ async def start_instance(
         
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # a failure may still have changed the instance, or found it gone; throttled
+        # A failure may still have changed the instance, or found it gone. Throttled.
         clear_instance_lists_after_failure(sys.exc_info()[1])
 
 
@@ -1135,12 +1106,10 @@ async def stop_instance(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
 ):
-    """Stop an instance."""
-    # important: ONE project value is authorized and acted on. This checked the ACL against
-    # `request.project or "default"` and then handed `request.project` to the service, which
-    # searches EVERY project when it is None and returns the first hit. A caller holding
-    # `operate` on `default` was therefore authorized there while the action ran against
-    # whichever project LXD listed first, which on a shared cluster is another tenant's instance.
+    # important: authorize and act on the same resolved project. Given None, the service searches
+    # every project and takes the first hit, so checking `request.project or "default"` and then
+    # passing `request.project` would authorize `default` and act on whichever project LXD lists
+    # first, on a shared cluster another tenant's instance.
     project = verify_instance_view_access(request.host, request.project, instance_name)
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(request.host, project, instance_name, "operate")
@@ -1159,7 +1128,6 @@ async def stop_instance(
             )
         get_cache_manager().invalidate_instance_cache()
         
-        # Log activity: instance stop success
         activity_logger.log_activity(
             action="instance.stop",
             target_type="instance",
@@ -1175,7 +1143,7 @@ async def stop_instance(
             message=f"Instance {instance_name} stopped successfully",
             vm_name=instance_name,
             action="stop",
-            new_status=VMStatus.STOPPED  # Stop always results in Stopped
+            new_status=VMStatus.STOPPED
         )
     except MigrationFenceConflict as exc:
         raise HTTPException(status_code=409, detail=exc.detail) from exc
@@ -1203,7 +1171,6 @@ async def stop_instance(
     except Exception as e:
         logger.error(f"Error stopping instance {instance_name}: {e}")
         
-        # Log activity: instance stop failure
         activity_logger.log_activity(
             action="instance.stop",
             target_type="instance",
@@ -1216,7 +1183,7 @@ async def stop_instance(
         
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # a failure may still have changed the instance, or found it gone; throttled
+        # A failure may still have changed the instance, or found it gone. Throttled.
         clear_instance_lists_after_failure(sys.exc_info()[1])
 
 
@@ -1232,12 +1199,10 @@ async def restart_instance(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
 ):
-    """Restart an instance."""
-    # important: ONE project value is authorized and acted on. This checked the ACL against
-    # `request.project or "default"` and then handed `request.project` to the service, which
-    # searches EVERY project when it is None and returns the first hit. A caller holding
-    # `operate` on `default` was therefore authorized there while the action ran against
-    # whichever project LXD listed first, which on a shared cluster is another tenant's instance.
+    # important: authorize and act on the same resolved project. Given None, the service searches
+    # every project and takes the first hit, so checking `request.project or "default"` and then
+    # passing `request.project` would authorize `default` and act on whichever project LXD lists
+    # first, on a shared cluster another tenant's instance.
     project = verify_instance_view_access(request.host, request.project, instance_name)
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(request.host, project, instance_name, "operate")
@@ -1256,7 +1221,6 @@ async def restart_instance(
             )
         get_cache_manager().invalidate_instance_cache()
         
-        # Log activity: instance restart success
         activity_logger.log_activity(
             action="instance.restart",
             target_type="instance",
@@ -1272,7 +1236,7 @@ async def restart_instance(
             message=f"Instance {instance_name} restarted successfully",
             vm_name=instance_name,
             action="restart",
-            new_status=VMStatus.RUNNING  # Restart ends in Running
+            new_status=VMStatus.RUNNING
         )
     except MigrationFenceConflict as exc:
         raise HTTPException(status_code=409, detail=exc.detail) from exc
@@ -1300,7 +1264,6 @@ async def restart_instance(
     except Exception as e:
         logger.error(f"Error restarting instance {instance_name}: {e}")
         
-        # Log activity: instance restart failure
         activity_logger.log_activity(
             action="instance.restart",
             target_type="instance",
@@ -1313,7 +1276,7 @@ async def restart_instance(
         
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # a failure may still have changed the instance, or found it gone; throttled
+        # A failure may still have changed the instance, or found it gone. Throttled.
         clear_instance_lists_after_failure(sys.exc_info()[1])
 
 
@@ -1333,7 +1296,6 @@ async def delete_instance(
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Delete an instance."""
     project = verify_project_access(host, project)
     try:
         # A rule naming this instance must not pass to the next instance created under its name.
@@ -1341,10 +1303,9 @@ async def delete_instance(
         captured_rules = (
             await instance_grants.rule_ids_naming_instance(host, project, instance_name) if project else None
         )
-        # important: everything below is stamped with the project the deletion ACTUALLY used.
-        # A caller that named none was resolved across projects and then had its tags, webhook,
-        # upstream event and audit row written against "default", naming a project the deletion
-        # never touched.
+        # important: everything below uses the project the deletion resolved. A caller that names
+        # none is resolved across projects; writing its tags, webhook, upstream event and audit
+        # row against "default" would name a project the deletion never touched.
         async with guard_instance_mutation(
             cluster_id=host,
             project=project,
@@ -1361,8 +1322,7 @@ async def delete_instance(
             only_rule_ids=captured_rules,
         )
 
-        # Announce the lifecycle change to any subscribed add-on. Nothing emitted these events
-        # until now, so the catalogue was a promise with no sender behind it.
+        # Announce the lifecycle change to any subscribed add-on.
         from app.services.webhooks.emitter import emit_resource_event
 
         await emit_resource_event(
@@ -1375,7 +1335,7 @@ async def delete_instance(
 
 
         # Clean up the instance's tag rows so the tag store doesn't drift from the
-        # deleted container. Best-effort, because the instance is already gone.
+        # deleted instance. Best-effort, because the instance is already gone.
         try:
             await tag_service.remove_resource_assignments(
                 "instance", instance_name,
@@ -1386,7 +1346,6 @@ async def delete_instance(
                 f"Failed to clean up tags for deleted instance {instance_name}: {tag_err}"
             )
 
-        # Log activity: instance deletion success
         activity_logger.log_activity(
             action="instance.delete",
             target_type="instance",
@@ -1410,7 +1369,7 @@ async def delete_instance(
         logger.warning(f"LXD connection error deleting {instance_name}: {e}")
         raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
-        # Map daemon errors to meaningful codes instead of a blanket 500.
+        # Map daemon errors to specific status codes.
         msg = str(e)
         low = msg.lower()
         if "not found" in low:
@@ -1434,7 +1393,6 @@ async def delete_instance(
     except Exception as e:
         logger.error(f"Error deleting instance {instance_name}: {e}")
 
-        # Log activity: instance deletion failure
         activity_logger.log_activity(
             action="instance.delete",
             target_type="instance",
@@ -1447,7 +1405,7 @@ async def delete_instance(
 
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # a failure may still have changed the instance, or found it gone; throttled
+        # A failure may still have changed the instance, or found it gone. Throttled.
         clear_instance_lists_after_failure(sys.exc_info()[1])
 
 
@@ -1469,7 +1427,6 @@ async def get_instance_metrics(
     ),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
-    """Get metrics for a specific instance."""
     scoped_project = verify_instance_view_access(host, project, instance_name)
     try:
         metrics = await lxd_service.get_instance_metrics(host, instance_name, scoped_project)
@@ -1532,20 +1489,19 @@ async def set_instance_nic_address(
     """Pin or release a fixed IPv4 on an instance's interface."""
     verify_cluster_access(request.host)
     project = request.project or "default"
-    # important: the project bound, not only the cluster one. A Partner is scoped by cluster
-    # alone, so without this a shared cluster lets one organization rewrite a device on
-    # another organization's instance.
+    # important: check the project bound as well as the cluster one. A Partner is scoped by
+    # cluster alone, so without it one organization could rewrite a device on another
+    # organization's instance on a shared cluster.
     if not project_is_visible(request.host, project):
         raise HTTPException(status_code=403, detail="Access denied to this project")
-    # important: enforce BEFORE the try - a 403 raised inside it would be swallowed and
-    # re-raised as a 500. Same ordering as start/stop.
+    # important: enforce before the try, as start/stop do. A 403 raised inside it is re-raised as
+    # a 500.
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(request.host, project, instance_name, "operate")
 
     try:
-        # The device preflight and write share migration's cluster serialization boundary.
-        # This closes the check-then-act window where a migration could commit its hierarchy
-        # fence after the old standalone check but before the daemon PATCH.
+        # The device read, preflight and write run inside the migration guard, so a migration
+        # cannot commit its hierarchy fence between the check and the daemon PATCH.
         async with guard_instance_mutation(
             cluster_id=request.host,
             project=project,
@@ -1560,10 +1516,9 @@ async def set_instance_nic_address(
             current, _inherited = await asyncio.to_thread(
                 _read_instance_device, client, instance_name, project, device_name
             )
-            # important: this reads the cluster over HTTP with a (3, 25) socket timeout, so it
-            # belongs off the loop like the read above it and the write below it. Called directly
-            # it parks a uvicorn worker for up to 56s on a slow daemon, and this deployment runs
-            # WEB_CONCURRENCY=4, so that is a quarter of the API including health checks.
+            # important: keep this off the event loop. It reads the cluster over HTTP with a
+            # (3, 25) socket timeout; called directly it can block a uvicorn worker for up to 56 s
+            # on a slow daemon, a quarter of the API under WEB_CONCURRENCY=4.
             await asyncio.to_thread(
                 check_address_for_network,
                 client,
@@ -1605,17 +1560,12 @@ async def set_instance_nic_address(
             status_code=400, detail=f"The cluster refused the change: {exc}"
         ) from None
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
-        # important: ConnectionError is not redundant here, it is the case that actually
-        # happens. The pooled session mounts urllib3 Retry, and with a Retry object mounted a
-        # read timeout surfaces as MaxRetryError, which requests converts to ConnectionError,
-        # NOT to ReadTimeout. Measured against a peer that accepts and never answers: a bare
-        # session raises ReadTimeout, the same call through this repo's adapter raises
-        # ConnectionError. Catching Timeout alone left this clause unreachable and a slow
-        # cluster answering a bare 500.
+        # important: keep ConnectionError. The pooled session mounts a urllib3 Retry, and with a
+        # Retry mounted a read timeout surfaces as MaxRetryError, which requests converts to
+        # ConnectionError rather than ReadTimeout. With Timeout alone a slow cluster answers 500.
         #
-        # A socket timeout on this path means the daemon took too long, not that we are
-        # broken. The write may still be applying, so say that rather than answering 500 and
-        # leaving the operator unsure whether to retry.
+        # A timeout here means the daemon was slow and the write may still be applying, so the
+        # answer is a 504 that tells the operator to refresh before retrying.
         logger.warning(f"Timed out on the device write for {instance_name}: {exc}")
         activity_logger.log_activity(
             action="instance.nic.address",

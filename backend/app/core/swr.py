@@ -1,26 +1,15 @@
 """Stale-while-revalidate for the fan-out response caches.
 
-Every list endpoint that fans out across clusters caches its body per scope. Before this module a
-request that found the entry expired waited for the whole fan-out, and the TTLs were matched to
-the frontend's polls, so a polled list missed on almost every poll: GET /instances hit 21% of the
-time and each miss cost about 4 s on dev. Here an expired entry is still served at once for up
-to SWR_MAX_STALE_SECONDS past its soft TTL, the same rule as RFC 5861's stale-while-revalidate,
-and one background read replaces it.
-
-Three things keep that honest:
-- a mutation still invalidates at once. The generation fences and key sweeps in core/cache.py
-  delete or fence the entry, and a background read that started before an invalidation is not
-  allowed to write its result back;
-- the response says what it is: X-Orcastra-Cache (hit | stale | miss | bypass) and
-  X-Orcastra-Cache-Age, set by RequestIdMiddleware from the request context, so the frontend can
-  ask again once the background read has landed and show the collection time;
-- `fresh=true` is unchanged: a forced refresh always reads the clusters before it answers.
+A fan-out list body is cached per scope. Past its soft TTL an entry is still served at once for up
+to SWR_MAX_STALE_SECONDS (RFC 5861) while one background read replaces it. A mutation still
+invalidates at once (generation fences and key sweeps in core/cache.py), and a background read that
+started before an invalidation never writes back. RequestIdMiddleware reports X-Orcastra-Cache
+(hit | stale | miss | bypass) and X-Orcastra-Cache-Age; `fresh=true` always reads the clusters.
 
 important: the key is always built here from the request's scope (get_scope_cache_key) and the
-background read runs in a copy of the request's context, so it computes with exactly the same
-cluster set, tenant ACL and project bound as the request that launched it. A builder must not
-capture the request's database session or Request object; everything after `await serve()`
-returns may outlive the request.
+background read runs in a copy of the request's context, so it sees the same cluster set, tenant
+ACL and project bound. A builder must not capture the request's database session or Request
+object: the background read may outlive the request.
 """
 
 from __future__ import annotations
@@ -66,7 +55,7 @@ class Built:
 
     `value` is returned to the caller that built it (usually the response model); `body` is the
     JSON-ready form that is cached. `fresh_for` is the soft TTL, or None when the handler's own
-    rule says this answer must not be remembered (nobody answered, a partial read).
+    rule says this answer must not be cached (ex; no cluster answered, or the read was partial).
     """
 
     value: Any
@@ -108,7 +97,7 @@ async def serve(
     boundary, only a cache.
     """
     if cache is None:
-        # No cache configured (some handlers have always tolerated it): read, never remember.
+        # No cache configured, which some handlers tolerate: read, never remember.
         built = await build()
         return _record(Served(BYPASS if fresh else MISS, value=built.value, body=built.body, age=0.0))
 
@@ -126,7 +115,7 @@ async def serve(
                 _schedule_refresh(cache, key, base_key, build, generation, label)
                 return _record(Served(STALE, body=entry.value, age=entry.age(now)))
 
-    # note: the same clock single_flight marks rebuilds with; ages use wall time (time.time).
+    # The clock single_flight marks rebuilds with; entry ages use wall time (time.time).
     arrived_at = monotonic()
 
     async def rebuild() -> Served:
@@ -154,7 +143,7 @@ def _read(cache: Any, key: str) -> tuple[Optional[Entry], bool]:
     getter = getattr(cache, "get_entry", None)
     if getter is not None:
         result = getter(NAMESPACE, key)
-        # note: a catch-all cache double answers None here rather than a pair.
+        # A catch-all cache double answers None here instead of a pair.
         raw, authoritative = result if isinstance(result, tuple) else (result, True)
     else:
         # A cache double without get_entry: its get() hands back whatever was set.
@@ -204,10 +193,10 @@ async def _build_and_store(
         wrap(built.body, stored_at=time.time(), build_started_at=started, fresh_for=built.fresh_for),
         ttl=built.fresh_for + SWR_MAX_STALE_SECONDS,
     )
-    # important: the check above and this write are two Redis calls, not one. An invalidation that
-    # advanced the generation and swept the key between them would otherwise leave this
-    # pre-mutation body in place for the whole stale window. Checking again after the write and
-    # dropping the key closes that gap; the worst case is one extra miss.
+    # important: the check above and this write are separate Redis calls. An invalidation that
+    # advanced the generation and swept the key between them would leave this pre-mutation body in
+    # place for the whole stale window, so check again after the write and drop the key; the worst
+    # case is one extra miss.
     if generation is not None and generation() != before:
         logger.info("Dropping %s: a mutation completed while it was being written", label)
         delete = getattr(cache, "delete", None)
@@ -258,12 +247,10 @@ async def _refresh(
 ) -> None:
     started = monotonic()
     wrote = False
-    # important: under the same per-key rebuild lock a miss or a forced refresh takes. Two reads of
-    # one list running side by side in this worker meet in the bounded per-cluster pools below
-    # them, and the second is refused: live QA saw a Refresh on /projects answer 503 ("Project list
-    # for central-1 is temporarily unavailable") because it landed while the background read held
-    # that cluster's slot. Holding the lock queues the refresh behind it instead; it then reads
-    # the clusters itself, because a background read never marks a rebuild.
+    # important: take the per-key rebuild lock a miss or a forced refresh takes. Two reads of one
+    # list side by side in this worker meet in the bounded per-cluster pools, and the second is
+    # refused with a 503. A forced refresh queued behind this read then reads the clusters itself,
+    # because a background read never marks a rebuild.
     lock = rebuild_lock(key)
     try:
         async with lock:

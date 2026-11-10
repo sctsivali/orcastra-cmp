@@ -1,7 +1,6 @@
 """
 Remote simplestreams image catalogues, aggregated for the create form's Custom and Ubuntu tabs,
-and the allowlist an `image_server` handed to a daemon must pass. Moved out of the images router,
-which owns the store reads; nothing here touches a cluster.
+and the allowlist an `image_server` handed to a daemon must pass. Nothing here touches a cluster.
 
 Each server lists the engines that can pull from it. LXD reads Canonical's two servers. Incus
 reads images.linuxcontainers.org only: its simplestreams reader (shared/simplestreams/products.go,
@@ -31,7 +30,7 @@ REMOTE_IMAGE_SERVERS = [
     {"server": "https://images.linuxcontainers.org", "source": "Custom", "engines": ("incus",)},
 ]
 _ENGINE_LABELS = {"lxd": "LXD", "incus": "Incus"}
-# note: v2 since rows carry `engines` and the Incus server; the old key held LXD's rows only.
+# Versioned with the row shape (rows carry `engines`), so a cached older shape is never read.
 REMOTE_CATALOG_CACHE_KEY = "images:remote:v2"
 # Metadata files whose combined_* fields name the image fingerprints, per engine family.
 _META_FTYPES = ("lxd.tar.xz", "incus.tar.xz")
@@ -89,11 +88,11 @@ def validate_image_server(image_server: Optional[str], engine: Optional[str] = N
 
 
 def rows_for_engine(rows: Iterable[dict], engine: Optional[str]) -> List[dict]:
-    """Catalogue rows `engine` can pull. A row without `engines` predates them and is LXD's."""
+    """Catalogue rows `engine` can pull. A row without `engines` is LXD's."""
     family = _family(engine)
     return [r for r in rows if family is None or family in (r.get("engines") or ["lxd"])]
 # Upper bound for a cold remote-catalog fetch (per-remote urllib timeouts can sum
-# past a minute). On timeout we return an empty, uncached result.
+# past a minute). A timeout gives an empty, uncached result.
 _REMOTE_FETCH_TIMEOUT = 60
 # Fallback ftypes (older streams without combined_* fingerprints).
 _CONTAINER_FTYPES = {"squashfs", "root.squashfs", "rootfs.squashfs", "root.tar.xz"}
@@ -165,8 +164,8 @@ def _parse_simplestreams(server: str, source: str, engines: Iterable[str] = ("lx
 def _fetch_remote_catalog() -> List[dict]:
     """Aggregate all configured remote catalogs (best-effort per remote).
 
-    The remotes are fetched concurrently (the Ubuntu catalog is ~17 MB / tens of
-    seconds, so we overlap it with the smaller community fetch).
+    The remotes are fetched concurrently: the Ubuntu catalog is about 17 MB and takes
+    tens of seconds.
     """
     rows: List[dict] = []
     with ThreadPoolExecutor(max_workers=len(REMOTE_IMAGE_SERVERS)) as pool:

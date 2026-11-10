@@ -144,8 +144,8 @@ async def _current_job_pins(job: MigrationJob) -> tuple[Any, Any]:
 def _answering(client: Any, cluster_id: str) -> Any:
     """``client``, or the migration's own outage signal when the cluster did not answer.
 
-    note: not ``require_client``. Its HTTP 503 means nothing to the worker, whose catch-all then
-    parked a job that had changed nothing in manual recovery, locks and slot held.
+    Not ``require_client``: its HTTP 503 means nothing to the worker, whose catch-all would park a
+    job that changed nothing in manual recovery, with its locks and slot held.
     """
     if client is None:
         raise MigrationClusterUnavailable(f"Cluster {cluster_id} did not answer.")

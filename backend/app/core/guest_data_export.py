@@ -1,32 +1,18 @@
-"""LXD requests that hand a guest's data to whoever holds the answer, and what they cost a key.
+"""Raw-proxy LXD requests that hand out a guest's data whole, so they cost `instance.files`.
 
-`instance.files` prices reading a guest's files one at a time. These raw-proxy requests hand over
-the same data whole, so they cost the same capability:
+- POST `migration: true` on an instance, a storage volume or a snapshot of either starts a
+  migration source: its websocket secrets stream the filesystem to anyone who presents them, and
+  a `target` pushes it to a server the caller names;
+- GET images/<fp>/export returns the tarball, POST images/<fp>/secret a download secret;
+- anything under storage-pools/<pool>/volumes/<type>/<volume>/backups (the instance /backups path
+  is priced in core/api_key_capabilities.py for every method);
+- `public: true` on POST /1.0/images, or set by PUT/PATCH images/<fp>. LXD serves a public image
+  to any client, and a copy naming a fingerprint the project holds makes that image public too
+  (images.go imgPostRemoteInfo and imgPostURLInfo call UpdateImage with req.Public).
 
-- a POST with `migration: true` on an instance, an instance snapshot, a storage volume or a volume
-  snapshot starts a migration source. Its operation carries the websocket secrets (control, fs,
-  criu) that stream the filesystem to anyone who presents them, and a `target` pushes it to a
-  server the caller names;
-- GET /1.0/images/<fp>/export returns the image tarball;
-- POST /1.0/images/<fp>/secret returns a secret that lets an untrusted client download the image;
-- any request under storage-pools/<pool>/volumes/<type>/<volume>/backups creates, lists, reads,
-  exports or deletes a backup of the volume, which is its data in a tarball. The instance /backups
-  path already costs `instance.files` (core/api_key_capabilities.py), for every method;
-- a POST /1.0/images with `public: true`, whatever its source, and a PUT or PATCH of
-  /1.0/images/<fp> that sets `public: true`. LXD serves a public image to any client that reaches
-  it, trusted or not, without passing this proxy. A publish from an instance or a snapshot makes
-  the guest's image public, and a copy (source `image` or `url`) that names a fingerprint the
-  project already holds sets `public` on that image too (images.go imgPostRemoteInfo and
-  imgPostURLInfo call UpdateImage with req.Public), so a copy could make a privately published
-  guest image public.
-
-note: a private publish is not priced. The integrator publishes its marketplace images from a
-snapshot with `public: false`, with a key that never holds `instance.files`, and LXD serves a
-private image only to a trusted client or to one holding a secret, which is priced.
-
-note: `/proxy` and MCP have no operation that sends one of these, so the raw proxy is the only
-door. tests/test_guest_data_leaves_only_with_files.py holds that with a ratchet over the /proxy
-vocabulary.
+A private publish is not priced: LXD serves a private image only to a trusted client or to one
+holding a secret, which is priced. `/proxy` and MCP send none of these (ratchet:
+tests/test_guest_data_leaves_only_with_files.py).
 """
 
 from collections.abc import Mapping
@@ -45,8 +31,8 @@ __all__ = [
 
 GUEST_DATA_CAPABILITY = "instance.files"
 
-# note: LXD routes images/{fingerprint}/export and images/{fingerprint}/secret before the alias
-# route, so images/aliases/export is an export of an image named "aliases" to LXD as well.
+# LXD routes images/{fingerprint}/export and images/{fingerprint}/secret before the alias route,
+# so to LXD images/aliases/export is an export of an image named "aliases" as well.
 _IMAGE_HANDOUTS = frozenset({"export", "secret"})
 
 
@@ -100,8 +86,8 @@ def _priced_by_its_path(segments: Tuple[str, ...]) -> bool:
 def guest_data_path_capability_for(path: str) -> Optional[str]:
     """The capability a raw-proxy path costs whatever its method and body, else None.
 
-    note: raw_proxy asks this before the body is held to one spelling, so a refused path is
-    recorded as a refused path whatever the body says.
+    raw_proxy asks this before the body is held to one spelling, so a refused path is recorded as
+    a refused path whatever the body says.
     """
     if _priced_by_its_path(canonical_proxy_path(path).lowered):
         return GUEST_DATA_CAPABILITY

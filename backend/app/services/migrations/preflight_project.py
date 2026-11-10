@@ -2,10 +2,9 @@
 
 ``member_relocation`` keeps the project and every instance identity and moves the workloads to
 another member of the same cluster, one at a time. ``project_relocation`` recreates the project
-under a new identity, on another cluster or under a new name on the same one: the job creates
-the target project, clones every profile, and stages each instance through the same contract an
-instance move uses. The target project must not exist, so nothing the job did not create is ever
-inside it.
+under a new identity (another cluster, or a new name on the same one): the job creates the
+target project, clones every profile, and stages each instance through the instance-move
+contract. The target project must not exist, so it never holds anything the job did not create.
 
 Readers and shared checks live in ``preflight`` and are looked up at call time.
 """

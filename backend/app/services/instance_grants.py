@@ -1,18 +1,16 @@
 """Forget the access rules that named one instance once that instance is gone.
 
-A tenant rule can name a single instance: `(cluster, project, "web-01")`. Nothing removed such a
-rule when its instance was deleted or renamed, so the next instance created under that name in
-that project, by anyone, was visible and operable by the old tenant at once. This module removes
-exactly those rules, the counterpart of `project_grants.forget_deleted_project` for one instance.
+A tenant rule can name a single instance: `(cluster, project, "web-01")`. Left behind after a
+delete or rename, it would give the rule's tenant the next instance anyone creates under that
+name in that project. This is the per-instance counterpart of
+`project_grants.forget_deleted_project`.
 
-Only an exact `(cluster, project, instance)` match is touched. A rule for every instance of a
-project (`*`) or for an instance name in every project (`project="*"`) describes no single
-instance, so it outlives any one of them.
+Only an exact `(cluster, project, instance)` match is touched; a `*` rule for every instance of a
+project, or for a name in every project, describes no single instance and outlives any one of them.
 
-important: callers capture the rule ids before the delete goes out and forget only those once
-LXD confirms the instance is gone, so a rule staged for a newcomer of the same name after the
-delete is never taken. A failure here is reported and audited, never raised into the caller,
-because the instance is already gone by then.
+important: callers capture the rule ids before the delete goes out and forget only those once LXD
+confirms the instance is gone, so a rule staged for a same-name newcomer is never taken. A failure
+here is logged and audited, never raised: the instance is already gone by then.
 """
 
 from __future__ import annotations
@@ -28,7 +26,7 @@ from app.services.activity_logger import get_activity_logger
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
 
-# note: a seam for tests, as in project_delete_store; the app's maker is used when unset.
+# Test seam, as in project_delete_store; the app's session maker is used when unset.
 session_maker: Optional[Callable[[], Any]] = None
 
 

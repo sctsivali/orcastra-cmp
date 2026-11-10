@@ -55,7 +55,7 @@ _CLAIM_ADVISORY_KEY = 5_178_261_933
 
 @dataclass(frozen=True)
 class MigrationListVisibility:
-    """Immutable request authority used to filter before pagination.
+    """Immutable request authority, applied as a filter before pagination.
 
     ``visible_projects`` contains only clusters with a project boundary. A cluster absent
     from that tuple is unrestricted by project, matching the request-scoped organization
@@ -392,8 +392,8 @@ async def revise_plan_preflight(
     """Persist fresh approval evidence as a new revision without accepting execution."""
     now = utcnow()
     ttl_seconds = max(60, int(get_settings().migration_plan_ttl_seconds))
-    # note: stored as given, like insert_plan and replace_plan. The approval hash covers this exact
-    # report; a sanitized copy differed from it, so every later execute asked to re-approve.
+    # Stored as given, like insert_plan and replace_plan. The approval hash covers this exact
+    # report; a sanitized copy would differ, and every later execute would ask to re-approve.
     row.preflight_payload = report
     row.status = "ready" if not report.get("blockers") else "blocked"
     row.revision += 1
@@ -407,7 +407,7 @@ async def revise_plan_preflight(
 async def get_job(db: AsyncSession, job_id: str, *, lock: bool = False) -> Optional[MigrationJob]:
     stmt = select(MigrationJob).where(MigrationJob.job_id == job_id)
     if lock:
-        # note: populate_existing, or a row this session already read keeps its stale attributes
+        # Without populate_existing, a row this session already read keeps its stale attributes
         # and a revision check made under the lock would compare against the earlier read.
         stmt = stmt.with_for_update().execution_options(populate_existing=True)
     return (await db.execute(stmt)).scalar_one_or_none()
@@ -570,8 +570,8 @@ async def enqueue_event(
         )
     )
     # important: sessions run with autoflush off, so the next event on this channel in the same
-    # transaction would read the same max sequence and collide (found live: a project emits one
-    # webhook per instance in its retention transaction).
+    # transaction would read the same max sequence and collide (ex; a project emits one webhook
+    # per instance in its retention transaction).
     await db.flush()
 
 
@@ -987,8 +987,9 @@ async def heartbeat(db: AsyncSession, job_id: str, worker_id: str, fence_token: 
 async def recoverable_job_ids(db: AsyncSession, *, limit: int = 50) -> list[str]:
     """Claimable jobs, every organization's oldest first, then each one's next, and so on.
 
-    important: a claim refused for want of a slot changes nothing, so ordering by age alone let
-    one organization with more queued jobs than `limit` hold the whole list and starve the rest.
+    important: a claim refused for want of a slot changes nothing, so ordering by age alone
+    would let one organization with more queued jobs than `limit` hold the whole list and
+    starve the rest.
     """
     now = utcnow()
     ranked = (
@@ -1024,8 +1025,8 @@ async def recoverable_job_ids(db: AsyncSession, *, limit: int = 50) -> list[str]
     )
 
 
-# Owner decision 2026-11-04: an operator keeps at most this many open plans, and an expired plan
-# no job refers to is removed after PLAN_RETENTION. A job's plan stays for its history.
+# An operator keeps at most this many open plans, and an expired plan no job refers to is
+# removed after PLAN_RETENTION. A job's plan stays for its history.
 OPEN_PLAN_LIMIT = 50
 PLAN_RETENTION = timedelta(days=30)
 _OPEN_PLAN_STATUSES = ("draft", "preflighting", "ready", "blocked")

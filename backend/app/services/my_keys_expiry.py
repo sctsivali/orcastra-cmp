@@ -1,12 +1,11 @@
 """Revoke each My Keys credential on its cluster once the key's expiry passes.
 
-A key's expiry used to be only its certificate's NotAfter. A client can replace its own
-certificate (certificate_self_renewal; shown on the Incus lab 2026-11-08 with a hundred-year
-replacement), so the date the dashboard showed bound nothing. One worker (Redis lease) revokes the
-cluster half when expires_at passes: the identity and its group on LXD, the certificate on Incus
-(services/lxd/client_identities.py). The record stays, marked revoked_at, so the owner still sees
-the key and its trail. A cluster that is unreachable, or that does not confirm the removal, is
-tried again on the next pass. Owner decision 2026-11-08: every engine.
+A certificate's NotAfter alone binds nothing: a client can replace its own certificate
+(certificate_self_renewal), ex; with a hundred-year one. So one worker (Redis lease) revokes the
+cluster half when expires_at passes, on every engine: the identity and its group on LXD, the
+certificate on Incus (services/lxd/client_identities.py). The record stays, marked revoked_at, so
+the owner still sees the key and its trail. A cluster that is unreachable, or that does not
+confirm the removal, is tried again on the next pass.
 
 important: revocation is idempotent on both engines (a credential already gone counts as revoked),
 so with Redis down and every worker running the loop the worst case is a repeated audit line.
@@ -100,7 +99,7 @@ async def _revoke_one(key_id: str, *, service: Any, vault: Any, now: datetime) -
         return _SETTLED
     if not _due(record, now):
         return _LATER
-    # note: get_client is memory-only and answers None on a worker that never connected to this
+    # get_client is memory-only and answers None on a worker that never connected to this
     # cluster, which the lease holder often has not; client_for connects from Vault.
     client = await client_for(service, record.get("node"), label="my_keys_expiry")
     if client is None:

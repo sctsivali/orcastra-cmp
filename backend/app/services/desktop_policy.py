@@ -6,8 +6,8 @@ Two consents have to line up before a desktop action runs, and they are given by
   this policy                 the organization owning the cluster decides whether it agrees at all
 
 Keeping them separate matters because screen contents leave the deployment for a third-party
-model. That is a disclosure to a sub-processor, not an ordinary API call, and it is not something
-the person issuing an API key can decide on behalf of a tenant whose desktop it is.
+model: a disclosure to a sub-processor, which the person issuing an API key cannot decide on
+behalf of the tenant whose desktop it is.
 
 important: an absent row reads exactly like a disabled one. An organization that has never been
 asked has not agreed, so the default is refusal rather than inheritance.
@@ -42,27 +42,21 @@ class DesktopConsent:
 
     @property
     def may_input(self) -> bool:
-        # note: input requires BOTH. `allow_input` alone would let a policy row that is disabled
-        # overall still authorize typing, which reads as a bug the first time somebody turns
-        # desktop control off and expects everything to stop.
+        # Input requires both, so turning desktop control off stops typing too.
         return self.enabled and self.allow_input
 
     @property
     def may_clipboard(self) -> bool:
-        # The clipboard was authorized by view consent alone, and `services/desktop/actions.py`
-        # calls it the highest-yield exfiltration primitive on this surface. The capability is
-        # already separate on the key; this makes the consent separate too.
+        # A clipboard read returns whatever the user last copied (`services/desktop/actions.py`),
+        # so it needs its own consent here as well as its own capability on the key.
         return self.enabled and self.allow_clipboard
 
     @property
     def may_guest_access(self) -> bool:
         """Whether an add-on install may take `instance.exec` or `instance.files` here.
 
-        important: its own switch, not `enabled`. The install path gated root-in-guest on the
-        DESKTOP consent, whose toggle says "whether an agent may capture this organization's
-        screens". So enabling screenshots silently authorized an add-on to take a shell inside a
-        renting customer's container, and an organization that wanted an exec add-on had to
-        enable screen capture it did not want. Two different disclosures, two decisions.
+        important: needs its own switch on top of `enabled`, so consenting to screen capture
+        never by itself authorizes an add-on to take a shell inside a customer's container.
         """
         return self.enabled and self.allow_guest_access
 
@@ -75,8 +69,7 @@ DENIED = DesktopConsent(
 async def get_consent(db: AsyncSession, organization_id: Optional[int]) -> DesktopConsent:
     """What this organization permits. Refusal when there is no organization or no row."""
     if organization_id is None:
-        # A cluster with no organization bound has nobody who could have consented. Refusing is
-        # the only honest answer, and it is also what stops an unbound cluster being the soft spot.
+        # No organization is bound, so no one could have consented.
         return DENIED
     row = (
         await db.execute(
@@ -96,17 +89,15 @@ async def get_consent(db: AsyncSession, organization_id: Optional[int]) -> Deskt
 
 
 async def consent_for_cluster(db: AsyncSession, cluster_id: str) -> tuple[DesktopConsent, Optional[str]]:
-    """What EVERY organization sharing this cluster permits, and the first that does not.
+    """What every organization sharing this cluster permits, and the first that does not.
 
-    important: the intersection, not one organization's row. A cluster can be bound to more than
-    one organization, and one on this deployment is: nuc2 carries both a provider org and a
-    partner's. Asking only the lowest-id binding, which is what `resolve_cluster_org` answers and
-    what this gate first shipped with, means one tenant's yes authorises capturing another
-    tenant's screens. Neither tenant can tell whose guest is whose from the cluster alone, so the
-    only honest rule is that all of them have to agree.
+    important: the intersection of every bound organization's consent. A cluster can be bound to
+    more than one organization, and asking only the lowest-id binding (what `resolve_cluster_org`
+    answers) would let one tenant's yes authorise capturing another tenant's screens. The cluster
+    alone cannot tell whose guest is whose, so all of them have to agree.
 
-    Failing closed twice over: an unbound cluster has nobody who could have consented, and a
-    single dissenting organization is enough to refuse.
+    Fails closed: an unbound cluster has no organization that could have consented, and one
+    dissenting organization is enough to refuse.
     """
     from app.core.org_scope import resolve_cluster_orgs
 
@@ -172,10 +163,8 @@ async def set_consent(
         row = DesktopControlPolicy(organization_id=organization_id)
         db.add(row)
     row.enabled = enabled
-    # Turning the feature off clears the input consent rather than leaving it set, so that turning
-    # it back on later does not silently restore a stronger permission than the operator expects.
-    # Each rides on `enabled`, so turning the feature off clears all three rather than leaving
-    # them set for the next time it is turned on.
+    # Each permission rides on `enabled`: turning the feature off clears all three, so turning it
+    # back on later does not restore a stronger permission than the operator expects.
     row.allow_input = allow_input and enabled
     row.allow_clipboard = allow_clipboard and enabled
     row.allow_guest_access = allow_guest_access and enabled

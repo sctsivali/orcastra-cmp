@@ -1,21 +1,16 @@
 """Claiming, delivering and retiring one delivery at a time.
 
-Three properties this file exists to hold.
+Deliveries are claimed with `FOR UPDATE SKIP LOCKED` rather than by electing a leader. The work
+is many independent rows, so every worker pulls from the queue and the queue keeps draining when
+one dies. The Redis lease used elsewhere fails open, so during a Redis outage every worker would
+believe it leads and every event would go out once per worker.
 
-Deliveries are claimed with `FOR UPDATE SKIP LOCKED`, not by electing a leader. The work is many
-independent rows, so every worker pulling from the queue is the only source of delivery
-parallelism and the queue degrades gracefully when one dies. Leader election would be worse than
-nothing here: the lease this codebase already uses fails open on purpose, so during a Redis outage
-all four workers would believe they lead and every event would go out four times.
+Every delivery is re-authorised immediately before it is sent. The stored grant is a record of
+consent, and an organization can lose a cluster between enqueue and send; without the check a
+revocation would not stop deliveries already queued.
 
-Every delivery is re-authorised immediately before it is sent, not merely re-sent. The stored
-grant is a record of consent, and an organization can lose a cluster between the moment an event
-was enqueued and the moment it goes out. Without this, revocation is not real, which is the
-property the whole installation model is sold on.
-
-Retries use full jitter rather than plain exponential backoff. The failure mode is not one slow
-receiver, it is a receiver that was down for an hour and comes back to a synchronised backlog;
-full jitter is the variant that actually spreads that.
+Retries use full jitter rather than plain exponential backoff, which spreads the synchronised
+backlog of a receiver that comes back after an hour down.
 """
 
 import asyncio
@@ -51,16 +46,15 @@ from app.services.webhooks.signing import (
 
 logger = logging.getLogger(__name__)
 
-# Five attempts over roughly fifty minutes. Deliberately not the multi-hour schedule a general
-# queue would use: a receiver down for longer than this reconciles through /extensions/self, and
-# a schedule that cannot be exercised inside a test is a schedule nobody has seen work.
+# Five attempts over roughly fifty minutes. A receiver down for longer reconciles through
+# /extensions/self, and a schedule this short can be exercised inside a test.
 RETRY_SCHEDULE_SECONDS = (10, 60, 300, 900, 1800)
 MAX_ATTEMPTS = len(RETRY_SCHEDULE_SECONDS)
 
 # Enough consecutive failures that the endpoint is gone rather than flapping.
 AUTO_SUSPEND_AFTER = 20
 
-# What a receiver says is diagnostic, not payload.
+# Cap on a receiver's response, which is kept for diagnostics only.
 MAX_RESPONSE_BYTES = 64 * 1024
 
 # A worker that dies holding a row must not hold it forever.
@@ -79,8 +73,7 @@ def _deployment_id() -> str:
 def _next_attempt_delay(attempt: int) -> float:
     """Full jitter over the scheduled backoff.
 
-    `random.uniform(0, base)` rather than `base`, because the thundering herd this guards against
-    is a queue resuming all at once, and only full jitter spreads a synchronised backlog.
+    `random.uniform(0, base)` rather than `base`, so a backlog that resumes all at once is spread.
     """
     base = RETRY_SCHEDULE_SECONDS[min(attempt, MAX_ATTEMPTS - 1)]
     return random.uniform(0, base)
@@ -96,9 +89,9 @@ async def enqueue_event(
 ) -> List[WebhookDelivery]:
     """Create one row per interested subscription, in the caller's transaction.
 
-    important: in the caller's transaction on purpose. The emitter this replaces fired a detached
-    task, so "the database commit succeeded but the event vanished" was reachable and invisible.
-    Enqueuing alongside the action means an event exists exactly when the thing it describes does.
+    important: keep it in the caller's transaction. A detached task can lose the event after the
+    commit succeeded; enqueuing alongside the action means an event exists exactly when the thing
+    it describes does.
     """
     created: List[WebhookDelivery] = []
     for subscription in subscriptions:
@@ -114,7 +107,7 @@ async def enqueue_event(
             installation_id=subscription.installation_id,
             sequence=int(time.time() * 1000),
         )
-        # Structural, on the row rather than only in a test, so a future builder cannot widen it.
+        # Checked on every row, not only in a test, so a change to the builder cannot widen it.
         assert_payload_is_clean(payload)
 
         delivery = WebhookDelivery(
@@ -180,8 +173,8 @@ async def _still_authorised(
 ) -> Optional[str]:
     """Why this delivery must not go out, or None.
 
-    Reloaded rather than read from the row that was enqueued, because the point is to notice a
-    change that happened after the enqueue.
+    The installation is reloaded rather than taken from the enqueued row, so a change made after
+    the enqueue is seen.
     """
     install = (
         await db.execute(
@@ -204,11 +197,9 @@ async def _still_authorised(
             return "the installation no longer reaches that cluster"
         from app.services.webhooks.reach import install_grant_names, payload_reach
 
-        # note: the installer's bound is judged when the event is queued (emitter.py). Here only the
-        # stored grant, so an identity provider outage or a restart cannot drop a delivery, and a
-        # project deleted after its instance events were queued does not cancel them (security
-        # review, 2026-11-06). Owner decision: rows a cluster-routed build queued before the upgrade
-        # still go out on the stored grant within their retry window, as that build would have sent.
+        # The installer's bound is judged when the event is queued (emitter.py). Here only the
+        # stored grant counts, so an identity provider outage or a restart cannot drop a delivery,
+        # and a project deleted after its instance events were queued does not cancel them.
         about = payload_reach(payload)
         if about is not None and not (about[0] and install_grant_names(install, about[0], about[1])):
             return "the installation's grant no longer names that project"
@@ -234,19 +225,16 @@ async def deliver(
 
     refusal = await _still_authorised(db, subscription, delivery.payload or {})
     if refusal is not None:
-        # Recorded, not silently discarded. An operator asking why an add-on stopped hearing about
-        # a cluster gets an answer.
+        # Recorded so an operator can see why an add-on stopped hearing about a cluster.
         delivery.state = "dropped"
         delivery.last_error = refusal
         await db.commit()
         logger.info("Dropped delivery %s: %s", delivery.id, refusal)
         return delivery.state
 
-    # important: every currently valid secret, not just the newest. The header is a space
-    # separated list for exactly this reason, and the subscription row has carried
-    # `previous_secret_expires_at` since it was created, but only one secret was ever sent. So a
-    # rotation broke every receiver on its very next delivery rather than giving it a window to
-    # switch in, which is the failure the list format exists to prevent.
+    # important: sign with every currently valid secret. The header is a space separated list so
+    # a receiver keeps verifying during the rotation window (`previous_secret_expires_at`);
+    # signing with the newest alone breaks every receiver on the next delivery after a rotation.
     secrets_ = read_signing_secrets(vault_client, subscription.installation_id)
     if not secrets_:
         delivery.state = "dropped"
@@ -284,8 +272,7 @@ async def deliver(
     delivery.response_status = status
 
     # important: the excerpt is kept only when the endpoint is public. Storing what an internal
-    # address replied would turn a blind SSRF into a returned one, which is the mistake the
-    # organization refresh path already documents.
+    # address replied would turn a blind SSRF into a returned one.
     if describe_url_risk(subscription.endpoint_url, require_https=True) is None:
         delivery.response_excerpt = head[:256].decode("utf-8", errors="replace")
     else:
@@ -323,8 +310,8 @@ async def _record_failure(
         )
 
     if subscription.consecutive_failures >= AUTO_SUSPEND_AFTER:
-        # An endpoint that has refused this many in a row is gone, and continuing to POST at it
-        # is us behaving like a reflector rather than a sender.
+        # An endpoint that has refused this many in a row is gone; posting at it further only
+        # makes this deployment a reflector.
         subscription.status = "suspended"
         subscription.suspended_reason = (
             f"{subscription.consecutive_failures} consecutive failures: {reason}"

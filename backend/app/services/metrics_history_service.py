@@ -1,12 +1,10 @@
-"""
-Metrics History Service - Persistent metrics storage backed by PostgreSQL.
+"""Persistent metrics history in PostgreSQL.
 
-Provides non-blocking writes (fire-and-forget with retry) so the background
-collector is never slowed by database I/O, plus efficient reads with
-in-memory caching for the chart endpoints.
+Writes retry with backoff and the caller schedules them fire-and-forget, so the
+background collector never waits on database I/O. Reads feed the chart endpoints.
 
-Retention is configurable (default 7 days) and enforced by a periodic
-cleanup task that runs alongside the collector.
+Retention (7 days by default) is enforced by a periodic cleanup loop started at app
+startup.
 """
 
 import logging
@@ -21,10 +19,10 @@ from app.models.db_models import MetricsSnapshot
 
 logger = logging.getLogger(__name__)
 
-# retention: keep 7 days of 30-second snapshots (~20k rows)
+# 7 days of 30-second snapshots is about 20k rows.
 DEFAULT_RETENTION_DAYS = 7
 
-# write retry config (mirrors session_audit.py pattern)
+# Write retries, the same pattern as session_audit.py.
 _MAX_RETRIES = 3
 _RETRY_BACKOFF = 0.5
 
@@ -37,12 +35,9 @@ async def persist_metrics_snapshot(
     point: Dict[str, Any],
     scope: str = "all",
 ) -> None:
-    """
-    Persist a single metrics data point to PostgreSQL.
+    """Persist one metrics point to PostgreSQL, retrying with backoff.
 
-    Uses fire-and-forget pattern with retry so it never blocks
-    the collector loop.  Values are stored as basis points
-    (percent * 100) for compact integer storage.
+    Percentages are stored as basis points (percent * 100) in integer columns.
     """
     # important: skip, never zero. The column is NOT NULL, and a point taken before any
     # instance had a second CPU sample would otherwise persist as an idle fleet.
@@ -91,19 +86,14 @@ async def load_metrics_history(
     scope: str = "all",
     since: Optional[datetime] = None,
 ) -> List[Dict[str, Any]]:
-    """
-    Load the most recent *points* snapshots from PostgreSQL, collected at or after *since*
-    when given.
+    """The newest *points* snapshots, oldest first, from *since* on when given.
 
-    Returns dicts matching the MetricsHistoryPoint schema so the
-    endpoint can wrap them in Pydantic models directly.
-
-    For large datasets we push the LIMIT/ORDER BY to the database
-    to avoid transferring unused rows.
+    Returns dicts matching the MetricsHistoryPoint schema. ORDER BY and LIMIT run in the
+    database, so unused rows are never transferred.
     """
     try:
         async with async_session_maker() as db:
-            # subquery: pick the N most recent rows (DESC), then re-order ASC
+            # The N most recent rows, newest first; reversed below.
             stmt = select(MetricsSnapshot).where(MetricsSnapshot.scope == scope)
             if since is not None:
                 stmt = stmt.where(MetricsSnapshot.collected_at >= since)
@@ -118,8 +108,8 @@ async def load_metrics_history(
 
         points_out: List[Dict[str, Any]] = []
         for row in rows:
-            # note: rows written since network became a rate keep it in their per-Cluster
-            # entries and 0 in the legacy counter columns; older rows carry the counters.
+            # Newer rows keep the network rate in their per-Cluster entries and 0 in the
+            # counter columns; older rows carry the counters.
             rx_rate, tx_rate = node_rates(row.nodes)
             points_out.append(
                 {
@@ -162,10 +152,7 @@ async def get_history_count(scope: str = "all") -> int:
 async def cleanup_old_snapshots(
     retention_days: int = DEFAULT_RETENTION_DAYS,
 ) -> int:
-    """
-    Delete snapshots older than *retention_days*.
-    Returns the number of rows deleted.
-    """
+    """Delete snapshots older than *retention_days*; returns the number deleted."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
     try:
         async with async_session_maker() as db:
@@ -191,10 +178,7 @@ async def run_retention_loop(
     interval_hours: int = 6,
     retention_days: int = DEFAULT_RETENTION_DAYS,
 ) -> None:
-    """
-    Background loop that periodically purges old snapshots.
-    Designed to be started once via asyncio.create_task() at app startup.
-    """
+    """Purge old snapshots every *interval_hours*; started once at app startup."""
     logger.info(
         "Metrics retention loop started (every %dh, keep %d days)",
         interval_hours, retention_days,

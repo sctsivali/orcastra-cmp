@@ -1,9 +1,7 @@
 """An organization's branding: what an account sees, and the organization's own row that partners edit.
 
 Included before routers/organizations.py, whose `/{org_id}` route would otherwise take
-`/my-preferences`. The paths and the `settings` field are the ones the frontend already reads; what
-changed is the answer: the layers in services/branding/resolve.py instead of a single row with a
-personal-settings fallback.
+`/my-preferences`. The answer is resolved through the layers in services/branding/resolve.py.
 """
 
 from __future__ import annotations
@@ -44,7 +42,7 @@ _NO_STORE = "no-store, private"
 class MyBrandingResponse(BaseModel):
     organization_id: int
     settings: dict
-    # note: always None. It used to name whoever last edited, which for a buyer is the seller's staff.
+    # Always None: whoever last edited a buyer's branding is the seller's staff.
     updated_by: Optional[str] = None
     updated_at: Optional[str] = None
     version: str
@@ -104,9 +102,9 @@ def _tenant_only(user: AuthenticatedUser) -> bool:
 async def _require_org_access(db: AsyncSession, org_id: int, user: AuthenticatedUser, *, runs: bool = False):
     """The organization, when the caller may see it, or with `runs` when the caller runs it.
 
-    important: a write asks `runs` (services.organization_roster.user_runs_org: an admin, the creator
-    or a partner row). Seeing it is any member row, so a partner who only bought from another partner
-    could otherwise rewrite that partner's branding.
+    A write passes `runs` (services.organization_roster.user_runs_org: an admin, the creator or a
+    partner row). Seeing it takes any member row, so without `runs` a partner who only bought from
+    another partner could rewrite that partner's branding.
     """
     svc = OrganizationService(db)
     org = await svc.get_organization(org_id)
@@ -199,14 +197,15 @@ async def update_org_branding(
     db: AsyncSession = Depends(get_db),
     _: None = Depends(check_read_only_mode),
 ):
-    """Partner (an organization it may manage) or Admin. A write by a non-member is audited like any other."""
+    """Replace the organization's own branding. Partner (an organization it runs) or Admin.
+
+    A write by someone who is not a member of the organization is audited and also logged at WARNING.
+    """
     response.headers["Cache-Control"] = _NO_STORE
     org = await _require_org_access(db, org_id, user, runs=True)
-    # important: an Admin passes user_has_access for every organization, which is the break-glass
-    # posture this deployment wants. It is also how a customer's branding got rewritten by an
-    # operator who never chose that organization. Break-glass is allowed here and is not allowed
-    # to be quiet: besides the audit record every write leaves, a write by somebody who does not
-    # belong to the organization is logged at WARNING, which reaches OpenSearch through Fluent Bit.
+    # important: an Admin passes user_runs_org for every organization (break-glass). Such a write
+    # must not be quiet: besides the audit record every write leaves, a write by somebody who does
+    # not belong to the organization is logged at WARNING.
     members = {(m.user_email or "").lower() for m in org.members or []}
     if (user.email or "").lower() not in members:
         logger.warning(

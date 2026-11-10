@@ -135,13 +135,10 @@ TASK_ACTIONS: Dict[str, Tuple[str, str]] = {
     "integration.storage.volume.delete": ("dashboard_action", "storage_volume"),
 }
 
-# The router action and its service-layer twin both fire for one click. The twin is dropped so a
-# click is one log line and one task; `lxd.connection.*` has no twin and stays.
-# important: the console's own start/stop/restart/create/delete path audits `vm.*`, the
-# `/instances` twins audit `instance.*`, and the daemon's frame maps to `instance.*`. The
-# task key carries the canonical name so either router's click meets its operation; the
-# stdout audit keeps the name the router emitted. Found by review: every console start
-# listed twice.
+# important: the console's start/stop/restart/create/delete path audits `vm.*`, the
+# `/instances` routes audit `instance.*`, and the daemon's frame maps to `instance.*`. The
+# task key carries the canonical name so either router's click meets its operation, and a
+# console start is listed once; the stdout audit keeps the name the router emitted.
 TASK_ACTION_ALIASES: Dict[str, str] = {
     "vm.create": "instance.create",
     "vm.start": "instance.start",
@@ -161,6 +158,8 @@ def canonical_task_action(action: str) -> str:
     return TASK_ACTION_ALIASES.get(action, action)
 
 
+# The router action and its service-layer `lxd.*` twin both fire for one click. The twin is
+# dropped so a click is one log line and one task; `lxd.connection.*` has no twin and stays.
 SUPPRESSED_ACTIONS = frozenset(
     {
         "lxd.instance.create",
@@ -176,10 +175,10 @@ SUPPRESSED_ACTIONS = frozenset(
     }
 )
 
-# important: machine-driven reads never reach the cluster log. Forty minutes of the first live
-# journal held 3,829 rows, 3,355 of them `vault.secret.read` (the cert read behind every dial
-# of a dead cluster) and 367 `integration.proxy.request` (the hub's polling). Those stay on
-# stdout, the audit of record; the log keeps what changed, what was denied and who signed in.
+# Machine-driven reads never reach the cluster log, which they would swamp: `vault.secret.read`
+# is the cert read behind every dial of a dead cluster and `integration.proxy.request` is the
+# hub's polling. They stay on stdout, the audit of record; the log keeps what changed, what was
+# denied and who signed in.
 LOG_SUPPRESSED_ACTIONS = frozenset(
     {
         "vault.secret.read",
@@ -189,9 +188,9 @@ LOG_SUPPRESSED_ACTIONS = frozenset(
         "cluster.auth_check",
         "integration.proxy.request",
         "auth.token.refresh",
-        # Stdout keeps it. The log keeps what changed, and a person opening a folder changed nothing.
+        # Opening a folder changes nothing.
         "file.browse",
-        # Same reasoning: looking at a guest's accounts changes nothing.
+        # Viewing a guest's accounts changes nothing.
         "guest.account.view",
     }
 )
@@ -370,9 +369,8 @@ def requestor_kind(
     """(actor_kind, source) for an LXD `requestor` block.
 
     A unix-socket caller is someone at an `lxc` shell on the host. A TLS caller whose username
-    (LXD names TLS clients by certificate fingerprint) is one of this dashboard's own identities
-    is the dashboard itself, whose actor the audit record supplies. Any other identity is an
-    external client the dashboard cannot name beyond what LXD reports.
+    (the certificate fingerprint) is one of this dashboard's own identities is the dashboard
+    itself, and the audit record supplies the actor. Any other identity is an external client.
     """
     if not isinstance(requestor, Mapping):
         return "system", "events"
@@ -406,8 +404,8 @@ def bounded_json(obj: Any, limit: int = METADATA_LIMIT) -> Dict[str, Any]:
     """A JSON object no larger than `limit` bytes; oversize values are replaced, never truncated
     mid-token, so the stored document always parses.
 
-    important: no NUL anywhere. Postgres refuses \\u0000 in jsonb, and the writer inserts in
-    batches, so one such string would cost every record beside it.
+    important: NUL is stripped everywhere. Postgres refuses \\u0000 in jsonb, and the writer
+    inserts in batches, so one such string would lose every record beside it.
     """
     if not isinstance(obj, Mapping):
         return {}

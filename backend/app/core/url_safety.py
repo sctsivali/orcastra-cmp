@@ -1,27 +1,16 @@
 """Whether a caller-supplied URL is safe for this server to fetch.
 
 A URL a caller stores and the server later requests is an SSRF sink: the request leaves from
-inside the network boundary, carrying whatever credentials the caller's integration is entitled
-to. This deployment sits on a Tailscale network alongside Vault, Redis and Postgres, and on
-infrastructure with a link-local metadata service, so "the server will fetch this for you" reaches
-considerably more than the public internet.
-
-The logic here started as `_is_ssrf_safe` in `routers/user_preferences.py`, where it guarded the
-image proxy and nothing else. It was never applied to `app_url`, the integration callback base,
-which is stored per API key and then used for three separate outbound requests, one of which
-carries the key's own plaintext secret. Having the right check in the codebase and not calling it
-is worse than not having it, because it reads as covered.
+inside the network boundary, where Vault, Redis, Postgres and a link-local metadata service may
+be reachable.
 
 important: an address is classified by what it *reaches*, not by how it is spelt. A membership
-test against an IPv4 network answers False for an IPv6Address rather than raising, so
-`::ffff:127.0.0.1` walked straight past the earlier prefix-list-only check while connecting to
-loopback. Every literal is unwrapped to the address it tunnels to before it is judged, and the
-prefix list is backed by `is_global` so a range nobody thought to list is still refused.
-
-note: DNS is resolved here and again by the HTTP client, so a name that answers differently
-between the two calls can still slip through. Closing that needs the connection pinned to the
-address that was checked, which is what `core/safe_http.py` does for outbound deliveries. This
-module stays the boundary validator, shaped for a Pydantic refusal; it is not the last line.
+test against an IPv4 network answers False for an IPv6Address instead of raising, so
+`::ffff:127.0.0.1` would pass a prefix-list-only check while connecting to loopback. Every
+literal is unwrapped to the address it tunnels to before it is judged, and the prefix list is
+backed by `is_global` so an unlisted range is still refused. DNS is resolved here and again by
+the HTTP client, so a name that answers differently the second time passes this check alone;
+fetch through `core/safe_http.py`, which pins the connection to the checked address.
 """
 
 import ipaddress
@@ -34,16 +23,11 @@ logger = logging.getLogger(__name__)
 
 IPAddress = Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
 
-# Ranges a server-side fetch has no business reaching.
-#
-# important: 100.64.0.0/10 is carrier-grade NAT, which is also the Tailscale range this
-# deployment's own hosts live on. Blocking it is deliberate and is the difference between
-# refusing a request to the internet and refusing a request to Vault. Python does not count it
-# as private, so it has to be listed even though `is_global` backs this list.
-#
-# 64:ff9b::/96 is NAT64. It is the one tunnel form `is_global` calls global, because the address
-# it embeds may itself be public, so a gateway would forward it. We do not run a NAT64 gateway,
-# and a receiver behind one is not a deployment shape this platform supports.
+# Ranges a server-side fetch must not reach.
+# important: 100.64.0.0/10 is carrier-grade NAT, which Tailscale also assigns to its nodes, so a
+# deployment's own hosts (Vault included) can live there. Python does not count it as private.
+# 64:ff9b::/96 is NAT64, the one tunnel form `is_global` calls global. A receiver behind a NAT64
+# gateway is not a supported deployment shape.
 PRIVATE_NETWORKS = [
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -86,7 +70,7 @@ _MAX_UNWRAP_HOPS = 4
 
 
 def _unwrap_address(address: IPAddress) -> IPAddress:
-    """Follow a mapped or tunnelled literal down to the address it actually reaches.
+    """Follow a mapped or tunnelled literal down to the address it reaches.
 
     `::ffff:10.0.0.1`, `2002:0a00:0001::` and a Teredo literal all connect somewhere a prefix
     list written in IPv4 will never match on its own.
@@ -118,9 +102,9 @@ def _address_risk(
     Judges the literal and what it unwraps to, because either one reaching inside is enough.
     """
     for candidate in (address, _unwrap_address(address)):
-        # An operator-declared exemption, used only by a development deployment so a test
-        # receiver on this host is reachable. `webhook_destination_exemptions` returns nothing
-        # at all unless DEBUG is on, so setting the variable in production has no effect.
+        # An operator-declared exemption: a webhook test receiver on a development deployment
+        # (`webhook_destination_exemptions` is empty unless DEBUG is on), or an operator's own
+        # feed mirror on a private network (`_mirror_exemptions` in core/config.py).
         if any(
             candidate.version == network.version and candidate in network
             for network in exemptions
@@ -144,12 +128,9 @@ def describe_url_risk(
 ) -> Optional[str]:
     """Why this URL is unsafe to fetch, or None when it is safe.
 
-    Returns a reason rather than a bool so the caller can say what was wrong. The reason names
-    the category, never the resolved address, so a refusal cannot be used to map the network.
-
-    `allowed_ports` is opt-in. A callback base registered years ago may legitimately sit on a
-    non-standard port, so the general validator does not constrain it; the surfaces where we
-    choose the policy pass their own set.
+    The reason names the category, never the resolved address, so a refusal cannot map the
+    network. `allowed_ports` is opt-in: a registered callback base may sit on a non-standard
+    port, so only surfaces with their own port policy pass a set.
     """
     try:
         parsed = urlparse(url)
@@ -163,9 +144,9 @@ def describe_url_risk(
     if require_https and scheme != "https":
         return "must use https"
 
-    # important: userinfo is not decoration. httpx turns `https://user:pass@host/` into an
-    # Authorization header, so a stored URL becomes a way to smuggle a credential into our own
-    # outbound requests and our own logs.
+    # important: httpx turns the userinfo of `https://user:pass@host/` into an Authorization
+    # header, so a stored URL could smuggle a credential into this server's outbound requests
+    # and logs.
     if parsed.username or parsed.password:
         return "URL must not carry credentials"
 
@@ -219,11 +200,9 @@ def resolve_safe_addresses(
 ) -> Tuple[str, ...]:
     """Every address `host` answers with, refusing outright if any of them reaches inside.
 
-    Refuses rather than filtering. A name that answers with a mix of public and internal
-    addresses is hostile, not partly usable, and picking the safe one would leave the next
-    lookup free to return the other.
-
-    Raises ValueError with a category reason, matching this module's refusal contract.
+    A name that answers with a mix of public and internal addresses is hostile; picking the safe
+    one would leave the next lookup free to return the other. Raises ValueError with a category
+    reason.
     """
     if host.lower().rstrip(".") in BLOCKED_HOSTNAMES:
         raise ValueError("host is not routable from this server")
@@ -291,10 +270,8 @@ def split_scheme_host(url: str) -> Tuple[str, str]:
 def normalize_endpoint(endpoint: Optional[str]) -> str:
     """Strip whitespace and trailing slashes from a hypervisor endpoint.
 
-    important: LXD's router does not collapse a double slash. An endpoint stored as
-    "https://host:8443/" joined to "/1.0/instances" requests "//1.0/instances", which answers
-    404 rather than the 403 that means "certificate not trusted yet" - so a healthy cluster
-    reads as an unexpected protocol error. Every place that builds a path onto a stored
-    endpoint must go through here.
+    important: LXD's router does not collapse a double slash: "https://host:8443/" joined to
+    "/1.0/instances" answers 404 instead of the 403 that means "certificate not trusted yet".
+    Every place that builds a path onto a stored endpoint must go through here.
     """
     return (endpoint or "").strip().rstrip("/")

@@ -48,7 +48,7 @@ LEASE_KEY = "orcastra:kernel_cve_feed:lease"
 
 _check_lock = asyncio.Lock()
 _task: Optional[asyncio.Task] = None
-# cve id -> ((cve id, last_success_at), the record read back from the store)
+# cve id -> ((cve id, last_success_at, record shape), the record read back from the store)
 _parsed: Dict[str, Tuple[Tuple[str, Any], Optional[record_module.UbuntuCve]]] = {}
 
 
@@ -177,8 +177,8 @@ def _when(epoch: Any) -> Optional[datetime]:
 
 
 def _stored_record(cve_id: str, state: Dict[str, Any]) -> Optional[record_module.UbuntuCve]:
-    # note: the stored copy is checked again on every read (record.from_dict), a few milliseconds
-    # for a kernel CVE's ~170 packages; one parse per read Ubuntu answered is enough per process.
+    # The stored copy is checked again on every read (record.from_dict), a few milliseconds for a
+    # kernel CVE's ~170 packages; one parse per read Ubuntu answered is enough per process.
     stored = state.get("record")
     packages = stored.get("packages") if isinstance(stored, dict) else None
     shape = (str(stored.get("updated_at")), len(packages)) if isinstance(packages, list) else None

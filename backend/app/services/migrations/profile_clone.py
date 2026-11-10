@@ -1,13 +1,13 @@
 """How a project relocation recreates the source project's profiles on the target.
 
-A profile is copied with its description, config, and devices. Two kinds of values name things
-outside the project that may not exist on the target: a NIC's network (or host parent) and the
-root disk's storage pool. They are decided with the rules an instance contract uses: an explicit
-mapping, else the same name when the target project can use it. Anything else is a finding,
-never a guess. Host-bound devices and raw daemon config are refused as they are on an instance.
+A profile is copied with its description, config and devices. A NIC's network (or host parent)
+and the root disk's storage pool name things outside the project that may not exist on the
+target. They follow the instance contract's rules: an explicit mapping, else the same name when
+the target project can use it, else a finding. Host-bound devices and raw daemon config are
+refused as they are on an instance.
 
 Everything here is pure. The planner and the worker clone from the same source records, so the
-profile a worker creates is exactly the one the plan approved.
+profile a worker creates is the one the plan approved.
 """
 
 from __future__ import annotations

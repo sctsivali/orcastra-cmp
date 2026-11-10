@@ -1,20 +1,13 @@
-"""
-Bounded offload for blocking calls reached from an async path.
+"""Bounded offload for blocking calls reached from an async path.
 
-Three bounds are needed and they are not interchangeable:
+Three bounds, each with its own job: a socket timeout on the call itself (the only thing that
+frees the worker thread), a wall-clock cap (how long the caller waits) and a bounded pool (how
+much of the process one dead peer can pin). `asyncio.wait_for` supplies only the second.
+Cancelling the await does not stop the thread, so a call with no socket timeout leaks a worker
+for good, and the pool drains until one silent LXD cluster has taken the whole API down.
 
-  - a socket timeout on the call itself, which is the only thing that ever frees the worker
-    thread;
-  - a wall-clock cap, which bounds how long the caller waits;
-  - a bounded pool, which bounds how much of the process one dead peer can pin.
-
-`asyncio.wait_for` supplies only the second. Cancelling the await does NOT stop the thread,
-so a call with no socket timeout leaks a worker permanently and the pool drains one request
-at a time until nothing is left. That is precisely how the RC3 outage escalated from one
-silent LXD cluster to a fully dead API.
-
-This module is stdlib and logging only. It must never import from app.services or
-app.routers, so any layer can use it without an import cycle.
+Stdlib and logging only. It must never import from app.services or app.routers, so any layer
+can use it without an import cycle.
 """
 
 from __future__ import annotations
@@ -37,8 +30,8 @@ class BlockingTimeout(Exception):
     """A bounded blocking call exceeded its wall-clock budget.
 
     The caller stops waiting; the call does not stop. `pending` is the still-running call, so a
-    write route can act when it really finishes (when_finished), such as clearing the list
-    caches that a write landing after the 504 would otherwise leave stale for a whole TTL.
+    write route can act once it ends (`when_finished`), such as clearing the list caches that a
+    write landing after the 504 would otherwise leave stale for a whole TTL.
     """
 
     def __init__(
@@ -142,8 +135,8 @@ def _release(executor: ThreadPoolExecutor, concurrency_key: Optional[str]) -> No
 def _on_done(
     executor: ThreadPoolExecutor, concurrency_key: Optional[str], future: Any
 ) -> None:
-    # note: retrieve the exception so a call that failed after its wall-clock cap expired
-    # does not surface later as "Future exception was never retrieved".
+    # Retrieve the exception so a call that failed after its wall-clock cap expired does not
+    # surface later as "Future exception was never retrieved".
     try:
         if not future.cancelled():
             future.exception()
@@ -185,26 +178,12 @@ async def run_blocking(
     loop = asyncio.get_running_loop()
     started = time.monotonic()
 
-    # important: carry the caller's context into the worker. `loop.run_in_executor` does not,
-    # so every ContextVar read in the thread returned its DEFAULT, and this codebase runs two
-    # semantics side by side: `asyncio.to_thread` copies the context (it wraps the call in
-    # `ctx.run` itself) and this did not. Three things depended on the difference and none of
-    # them announced it.
-    #
-    # The org-scope filter at the top of connection.get_client reads `_allowed_clusters_var`,
-    # which defaults to None meaning "no filter", so the filter could never deny anything
-    # reached through here. services/lxd/status.py already records that and warns that a future
-    # caller which does not pre-filter its own list gets no second line of defence.
-    #
-    # `org_scope.get_scope_cache_key` returns ":scope=all" on a None var, which is the ADMIN
-    # cache namespace. Every current call site runs on the loop before the offload, so nothing
-    # is poisoned today, and this removes the way it could be.
-    #
-    # `org_scope.check_tenant_permission` returns True on a None ACL. In a worker that is
-    # unconditional, so it fails OPEN. No target of this helper calls it today.
-    #
-    # It also restores the request id and the actor to every log line emitted from a worker,
-    # since core/request_context.py is a ContextVar too.
+    # important: carry the caller's context into the worker. Unlike `asyncio.to_thread`,
+    # `loop.run_in_executor` does not, and an unset ContextVar is the permissive value: the
+    # org-scope filter in connection.get_client reads None as "no filter",
+    # `org_scope.get_scope_cache_key` returns the Admin namespace ":scope=all", and
+    # `org_scope.check_tenant_permission` treats a None ACL as full access, so it fails open.
+    # The copy also keeps the request id and actor (core/request_context.py) on worker log lines.
     ctx = contextvars.copy_context()
     call = (
         partial(ctx.run, fn, *args, **kwargs)
@@ -219,9 +198,9 @@ async def run_blocking(
         raise
 
     if tracked:
-        # note: shield below keeps `future` pending until the thread really finishes, so this
-        # callback fires then and not at cancellation time. That is what keeps the in-flight
-        # count honest about how much of the pool a dead peer is holding.
+        # The shield below keeps `future` pending until the thread finishes, so this callback
+        # fires then and not at cancellation. The in-flight count therefore shows how much of
+        # the pool a dead peer still holds.
         future.add_done_callback(lambda f: _on_done(executor, concurrency_key, f))
 
     try:

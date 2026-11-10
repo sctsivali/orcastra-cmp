@@ -1,14 +1,4 @@
-"""
-Archive Service for OpenSearch log compression & archive management.
-
-Provides methods to:
-- Query snapshot repository status
-- List/manage snapshots
-- Get ISM policy status for indices
-- Trigger manual snapshots
-- Restore indices from snapshots
-- Get archive health overview
-"""
+"""OpenSearch log archive: snapshots, restores, ISM policies and index status."""
 
 import logging
 from typing import Optional, Dict, List, Any
@@ -104,13 +94,9 @@ class ArchiveService:
         return await self._get("/_cluster/health")
 
     async def get_archive_overview(self) -> Dict[str, Any]:
-        """
-        Get comprehensive archive status overview:
-        - Cluster health
-        - Snapshot repository status
-        - Snapshot count & latest snapshot info
-        - Index lifecycle status (ISM)
-        - Archive indices summary
+        """Archive status: cluster health, snapshot repository, snapshot count with
+        the oldest and latest, archive indices by category and ISM policies. Each part
+        reports its own error.
         """
         overview: Dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -121,7 +107,6 @@ class ArchiveService:
             "ism_policies": {},
         }
 
-        # cluster health
         try:
             health = await self.get_cluster_health()
             overview["cluster"] = {
@@ -132,14 +117,12 @@ class ArchiveService:
         except ArchiveServiceError as e:
             overview["cluster"] = {"error": str(e)}
 
-        # snapshot repo
         try:
             repo = await self.get_snapshot_repository()
             overview["snapshot_repository"] = repo
         except ArchiveServiceError:
             overview["snapshot_repository"] = {"status": "not_configured"}
 
-        # snapshot summary
         try:
             snapshots = await self.list_snapshots()
             overview["snapshots"] = {
@@ -150,7 +133,6 @@ class ArchiveService:
         except ArchiveServiceError:
             overview["snapshots"] = {"total": 0, "error": "unavailable"}
 
-        # indices overview
         try:
             indices = await self.list_archive_indices()
             overview["indices"] = {
@@ -160,7 +142,6 @@ class ArchiveService:
         except ArchiveServiceError:
             overview["indices"] = {"error": "unavailable"}
 
-        # ISM policy summary
         try:
             policies = await self.list_ism_policies()
             overview["ism_policies"] = {
@@ -192,7 +173,6 @@ class ArchiveService:
         """List all snapshots in the archive repository."""
         data = await self._get(f"/_snapshot/{self._repo}/_all")
         snapshots = data.get("snapshots", [])
-        # sort by start_time
         snapshots.sort(key=lambda s: s.get("start_time", ""))
         return snapshots
 
@@ -210,9 +190,7 @@ class ArchiveService:
         indices: str = "orcastra-*,vault-audit-*",
         wait_for_completion: bool = False,
     ) -> Dict[str, Any]:
-        """
-        Create a new snapshot manually.
-        """
+        """Snapshot the archive indices, without the cluster's global state."""
         params = {"wait_for_completion": str(wait_for_completion).lower()}
         body = {
             "indices": indices,
@@ -236,9 +214,7 @@ class ArchiveService:
         rename_pattern: Optional[str] = None,
         rename_replacement: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """
-        Restore indices from a snapshot.
-        """
+        """Restore indices from a snapshot, optionally renamed."""
         body: Dict[str, Any] = {
             "ignore_unavailable": True,
             "include_global_state": False,

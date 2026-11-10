@@ -1,38 +1,20 @@
 """A name a raw-proxy create or rename body gives an LXD object, refused when no key door could address it.
 
-LXD addresses a snapshot, a backup, a volume, a network, a zone and its records, a storage pool and an
-image alias by the name its create or rename body carried, and several of its own name checks allow `.`
-and `..` (July 2024 module, lxd/):
+LXD names snapshots, backups, volumes, networks, zones, zone records, storage pools and image aliases from
+the body, and its checks there let `.` and `..` through (July 2024 lxd/: instance_snapshot.go:316, 727,
+instance_backup.go:313, 511, storage_volumes.go:947, 1346, storage_volumes_snapshot.go:219, 582,
+storage_volumes_backup.go:429, 676, storage_pools.go:271, networks.go:329, 1119, network/zone/zone.go:149,
+network/zone/record.go:16, images.go:1182, 3306, 3906). requests folds a dot segment out of a path and
+core/raw_proxy_path refuses one, so no key door could reach such an object again. A dot, empty or null
+name, or one that fully decodes to a dot segment, is refused with 400 before anything is sent. An absent
+name is refused only where LXD keeps it as an empty one (a backup or image alias rename, a zone record, an
+image's alias entry); elsewhere LXD names the object itself or keeps the current name.
 
-- instance snapshot create and rename: validate.IsURLSegmentSafe only (instance_snapshot.go:316, 727)
-- instance backup create and rename: a `/` check only (instance_backup.go:313, 511)
-- volume create and rename: storagePools.ValidVolumeName, empty and `/` only (storage_volumes.go:947, 1346)
-- volume snapshot create: the pool backend's ValidateName, `/` and space only (storage_volumes_snapshot.go:219,
-  storage/backend_lxd.go:91), rename: ValidVolumeName (storage_volumes_snapshot.go:582)
-- volume backup create and rename: a `/` check only (storage_volumes_backup.go:429, 676)
-- storage pool create: `/` and the backend's ValidateName (storage_pools.go:271, storage_pools_utils.go:55)
-- network create and rename: the driver's ValidateName, IsURLSegmentSafe for every type and IsInterfaceName,
-  which takes `..`, for a bridge (networks.go:329, 1119, network/driver_common.go:209, driver_bridge.go:186)
-- network zone create: empty and a leading `/` only (network/zone/zone.go:149), zone record create: no name
-  check (network/zone/record.go:16)
-- image alias create: empty only (images.go:3306), rename: no check (images.go:3906), and the aliases of an
-  image create: no check (images.go:1182).
-
-requests folds a `.` or `..` segment out of the path it sends and core/raw_proxy_path refuses one, so an
-object named that way cannot be read, renamed or deleted through any key door once it exists. A body that
-carries such a name, or an empty or null one, is refused with 400 before anything is sent, and so is a
-name that is one once fully decoded, the way canonical_proxy_path reads a path. Where LXD reads an absent
-name as an empty one and keeps it (a backup or image alias rename, a zone record, an image's alias entry),
-an absent name is refused too. Where it names the object itself (a snapshot or backup create) or keeps the
-old name (an instance rename or move), an absent name is left to it.
-
-note: LXD refuses a dot name itself for an instance create (instance.ValidName, instances_post.go:1129), a
-profile (profiles.go:290, 748), a project (api_project.go:1436), a network ACL and a network peer
-(network/acl/acl_validation.go:23), and a storage bucket (storage/drivers/driver_common.go:491), and a
-network forward or load balancer is addressed by its listen address, parsed as an IP. Those bodies are left
-to LXD. An instance rename is held to the rule although instance.ValidName refuses the dot names too
-(instance_post.go:317), so an empty name there, which LXD reads as keeping the old one, is refused and a
-caller leaves name out instead.
+LXD refuses dot names itself on instance create (instances_post.go:1129), profiles (profiles.go:290, 748),
+projects (api_project.go:1436), network ACLs and peers (network/acl/acl_validation.go:23) and storage
+buckets (storage/drivers/driver_common.go:491), and addresses network forwards and load balancers by listen
+address, so those are left to it. An instance rename is still checked, so an empty name, which LXD reads as
+keeping the current one, is refused; a caller leaves name out instead.
 """
 
 from collections.abc import Mapping
@@ -48,7 +30,7 @@ __all__ = ["assert_body_names_addressable"]
 
 _FAMILY = "<family>"
 _VOLUME = ("storage-pools", None, "volumes", None, None)
-# note: each entry is (segments under /1.0, what the name is, whether LXD keeps an absent name as an empty
+# Each entry is (segments under /1.0, what the name is, whether LXD keeps an absent name as an empty
 # one). None matches any one segment and _FAMILY any of /instances, /containers and /virtual-machines.
 _NAMED_BODIES: Tuple[Tuple[Tuple[Optional[str], ...], str, bool], ...] = (
     ((_FAMILY, None), "Instance name", False),
@@ -85,7 +67,7 @@ def _named_body(segments: Tuple[str, ...]) -> Optional[Tuple[str, bool]]:
     for pattern, what, absent_is_empty in _NAMED_BODIES:
         if _matches(pattern, segments):
             return what, absent_is_empty
-    # note: an alias name may hold `/` (mkt/<org>/<slug>), so a rename path has any number of segments.
+    # An alias name may hold `/` (mkt/<org>/<slug>), so a rename path has any number of segments.
     if len(segments) > 2 and segments[:2] == ("images", "aliases"):
         return _ALIAS_NAME, True
     return None
@@ -124,8 +106,8 @@ def assert_body_names_addressable(path: str, method: str, body: Any) -> None:
         return
     segments = canonical_proxy_path(path).lowered
     if segments == ("images",):
-        # note: the body rule (core/api_key_body.py) refused any other spelling of an entry's fields first, so
-        # `name` is the one field LXD reads as the alias name.
+        # The body rule (core/api_key_body.py) has already refused any other spelling of an entry's fields,
+        # so `name` is the one field LXD reads as the alias name.
         aliases = body.get("aliases")
         for alias in aliases if isinstance(aliases, list) else []:
             if isinstance(alias, Mapping):

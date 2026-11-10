@@ -2,8 +2,8 @@
 
 Preflight and the worker both build the target contract through ``read_target_view`` and
 ``contract_for`` so the definition the worker submits is derived exactly the way the approved
-plan was. Reader functions come from ``preflight`` and are looked up at call time, which keeps
-the existing test doubles for ``preflight._instance`` and friends effective.
+plan was. Reader functions come from ``preflight`` and are looked up at call time, so test
+doubles for ``preflight._instance`` and the other readers still apply.
 """
 
 from __future__ import annotations

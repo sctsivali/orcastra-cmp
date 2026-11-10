@@ -65,7 +65,7 @@ async def read_restore_plan(
         raise HTTPException(
             status_code=404, detail=f"Snapshot '{snapshot_name}' does not exist on {instance_name}."
         )
-    # note: a Tenant's plan withholds the pool's driver (owner decision 2026-10-26).
+    # A Tenant's plan withholds the pool's driver.
     plan = restore_plan.plan_restore(
         driver, existing, snapshot_name, name_driver=caller_tier() != "tenant"
     )
@@ -93,11 +93,11 @@ async def read_snapshot_operation(
     lxd_service: LXDService = Depends(get_lxd_service),
     user: AuthenticatedUser = Depends(require_tenant()),
 ):
-    """The status of a snapshot operation, for the caller who started it and nobody else.
+    """The status of a snapshot operation, readable only by the caller who started it.
 
-    important: the initiator record is the whole grant. It must name this caller, this cluster,
-    this project and this instance; anything else, a missing record included, is the same 404 so
-    an operation id is never an oracle for whose it is.
+    The initiator record is the whole grant: it must name this caller, this cluster, this project
+    and this instance. Anything else, a missing record included, answers the same 404, so an
+    operation id never reveals whose it is.
     """
     project = _enforce_snapshot_access(host, project, instance_name)
     initiator = operation_initiator.recall(host, operation_id)

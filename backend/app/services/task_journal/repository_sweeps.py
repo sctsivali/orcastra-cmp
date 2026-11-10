@@ -22,9 +22,9 @@ from app.services.task_journal.repository_types import (
 
 
 async def merge_racing_pairs(db: AsyncSession, *, window_s: int = 900) -> int:
-    # note: the residual race is a dashboard row and an LXD row for one key that neither side
-    # claimed because both landed inside the same instant. The LXD row keeps the operation and
-    # takes the actor; the dashboard row's log lines move over before it goes.
+    # The residual race: a dashboard row and an LXD row for one key that neither side claimed
+    # because both landed in the same instant. The LXD row keeps the operation and takes the
+    # actor; the dashboard row's log lines move over before it is deleted.
     pairs = (
         await db.execute(
             text(
@@ -221,10 +221,10 @@ async def reset_cluster_states(db: AsyncSession) -> None:
 
 
 async def mark_unregistered_except(db: AsyncSession, registered: Iterable[str]) -> None:
-    """Every row whose cluster the registry no longer holds reads `unregistered`.
+    """Every row whose cluster the registry does not hold reads `unregistered`.
 
-    note: the registry loop unfollows only ids this worker follows in memory, which after a
-    restart is none, so a cluster deregistered earlier or on another worker kept its old row.
+    The registry loop unfollows only ids this worker follows in memory, which after a restart is
+    none, so a cluster deregistered earlier or on another worker would otherwise keep its row.
     """
     await db.execute(
         text(
@@ -282,8 +282,8 @@ async def prune_batch(
     """One batch of each delete; the third value says whether a full batch was deleted, so the
     caller commits and comes back for more. Nothing here holds more than one batch's rows.
 
-    A My Keys row (resource_type ssh_key, ssh_key_cleanup or ssh_key_request) is a credential's trail and is kept
-    for `key_days` (MY_KEYS_AUDIT_RETENTION_DAYS), never less than every other row's `log_days`.
+    A My Keys row (resource_type ssh_key, ssh_key_cleanup or ssh_key_request) is a credential's
+    trail and is kept for `key_days` (MY_KEYS_AUDIT_RETENTION_DAYS), never less than `log_days`.
     """
     key_days = max(int(key_days if key_days is not None else log_days), int(log_days))
     logs = await db.execute(

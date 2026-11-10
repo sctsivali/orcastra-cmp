@@ -1,13 +1,12 @@
 """Ownership-aware policy for writes that can reach the LXD host.
 
-Partners normally own their cluster and keep the full LXD surface. A physical cluster may,
-however, be bound to more than one organization. On that boundary only project-contained,
-typed settings are safe: a raw config key, passthrough device, host path or unmanaged NIC
-would let one organization affect or inspect another organization's host resources.
+A Partner that owns its cluster keeps the full LXD surface. A physical cluster may be bound to
+more than one organization, and there only project-contained, typed settings are safe: a raw
+config key, passthrough device, host path or unmanaged NIC would let one organization affect or
+inspect another organization's host resources.
 
-The policy is intentionally independent from the instance router. Profile and project writes
-use it here, and instance create/update can call the same validator rather than growing a
-second allowlist that eventually drifts.
+The policy is independent of any router: instance, profile and project writes all call it, so
+there is one allowlist to keep current.
 """
 
 from __future__ import annotations
@@ -96,9 +95,9 @@ async def resolve_cluster_write_policy(
 ) -> ClusterWritePolicy:
     """Resolve the current ownership shape directly from organization bindings.
 
-    Admin deliberately short-circuits without a database read. For Partner, anything other
-    than exactly one bound organization on the partner's own side is restricted. An unbound registrant row is valid for
-    cluster visibility, but it is not enough evidence to grant host-level capabilities.
+    Admin and Tenant return without a database read. For a Partner, anything other than exactly
+    one bound organization, on a cluster no other party holds, is restricted. An unbound registrant
+    row is valid for cluster visibility but is not enough evidence to grant host-level capabilities.
     """
 
     role = get_highest_role(resolve_roles(user))
@@ -123,8 +122,8 @@ async def resolve_cluster_write_policy(
     elif len(bound_organizations) > 1:
         ownership = ClusterOwnership.SHARED
     elif cluster_id in await cluster_parties.clusters_held_by_another_party(db, user.email, {cluster_id}):
-        # important: one binding is not one owner. A partner reaches a cluster another party holds
-        # alone through a member row in an organization it bought from, and EXCLUSIVE would hand it
+        # important: one binding is not one owner. A Partner reaches a cluster another party holds
+        # alone through a member row in an organization it bought from; EXCLUSIVE would hand it
         # host-level config (privileged containers, raw.lxc, host disks) on the seller's host.
         ownership = ClusterOwnership.SHARED
     else:
@@ -281,10 +280,10 @@ def shared_payload_findings(
 ) -> tuple[PolicyFinding, ...]:
     """Return the value-free shared-cluster findings used by every write guard.
 
-    A daemon readback adds immutable bookkeeping such as ``volatile.*`` and image metadata to
-    an instance's local config. Those keys were not supplied by the tenant and cannot grant a
-    host capability, so the pre-share inventory audit ignores them. Request payloads retain the
-    stricter behavior and reject every key outside the allowlist.
+    A daemon readback adds bookkeeping such as ``volatile.*`` and ``image.*`` to an instance's
+    local config. The tenant did not supply those keys and they grant no host capability, so
+    ``existing_resource`` (the pre-share inventory audit) ignores them. Request payloads reject
+    every key outside the allowlist.
     """
 
     checked_config = config
@@ -467,6 +466,6 @@ def validate_project_update(
     policy: ClusterWritePolicy,
     current_config: Mapping[str, Any],
 ) -> None:
-    """Refuse writes to legacy shared projects until an Admin isolates them explicitly."""
+    """Refuse writes to a shared-cluster project until an Admin isolates it."""
 
     validate_target_project_isolation(policy, current_config)

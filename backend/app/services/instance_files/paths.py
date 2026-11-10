@@ -53,7 +53,7 @@ def to_guest(text: str) -> bytes:
 def clean_path(value: str) -> str:
     """The absolute, normalized path a request names, or a refusal.
 
-    note: `..` is folded here rather than refused. LXD resolves paths inside the guest, so it is
+    `..` is folded here rather than refused. LXD resolves paths inside the guest, so it is
     no traversal against this host, and folding means the audit record says what was reached.
     """
     if not value.startswith("/"):

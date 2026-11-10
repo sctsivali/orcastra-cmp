@@ -1,17 +1,16 @@
 """The browser-to-LXD relay behind ``/terminal/ws/{instance}``: an interactive exec shell.
 
-Wire protocol (the client's first text frame chooses it):
+The client's first text frame chooses the wire protocol:
 
-- ``{"width", "height", "binary": true, "flow": true}``: PTY output goes out as raw binary frames,
-  input comes in as binary frames, and the client ACKs output it has drawn. Text frames carry
-  JSON control only: resize, ack, ping, and the server's session / ready / error notices.
-- ``{"width", "height"}`` alone: the previous protocol, kept for a tab still running the last
-  build across a deploy. Output goes out as ``{"type": "output", "data": "..."}``.
+- ``{"width", "height", "binary": true, "flow": true}``: PTY output and input travel as binary
+  frames and the client ACKs drawn output; text frames carry JSON control only (resize, ack, ping,
+  and the server's session / ready / error notices).
+- ``{"width", "height"}`` alone: the legacy JSON protocol for a tab still on an older build, with
+  output as ``{"type": "output", "data": "..."}``.
 
-important: output used to be decoded per LXD frame with errors="replace", so a multibyte
-character split across two frames (box drawing in htop, CJK, emoji, systemd's bullet) arrived as
-U+FFFD. Binary frames hand xterm the bytes and its streaming decoder stitches them. The legacy
-path keeps an incremental decoder for the same reason.
+important: never decode output per LXD frame; a multibyte character split across two frames would
+arrive as U+FFFD. Binary frames hand xterm the bytes for its streaming decoder; the legacy path
+uses an incremental decoder.
 """
 
 from __future__ import annotations
@@ -167,7 +166,7 @@ class TerminalProxy:
     async def _refuse(self, message: str, code: int, *, reason: str = "") -> None:
         """Say why in an error frame, then close with `code` and `reason` (the message when unset).
 
-        note: the frame carries the full sentence and the code, since a close reason is cut at 123
+        The frame carries the full sentence and the code, since a close reason is cut at 123
         bytes. A code of core/ws_close.py closes with its token instead of the sentence.
         """
         try:
@@ -229,7 +228,7 @@ class TerminalProxy:
             return
         kind = body.get("type")
         if kind == "input":
-            # The previous protocol: keystrokes as JSON text.
+            # Legacy protocol: keystrokes as JSON text.
             payload = str(body.get("data") or "").encode("utf-8")
             if payload:
                 await self.data_ws.send(payload)

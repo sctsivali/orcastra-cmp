@@ -3,13 +3,12 @@
 A row is written before the DELETE goes to LXD and stays until the outcome is settled: deleted
 (the captured rules are revoked and the deletion announced), refused (the row goes), or still
 present when its deadline passes (nothing is revoked). Any worker's sweeper can finish a row whose
-lease ran out, which is what makes a crash between sending the DELETE and reading its answer safe.
+lease ran out, so a crash between sending the DELETE and reading its answer is safe.
 
-**One open row per (cluster, project).** The partial unique index over the open states, not a
-read-then-write, is what stops two workers opening two follow-ups for one project.
-
-**`rule_ids` are the rules captured under the cluster lock**, never the rules that name the project
-when the row is finished: a rule staged after the delete landed belongs to a later project.
+important: only the partial unique index over the open states keeps one open row per (cluster,
+project); a read-then-write would let two workers open two. `rule_ids` are the rules captured
+under the cluster lock, never the rules naming the project when the row is finished: a rule
+staged after the delete landed belongs to a later project.
 """
 
 from datetime import datetime, timezone
@@ -31,7 +30,7 @@ def _now() -> datetime:
 class ProjectDeleteFollowup(Base):
     __tablename__ = "project_delete_followups"
 
-    # note: Integer on SQLite only, where nothing but INTEGER PRIMARY KEY autoincrements; the
+    # Integer on SQLite only, where nothing but INTEGER PRIMARY KEY autoincrements; the
     # hermetic tests run these rows there. PostgreSQL gets the BIGINT the migration creates.
     id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     cluster_id = Column(String(255), nullable=False, index=True)

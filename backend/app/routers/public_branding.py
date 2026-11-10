@@ -1,10 +1,9 @@
 """The deployment default branding, before sign-in: the sign-in page, the tab title and the favicon.
 
 No authentication, so the answer is an allow-list of display fields and nothing that names a
-person or an organization. An uploaded image is not inlined: it is served from /assets/, decoded,
+person or an organization. An uploaded image is not inlined: it is served decoded from /assets/,
 under its own type and a policy that runs nothing inside it, which is what makes an SVG logo safe
-to accept (validation.py). A URL the Administrator gave (Cloudinary, or a path on this site) is
-passed through as it is.
+to accept (validation.py). A URL the Administrator gave is passed through as it is.
 """
 
 from __future__ import annotations

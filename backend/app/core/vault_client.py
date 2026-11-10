@@ -1,13 +1,12 @@
 """
-Vault Client Module
-Provides secure interaction with HashiCorp Vault for storing cluster metadata,
-certificates, and secrets.
+HashiCorp Vault client for cluster metadata, certificates and secrets.
 
 All operations are audit-logged via ActivityLogger with:
 - vault.secret.read / vault.secret.write / vault.secret.delete
 - vault.kv.put / vault.kv.list
 - vault.cert.generate / vault.cert.list
-Secret VALUES are NEVER logged - only access paths and operation results.
+- vault.health.check
+Secret VALUES are NEVER logged, only access paths and operation results.
 """
 
 import logging
@@ -25,15 +24,13 @@ LAST_GOOD_LIST_NAMESPACE = "vault_list_last_good"
 LAST_GOOD_LIST_TTL = 7 * 24 * 3600
 
 # (connect, read) for the metadata LIST only. A KV-v2 LIST walks the storage backend, the one
-# Vault call here that is a scan rather than a point read, and on a loaded box it was the one
-# call that timed out while every per-cluster GET at (2, 3) kept answering. The read budget
-# is affordable because the LIST runs off the event loop (routers/nodes.py); point reads stay
-# at (2, 3) since they sit on the request path.
+# Vault call here that is a scan rather than a point read, so under load it is the first to
+# time out. The read budget is affordable because the LIST runs off the event loop
+# (routers/nodes.py); point reads stay at (2, 3) since they sit on the request path.
 VAULT_LIST_TIMEOUT = (3, 10)
 
-# Import cache manager - will be lazy loaded to avoid circular imports
+# Both loaded lazily to avoid circular imports.
 _cache_manager = None
-# Lazy-loaded audit logger to avoid circular imports
 _audit_logger = None
 
 
@@ -71,16 +68,12 @@ def _audit_vault_operation(
     duration_ms: Optional[float] = None,
     details: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """
-    Emit a vault audit event. Never blocks the caller on failure.
-    SECURITY: Only logs the path - never logs secret values.
-    """
+    """Emit a vault audit event with the path, never secret values. Never fails the caller."""
     try:
         audit = _get_audit_logger()
         if audit is None:
             return
 
-        # sanitize path for audit (remove Vault addr prefix, just path)
         safe_details = {"vault_path": path}
         if details:
             safe_details.update(details)
@@ -127,14 +120,11 @@ def _unique_vault_json_pairs(pairs):
 def _safe_vault_url(vault_addr: str, path: str) -> str:
     """Build a Vault URL whose path cannot escape the segment the caller asked for.
 
-    important: every call site interpolated the path straight into the URL, and several build
-    that path from request data. `save_user_mapping_to_vault` puts a caller-supplied
-    `external_user_id` in it, so `../../../../clusters/<id>` produced a URL that Vault's own HTTP
-    layer normalised, and a user-mapping write landed on a cluster's certificate material.
-
-    Refusing rather than encoding, because no legitimate Vault path in this codebase contains a
-    dot segment, and an encoded `..` would still be a caller steering the path. Each segment is
-    percent-encoded so a stray slash cannot add a level either.
+    Some paths carry request data (ex; `external_user_id` in `save_user_mapping_to_vault`), and
+    Vault's HTTP layer normalises dot segments, so `../../../../clusters/<id>` would land a
+    user-mapping write on a cluster's certificate material. Dot segments are refused: no
+    legitimate Vault path here contains one. Each segment is percent-encoded so a stray slash
+    cannot add a level either.
     """
     from urllib.parse import quote
 
@@ -150,17 +140,10 @@ def _safe_vault_url(vault_addr: str, path: str) -> str:
 
 
 class VaultClient:
-    """
-    Client for interacting with HashiCorp Vault.
-    Handles KV secrets, PKI operations, and certificate management.
-    """
+    """Synchronous Vault client for KV secrets, PKI and certificate operations."""
     
     def __init__(self, vault_addr: str, vault_token: str):
-        """
-        Initialize Vault client.
-        
-            vault_addr: Vault server address (ex; http://localhost:8200 or http://<IP>:8200)
-        """
+        """`vault_addr` is the server address, ex; http://localhost:8200."""
         self.vault_addr = vault_addr.rstrip('/')
         self.headers = {"X-Vault-Token": vault_token}
         self.session = self._create_session()
@@ -176,7 +159,6 @@ class VaultClient:
             allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PUT", "DELETE"]
         )
         
-        # Use connection pooling for better performance
         adapter = HTTPAdapter(
             max_retries=retry_strategy,
             pool_connections=20,
@@ -186,7 +168,6 @@ class VaultClient:
         session.mount("http://", adapter)
         session.mount("https://", adapter)
         
-        # Enable keep-alive for connection reuse
         session.headers.update({
             'Connection': 'keep-alive',
         })
@@ -197,18 +178,10 @@ class VaultClient:
         """
         Whether this path's contents may be mirrored into Redis.
 
-        important: an allowlist, and it replaced a denylist that had already failed. That
-        denylist matched the substrings '/certs', '/certificates', '/keys', '/private' and
-        '/secrets', and the API key credential path
-        ``secret/data/integrations/api_keys/<id>/secret`` slipped past it twice over: the path
-        contains ``api_keys``, which is ``_keys`` and not ``/keys``, and it ends in ``secret``,
-        singular, not ``secrets``. The plaintext key secret was therefore written to Redis in
-        clear for the cache TTL, which was confirmed against a running deployment rather than
-        inferred.
-
-        A denylist that has already missed two spellings of the same word is the wrong shape.
-        Anything not named here is not cached, so a new path is safe by default and the failure
-        mode of getting this wrong is a slower read rather than a leaked credential.
+        An allowlist. A substring denylist ('/keys', '/secrets', ...) misses spellings such as
+        ``secret/data/integrations/api_keys/<id>/secret`` and would write a plaintext credential
+        to Redis. Anything not named here is not cached, so a new path is safe by default and
+        getting this wrong costs a slower read, never a leaked credential.
         """
         return path.lower().rstrip('/').endswith(self.CACHEABLE_PATH_SUFFIXES)
 
@@ -225,7 +198,7 @@ class VaultClient:
         ``use_cache`` parameter. See ``_is_cacheable_path``.
         """
         start = time.perf_counter()
-        # SECURITY: only allowlisted paths may reach Redis
+        # important: only allowlisted paths may reach Redis.
         should_cache = use_cache and self._is_cacheable_path(path)
         
         # Try cache first (only for non-sensitive paths)
@@ -238,10 +211,10 @@ class VaultClient:
         url = _safe_vault_url(self.vault_addr, path)
         
         try:
-            # Use faster timeout: (connect_timeout, read_timeout)
+            # (connect, read) seconds: a point read sits on the request path.
             response = self.session.get(url, headers=self.headers, timeout=(2, 3))
             response.raise_for_status()
-            
+
             result = response.json()
             # Handle both KV v1 and v2 formats
             if "data" in result and "data" in result["data"]:
@@ -249,9 +222,7 @@ class VaultClient:
             else:
                 data = result.get("data", {})  # KV v1 or other
             
-            # Cache the result with appropriate TTL (ONLY for non-sensitive paths)
             if should_cache and cache:
-                # Determine TTL based on path
                 ttl = self._get_cache_ttl(path)
                 cache.set("vault", path, data, ttl)
 
@@ -273,10 +244,9 @@ class VaultClient:
                 error_message=str(e),
                 duration_ms=duration,
             )
-            # important: a 404 is "this secret is not there", which for a cluster that was
-            # registered without one is a configuration state, not a server fault. Keeping
-            # it at ERROR meant a handful of stale cluster entries produced hundreds of
-            # ERROR records an hour and drowned the Vault failures worth paging on.
+            # A 404 means no secret at this path, which for a cluster registered without one is
+            # a configuration state. It logs at INFO so stale cluster entries do not drown the
+            # Vault failures worth paging on.
             status = getattr(getattr(e, "response", None), "status_code", None)
             if status == 404:
                 logger.info(f"No secret at Vault path {path}")
@@ -286,10 +256,7 @@ class VaultClient:
     
     def _get_cache_ttl(self, path: str) -> int:
         """
-        Determine appropriate cache TTL based on path.
-        
-        Note: Sensitive paths (certs, keys, secrets) are never cached,
-        but this function is still called for logging/metrics purposes.
+        Cache TTL for a path. Only called for paths _is_cacheable_path admits.
         """
         try:
             from app.core.config import get_settings
@@ -297,8 +264,8 @@ class VaultClient:
             
             if "/metadata" in path:
                 return settings.cache_ttl_vault_metadata
-            # Note: only /metadata reaches the cache at all (_is_cacheable_path), so this
-            # branch is unreachable for caching and stays as an explicit zero.
+            # Only /metadata reaches the cache (_is_cacheable_path), so the branches below
+            # never apply to a cached read; the zeros stay explicit.
             elif "/certs" in path:
                 return 0  # Never cache
             elif "/secrets" in path:
@@ -363,8 +330,7 @@ class VaultClient:
         self, path: str, data: Dict[str, Any], *, cas: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Put data into Vault KV v2 store.
-        Invalidates cache for the path.
+        Put data into the Vault KV v2 store and invalidate the path's cache entries.
 
         ``cas`` makes the write conditional on the document still being at that version, and a
         lost race raises `VaultCASConflict` instead of overwriting the winner.
@@ -380,7 +346,6 @@ class VaultClient:
             response = self.session.post(url, headers=self.headers, json=payload, timeout=(2, 3))
             response.raise_for_status()
             
-            # Invalidate cache for this path
             cache = get_cache()
             if cache:
                 cache.delete("vault", path)
@@ -414,10 +379,7 @@ class VaultClient:
             raise VaultClientError(f"Vault KV put failed: {str(e)}", status_code=status)
     
     def vault_delete(self, path: str) -> bool:
-        """
-        Delete data from Vault.
-        Invalidates cache for the path.
-        """
+        """Delete data from Vault and invalidate its cached copy and every parent list."""
         start = time.perf_counter()
         url = _safe_vault_url(self.vault_addr, path)
         
@@ -425,7 +387,6 @@ class VaultClient:
             response = self.session.delete(url, headers=self.headers, timeout=10)
             response.raise_for_status()
             
-            # Invalidate cache comprehensively
             cache = get_cache()
             if cache:
                 cache.delete("vault", path)
@@ -464,10 +425,10 @@ class VaultClient:
     
     def vault_delete_metadata(self, path: str) -> bool:
         """
-        Delete metadata from Vault KV v2 (permanently removes key from LIST).
-        For KV v2, deleting data path only soft-deletes. Must delete metadata to remove from LIST.
-        
-            path: Vault metadata path to delete (ex; "secret/metadata/clusters/cluster-id")
+        Delete a KV v2 metadata path, which removes the key from LIST.
+
+        Deleting the data path only soft-deletes; the key stays listed until its metadata is
+        gone. ``path`` is a metadata path, ex; "secret/metadata/clusters/<id>".
         """
         start = time.perf_counter()
         url = _safe_vault_url(self.vault_addr, path)
@@ -480,8 +441,8 @@ class VaultClient:
             # Invalidate all related list caches
             cache = get_cache()
             if cache:
-                # note: the cached copy of the data path too. Only the data delete used to drop it,
-                # so a permanently deleted descriptor was still served from the mirror for its TTL.
+                # The cached copy of the data path too, or a permanently deleted descriptor is
+                # still served from the mirror for its TTL.
                 cache.delete("vault", path.replace("secret/metadata/", "secret/data/", 1))
                 # Invalidate all parent list caches
                 path_parts = path.split("/")
@@ -515,9 +476,9 @@ class VaultClient:
     
     def vault_list(self, path: str, use_cache: bool = True) -> list:
         """
-        List keys at a Vault path with optional caching.
-        
-            path: Vault path to list (ex; "secret/metadata/clusters")
+        List keys at a Vault path, ex; "secret/metadata/clusters".
+
+        ``use_cache`` only decides whether the cache is read; a successful LIST is always written.
         """
         start = time.perf_counter()
         # Try cache first
@@ -547,15 +508,14 @@ class VaultClient:
                 if not isinstance(keys, list) or any(not isinstance(key, str) or not key for key in keys):
                     raise VaultClientError("Vault LIST returned an invalid key list")
             
-            # Cache the result with longer TTL for list operations. Written on a fresh read
-            # too: use_cache only decides whether the cache is READ, and a bypass that left a
-            # stale entry behind is what let the request path pay a Vault round trip later.
+            # Written on a bypass too: a stale entry left behind would make the request path pay
+            # a Vault round trip later.
             if cache:
                 cache.set("vault_list", path, keys, 600)  # Cache list for 10 minutes
-            # note: not a cache but a memo of the last answer, written even when the caller
-            # bypassed the cache, so a lost LIST later can be served from it. Seven days:
-            # a registry cannot change while Vault is down (every change writes Vault first),
-            # and an outage longer than that is not one worth serving stale.
+            # A memo of the last answer, not a cache: written even when the caller bypassed
+            # the cache, so a failed LIST later can be served from it. Seven days: a registry
+            # cannot change while Vault is down (every change writes Vault first), and a longer
+            # outage is not worth serving stale.
             if cache:
                 cache.set(LAST_GOOD_LIST_NAMESPACE, path, keys, LAST_GOOD_LIST_TTL)
 
@@ -638,15 +598,13 @@ class VaultClient:
         role: str = "lxd"
     ) -> Dict[str, str]:
         """
-        Generate LXD client certificate via Vault PKI.
-        
-            common_name: Common name for the certificate (ex; "cluster1.orcastra.io")
-            ttl: Time to live (default: 720h = 30 days)
-            role: PKI role to use (default: "lxd")
+        Issue an LXD client certificate from Vault PKI (`pki_int/issue/<role>`).
+
+        ``common_name`` must be an FQDN, ex; "cluster1.example.com". The default ``ttl`` of
+        720h is 30 days.
         """
-        # Ensure common_name is FQDN for hostname validation
+        # An FQDN, for hostname validation. The caller appends settings.orcastra_domain.
         if '.' not in common_name:
-            # domain injected at call site via settings.orcastra_domain
             raise ValueError(
                 f"common_name '{common_name}' must be a FQDN (ex; cluster1.example.com). "
                 "Pass full FQDN from the caller using settings.orcastra_domain."
@@ -689,7 +647,9 @@ class VaultClient:
     
     def list_certificates(self, role: str = "lxd") -> list:
         """
-        List certificates issued by a PKI role.
+        Certificates issued by the intermediate PKI (`pki_int/certs`); empty on failure.
+
+        ``role`` is only recorded in the audit event; the list is not filtered by it.
         """
         start = time.perf_counter()
         try:
@@ -715,20 +675,13 @@ class VaultClient:
             return []
     
     def health_check(self) -> bool:
-        """
-        Check if Vault is accessible and healthy.
-        """
+        """Whether Vault answers sys/health as initialized and unsealed, standbys included."""
         start = time.perf_counter()
         try:
             url = f"{self.vault_addr}/v1/sys/health"
             response = self.session.get(url, timeout=5)
-            # Vault returns different status codes based on state
-            # 200 = initialized, unsealed, and active
-            # 429 = unsealed and standby
-            # 472 = data recovery mode replication secondary and active
-            # 473 = performance standby
-            # 501 = not initialized
-            # 503 = sealed
+            # sys/health: 200 active, 429 unsealed standby, 472 DR replication secondary,
+            # 473 performance standby, 501 not initialized, 503 sealed.
             healthy = response.status_code in [200, 429, 472, 473]
             duration = round((time.perf_counter() - start) * 1000, 2)
             _audit_vault_operation(
@@ -756,12 +709,7 @@ _vault_client: Optional[VaultClient] = None
 
 
 def get_vault_client(vault_addr: str = None, vault_token: str = None) -> VaultClient:
-    """
-    Get or create the Vault client singleton.
-    
-        vault_addr: Vault address (required on first call)
-        vault_token: Vault token (required on first call)
-    """
+    """The Vault client singleton. The first call must pass ``vault_addr`` and ``vault_token``."""
     global _vault_client
     
     if _vault_client is None:

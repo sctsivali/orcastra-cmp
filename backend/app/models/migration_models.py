@@ -1,9 +1,8 @@
 """Durable persistence for staged instance and project migrations.
 
-Only sanitized control-plane projections belong in these tables. Raw daemon responses,
-cloud-init, migration websocket secrets, certificates, and credentials must never be stored
-here. The worker reconciles those values from short-lived in-memory state and authoritative
-daemon readback instead.
+important: only sanitized control-plane projections belong in these tables. Raw daemon
+responses, cloud-init, migration websocket secrets, certificates and credentials are never stored
+here; the worker reconciles them from short-lived in-memory state and daemon readback.
 """
 
 from datetime import datetime, timezone
@@ -274,10 +273,10 @@ class MigrationJob(Base):
 class MigrationResourceLock(Base):
     """Exclusive cross-direction lock for every project and instance a job touches.
 
-    Every migration takes source and target project locks. Instance migrations additionally
-    take both instance locks. The project lock is intentionally conservative: it prevents an
-    instance migration from racing a whole-project relocation, even when their resource keys
-    differ. Rows live until terminal reconciliation and are then deleted transactionally.
+    Every migration locks its source and target projects; an instance migration also locks both
+    instances. The project lock keeps an instance migration from racing a whole-project
+    relocation even when their resource keys differ. Rows live until terminal reconciliation,
+    which deletes them in its transaction.
     """
 
     __tablename__ = "migration_resource_locks"

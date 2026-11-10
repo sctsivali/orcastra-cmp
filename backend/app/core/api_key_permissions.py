@@ -1,17 +1,13 @@
 """The one permission check for an external API key's per-cluster grant.
 
-This existed three times: inline in the raw proxy (`routers/integrations.py`) and copied verbatim
-as `_assert_cluster_permission` into both `routers/image_uploads.py` and `routers/iso_uploads.py`.
-All three carried the same defect, which is what duplication costs.
+The proxy routes (routers/integrations.py) and both upload routers call this instead of keeping
+their own copy.
 
-``max()`` over an empty sequence raises ValueError, and ``perm.get("permissions", ["read"])``
-returns the default only when the key is ABSENT. A grant stored as ``"permissions": []`` therefore
-reached ``max()`` with nothing in it. Pydantic accepts that shape on the way in: ClusterPermission
-declares ``permissions: List[str] = Field(default=["read"])`` with no minimum length, so an empty
-list is a valid request body, not corruption.
-
-The crash surfaced as HTTP 500 from a generic handler. Fail-closed by accident is still the wrong
-answer: an empty grant is a decision the caller expressed, and the honest reply is 403.
+A grant stored as ``"permissions": []`` is valid input (ClusterPermission declares
+``permissions: List[str] = Field(default=["read"])`` with no minimum length), and
+``grant.get("permissions", ["read"])`` returns the default only when the key is ABSENT. An empty
+grant is a decision the caller expressed, so it answers 403 rather than reaching ``max()`` with
+nothing in it and failing as a 500.
 """
 
 from typing import Any, Dict, List, Optional
@@ -25,9 +21,8 @@ PERMISSION_LEVELS: Dict[str, int] = {"read": 0, "write": 1, "admin": 2}
 def granted_level(permissions: Optional[List[str]]) -> int:
     """Strongest level in a grant, or -1 when it grants nothing.
 
-    important: -1, not 0. Zero is the level of "read", so collapsing an empty grant to zero would
-    hand out read access nobody asked for. Any required level is above -1, so an empty grant
-    satisfies nothing.
+    important: an empty grant is -1 because 0 is the level of "read" and would hand out read access
+    the caller never chose. Every required level is above -1, so an empty grant satisfies nothing.
     """
     if not permissions:
         return -1
@@ -83,10 +78,8 @@ def assert_cluster_permission(
 
     held = grant.get("permissions", ["read"])
     if granted_level(held) < PERMISSION_LEVELS.get(required, 0):
-        # note: naming what the key holds is deliberate. The bare "Operation requires read
-        # permission" was the message an operator saw while holding ["admin"], which pointed
-        # the investigation at the credential instead of at the check. The caller already has
-        # the key and can read the same list from GET /integrations/whoami, so this discloses
+        # Naming what the key holds points an operator at the check instead of the credential.
+        # The caller can read the same list from GET /integrations/whoami, so this discloses
         # nothing it does not already hold.
         raise HTTPException(
             status_code=403,

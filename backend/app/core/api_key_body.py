@@ -1,22 +1,13 @@
 """The one reading of an API key's request body: the dict every guard judges is the dict LXD gets.
 
-LXD decodes a request body with Go's encoding/json, which matches a struct field whatever its case
-and with Unicode case folding (U+017F, the long s, is `s` and U+212A, the Kelvin sign, is `k`). So
-"Profiles", "CONFIG", "Project" or a long-s "source" are the fields profiles, config, project and
-source to LXD, while every guard here reads the plain lowercase key. A body carrying both
-spellings is worse: Python keeps both keys, the guard reads one and LXD takes whichever comes last.
-`{"action": "stop", "Action": "restart"}` passed the migration fence as a stop and reached LXD as a
-restart.
+LXD decodes a body with Go's encoding/json, which matches struct field names case-insensitively and
+with Unicode case folding (U+017F long s is `s`, U+212A Kelvin sign is `k`). A guard reading the
+lowercase key would miss "CONFIG" or a long-s "source", and with both spellings in one body LXD
+takes the last: `{"action": "stop", "Action": "restart"}` would pass the migration fence as a stop.
 
-important: the rule is on the field NAMES of a struct, at the top level, in the nested `source`
-and `target` structs and in each entry of an `aliases` list (an image create's api.ImageAlias
-entries, whose `name` core/lxd_body_names.py judges), for every key. Map keys (config keys, device
-names, environment variables, image properties) are matched exactly by LXD and are left alone. A
-name outside `[a-z0-9_-]` is refused with 400 naming it, never folded: folding would pick one of
-two spellings, which is the ambiguity being removed.
-
-note: the integrator (OrcaHub) sends only lowercase field names (its source was read to confirm),
-and every field LXD defines is spelled that way, so a correct caller never meets this rule.
+important: the rule covers struct field names at the top level, in `source` and `target` and in each
+`aliases` entry. Map keys (config keys, device names, environment variables, image properties) are
+matched exactly by LXD and left alone. A name outside `[a-z0-9_-]` is refused with 400, never folded.
 """
 
 import logging
@@ -73,8 +64,8 @@ def assert_canonical_body(body: Any, *, where: str) -> None:
 def canonical_raw_proxy_body(method: str, body: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """The body the raw proxy forwards for `method`, refused with 400 when a field is misspelled.
 
-    important: a verb that sends no body answers None, so no guard can read a body LXD never
-    receives (a DELETE carrying {"action": "stop"} once took the fence's stop exemption).
+    important: a verb that sends no body answers None, so no guard reads a body LXD never receives
+    (ex; a DELETE carrying {"action": "stop"} must not earn the migration fence's stop exemption).
     """
     if method.upper() not in BODY_METHODS or body is None:
         return None
@@ -107,11 +98,11 @@ def _not_an_object(field: str, value: Any) -> HTTPException:
 def assert_proxy_maps_are_objects(params: Mapping[str, Any], *, where: str) -> None:
     """Raise 400 naming the first of config, devices or a device entry that is not a JSON object.
 
-    important: update_instance merges config and devices into the instance with dict.update, which
-    also takes a list of [key, value] pairs, while every guard reads a dict and skips any other
-    shape. `"config": [["raw.lxc", "..."]]` passed the instance.exec price and the limited-key host
-    rule as an empty config and reached LXD as raw.lxc. A null config or devices is left alone: it
-    carries nothing, and the operations read it as empty.
+    important: update_instance merges config and devices with dict.update, which also accepts a
+    list of [key, value] pairs, while every guard reads a dict and skips any other shape. Unchecked,
+    `"config": [["raw.lxc", "..."]]` would pass the instance.exec price and the limited-key host
+    rule as an empty config and reach LXD as raw.lxc. A null config or devices carries nothing and
+    is left alone.
     """
     for field in MAP_PARAMS:
         value = params.get(field)

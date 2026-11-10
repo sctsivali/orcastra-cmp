@@ -1,6 +1,6 @@
 """
-Cluster Registration Router
-Handles LXD cluster registration, certificate management, and trust establishment via Vault.
+Cluster registration endpoints: register, list, check trust, update location, regenerate or
+re-pin certificates, and deregister. Vault holds each cluster's record and certificates.
 """
 
 import logging
@@ -105,9 +105,8 @@ def get_cert_manager() -> LXDCertificateManager:
     try:
         vault_client = get_vault_client(settings.vault_addr, settings.vault_token)
 
-        # important: the cached seal probe, not VaultClient.health_check(). That made three
-        # attempts on every request to any of these routes, and its 503 said only "unhealthy",
-        # so a sealed Vault read the same as a network fault (issue #15). The probe answers once
+        # important: the cached seal probe, not VaultClient.health_check(), which would retry on
+        # every request and report a sealed Vault like a network fault. The probe answers once
         # per ten seconds per worker and the refusal carries the structured vault_unavailable.
         if vault_probe.seal_probe().state != "ok":
             raise vault_unavailable_error()
@@ -120,10 +119,8 @@ def get_cert_manager() -> LXDCertificateManager:
         return cert_manager
         
     except HTTPException:
-        # important: let a deliberate status through. This try raises HTTPException
-        # itself, and the broad handler below rewrote it, so an unreachable cluster
-        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
-        # instead of 403.
+        # important: let the 503 raised above through; the broad handler below would turn it
+        # into a 500.
         raise
     except Exception as e:
         logger.error(f"Failed to initialize certificate manager: {e}")
@@ -136,10 +133,9 @@ def get_cert_manager() -> LXDCertificateManager:
 def _owns_a_binding(rows, org_ids, email: str) -> bool:
     """Whether one of a cluster's ownership rows (organization_id, registered_by[, source]) is the caller's.
 
-    important: a binding provisioning wrote for a sale (no registrant, OrcaHub organization) is not
-    ownership. It exists because the organization bought something on the seller's cluster, and
-    counting it let a buyer founder re-register the seller's cluster (rewriting its Vault record)
-    and gain a binding of its own (security review 2026-10-27).
+    A binding provisioning wrote for a sale (no registrant, OrcaHub organization) is not
+    ownership. Counting it would let the buyer register the seller's cluster again, rewriting its
+    Vault record, and gain a binding of its own.
     """
     return any(
         (row[0] is not None and row[0] in org_ids and not (row[1] is None and len(row) > 2 and row[2] == "orcahub"))
@@ -152,10 +148,10 @@ def _owns_a_binding(rows, org_ids, email: str) -> bool:
 async def _continues_its_registration(db: AsyncSession, cluster_id: str, user: AuthenticatedUser) -> bool:
     """Whether this register call is the cluster's owner (or an Admin) registering it again.
 
-    important: a Vault record alone does not say so. A partner can unbind a cluster without
-    deregistering it, which leaves the record and its registration behind with no owner; another
-    organization registering that id must get a new registration, or every grant made for the old
-    one would reach its cluster. No ownership row means a new trust identity.
+    A Vault record alone does not say so. A partner can unbind a cluster without deregistering
+    it, leaving the record and its registration with no owner; another organization registering
+    that id must get a new registration, or every grant made for the earlier one would reach its
+    cluster. No ownership row means a new trust identity.
     """
     from sqlalchemy import select as sa_select
 
@@ -210,9 +206,9 @@ async def _guard_registration_binding(
         )
     ).all()
     if not rows:
-        # important: no binding is not no cluster. An id still in the Vault registry whose last
-        # binding was removed is an orphan, and registering it again would rewrite its endpoint and
-        # certificate for whoever still uses it, so only an admin may claim one.
+        # important: an id still in the Vault registry with no binding is an orphan. Registering it
+        # again would rewrite its endpoint and certificate for whoever still uses it, so only an
+        # admin may claim one.
         if get_highest_role(resolve_roles(user)) != Role.ADMIN:
             from app.services.lxd import registry as cluster_registry
 
@@ -247,8 +243,8 @@ async def _guard_registration_binding(
     if prospective_org is not None and any(row[0] == prospective_org for row in rows):
         return org_ids
     if prospective_org is None and any(row[0] is None for row in rows):
-        # The registration flow deliberately refuses a second unbound claimant below. It
-        # will not create an owner identity, so there is no share transition to audit.
+        # The registration flow refuses a second unbound claimant, so no owner identity is
+        # created and there is no share transition to audit.
         return org_ids
 
     await assert_cluster_safe_to_share(
@@ -311,7 +307,7 @@ async def register_cluster(
 
         # Which registration this is (services/cluster_generations.py), in this transaction and
         # under the share lock. An id the registry lists right now, registered again by its owner
-        # or an Admin (a new endpoint, say), keeps its registration and every API key grant made
+        # or an Admin (ex; a new endpoint), keeps its registration and every API key grant made
         # for it. Anything else starts a new one, which no earlier grant reaches.
         # important: from Vault itself. A remembered registry could call a deregistered id live.
         read = await asyncio.to_thread(cert_manager.read_registry, False)
@@ -327,17 +323,16 @@ async def register_cluster(
             and await _continues_its_registration(db, cluster_id, _rbac),
         )
         
-        # Step 1: Pre-auth type detection from /1.0 API endpoint
-        # The /1.0 endpoint returns api_extensions even without auth, which is enough to tell
-        # Incus from the LXD family. It withholds `environment`, so LXD vs MicroCloud stays
-        # undetermined (None) until the first trusted read, and nothing is stored for it.
+        # Step 1: pre-auth type detection from the /1.0 endpoint. Without auth it may return
+        # api_extensions, which can tell Incus from the LXD family, but it withholds
+        # `environment`, so LXD vs MicroCloud stays undetermined (None) until the first trusted
+        # read, and nothing is stored for it.
         cluster_type, raw_metadata = await detect_hypervisor_type_from_endpoint(request.endpoint)
         logger.info(
             f"Pre-auth type detection for {cluster_id}: "
             f"{cluster_type or 'undetermined, deferring to first trusted read'}"
         )
-        
-        # Prepare location data for storage
+
         location_data = None
         if request.location:
             location_data = get_region_catalog().canonical_location(request.location.model_dump(exclude_none=True))
@@ -363,20 +358,17 @@ async def register_cluster(
         # Save empty secrets (for compatibility)
         cert_manager.save_cluster_secrets(cluster_id=cluster_id, trust_password=None)
         
-        # Step 2b: Auto-bind cluster to the registering user's organization so it
-        # appears in org-scoped queries (partner/tenant see their own clusters).
-        # important: use the SAME membership predicate as cluster visibility
-        # (get_user_org_ids) so binding can never drift from the scope query - a
-        # role-filtered binding vs a role-agnostic scope was what orphaned clusters
-        # registered by tenant-role members of OrcaHub-synced orgs.
-        # NOTE: must run BEFORE cache invalidation so the binding exists when caches repopulate.
+        # Step 2b: bind the cluster to the registrant's organization so it appears in org-scoped
+        # queries. Runs before cache invalidation so the binding exists when caches repopulate.
+        # important: use the same membership predicate as cluster visibility (get_user_org_ids),
+        # so the binding cannot drift from the scope query.
         org_bind_warning: Optional[str] = None
         try:
             from sqlalchemy import select as sa_select
             from app.models.db_models import OrganizationCluster
 
             if org_ids:
-                # bind to the primary org - avoid duplicates
+                # Bind to the primary org, once.
                 primary_org_id = org_ids[0]
                 existing = await db.execute(
                     sa_select(OrganizationCluster.id).where(
@@ -395,14 +387,13 @@ async def register_cluster(
                         f"for user {_rbac.email}"
                     )
             else:
-                # partner with no synced org yet: still record ownership (org_id NULL)
-                # so the registrant can see and grant API-key access to their own cluster.
+                # A partner with no synced org yet still records ownership (org_id NULL), so the
+                # registrant can see and grant API-key access to their own cluster;
                 # reconcile_personal_clusters binds it to their org once it is synced.
-                # important: match the constraint, not more than it. uq_org_cluster_null is a
-                # partial unique index on cluster_id alone where organization_id IS NULL, so
-                # filtering on registered_by too made this miss a row another user already
-                # holds. The INSERT then violated the index, the broad handler below swallowed
-                # it, and registration returned success while recording no ownership at all.
+                # important: filter on exactly the columns of uq_org_cluster_null, a partial
+                # unique index on cluster_id where organization_id IS NULL. Filtering on
+                # registered_by too would miss a row another user holds, and the INSERT would
+                # then violate the index.
                 existing = await db.execute(
                     sa_select(OrganizationCluster.registered_by).where(
                         OrganizationCluster.organization_id.is_(None),
@@ -451,16 +442,15 @@ async def register_cluster(
             share_serialization = None
             await closing_serialization.__aexit__(None, None, None)
         
-        # Invalidate clusters list cache AFTER org binding so scoped users see the cluster
+        # Invalidated after the org binding so scoped users see the cluster.
         from app.core.cache import get_cache_manager
         cache = get_cache_manager()
         if cache:
             cache.invalidate_resource_cache("clusters", "regions")
             cache.invalidate_capacity_cache()
-            # CRITICAL: Also invalidate vault_list cache for cluster list
+            # The cluster list also reads the vault_list cache.
             vault_list_path = settings.vault_clusters_path.replace("/data/", "/metadata/")
             cache.delete("vault_list", vault_list_path)
-            # Invalidate nodes status cache
             cache.delete("api_responses", get_scope_cache_key(NODES_STATUS_CACHE_KEY))
             cache.delete("api_responses", f"{NODES_STATUS_CACHE_KEY}:scope=all")
             cache.invalidate_availability_cache()
@@ -469,7 +459,7 @@ async def register_cluster(
             cache.delete_pattern("api_responses", "regions:*")
             logger.info(f"Invalidated clusters list cache (scoped + vault_list + regions) after registering {cluster_id}")
         
-        # Update connection_manager registered clusters whitelist
+        # Add the cluster to the connection manager's allowlist.
         from app.services.lxd_service import get_lxd_service
         get_lxd_service().connection_manager.register_cluster(cluster_id)
         
@@ -500,9 +490,8 @@ async def register_cluster(
             # Get certificate PEM for user to copy-paste
             certificate_pem = cert_data.get("cert")
             
-            # Build CLI-friendly message based on detected type
-            # note: Incus 6.0.7 and 7.6 send an untrusted caller no api_extensions at all, so before
-            # trust the type is usually unknown for every engine, and the form shows both commands.
+            # Incus 6.0.7 and 7.6 send an untrusted caller no api_extensions, so before trust the
+            # type is usually unknown for every engine and the message names both commands.
             register_message = (
                 f"Certificate generated! Run the {get_cli_command_prefix(cluster_type)} command to add trust. "
                 f"Detected hypervisor: {cluster_type}."
@@ -513,7 +502,6 @@ async def register_cluster(
             if org_bind_warning:
                 register_message = f"{register_message} {org_bind_warning}"
 
-            # Log activity: cluster registration success
             activity_logger.log_activity(
                 action="cluster.register",
                 target_type="cluster",
@@ -542,8 +530,7 @@ async def register_cluster(
                 
         except LXDCertManagerError as e:
             logger.error(f"Certificate generation failed for {cluster_id}: {e}")
-            
-            # Log activity: cluster registration failure
+
             activity_logger.log_activity(
                 action="cluster.register",
                 target_type="cluster",
@@ -623,15 +610,13 @@ async def check_cluster_authentication(
     verify_cluster_access(request.cluster_id)
     try:
         cluster_id = request.cluster_id
-        
-        # Verify connection
-        # use_breaker=False: this is an operator-initiated check, so it must probe for real
-        # rather than replay a 60-second-old failure.
+
+        # use_breaker=False: an operator-initiated check probes for real rather than replay a
+        # 60-second-old failure.
         auth_probe = cert_manager.probe_connection(cluster_id, use_breaker=False)
         connected, message = auth_probe.trusted, auth_probe.message
         
         if connected:
-            # Get server info
             try:
                 client = cert_manager.connect_with_vault_cert(cluster_id, force=True)
                 server_info = client.api.get().json()
@@ -643,8 +628,8 @@ async def check_cluster_authentication(
                     metadata_info = server_info.get("metadata", {})
                     environment = metadata_info.get("environment", {})
 
-                    # This is the first payload that carries `environment`, so it is the first
-                    # honest reading of both the hypervisor family and the clustering state.
+                    # The first payload that carries `environment`, so the first reliable reading
+                    # of both the hypervisor family and the clustering state.
                     detected_type = detect_cluster_type_from_metadata(metadata_info)
                     final_cluster_type = detected_type
                     final_clustered = detect_clustered_from_metadata(metadata_info)
@@ -666,21 +651,12 @@ async def check_cluster_authentication(
                     current_endpoint = vault_metadata.get("endpoint", "")
                     clean_endpoint = normalize_endpoint(current_endpoint)
 
-                    # important: this is the ONLY place either fact is written, and it runs only
-                    # after the host has answered a trusted request, so nothing here can be a
-                    # pre-auth guess. That distinction is what makes storing them safe: the
-                    # defect that left a MicroCloud labelled LXD was a value written at
-                    # REGISTRATION from an untrusted probe, which cannot see `environment`, and
-                    # which nothing ever re-derived. Both resolvers prefer a live client, so a
-                    # stored reading can only ever answer when there is nobody to ask.
-                    #
-                    # `clustered` is stored as well as `type` because the members picker has to
-                    # tell a host pending trust apart from a clustered host that is merely
-                    # offline, and both answer None with no fallback.
-                    #
-                    # The comparison includes `clustered` on purpose: gating the write on the
-                    # type alone would mean a host whose type is already correct never got its
-                    # clustering state written at all.
+                    # important: the only place either fact is written, and only after the host
+                    # answered a trusted request; an untrusted probe cannot see `environment`.
+                    # Both resolvers prefer a live client, so a stored reading answers only when
+                    # there is nobody to ask. `clustered` is stored because the members picker
+                    # must tell a host pending trust from an offline clustered host. The write
+                    # condition includes it so a host with the right type still gets it written.
                     if (
                         current_type != detected_type
                         or current_clustered != final_clustered
@@ -693,8 +669,8 @@ async def check_cluster_authentication(
                         )
                         vault_metadata["type"] = detected_type
                         vault_metadata["clustered"] = final_clustered
-                        # Heal a stored endpoint that carries a trailing slash while we are
-                        # already writing this record; the probe normalizes on read anyway.
+                        # Heal a stored endpoint with a trailing slash while the record is being
+                        # written; the probe normalizes on read anyway.
                         vault_metadata["endpoint"] = clean_endpoint
                         cert_manager.vault.vault_kv_put(
                             f"{settings.vault_clusters_path}/{cluster_id}/metadata",
@@ -710,13 +686,12 @@ async def check_cluster_authentication(
                 except Exception as type_err:
                     logger.warning(f"Failed to re-detect cluster type for {cluster_id}: {type_err}")
                 
-                # IMPORTANT: Add the connection to LXD service connection manager
-                # so it appears in active nodes list for projects/instances queries
+                # Add the connection to the LXD service's connection manager so the cluster is
+                # in the active list for project and instance queries.
                 try:
                     from app.services.lxd_service import get_lxd_service
                     lxd_service = get_lxd_service()
-                    
-                    # Get certificate from Vault
+
                     settings = get_settings()
                     cert_data = cert_manager.vault.vault_read(
                         f"{settings.vault_clusters_path}/{cluster_id}/certs"
@@ -724,8 +699,7 @@ async def check_cluster_authentication(
                     metadata = cert_manager.vault.vault_read(
                         f"{settings.vault_clusters_path}/{cluster_id}/metadata"
                     )
-                    
-                    # Add connection to LXD service
+
                     lxd_service.connection_manager.connect_with_vault_cert(
                         cluster_id=cluster_id,
                         endpoint=metadata["endpoint"],
@@ -760,13 +734,13 @@ async def check_cluster_authentication(
                     connected=True,
                     authenticated=False,
                     status=ClusterStatus.ERROR,
-                    # note: the exception text names the host's address and Vault paths; it is
-                    # in the log line above.
+                    # The exception text names the host's address and Vault paths; it is in the
+                    # log line above.
                     message="Connected, but the server information could not be read.",
                 )
         else:
-            # A cluster that never answered is offline, not a trust problem. Reporting
-            # NOT_AUTHORIZED here sent operators to rotate a certificate on a dead host.
+            # A cluster that never answered is offline, not a trust problem, so the status
+            # comes from reachability.
             unreachable_status, _reason_code, _detail = derive_status(
                 connected=False, reachable=auth_probe.reachable, error=message
             )
@@ -779,11 +753,10 @@ async def check_cluster_authentication(
             )
             
     except LXDLocalStorageError:
-        # important: above LXDCertManagerError and the generic handler. probe_connection
-        # raises this when the backend's own disk could not hold the TLS material, so there
-        # is no honest cluster status to return: derive_status would default it to OFFLINE,
-        # which is how a full tmpfs came to label healthy hypervisors down. Re-raised so the
-        # app-level handler answers 503 BACKEND_TEMP_STORAGE_FULL and names the real fault.
+        # important: keep above the generic handler. probe_connection raises this when the
+        # backend's own disk cannot hold the TLS material, which says nothing about the cluster
+        # (derive_status would report OFFLINE). Re-raised so the app-level handler answers 503
+        # BACKEND_TEMP_STORAGE_FULL.
         raise
     except Exception as e:
         # Logged here in full; the caller gets the fixed answer every server fault gets
@@ -800,16 +773,11 @@ def _cluster_info_blocking(
 ) -> Optional[ClusterInfo]:
     """One cluster list row. Blocking: run it through ``_get_cluster_info_async``.
 
-    This function also ensures connected clusters are added to the connection manager
-    so they can be used for subsequent API calls (instances, networks, etc.).
-
-    Auto-reconnection priority:
-    1. Try to use existing connection from connection manager
-    2. If this worker last saw the cluster fail, report that verdict (unless ``force``)
-    3. Otherwise reconnect using Vault certs, then fall back to a probe
+    Also adds connected clusters to the connection manager for later calls. Order: reuse the
+    pooled connection; if this worker last saw the cluster fail, report that verdict (unless
+    ``force``); otherwise reconnect with the Vault certificate, then fall back to a probe.
     """
     try:
-        # First, check if we already have a valid connection in the pool
         from app.services.lxd_service import get_lxd_service
         from app.services.lxd import health as lxd_health
 
@@ -817,41 +785,35 @@ def _cluster_info_blocking(
         manager = lxd_service.connection_manager
         verdict = None if force else lxd_health.last_failure(cluster_id)
 
-        # Try to get client (this will auto-reconnect if connection info is stored)
-        # note: not for a cluster this worker saw fail and holds no client for. get_client's
-        # auto-reconnect is a dial of its own once the trip lapses (about 8s against a dead
-        # peer whose credentials are still cached), and it is the healer's job to pay it.
+        # get_client reconnects from stored connection info, but not for a cluster this worker
+        # saw fail and holds no client for: that reconnect is a dial of its own once the trip
+        # lapses (about 8 s against a dead peer), and it is the healer's job to pay it.
         if verdict is not None and manager.get_cached_client(cluster_id) is None:
             existing_client = None
         else:
             existing_client = manager.get_client(cluster_id)
         
         connected = False
-        # important: reachable is tracked separately from connected because they answer
-        # different questions. This used to be `ONLINE if connected else NOT_AUTHORIZED`,
-        # which reported every unreachable cluster as "Pending Trust" and left an operator
-        # chasing a certificate problem on a host that was simply powered off.
+        # important: reachable is tracked apart from connected. An unreachable cluster is
+        # offline, not pending trust.
         reachable = None
         error_msg = None
         
         live_client = existing_client
         if existing_client:
-            # We have a valid connection
             connected = True
             reachable = True
             logger.debug(f"Cluster {cluster_id} already connected in pool")
         elif verdict is not None:
             # important: this worker already knows the cluster is down, tripped or between two
-            # retries. Dialing anyway cost a forced connect per dead cluster on every cold list
-            # read, which is how five offline clusters made the list take 40s. The background
-            # healer keeps retrying them and clears the verdict on its first success; Refresh
-            # sends fresh=true, and that still forces a real recheck.
-            # note: only the kind is used. The reason is raw exception text from whichever path
-            # failed last, so it stays in the logs and derive_status words the row, as the
-            # availability rows do (services/lxd/status.py).
+            # retries. Dialing anyway costs a forced connect per dead cluster on every cold list
+            # read. The background healer keeps retrying and clears the verdict on its first
+            # success; Refresh sends fresh=true, which still forces a real recheck.
+            # Only the kind is used. The reason is raw exception text, so it stays in the logs
+            # and derive_status words the row, as the availability rows do (services/lxd/status.py).
             reachable = verdict[1] == lxd_health.KIND_UNAUTHORIZED
         else:
-            # No valid connection, try to reconnect using Vault certs
+            # No pooled connection: reconnect with the Vault certificate.
             try:
                 cert_data = cert_manager.get_cluster_certificate(cluster_id)
                 info = cert_manager.get_cluster_info(cluster_id)
@@ -870,7 +832,7 @@ def _cluster_info_blocking(
                 reachable = True
                 logger.info(f"Reconnected cluster {cluster_id} to connection pool from Vault certs")
             except LXDAuthorizationError as auth_err:
-                # The host answered and refused the certificate. That IS Pending Trust.
+                # The host answered and refused the certificate: pending trust.
                 reachable, error_msg = True, str(auth_err)
                 logger.debug(f"{cluster_id} answered but refused our certificate: {auth_err}")
             except Exception as reconnect_err:
@@ -888,18 +850,10 @@ def _cluster_info_blocking(
         
         # Prefer what the host says now over what was stored. client.host_info is pylxd's
         # cached /1.0 body, so resolving from a live client costs no extra round trip.
-        #
-        # important: `clustered` is safe to read from storage unconditionally. This release is
-        # the first thing that ever writes it, and the only writer is the check-auth path, after
-        # the host has answered a trusted request, so a stored value is always evidence. That is
-        # what lets the members picker tell a host pending trust apart from a clustered host
-        # that is merely offline.
-        #
-        # `type` cannot be read from storage unconditionally, because a record written before
-        # registration stopped guessing can still hold a "LXD" default nobody ever read off a
-        # host. A stored `clustered` is the marker that separates the two: check-auth writes
-        # both facts in the same statement, so its presence proves this record came from a
-        # trusted read rather than from the old pre-auth probe.
+        # important: a stored `clustered` is always evidence: only check-auth writes it, after a
+        # trusted request. A stored `type` may be an "LXD" default no host reported, so it is
+        # read only when connected or when a stored `clustered` shows check-auth wrote the record
+        # (it writes both together).
         stored_clustered = info["metadata"].get("clustered")
         clustered = resolve_clustered(stored_clustered, live_client)
         cluster_type = None
@@ -919,22 +873,21 @@ def _cluster_info_blocking(
             certificate_common_name=info["certificate"].get("common_name"),
             last_checked=datetime.utcnow(),
             error_message=None if connected else (error_msg or derived_message or None),
-            # important: never the raw stored value. {}, null, part of a location, a string or a
-            # list all read as no location; built into ClusterInfo they degraded this row to
-            # endpoint "unknown" (stored_location says why).
+            # important: never the raw stored value. A malformed location ({}, null, a partial
+            # one, a string or a list) would fail ClusterInfo and degrade the whole row;
+            # stored_location reads it as no location.
             location=stored_location(cluster_id, info["metadata"]),
         )
 
     except LXDLocalStorageError:
-        # important: above LXDCertManagerError and the generic handler. probe_connection
-        # raises this when the backend's own disk could not hold the TLS material, so there
-        # is no honest cluster status to return: derive_status would default it to OFFLINE,
-        # which is how a full tmpfs came to label healthy hypervisors down. Re-raised so the
-        # app-level handler answers 503 BACKEND_TEMP_STORAGE_FULL and names the real fault.
+        # important: keep above the generic handler. probe_connection raises this when the
+        # backend's own disk cannot hold the TLS material, which says nothing about the cluster
+        # (derive_status would report OFFLINE). Re-raised so the app-level handler answers 503
+        # BACKEND_TEMP_STORAGE_FULL.
         raise
     except Exception as e:
-        # note: the text stays in the log. It is Vault's, pydantic's or a driver's and can carry
-        # paths and stored values, and the row reaches every caller of the list.
+        # The text stays in the log. It is Vault's, pydantic's or a driver's and can carry paths
+        # and stored values, and the row reaches every caller of the list.
         logger.warning(f"Failed to get info for cluster {cluster_id}: {e}")
         return ClusterInfo(
             cluster_id=cluster_id,
@@ -947,8 +900,8 @@ def _cluster_info_blocking(
         )
 
 
-# note: sized for a fleet's worth of rows at once. A row's own sockets carry (3, 8)s budgets,
-# so the wall cap below only bounds how long the list waits for a row, never a leaked thread.
+# Sized for a fleet's worth of rows at once. A row's own sockets carry (3, 8)s budgets, so the
+# wall cap below only bounds how long the list waits for a row, never a leaked thread.
 _cluster_list_executor = ThreadPoolExecutor(max_workers=16, thread_name_prefix="cluster-list")
 _CLUSTER_ROW_TIMEOUT_SECONDS = 30.0
 # The wall also counts time queued behind other lists' rows, so the queue is bounded too: past
@@ -965,9 +918,8 @@ async def _get_cluster_info_async(
 ) -> Optional[ClusterInfo]:
     """Build one list row on a worker thread, so the rows are probed side by side.
 
-    important: the row build is blocking (pooled-client revalidation, Vault reads, a TLS
-    connect). Awaited inline, asyncio.gather ran the rows one after another on the loop thread
-    and parked this worker for the whole list.
+    The row build is blocking (pooled-client revalidation, Vault reads, a TLS connect). Awaited
+    inline, the rows would run one after another on the loop thread and stall the worker.
     """
     try:
         return await run_blocking(
@@ -1010,27 +962,24 @@ async def list_clusters(
     cache = get_cache_manager()
 
     async def build() -> Built:
-        # When fresh=True, bypass Vault list cache to get latest data
-        # This ensures deleted clusters don't appear in the list
-        # important: apply org-scope filter so partners/tenants only see their own
-        # org's clusters (admin = unfiltered). Matches overview/nodes behaviour and
-        # closes the cross-tenant visibility hole. Cache key is already scope-aware.
+        # fresh=true bypasses the Vault list cache, so a deleted cluster does not linger.
+        # important: the org-scope filter limits partners and tenants to their own org's
+        # clusters (Admin unfiltered), as overview and nodes do. The cache key is scope-aware.
         cluster_ids = apply_cluster_filter(
             await asyncio.to_thread(cert_manager.list_clusters, use_cache=not fresh)
         )
         # An unreadable registry with nothing known is not "no clusters registered".
         require_known_registry(cluster_ids)
 
-        # Fetch all cluster info in parallel for better performance.
-        # note: `force=fresh` is captured, so a background refresh (always fresh=False) never
-        # forces a probe past the reachability breaker.
+        # Rows are built in parallel. `force=fresh` is captured, so a background refresh (always
+        # fresh=False) never forces a probe past the reachability breaker.
         tasks = [
             _get_cluster_info_async(cluster_id, cert_manager, force=fresh)
             for cluster_id in cluster_ids
         ]
         clusters = await asyncio.gather(*tasks)
 
-        # Filter out None values (shouldn't happen but just in case)
+        # Drop None rows defensively.
         clusters = [c for c in clusters if c is not None]
 
         response = ClusterListResponse(
@@ -1044,14 +993,14 @@ async def list_clusters(
         finished = not any(c.error_message == _ROW_UNFINISHED for c in clusters)
         if not finished:
             logger.info("Not caching clusters list: a row did not finish in time")
-        # Owner decision 2026-11-04: 30 s, was 180. A recovery clears this list at once, a failure
-        # does not, so a cluster going down read online until the entry aged out: 88 s in the
-        # lab, up to 180. Past 30 s a read is served stale and refreshed in the background, so an
-        # open page shows the change on its next look.
+        # Fresh for 30 s. A recovery clears this list at once but a failure does not, so a longer
+        # TTL would show a downed cluster online until the entry aged out. Past 30 s a read is
+        # served stale and refreshed in the background, so an open page shows the change on its
+        # next look.
         return Built(value=response, body=response.model_dump(), fresh_for=_LIST_FRESH_SECONDS if finished else None)
 
     try:
-        # e1: the body moved into the stale-while-revalidate envelope and gained collected_at.
+        # e1: the stale-while-revalidate envelope, with collected_at in the body.
         served = await swr.serve(
             cache=cache,
             base_key="clusters:list:all:e1",
@@ -1150,13 +1099,12 @@ async def get_cluster(
     cert_manager: LXDCertificateManager = Depends(get_cert_manager)
 ):
     """Get information about a specific cluster."""
-    # verify caller has access to this cluster
     verify_cluster_access(cluster_id)
     try:
         info = cert_manager.get_cluster_info(cluster_id)
-        
-        # Check current connection status. The probe reports reachability and trust
-        # separately, so a powered-off cluster no longer reads as a certificate problem.
+
+        # The probe reports reachability and trust separately, so a powered-off cluster does
+        # not read as a certificate problem.
         probe = cert_manager.probe_connection(cluster_id)
         connected, error_msg = probe.trusted, probe.message
         current_status, _reason_code, _message = derive_status(
@@ -1170,10 +1118,8 @@ async def get_cluster(
         if connected:
             from app.services.lxd_service import get_lxd_service
             # Off the loop: get_client revalidates the pooled connection with a live request.
-            # Passed by reference, not called here, for the same reason. A None result is fine -
-            # it only means the resolvers fall back to storage, and this endpoint must still
-            # answer for a cluster that is down. Skipped entirely when not connected, because
-            # the revalidation is the expensive part and it cannot succeed.
+            # A None result means the resolvers fall back to storage. Skipped when not
+            # connected, since the revalidation is the expensive part and cannot succeed.
             loop = asyncio.get_event_loop()
             with ThreadPoolExecutor(max_workers=1) as executor:
                 live_client = await loop.run_in_executor(
@@ -1196,29 +1142,28 @@ async def get_cluster(
             certificate_common_name=info["certificate"].get("common_name"),
             last_checked=datetime.utcnow(),
             error_message=error_msg if not connected else None,
-            # important: never the raw stored value. Anything short of a complete location
-            # answered this read with 500 (stored_location says why).
+            # important: never the raw stored value. Anything short of a complete location would
+            # fail this read with a 500 (stored_location says why).
             location=stored_location(cluster_id, info["metadata"]),
         ), caller_tier())
         
     except LXDLocalStorageError:
-        # important: above LXDCertManagerError and the generic handler. probe_connection
-        # raises this when the backend's own disk could not hold the TLS material, so there
-        # is no honest cluster status to return: derive_status would default it to OFFLINE,
-        # which is how a full tmpfs came to label healthy hypervisors down. Re-raised so the
-        # app-level handler answers 503 BACKEND_TEMP_STORAGE_FULL and names the real fault.
+        # important: keep above LXDCertManagerError and the generic handler. probe_connection
+        # raises this when the backend's own disk cannot hold the TLS material, which says
+        # nothing about the cluster (derive_status would report OFFLINE). Re-raised so the
+        # app-level handler answers 503 BACKEND_TEMP_STORAGE_FULL.
         raise
     except LXDCertManagerError as e:
-        # note: a 4xx passes main.py's handler untouched, and this text is Vault's.
+        # A 4xx passes main.py's handler untouched, and the exception text is Vault's.
         logger.error(f"Failed to get cluster {cluster_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Cluster '{cluster_id}' not found",
         )
     except Exception as e:
-        # important: the text is pydantic's, Vault's or a driver's and carried stored values and
-        # Vault paths to the caller. It is logged here; the caller gets the fixed answer every
-        # server fault gets (main.py adds the reference that ties the two together).
+        # important: the text is pydantic's, Vault's or a driver's and can carry stored values and
+        # Vault paths. It is logged here; the caller gets the fixed answer every server fault
+        # gets (main.py adds the reference that ties the two together).
         logger.exception("Unexpected error getting cluster %s: %s", cluster_id, e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1260,10 +1205,10 @@ async def delete_cluster(
         await assert_cluster_not_migration_fenced(cluster_id=cluster_id, db=db)
     except MigrationFenceConflict as exc:
         raise HTTPException(status_code=409, detail=exc.detail) from exc
-    # The registration ends first, in a transaction of its own that must commit before anything is
-    # deleted (services/cluster_generations.py). The Vault deletes below are best effort; if this
-    # lived among them, a re-registration could find the old registration still active and hand
-    # every grant made for it to whoever registers the id next.
+    # important: the registration ends first, in its own transaction that commits before anything
+    # is deleted (services/cluster_generations.py). The Vault deletes below are best effort; if it
+    # ended among them, a re-registration could find this registration still active and inherit
+    # every grant made for it.
     try:
         async with serialize_cluster_share(db, cluster_id):
             ended = await cluster_generations.end_registration(db, cluster_id)
@@ -1279,8 +1224,8 @@ async def delete_cluster(
             detail="The cluster's registration could not be ended, so nothing was deleted. Try again.",
         ) from exc
     cluster_generations.changed()
-    # Step 0: revoke our own access while the key still exists. Before any Vault delete, because
-    # removing a trust entry needs the current certificate. Best effort: it never blocks the delete.
+    # Step 0: remove the dashboard's own trust while the key still exists. Before any Vault delete,
+    # because removing a trust entry needs the current certificate. Best effort: never blocks.
     manual_trust_commands: list = []
     trust_cleanup_complete = False
     try:
@@ -1306,8 +1251,8 @@ async def delete_cluster(
         base_path = cert_manager.clusters_path
         loop = asyncio.get_event_loop()
 
-        # important: bound cleanup so a slow/degraded Vault or a locked DB cannot make
-        # delete hang (users were double-clicking a button that never responded).
+        # important: bound the cleanup so a slow Vault or a locked DB cannot make the delete
+        # hang.
         VAULT_DELETE_TIMEOUT = 20.0
         DB_DELETE_TIMEOUT = 10.0
         KEY_GRANT_CLEANUP_TIMEOUT = 20.0
@@ -1329,9 +1274,9 @@ async def delete_cluster(
             except Exception as e:
                 logger.warning(f"Failed to delete metadata {op_name} for {cluster_id}: {e}")
         
-        # Run a parallel batch of vault deletes, hard-bounded by VAULT_DELETE_TIMEOUT.
-        # Manual executor + shutdown(wait=False) so the timeout actually caps wall-clock
-        # (a `with ThreadPoolExecutor` block would re-block on its wait=True shutdown).
+        # Run a parallel batch of Vault deletes, bounded by VAULT_DELETE_TIMEOUT. A manual
+        # executor with shutdown(wait=False), so the timeout caps wall-clock time (a
+        # `with ThreadPoolExecutor` block would block again on its wait=True shutdown).
         async def _run_vault_batch(delete_fn, ops, max_workers: int, label: str) -> None:
             executor = ThreadPoolExecutor(max_workers=max_workers)
             try:
@@ -1364,7 +1309,7 @@ async def delete_cluster(
         metadata_ops = [
             (f"secret/metadata/clusters/{cluster_id}/{sp}", sp) for sp in subpaths
         ]
-        # Include parent metadata folder deletion (CRITICAL - removes from LIST)
+        # The parent metadata folder too: deleting it removes the cluster from the Vault LIST.
         metadata_ops.append((f"secret/metadata/clusters/{cluster_id}", "parent_folder"))
         await _run_vault_batch(
             _vault_delete_metadata_safe, metadata_ops, max_workers=5, label="metadata",
@@ -1380,7 +1325,7 @@ async def delete_cluster(
                 if await cluster_generations.active_registration(db, cluster_id) is not None:
                     # important: the id was registered again while this delete ran (its
                     # registration ended first, above). The binding, tags and schedules now
-                    # belong to that registration, not to this delete (security review 2026-11-05).
+                    # belong to that registration.
                     logger.warning("Left %s's binding and records: it was registered again meanwhile", cluster_id)
                     return 0
                 result = await db.execute(
@@ -1411,19 +1356,18 @@ async def delete_cluster(
         except Exception as e:
             logger.warning(f"Failed to delete OrganizationCluster binding for {cluster_id}: {e}")
         
-        # Step 5: Clear ALL cache for this cluster - critical for immediate UI update
+        # Step 5: clear every cache entry for this cluster so the UI updates at once.
         from app.core.cache import get_cache_manager
         try:
             cache = get_cache_manager()
             if cache:
-                # Use dedicated cache invalidation method for cluster-specific data
                 cache.invalidate_cluster_cache(cluster_id)
 
                 # Clear every scoped list shape, including versioned instance keys, and leave
                 # the instance-list generation token that prevents an in-flight fleet read
                 # from writing the deleted cluster back after this request completes.
                 cache.invalidate_instance_cache()
-                # images and warnings too: both list rows per cluster, for 180 s and 60 s
+                # Images and warnings too: both list rows per cluster, for 180 s and 60 s.
                 cache.invalidate_resource_cache("clusters", "projects", "regions", "images", "warnings")
                 
                 # Also invalidate the Vault list cache to remove from list immediately
@@ -1459,10 +1403,9 @@ async def delete_cluster(
         except Exception as e:
             logger.warning(f"Failed to delete node metadata for {cluster_id}: {e}")
 
-        # Step 8: Drop the grants made for the registration that just ended. They already reach
-        # nothing (the registration is over), but a key reports them as held and its integration
-        # polls them. Only grants for `ended` go, so a grant for a registration made since, by a
-        # quick re-register, stays.
+        # Step 8: drop the grants made for the registration that just ended. They reach nothing,
+        # but a key still reports them as held. Only grants for `ended` go, so a grant for a quick
+        # re-registration stays.
         # important: shielded and never cancelled. A key rewrite cut off between its Vault write
         # and its lock release could land after a concurrent revoke and bring the key back; on a
         # slow Vault the route stops waiting and the cleanup carries on.
@@ -1476,9 +1419,9 @@ async def delete_cluster(
             if get_settings().key_grant_generations:
                 cleanup = spawn(strip_cluster_from_key_grants(cluster_id, ended))
             else:
-                # important: with generations switched off a grant matches by id alone again, so
-                # every grant naming the id goes, as before generations; but only once the registry
-                # confirms the id is gone, or a failed Vault delete would strip live grants.
+                # important: with generations switched off a grant matches by id alone, so every
+                # grant naming the id goes, but only once the registry confirms the id is gone;
+                # otherwise a failed Vault delete would strip live grants.
                 still_registered = await cluster_registry.registered_cluster_ids(fresh=True)
                 if still_registered is not None and cluster_id not in still_registered:
                     cleanup = spawn(strip_cluster_from_key_grants(cluster_id, None))
@@ -1497,8 +1440,7 @@ async def delete_cluster(
             logger.warning(f"Failed to drop {cluster_id} from API key grants: {e}")
 
         logger.info(f"Successfully completed deletion of cluster {cluster_id}")
-        
-        # Log activity: cluster deletion success
+
         activity_logger.log_activity(
             action="cluster.delete",
             target_type="cluster",
@@ -1521,8 +1463,7 @@ async def delete_cluster(
         
     except Exception as e:
         logger.error(f"Failed to delete cluster {cluster_id}: {e}")
-        
-        # Log activity: cluster deletion failure
+
         activity_logger.log_activity(
             action="cluster.delete",
             target_type="cluster",
@@ -1564,7 +1505,6 @@ async def regenerate_certificate(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Regenerate certificate for a cluster."""
-    # verify caller may access this cluster (org-scope), matching get/delete/update
     verify_cluster_access(cluster_id)
     # important: the certificate acts for every project on the cluster, and a new one replaces the
     # owner's pending renewal, so this is held to the whole cluster like /certificates/renew.
@@ -1575,7 +1515,6 @@ async def regenerate_certificate(
     except MigrationFenceConflict as exc:
         raise HTTPException(status_code=409, detail=exc.detail) from exc
     try:
-        # Get cluster info to retrieve endpoint and detect type
         info = cert_manager.get_cluster_info(cluster_id)
         if not info:
             raise HTTPException(
@@ -1586,10 +1525,10 @@ async def regenerate_certificate(
         endpoint = info.get("metadata", {}).get("endpoint", "")
         stored_type = info.get("metadata", {}).get("type")
         
-        # Re-detect type from endpoint for accuracy (in case it changed or wasn't set).
-        # important: only overwrite when the probe actually determined something. It is
-        # unauthenticated, so it returns None for the whole LXD family, and taking that
-        # unconditionally would blank a type an authenticated read had already established.
+        # Re-detect the type from the endpoint.
+        # important: overwrite only when the probe determined something. It is unauthenticated
+        # and returns None for the whole LXD family, which would blank a type an authenticated
+        # read had established.
         cluster_type = stored_type
         if endpoint:
             detected_type, _ = await detect_hypervisor_type_from_endpoint(endpoint)
@@ -1602,7 +1541,7 @@ async def regenerate_certificate(
         
         # A pending certificate, not a replacement: the active one keeps working until the cluster
         # trusts the new one and Verify activates it (services/lxd_certs/pending.py). Overwriting
-        # it at once cut off every worker that reconnected before trust was added.
+        # it at once would cut off every worker that reconnects before trust is added.
         try:
             issued = await pending_certs.regenerate(db, cert_manager, cluster_id, cluster_type=cluster_type)
         except trust_store.CertificateOperationBusy:
@@ -1622,7 +1561,7 @@ async def regenerate_certificate(
             else f"New certificate issued as pending; the current one stays active. Run the {cli_tool} "
                  f"command on the host, then Verify to activate it. Detected: {cluster_type}."
         )
-        # note: `status` describes the NEW certificate, which the cluster does not trust yet; the
+        # `status` describes the new certificate, which the cluster does not trust yet; the
         # cluster's own status is unchanged until Verify.
         return ClusterRegisterResponse(
             success=True,
@@ -1647,10 +1586,8 @@ async def regenerate_certificate(
             detail=str(e)
         )
     except HTTPException:
-        # important: let a deliberate status through. This try raises HTTPException
-        # itself, and the broad handler below rewrote it, so an unreachable cluster
-        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
-        # instead of 403.
+        # important: let the 404 and 409 raised above through; the broad handler below would
+        # turn them into a 500.
         raise
     except Exception as e:
         logger.error(f"Unexpected error regenerating certificate: {e}")
@@ -1690,16 +1627,15 @@ async def update_cluster_location(
     logger.info(f"Updating location for cluster {cluster_id}")
     
     try:
-        # Get existing cluster info (may not exist for legacy clusters)
+        # An older cluster may have no metadata yet.
         try:
             cluster_info = cert_manager.get_cluster_info(cluster_id)
             existing_metadata = cluster_info.get("metadata", {}) if cluster_info else {}
         except LXDCertManagerError:
-            # Metadata doesn't exist yet - initialize empty metadata
             logger.warning(f"No existing metadata for cluster {cluster_id}, creating fresh")
             existing_metadata = {"endpoint": "", "display_name": cluster_id, "type": "LXD"}
         
-        # note: copied before the update below, so the audit event can say what it replaced.
+        # Copied before the update below, so the audit event can say what it replaced.
         previous = existing_metadata.get("location")
         previous_location = dict(previous) if isinstance(previous, dict) else {}
         # Update location in metadata. A catalogue region is stored as the catalogue has it,
@@ -1707,33 +1643,27 @@ async def update_cluster_location(
         location_data = get_region_catalog().canonical_location(request.location.model_dump(exclude_none=True))
         existing_metadata["location"] = location_data
         
-        # IMPORTANT: Sync zone with location.city for backwards compatibility
-        # The zone field is displayed in the clusters table
+        # Keep zone in step with location.city: the clusters table shows zone.
         new_zone = location_data["city"]
-        
-        # Save updated metadata with synced zone
+
         cert_manager.save_cluster_metadata(
             cluster_id=cluster_id,
             endpoint=existing_metadata.get("endpoint", ""),
             display_name=existing_metadata.get("display_name", cluster_id),
-            zone=new_zone,  # Update zone to match location.city
-            # Preserve whatever is stored, including "not determined yet". Defaulting to
-            # "LXD" here would re-introduce the guess this change removes.
+            zone=new_zone,
+            # Preserve whatever is stored, including "not determined yet"; defaulting to "LXD"
+            # would store a guess.
             cluster_type=existing_metadata.get("type"),
             merchant_id=existing_metadata.get("merchant_id"),
             location=location_data
         )
         
-        # Invalidate all relevant caches
         from app.core.cache import get_cache_manager
         cache = get_cache_manager()
         if cache:
-            # CRITICAL: Invalidate clusters list cache (scoped + admin)
             cache.invalidate_resource_cache("clusters", "regions")
-            # Also invalidate individual cluster cache if exists
             cache.invalidate_cluster_cache(cluster_id)
-        
-        # Log activity
+
         activity_logger.log_activity(
             action="cluster.location.update",
             target_type="cluster",
@@ -1777,15 +1707,14 @@ async def repin_cluster_certificate(
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_admin()),
 ):
-    """Accept a rotated server certificate deliberately.
+    """Accept a rotated server certificate.
 
-    important: pinning is only safe to enable if there is a way to accept a legitimate rotation.
-    Without one, the first time an operator rotates a hypervisor certificate the cluster goes
-    dark and the fix is to turn pinning off, which is how a control ends up permanently disabled.
+    Pinning needs a way to accept a legitimate rotation; without one, rotating a hypervisor
+    certificate takes the cluster dark and the only fix is turning pinning off.
 
-    Admin only, and it takes no fingerprint from the caller: it records what the endpoint is
-    presenting right now. A caller-supplied fingerprint would let someone pin a cluster to a
-    certificate they hold rather than to the one it actually serves.
+    Admin only, and it takes no fingerprint from the caller: it records what the endpoint
+    presents now. A caller-supplied fingerprint would let someone pin a cluster to a certificate
+    they hold.
     """
     verify_cluster_access(cluster_id)
     try:
@@ -1827,11 +1756,11 @@ async def repin_cluster_certificate(
 
     previous = metadata.get(FINGERPRINT_FIELD)
     # A re-pin is a new trust decision: classified like a first sighting, and the renewal lineage
-    # of the old pin is dropped so nothing approved against it still counts as this cluster.
+    # of the previous pin is dropped so nothing approved against it still counts as this cluster.
     fields = await asyncio.to_thread(repin_fields, endpoint_url, fingerprint)
     for attempt in range(2):
         try:
-            # Check-and-set, so a renewal decided from the old body cannot land on top of this.
+            # Check-and-set, so a renewal decided from the pre-re-pin record cannot land on top.
             await asyncio.to_thread(
                 vault_client.vault_kv_put, path, {**metadata, **fields}, cas=version
             )
@@ -1845,16 +1774,15 @@ async def repin_cluster_certificate(
             metadata, version = await asyncio.to_thread(vault_client.vault_read_versioned, path)
             previous = metadata.get(FINGERPRINT_FIELD)
 
-    # The cluster metadata this just rewrote is what the availability and region reads render,
-    # and a pooled client built before the re-pin still holds the old pin, so drop both.
+    # The availability and region reads render the metadata this just rewrote.
     from app.core.cache import get_cache_manager
     from app.services.lxd_service import get_lxd_service
 
     cache = get_cache_manager()
     cache.invalidate_availability_cache()
     cache.delete_pattern("api_responses", "regions:*")
-    # A client pooled before the re-pin was built against the old certificate, so drop it and
-    # let the next call reconnect and re-check against the pin this just wrote.
+    # A client pooled before the re-pin still trusts the previous certificate, so drop it and
+    # let the next call reconnect and check against the pin this just wrote.
     get_lxd_service().connection_manager.remove_connection(cluster_id)
 
     logger.warning(

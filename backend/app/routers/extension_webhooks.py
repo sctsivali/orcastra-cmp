@@ -1,9 +1,9 @@
 """Subscribing an installation to events, and looking at what was delivered.
 
 A subscription does not go live when it is created. It answers `pending_verification` until the
-endpoint has proved it wants the traffic by returning 2xx to a signed ping. Without that step our
-sender is a reflector: anyone could register a victim's URL and then generate events at them from
-our address.
+endpoint has proved it wants the traffic by returning 2xx to a signed ping. Without that step the
+sender is a reflector: anyone could register a victim's URL and aim events at it from this server's
+address.
 """
 
 import logging
@@ -98,13 +98,10 @@ class SubscriptionSecretResponse(BaseModel):
 
 
 class DeliveryPage(BaseModel):
-    """One page of the delivery log, and the two different totals a reader needs.
+    """One page of the delivery log, with two totals.
 
-    important: `total` counts what the current state filter matches, because that is what a pager
-    divides by. `counts` is the breakdown over every delivery on the installation, ignoring the
-    filter, because the health panel answers how much has failed overall. Reducing over the rows in
-    hand answered neither question honestly once the list was capped: it reported the last page as
-    though it were the whole history.
+    `total` counts what the current state filter matches, for paging. `counts` breaks down every
+    delivery on the installation by state, ignoring the filter, for the health panel.
     """
 
     deliveries: List[Dict[str, Any]]
@@ -280,8 +277,8 @@ async def verify_subscription(
     await db.commit()
     await db.refresh(delivery)
 
-    # A verification ping goes out now rather than through the queue, because the operator is
-    # waiting on the answer and a queued result would tell them nothing.
+    # A verification ping goes out now rather than through the queue: the operator is waiting on
+    # the answer.
     state = await dispatcher.deliver(db, delivery, get_vault_integrations_client())
     if state == "delivered":
         row.status = "active"
@@ -290,13 +287,10 @@ async def verify_subscription(
     else:
         row.status = "pending_verification"
         row.last_failure_reason = delivery.last_error
-        # important: a verification ping is one shot. `deliver` schedules a retry on failure by
-        # leaving the row `pending`, which the queue claims, so a refused verification became
-        # queued traffic aimed at an endpoint that had just declined it. That is the reflector
-        # behaviour the auto-suspend rule exists to prevent, and it is worse here because the
-        # whole point of verifying is to establish that the endpoint wants this traffic at all.
-        # A failure also must not count towards the consecutive-failure budget of a subscription
-        # that has never been active.
+        # important: a verification ping is one shot. On failure `deliver` leaves the row
+        # `pending` for a retry, and the queue would keep posting at an endpoint that just
+        # declined the traffic. A failed verification also must not count towards the failure
+        # budget of a subscription that was never active.
         delivery.state = "dead"
         delivery.next_attempt_at = None
         row.consecutive_failures = 0
@@ -325,12 +319,10 @@ async def rotate_secret(
     row = await _subscription_for(db, install_id, subscription_id, user)
     secret = rotate_signing_secret(get_vault_integrations_client(), row.installation_id)
 
-    # important: one secret per installation, and no constraint stops an installation having
-    # several subscriptions. Stamping only this row left every sibling advertising a fingerprint
-    # for a secret that no longer exists, so an operator comparing the dashboard against what
-    # their receiver reports would be told the wrong thing about the endpoint that just broke.
-    # Deliveries themselves stay correct either way, because the header's fingerprint is computed
-    # from the secret at send time rather than read from here.
+    # important: the secret is per installation, and an installation can hold several
+    # subscriptions. Restamp every sibling, or they advertise a fingerprint for a secret that is
+    # gone. Deliveries stay correct either way: the signature header's fingerprint is computed
+    # from the secret at send time.
     fingerprint = secret_fingerprint(secret)
     siblings = (
         await db.execute(
@@ -339,10 +331,8 @@ async def rotate_secret(
             )
         )
     ).scalars().all()
-    # The overlap window, recorded so an operator can see how long the old secret keeps working
-    # rather than having to know. This column has existed since the table was created, with a
-    # comment describing exactly this, and nothing ever set it because nothing sent two
-    # signatures.
+    # The overlap window, recorded so an operator can see how long the previous secret keeps
+    # working.
     overlap_until = datetime.now(timezone.utc) + timedelta(seconds=SIGNING_OVERLAP_SECONDS)
     for subscription in siblings:
         subscription.secret_fingerprint = fingerprint
@@ -354,7 +344,7 @@ async def rotate_secret(
         target_id=str(install_id),
         details={
             "subscription_id": row.id,
-            # Named so the audit trail shows this reached endpoints nobody asked about.
+            # Every sibling subscription this rotation also changed.
             "subscriptions_resigned": sorted(s.id for s in siblings),
             "previous_secret_valid_until": overlap_until.isoformat(),
         },
@@ -406,10 +396,8 @@ async def list_deliveries(
 ) -> DeliveryPage:
     """A page of the log, newest first.
 
-    This was a cap rather than a page: 50 rows with no offset, so the fifty-first delivery was
-    unreachable and nothing said so. Delivery is at-least-once and every retry writes a row, so the
-    log outgrows any cap quickly, and filtering by state then narrowed a set that had already been
-    cut, which is a misleading answer rather than a slow one.
+    Delivery is at-least-once and every retry writes a row, so the log grows quickly. It is paged
+    with `offset`, and the state filter applies before paging.
     """
     install = await _install_for(db, install_id, user)
     subscription_ids = [
@@ -429,8 +417,7 @@ async def list_deliveries(
 
     mine = WebhookDelivery.subscription_id.in_(subscription_ids)
 
-    # Unfiltered on purpose: this is what the health panel reads, and it asks about the whole
-    # installation rather than about whichever state the operator is currently looking at.
+    # Not filtered by state: the health panel reads these counts for the whole installation.
     counts = {
         row[0]: row[1]
         for row in (
@@ -461,8 +448,8 @@ async def list_deliveries(
         .all()
     )
 
-    # important: rows enqueued before events were held to the installation's projects can carry
-    # another party's names; they are shown without their payload (security review, 2026-11-06).
+    # important: a stored delivery can carry another party's names, so a row whose payload this
+    # installation does not reach is shown without it.
     from app.services.webhooks.reach import REACH_SECONDS, payload_reach, payload_reaches, read_bounds
 
     memo: Dict[Any, Any] = {}
@@ -510,10 +497,9 @@ async def redeliver(
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     install = await _install_for(db, install_id, user)
-    # important: the delivery must be bound to a subscription of THIS installation. Looking it up
-    # by primary key alone let any partner holding any installation requeue any delivery in the
-    # deployment by guessing an integer, and the response hands back its event_id. `list_deliveries`
-    # above already scopes the same table this way.
+    # important: bind the delivery to a subscription of this installation. A lookup by primary key
+    # alone would let any partner holding an installation requeue any delivery by guessing an
+    # integer, and the response returns its event_id.
     row = (
         await db.execute(
             select(WebhookDelivery)

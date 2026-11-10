@@ -1,13 +1,11 @@
 """Whether an organization permits an agent to see and drive its guests' desktops.
 
-important: this router exists because the gate that reads this row shipped before anything could
-write it. `desktop_control_policy` defaults to refusing, so without a way to set it the feature is
-correctly but permanently off, and an operator has no way to tell a deliberate refusal from a
-missing endpoint. A consent nobody can give is not a consent.
+`desktop_control_policy` defaults to refusing; these routes are how an organization gives or
+withdraws its consent.
 
 The decision belongs to the organization that owns the cluster rather than to whoever issued the
-API key: screen contents leaving for a third-party model is a disclosure to a sub-processor, not
-an ordinary API call, and the two are consented to by different people.
+API key: screen contents sent to a third-party model are a disclosure to a sub-processor, and the
+two are consented to by different people.
 """
 
 import logging
@@ -72,11 +70,8 @@ class DesktopControlPolicyRequest(BaseModel):
 def _as_response(org_id: int, consent: DesktopConsent) -> DesktopControlPolicyResponse:
     """One builder for both handlers.
 
-    important: the read used to construct this inline with two of the four fields, so the two
-    added later defaulted to False in the response. The row was correct, the form showed the
-    consent switched off, and an operator would have granted it twice and still seen nothing.
-    A response model with defaults will not tell you it is missing a field, so the builder is
-    the place that cannot forget one.
+    important: set every field here. The response model has defaults, so a handler that forgets a
+    field reports the consent as off while the row says it is on.
     """
     return DesktopControlPolicyResponse(
         organization_id=org_id,
@@ -90,16 +85,14 @@ def _as_response(org_id: int, consent: DesktopConsent) -> DesktopControlPolicyRe
 async def _assert_member(
     org_id: int, user: AuthenticatedUser, db: AsyncSession
 ) -> None:
-    """The organization's own people decide this, and an admin acting for them.
+    """Allow any member of the organization, and an admin acting for it.
 
-    important: any member, including a Tenant. These routes required Partner or above, which meant
-    the organization whose screens are at stake could not give or withdraw its own consent unless
-    it happened to hold Partner. Since an Admin is the only role that can also issue the key
-    grant, both halves of a control this module describes as belonging to two different people
-    collapsed into one actor. Membership is the boundary here; the tier is not.
+    important: membership is the boundary, whatever the role tier. A Tenant member must be able to
+    give or withdraw its organization's consent; requiring Partner would leave the Admin, who also
+    issues the key grant, holding both halves of the control.
 
-    note: 404 rather than 403 for a non-member, matching the rest of the org surface. Whether an
-    organization exists is not something a stranger should learn from the difference.
+    A non-member gets 404, as on the rest of the org surface, so a stranger cannot learn whether
+    the organization exists.
     """
     role = get_highest_role(resolve_roles(user)).value
     service = OrganizationService(db)
@@ -144,8 +137,7 @@ async def set_policy(
         allow_guest_access=body.allow_guest_access,
         updated_by=user.email,
     )
-    # Consent to a third-party disclosure is exactly the kind of decision that has to be
-    # attributable afterwards, including when it is withdrawn.
+    # Consent to a third-party disclosure must be attributable, including when it is withdrawn.
     activity_logger.log_activity(
         action="desktop_control.consent.set",
         target_type="organization",

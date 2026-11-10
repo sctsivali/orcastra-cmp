@@ -1,7 +1,4 @@
-"""
-LXD Service - Main integration module.
-Provides unified interface for all LXD operations.
-"""
+"""The LXD service: one interface for instance, project, image and resource operations."""
 
 import asyncio
 import logging
@@ -38,32 +35,25 @@ from app.services.lxd.project_scope import list_instance_records
 
 logger = logging.getLogger(__name__)
 
-# Shared thread pool for blocking operations
 _blocking_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="lxd_blocking")
 
 # important: instance metrics get their own pool. The node-status sweep submits to
-# _blocking_executor through a bare run_in_executor that run_blocking cannot count, so a sweep
-# could take every thread and leave a five-second poll queueing until its budget ran out, which
-# the dialog then reported as "Cluster did not answer" for a healthy instance. The per-cluster
-# cap keeps one slow cluster from holding the whole pool.
+# _blocking_executor through a bare run_in_executor that run_blocking cannot count, so in a
+# shared pool a sweep could starve the five-second poll until it timed out on a healthy
+# instance. The per-cluster cap keeps one slow cluster from holding the whole pool.
 _instance_metrics_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="instance_metrics")
 _INSTANCE_METRICS_TIMEOUT_SECONDS = 12.0
 _INSTANCE_METRICS_MAX_IN_FLIGHT = 10
 _INSTANCE_METRICS_MAX_IN_FLIGHT_PER_CLUSTER = 3
 
-# Failed-node skip is delegated to the shared circuit breaker
-# (app.services.lxd.health) so every connection path - status checks, instance
-# and project fan-outs, warning sweeps - skips the same dead cluster.
+# Failed clusters are skipped through the shared breaker (app.services.lxd.health), so status
+# checks, instance and project fan-outs and warning sweeps all skip the same dead cluster.
 
 
 class LXDService:
-    """
-    Main service class for managing LXD operations across multiple nodes.
-    Provides unified interface for VM management, projects, images, and resources.
-    """
+    """LXD operations across every registered cluster: instances, projects, images, resources."""
     
     def __init__(self):
-        # Initialize managers
         self.connection_manager = LXDConnectionManager()
         self.resource_manager = ResourceManager()
         settings = get_settings()
@@ -73,8 +63,8 @@ class LXDService:
         self.project_manager = ProjectManager(self.connection_manager, self.cert_manager)
         self.image_manager = ImageManager(self.connection_manager, self.cert_manager)
         
-        # Sync Vault-registered clusters into connection_manager whitelist
-        # so get_node_names() only returns registered nodes
+        # Seed the connection manager's whitelist from Vault, so its get_node_names lists only
+        # registered clusters.
         try:
             registered = self.cert_manager.list_clusters()
             self.connection_manager.sync_registered_clusters(registered)
@@ -88,14 +78,14 @@ class LXDService:
         expected_server_fingerprint: str | None = None,
         force: bool = False,
     ) -> bool:
-        """
-        Ensure cluster is connected (lazy loading helper).
-        Respects org-scope: returns False if the cluster is outside user's org.
+        """Connect a cluster from Vault unless this worker already holds a client.
 
-        `force` dials past the breaker without lifting it first, for the leader's dead-cluster
-        probe (breaker_sync): every other reader keeps skipping the cluster while it runs.
+        False for a cluster outside the caller's org scope, one the breaker holds, or one that
+        did not connect. `force` dials past the breaker without lifting it first, for the
+        leader's dead-cluster probe (breaker_sync): every other reader keeps skipping the
+        cluster while it runs.
         """
-        # Org-scope guard: prevent reconnecting to clusters outside the user's org
+        # Never connect a cluster outside the caller's org scope.
         from app.core.org_scope import get_current_allowed_clusters
         from app.services.lxd import health
         from app.services.lxd.exceptions import (
@@ -106,7 +96,6 @@ class LXDService:
         if allowed is not None and cluster_id not in allowed:
             return False
 
-        # Check if already connected
         client = (
             self.connection_manager.get_client(cluster_id)
             if expected_server_fingerprint is None
@@ -118,20 +107,17 @@ class LXDService:
         if client:
             return True
 
-        # important: fast-skip clusters the breaker marked as recently failed -
-        # this is the project/instance lazy-connect path; without it every
-        # fan-out re-pays the dead-cluster connect timeout (the projects stall).
+        # important: skip a cluster the breaker holds. This is the lazy-connect path of the
+        # project and instance fan-outs; without the check each one pays the dead cluster's
+        # connect timeout again.
         if not force and health.is_tripped(cluster_id):
             return False
 
-        # Try to connect
         try:
-            # important: the metadata path, not get_cluster_info. That helper also reads
-            # <cluster>/secrets to compute a has_trust_password flag nothing on this path
-            # looks at, and only /metadata is on the Vault read cache allowlist
-            # (core/vault_client.py CACHEABLE_PATH_SUFFIXES), so the flag cost one uncached
-            # round trip on every cold connect. Certificates are deliberately never cached,
-            # so this is the only Vault read here that could be removed at all.
+            # The /metadata read, not get_cluster_info: that helper also reads <cluster>/secrets
+            # for a has_trust_password flag this path never uses, and only /metadata is on the
+            # Vault read cache allowlist (core/vault_client.py CACHEABLE_PATH_SUFFIXES).
+            # Certificates are never cached.
             metadata = self.cert_manager.vault.vault_read(
                 f"{get_settings().vault_clusters_path}/{cluster_id}/metadata"
             )
@@ -153,8 +139,8 @@ class LXDService:
             connected = self.connection_manager.connect_with_vault_cert(
                 **connect_kwargs
             )
-            # note: this returns None when the breaker refuses it. Treating that as success
-            # cleared the breaker and reported a cluster as connected that never was.
+            # None means the breaker refused the connect: it must neither clear the breaker nor
+            # count as connected.
             if connected is None:
                 return False
             logger.info(f"Lazy-connected to cluster: {cluster_id}")
@@ -163,37 +149,30 @@ class LXDService:
         except LXDTransportPinError:
             raise
         except LXDAuthorizationError as e:
-            # important: the host ANSWERED and refused our certificate. Letting this fall into
-            # the broad handler below recorded it as a generic failure, so the breaker's kind
-            # reverted to "offline" one line after connect_with_vault_cert had correctly
-            # recorded "unauthorized". Five clusters on the dev fleet answered HTTP 200 and
-            # still read Offline on every surface because of these two lines.
+            # important: the host answered and refused our certificate. Keep this above the broad
+            # handler, which records a generic failure: that would overwrite the "unauthorized"
+            # kind connect_with_vault_cert recorded and show a reachable cluster as Offline.
             logger.warning(f"Cluster {cluster_id} refused our certificate: {e}")
             health.record_failure(cluster_id, str(e), kind=health.KIND_UNAUTHORIZED)
             return False
         except LXDLocalStorageError:
-            # important: narrow, and above the broad handler for the same reason the
-            # LXDAuthorizationError branch is. The backend's own disk failed, so the peer was
-            # never contacted and there is nothing true to record about it. Letting this reach
-            # record_failure below marked every cluster offline at once while the hypervisors
-            # were healthy, and the breaker then suppressed the retries that would have shown it.
+            # important: keep this narrow and above the broad handler. The backend's own disk
+            # failed and the peer was never contacted; recording a failure would mark every
+            # cluster offline at once, and the breaker would then suppress the retries.
             raise
         except Exception as e:
-            # important: WARNING, not ERROR. See connection.py: an offline cluster is
-            # expected operational noise, and the breaker below already records it.
+            # WARNING rather than ERROR: an offline cluster is expected, and the breaker
+            # records it.
             logger.warning(f"Failed to connect cluster {cluster_id}: {e}")
             health.record_failure(cluster_id, str(e))
             return False
     
     def get_client_with_reconnect(self, cluster_id: str):
-        """
-        Get LXD client with automatic reconnection if stale.
-        This method properly adds reconnected clients back to the connection pool.
-        """
+        """The pooled client, reconnecting through ensure_connection when there is none."""
         client = self.connection_manager.get_client(cluster_id)
         if client is None:
             logger.info(f"Connection to {cluster_id} is stale, attempting reconnect...")
-            # Use ensure_connection which properly adds client to connection_manager._clients
+            # ensure_connection stores the new client in connection_manager._clients.
             if self.ensure_connection(cluster_id):
                 client = self.connection_manager.get_client(cluster_id)
                 logger.info(f"Reconnected to {cluster_id} successfully")
@@ -204,12 +183,12 @@ class LXDService:
     
     # Node operations
     def get_node_names(self) -> List[str]:
-        """Get list of all registered cluster names from Vault."""
+        """Registered cluster names from Vault, filtered to the caller's org scope."""
         from app.core.org_scope import apply_cluster_filter
         return apply_cluster_filter(self.cert_manager.list_clusters())
     
     def check_nodes_status(self) -> List[NodeStatus]:
-        """Check connection status for all nodes (sync version - deprecated, use async version)."""
+        """Status of every node, one at a time. Deprecated: use check_nodes_status_async."""
         statuses = []
         settings = get_settings()
         node_names = self.get_node_names()
@@ -223,29 +202,19 @@ class LXDService:
     def check_node_status(self, node_name: str) -> NodeStatus:
         """Probe one node and return its status, resources included.
 
-        The public entry point for callers outside the fan-out, which need one node rather than
-        the whole fleet.
+        For callers outside the fan-out that need one node rather than the whole fleet.
         """
         return self._check_single_node_status(node_name, get_settings())
 
     def _read_registry(self, node_name: str, settings) -> Dict[str, Any]:
         """What registration recorded about a cluster, none of which depends on it answering.
 
-        The endpoint was pulled onto every path first, for the reason in the caller. The display
-        name and the type are the same kind of value and had the same defect: a cluster that did
-        not answer came back with no name and no type, so every picker and every card printed its
-        raw id and called it a bare hypervisor. Vault has held both the whole time.
+        Endpoint, display name, type and the clustered flag all come from Vault, so a cluster
+        that does not answer is still named and typed on every picker and card, and the clusters
+        table and the node card agree on whether an offline host is clustered.
 
-        note: `type` is normalised only when one was recorded. normalize_node_type(None) answers
-        "lxd", which would put back the everything-is-LXD default this removes.
-
-        note: `clustered` rides along for free. This read already happens on every path, so the
-        clusters table and the dashboard node card can stop disagreeing about whether an offline
-        host is clustered without paying anything for it. An earlier note in
-        documentation/clusters/hypervisor-type-and-clustering.md claimed the opposite, that
-        giving /nodes the stored fallback would mean a storage read on a per-cluster fan-out.
-        It would not; the record is already in hand and the key was simply dropped on the way
-        out.
+        `type` is normalised only when one was recorded: normalize_node_type(None) answers "lxd",
+        which would label every unknown cluster as LXD.
         """
         try:
             metadata = self.cert_manager.vault.vault_read(
@@ -274,11 +243,9 @@ class LXDService:
         """Check status for a single node (internal helper)."""
         from app.services.lxd import fanout, health
 
-        # important: read the registration BEFORE the breaker check. Endpoint, display name and
-        # type are registry metadata and have nothing to do with reachability, but returning them
-        # only on the healthy path meant every dead cluster reported endpoint="unknown", no name
-        # and no type, so a picker printed the word "unknown" and the cluster's raw id. The
-        # breaker exists to skip an 8s connect, not a local Vault read.
+        # important: read the registration before the breaker check, so a dead cluster still
+        # reports its endpoint, name and type. The breaker exists to skip an 8s connect, not a
+        # Vault read.
         registry = self._read_registry(node_name, settings)
         endpoint = registry["endpoint"]
 
@@ -316,7 +283,6 @@ class LXDService:
 
         try:
             
-            # Use get_client_with_reconnect for automatic reconnection
             client = self.get_client_with_reconnect(node_name)
             if client:
                 status = self.resource_manager.check_node_status(
@@ -324,15 +290,11 @@ class LXDService:
                 )
                 return status
             else:
-                # important: get_client has already recorded WHY it failed, and an untrusted
-                # certificate records KIND_UNAUTHORIZED. Overwriting that with a generic
-                # "Client not connected" downgrades a cluster that answered and refused us
-                # into one that looks powered off, and the breaker then serves that wrong
-                # answer to every reader for its whole TTL.
-                # important: same rule as instance.py. A missing client is not evidence the
-                # cluster failed, and recording one here trips the breaker for a cluster this
-                # worker has merely never connected to. Report it offline for this response
-                # and leave the door open. Only a path that actually reached the peer records.
+                # important: record nothing here. get_client has already recorded why it
+                # failed (an untrusted certificate records KIND_UNAUTHORIZED), and a missing
+                # client is no evidence the cluster failed: this worker may never have connected
+                # to it. Recording would trip the breaker for every reader. Only a path that
+                # reached the peer records; this response just reports the cluster offline.
                 kind = health.get_kind(node_name) or health.KIND_OFFLINE
                 return NodeStatus(
                     name=node_name,
@@ -345,8 +307,8 @@ class LXDService:
                     error=health.get_reason(node_name) or "Client not connected"
                 )
         except LXDLocalStorageError:
-            # See ensure_connection above. The node is not the thing that failed, so it must not
-            # be the thing recorded, and a NodeStatus claiming "not connected" would be a guess.
+            # The backend's own disk failed (see ensure_connection), so nothing is recorded or
+            # reported about the node.
             raise
         except Exception as e:
             logger.warning(f"Node {node_name} health check failed: {e}")
@@ -372,7 +334,6 @@ class LXDService:
         if not node_names:
             return []
         
-        # Run all node checks in parallel using thread pool
         loop = asyncio.get_event_loop()
         tasks = [
             loop.run_in_executor(
@@ -386,7 +347,7 @@ class LXDService:
         
         statuses = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Filter out exceptions and log them
+        # A check that raised still yields an offline status for its node.
         result = []
         for i, status in enumerate(statuses):
             if isinstance(status, Exception):
@@ -404,18 +365,15 @@ class LXDService:
         return result
     
     def get_node_resources(self, node_name: str) -> Dict[str, Any]:
-        """Get available resources for a specific node.
+        """Resources of one node, aggregated over its members when the host is clustered.
 
-        important: require_client, like every sibling here. Without it a breaker-tripped
-        cluster arrived as a None dereference and the route answered 500, sending an operator
-        to look for a backend fault when the node was simply not answering.
+        require_client turns a breaker-tripped cluster into a 503 instead of a None dereference.
         """
         client = require_client(self.connection_manager.get_client(node_name), node_name)
         data = self.resource_manager.get_node_resources(client, node_name)
-        # A clustered host's body is one member's. The project quota pre-flight and the
-        # server resources route read this dict, and a cap bounded by one member's threads
-        # refused projects the cluster could hold. Same aggregate, same cache, as the card,
-        # through the one place that decision is made (resources_for_host).
+        # A clustered host's body is one member's. The project quota pre-flight and the server
+        # resources route read this dict, so it carries the same cluster aggregate as the card,
+        # built in one place (resources_for_host).
         if resolve_clustered(client=client):
             return resources_for_host(
                 client, node_name, data, GpuInventory.empty(), True
@@ -423,15 +381,14 @@ class LXDService:
         return data
 
     def get_node_resources_detail(self, node_name: str) -> NodeResources:
-        """Full NodeResources for one node, GPU included.
+        """Full NodeResources for one node, GPU inventory included.
 
-        important: GET /nodes/{node}/resources is typed as NodeResources but was built from
-        the CPU/memory/storage dict alone, so every GPU field it declared was served as its
-        default. The endpoint reported zero GPUs on hardware that has one.
+        Backs GET /nodes/{node}/resources, so the GPU fields come from a real inventory read
+        rather than their defaults.
         """
         client = require_client(connect_or_get_client(self, node_name), node_name)
-        # important: one live read for both consumers. Reading twice doubles the round trips
-        # and lets the memory figure and the GPU inventory disagree about the same host.
+        # One live read for both consumers: two would double the round trips and let the memory
+        # figure and the GPU inventory disagree about the same host.
         live = read_resources(client, node_name)
         data = self.resource_manager.get_node_resources(client, node_name, resources=live)
         gpu = GpuInventory.empty()
@@ -452,10 +409,7 @@ class LXDService:
     
     # Instance/VM operations
     async def list_all_vms(self) -> Tuple[List[VMInfo], List[str]]:
-        """
-        List all VMs across all configured LXD nodes and all projects.
-        Returns tuple of (vm_list, connected_nodes).
-        """
+        """Every instance in every cluster and project, as (instances, connected clusters)."""
         return await self.instance_manager.list_all_vms()
 
     async def list_all_vms_with_failures(
@@ -469,7 +423,7 @@ class LXDService:
         return await self.instance_manager.list_node_instances(node_name)
 
     async def read_fleet_inventory(self) -> FleetInventory:
-        """The monitoring sweep's fleet read: clusters out of time are named, not raised."""
+        """The monitoring sweep's fleet read; clusters that run out of time are listed."""
         return await self.instance_manager.read_fleet_inventory()
 
     async def list_vms_in_project_with_failures(
@@ -536,7 +490,7 @@ class LXDService:
         force: bool = False,
         project: Optional[str] = None,
     ) -> str:
-        """Delete a VM, returning the project it was actually deleted from."""
+        """Delete a VM and return the project it was deleted from."""
         return await self.instance_manager.delete_vm(name, host, force, project)
 
     async def get_rebuild_preflight(self, name: str, host: str, project: Optional[str] = None):
@@ -635,9 +589,8 @@ class LXDService:
         or every store on the host when no project is named."""
         return await self.image_manager.list_images(host, project)
 
-    # note: the two below are deliberately sync. pylxd blocks, and a delete waits on a real
-    # LXD operation, so the router hands them to run_blocking with an explicit timeout rather
-    # than this layer hiding the block behind an async signature.
+    # The image methods below are sync: pylxd blocks and a delete waits on an LXD operation, so
+    # the router offloads them with an explicit timeout instead of this layer hiding the block.
     def image_store_of(self, host: str, project: Optional[str] = None) -> str:
         """The store `project` reads on a host, which is what a caller must be allowed to see."""
         return self.image_manager.image_store_of(host, project)
@@ -668,8 +621,8 @@ class LXDService:
         return await asyncio.to_thread(self._read_project_usage_sync, host, project)
 
     def _read_project_usage_sync(self, host: str, project: str) -> ProjectUsage:
-        # note: the client lookup revalidates the pooled connection with a live request, so it
-        # runs on the thread with the read, never inline on the loop.
+        # The client lookup revalidates the pooled connection with a live request, so it runs on
+        # this thread with the read, never inline on the loop.
         self.ensure_connection(host)
         client = require_client(self.connection_manager.get_client(host), host)
         return read_project_usage(client, project)
@@ -719,19 +672,17 @@ class LXDService:
         project: str = "default"
     ) -> InstanceMetrics:
         """Read one metrics sample. Must run on the instance metrics executor."""
-        # important: connect_or_get_client, not connection_manager.get_client. The latter is
-        # memory-only and answers None in a worker that has never connected to this cluster,
-        # so with four workers the same poll answered 200 or 503 depending on which one took it.
+        # important: connect_or_get_client, because connection_manager.get_client is memory-only
+        # and answers None on a worker that has never connected to this cluster, so the same poll
+        # would answer 200 or 503 depending on the worker.
         client = connect_or_get_client(self, host)
-        # important: without this, a None client reaches find_instance_in_projects, which
-        # swallows the AttributeError in both of its loops and returns (None, None). The
-        # caller then reports "Instance '<name>' not found on <host>" and the router
-        # message-sniffs "not found" into a 404 -- telling the operator their instance was
-        # deleted when the cluster is merely offline.
+        # important: a None client must not reach find_instance_in_projects, which swallows the
+        # AttributeError and returns (None, None); the router would then answer 404 "not found"
+        # for an instance whose cluster is only offline.
         if client is None:
             raise LXDConnectionError(f"Could not connect to {host}")
-        # note: two seconds under the wall budget, so a slow /1.0/metrics read is dropped
-        # before run_blocking gives up on the whole sample.
+        # Two seconds under the wall budget, so a slow /1.0/metrics read is dropped before
+        # run_blocking gives up on the whole sample.
         deadline = time.monotonic() + _INSTANCE_METRICS_TIMEOUT_SECONDS - 2.0
         return read_instance_metrics(client, host, instance_name, project, deadline=deadline)
 
@@ -761,7 +712,6 @@ class LXDService:
         )
 
 
-# Singleton instance
 _lxd_service: Optional[LXDService] = None
 
 

@@ -63,11 +63,11 @@ def _not_housekeeping() -> Any:
     """Every row except LXD's own background work, for the dock's two counts.
 
     LXD runs tasks nobody asked for ("Updating images", "Cleaning up expired backups"), and the
-    follower records them as an LXD task operation with a system actor. A sick daemon holds them
-    open for weeks: on dev they were 91 of 101 open rows, so the dock read "Tasks 101" over ten
-    real actions. They are still listed by the Tasks and Queue tabs; only the counts skip them.
+    follower records them as an LXD task operation with a system actor. A sick daemon can hold
+    them open for weeks and swamp the counts. They are still listed by the Tasks and Queue tabs;
+    only the counts skip them.
 
-    important: spelled as an OR of the ways a row is NOT housekeeping, not NOT(a AND b AND c).
+    Spelled as an OR of the ways a row is not housekeeping rather than NOT(a AND b AND c):
     operation_class is nullable, and NOT(TRUE AND NULL AND TRUE) is NULL, which would drop an
     LXD frame that carried no class from the count.
     """
@@ -90,7 +90,7 @@ async def count_running(db: AsyncSession, conditions: Sequence[Any]) -> int:
 async def count_failed_recent(
     db: AsyncSession, conditions: Sequence[Any], minutes: int = FAILED_RECENT_MINUTES
 ) -> int:
-    # note: the window is the database clock, which is the clock that stamped finished_at.
+    # The window uses the database clock, which is the clock that stamped finished_at.
     cutoff = literal_column(f"now() - interval '{int(minutes)} minutes'")
     return await _count(
         db,
@@ -122,7 +122,7 @@ async def task_log(db: AsyncSession, task_id: str, limit: int = 500) -> List[Map
 async def queue_rows(
     db: AsyncSession, conditions: Sequence[Any], limit: int = 100, offset: int = 0
 ) -> Tuple[List[Mapping[str, Any]], int]:
-    """One bounded page in acceptance order, with pending ranks over the scoped queue.
+    """One bounded page in queue order, with pending ranks over the scoped queue.
 
     Window evaluation precedes LIMIT, so a later page keeps each pending row's rank. Running
     rows have their own partition and never consume a pending position.

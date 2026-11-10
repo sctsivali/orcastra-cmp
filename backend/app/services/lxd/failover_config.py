@@ -5,7 +5,7 @@ the loss of a host. Most of that is readable through the raw proxy (members, sto
 networks), but the one switch that decides automatic recovery, `cluster.healing_threshold`, lives
 in the server configuration at the bare `/1.0`.
 
-important: that object is deliberately not proxied. Besides the thresholds it carries the server
+important: that object is not proxied. Besides the thresholds it carries the server
 certificate, listen addresses and, before LXD 6, `core.trust_password`. This module reduces it to
 an allowlist of numbers and one boolean, so a caller learns how the cluster recovers and nothing
 about how to reach or join it.
@@ -14,7 +14,7 @@ about how to reach or join it.
 from typing import Any, Dict, Optional
 
 # LXD's own defaults for a key the server configuration does not set. A trusted read that omits
-# a key is a positive answer ("left at the default"), not a missing one.
+# a key means the key is left at its default.
 FAILOVER_CONFIG_DEFAULTS: Dict[str, int] = {
     "cluster.healing_threshold": 0,
     "cluster.offline_threshold": 20,

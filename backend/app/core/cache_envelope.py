@@ -8,8 +8,8 @@ pattern sweep remove both at once.
 
 Shape: {"__swr__": 1, "t": stored_at, "b": build_started_at, "s": fresh_for, "v": body}
 
-A value without the marker is a plain body written by code that predates this module. It is
-treated as fresh with an unknown age, so nothing that reads an old entry changes behaviour.
+A value without the marker is a plain body. It is treated as fresh with an unknown age, so a
+reader of a plain entry sees no change in behaviour.
 """
 
 from dataclasses import dataclass

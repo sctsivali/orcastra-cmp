@@ -1,8 +1,7 @@
 """Destruction, and infrastructure no project contains. `admin` on the named cluster.
 
-Registered only when MCP_ADMIN_TOOLS_ENABLED. A key's own grant always decides whether these RUN;
-the flag decides whether a model is ever shown them, which is a different question and worth
-answering separately for a surface a model drives.
+Registered only when MCP_ADMIN_TOOLS_ENABLED. A key's own grant always decides whether these run;
+the flag decides whether a model is ever shown them.
 
 Every delete carries `destructive_hint=True` so a host can prompt for confirmation, and so does
 creating a storage pool, which can format the device it is given. Creating a network or a project
@@ -24,8 +23,8 @@ __all__ = ["register"]
 _DESTRUCTIVE = ToolAnnotations(
     read_only_hint=False, destructive_hint=True, idempotent_hint=False
 )
-# Creating infrastructure is not destruction, but it is priced `admin` because it is not bounded
-# by a project grant, and it should still not be auto-approved.
+# Creating infrastructure destroys nothing, but it is priced `admin` because no project grant
+# bounds it, and it should still not be auto-approved.
 _CLUSTER_WIDE = ToolAnnotations(
     read_only_hint=False, destructive_hint=False, idempotent_hint=False
 )

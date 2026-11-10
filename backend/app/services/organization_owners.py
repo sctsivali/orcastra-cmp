@@ -1,25 +1,18 @@
 """The set of integration keys that own a synced organization.
 
-A synced (OrcaHub) organization is owned by a set of integration keys. Every key in the set may sync
-the organization, write its members and tenant access policies and provision tenant access for it;
-`organizations.api_key_id` is the primary, the one key OrcaHub callbacks are made with, and is always
-in the set (the before_flush listener in db_models writes its row, and on PostgreSQL a deferred
-foreign key refuses a primary outside the set). An organization with a NULL primary has no owner and
-is claimable as before.
+Every key in a synced (OrcaHub) organization's owner set may sync it, write its members and tenant
+access policies and provision tenant access for it. `organizations.api_key_id` is the primary, the key
+OrcaHub callbacks use; the before_flush listener in db_models keeps it in the set, and on PostgreSQL a
+deferred foreign key refuses a primary outside it. A NULL primary means no owner.
 
-A key enters a set only by claiming an unowned organization (a sync or a refresh), by provisioning
-creating one, by two-key enrollment from a key already in the set, by an Administrator, or by an
-add-on credential's rotation carrying it. A set is never emptied: removing the last owner is refused,
-and an Administrator's transfer replaces the whole set at once.
+A key joins by claiming an unowned organization (sync or refresh), provisioning one, two-key
+enrollment, an Administrator, or an add-on credential rotation. A set is never emptied: removing the
+last owner is refused and a transfer replaces the whole set. Outside the sync, refresh and provision
+claims, only this module and that listener write `organization_owner_keys` or the primary
+(tests/test_the_one_org_rule_holds_for_orcahubs_bodies_and_every_claim_path.py).
 
-Only this module (and the listener that keeps the primary in the set) writes `organization_owner_keys`
-or `organizations.api_key_id` outside the three claim paths; the ratchets in
-tests/test_the_one_org_rule_holds_for_orcahubs_bodies_and_every_claim_path.py pin that.
-
-Concurrency: a change to an organization's set runs inside serialize_org_owners for it, taken after
-any key locks (integration_key_ownership.serialize_keys), in sorted order, never the other way around.
-An add-on's installation row comes before both (extension_install.lock_installation), and no path
-locks an installation row while holding a key or organization lock.
+important: lock order is the add-on installation row (extension_install.lock_installation), then key
+locks (integration_key_ownership.serialize_keys), then serialize_org_owners in sorted order.
 """
 
 import asyncio
@@ -38,19 +31,18 @@ from app.models.db_models import Organization, OrganizationOwnerKey
 
 logger = logging.getLogger(__name__)
 
-# How many keys may own one organization. Enough for a rolling rotation and a cluster key per region;
-# small enough that an owner set is reviewed rather than accumulated.
+# Owner keys per organization: room for a rolling rotation and a cluster key per region, few enough
+# that a set stays reviewable.
 MAX_OWNER_KEYS = 5
 
 ADD_ACTION = "integration.organization.owner.add"
 REMOVE_ACTION = "integration.organization.owner.remove"
 PRIMARY_ACTION = "integration.organization.owner.primary"
 
-# important: the ways in which a key comes to own an organization that also put the organization on its
-# minter's side (services/cluster_parties.py), and so let that side manage the key. A key enrolled by
-# another owner or added by an Administrator owns the organization but lends no party: otherwise the
-# seller who provisioned a buyer would manage, and could rotate, a key the buyer's founder enrolled.
-# An allowlist, so a new way in lends nothing until it is decided here.
+# important: the entry routes that also put the organization on the key minter's side
+# (services/cluster_parties.py), letting that side manage the key. Enrollment and Administrator adds
+# lend no party, or the seller who provisioned a buyer could manage and rotate a key the buyer
+# enrolled. An allowlist: a new entry route lends nothing until it is added here.
 PARTY_ADDED_VIA = ("backfill", "claim", "provision", "transfer", "carry")
 
 
@@ -123,11 +115,9 @@ async def owner_key_ids(db: AsyncSession, org_id: int) -> List[str]:
 async def is_owner(db: AsyncSession, org: Organization, key_id: Optional[str]) -> bool:
     """Whether this key is in the organization's owner set. An unowned organization has no owner.
 
-    The primary is always in the set, so it answers without a query; only another key is looked up.
-
-    note: a primary equal to the caller answers yes even for an empty id, as the plain comparison it
-    replaced did. A push from a key with an empty id stamps an empty primary, which owns nothing else
-    and claims nothing (integration_cluster_rebind counts no organization for it).
+    The primary is always in the set, so it answers without a query. A primary equal to the caller
+    answers yes even for an empty id: a push from a key with an empty id stamps an empty primary, which
+    owns nothing else and claims nothing (integration_cluster_rebind counts no organization for it).
     """
     if key_id is None or org.api_key_id is None:
         return False
@@ -260,8 +250,8 @@ async def replace_owners(
     if org.api_key_id != key_id:
         mark_entry(org, via, by)
         org.api_key_id = key_id
-    # note: a key that was already an owner now owns the organization by the transfer, so its row says so
-    # (and lends the party a transfer lends, as before co-ownership)
+    # A key that was already an owner now owns by the transfer: its row says so and lends the party a
+    # transfer lends.
     kept = await db.execute(
         select(OrganizationOwnerKey).where(
             OrganizationOwnerKey.organization_id == org.id, OrganizationOwnerKey.api_key_id == key_id
@@ -284,7 +274,7 @@ async def carry(db: AsyncSession, org: Organization, *, from_key_id: str, to_key
     """An add-on credential's rotation: the new key takes the old one's place in this organization's set,
     keeping the primary if the old key held it.
 
-    important: and the way the old key came in. A carried enrolled key stays one that lends no party
+    important: it also keeps the way the old key came in. A carried enrolled key still lends no party
     (PARTY_ADDED_VIA), so a rotation cannot turn an enrollment into a claim.
     """
     old = list((await db.execute(
@@ -373,15 +363,14 @@ async def serialize_org_owners(db: AsyncSession, org_ids: Iterable[int]) -> Asyn
 async def _reload(db: AsyncSession, org_ids: List[int]) -> None:
     """Read these organizations again now that their sets are held, over any copy the session has.
 
-    important: sessions do not expire on commit, so an organization a handler loaded before taking the
-    lock keeps the primary it had then. Deciding on that copy, a second concurrent end of an owner key
-    skipped the promotion the first one had made necessary, and its commit failed on the primary-in-set
-    foreign key after Vault was written. FOR UPDATE (PostgreSQL only; SQLite omits it) also holds the
+    important: sessions do not expire on commit, so an organization loaded before the lock keeps its
+    old primary. Deciding on that copy can skip a needed promotion and fail the commit on the
+    primary-in-set foreign key after Vault was written. FOR UPDATE (PostgreSQL only) also holds the
     rows against a writer that does not take this lock.
     """
     if not org_ids:
         return
-    # note: the rows must be fetched; populate_existing refreshes an object only as its row is read
+    # The rows must be fetched: populate_existing refreshes an object only as its row is read.
     (await db.execute(
         select(Organization)
         .where(Organization.id.in_(org_ids))
@@ -395,7 +384,7 @@ async def check_owner_sets(db: AsyncSession) -> None:
     """Write the pending owner-set changes and check the primary-in-set rule now rather than at commit.
 
     For a caller that must stop before an outside write (Vault) when the database would refuse the change.
-    On PostgreSQL the deferred foreign key from migration 015a is checked here; SQLite has no such key.
+    On PostgreSQL the deferred primary-in-set foreign key is checked here; SQLite has no such key.
     """
     from app.services.integration_key_ownership import _dialect_name
 

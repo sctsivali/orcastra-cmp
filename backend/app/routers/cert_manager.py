@@ -1,10 +1,10 @@
 """
-Certificate Manager Router
-Handles certificate lifecycle management, renewal, and monitoring.
+Certificate endpoints: status, renewal, verification and superseded trust cleanup.
 
 The rotation logic lives in services/lxd_certs/rotation.py and the trust cleanup in
-services/lxd_certs/trust_cleanup.py; this file maps HTTP onto them. Every mutation takes the
-cluster's certificate lock and answers 409 while another change on the same cluster holds it.
+services/lxd_certs/trust_cleanup.py; this file maps HTTP onto them. Every single-cluster
+mutation takes the cluster's certificate lock and answers 409 while another change on it
+holds the lock.
 """
 
 import asyncio
@@ -141,7 +141,7 @@ async def list_certificates(
 ):
     try:
         # important: a cluster certificate acts for every project on its cluster, so a non-admin
-        # keeps only the clusters no other party holds (core/whole_cluster_access)
+        # keeps only the clusters no other party holds (core/whole_cluster_access).
         cluster_ids = await whole_clusters(
             await asyncio.to_thread(cert_manager.list_clusters, use_cache=False), db, user
         )
@@ -174,7 +174,7 @@ async def get_certificate(
 ):
     verify_cluster_access(cluster_id)
     # important: a cluster's client certificate and its renewal act for every project on the
-    # cluster, so this needs the whole cluster (core/whole_cluster_access)
+    # cluster, so this needs the whole cluster (core/whole_cluster_access).
     await verify_whole_cluster_access(cluster_id, db, user)
     rows = await _read_rows(cert_manager, [cluster_id])
     if not rows or rows[0][0].status == CertificateStatus.UNKNOWN and not rows[0][0].fingerprint:
@@ -199,7 +199,7 @@ async def get_pending_certificate(
 ):
     verify_cluster_access(cluster_id)
     # important: a cluster's client certificate and its renewal act for every project on the
-    # cluster, so this needs the whole cluster (core/whole_cluster_access)
+    # cluster, so this needs the whole cluster (core/whole_cluster_access).
     await verify_whole_cluster_access(cluster_id, db, user)
     try:
         return await pending_certs.pending_view(cert_manager, cluster_id)
@@ -232,7 +232,7 @@ async def initiate_renewal(
 ):
     verify_cluster_access(request.cluster_id)
     # important: a cluster's client certificate and its renewal act for every project on the
-    # cluster, so this needs the whole cluster (core/whole_cluster_access)
+    # cluster, so this needs the whole cluster (core/whole_cluster_access).
     await verify_whole_cluster_access(request.cluster_id, db, user)
     try:
         return await rotation.renew(db, cert_manager, request)
@@ -271,7 +271,7 @@ async def verify_renewal(
 ):
     verify_cluster_access(request.cluster_id)
     # important: a cluster's client certificate and its renewal act for every project on the
-    # cluster, so this needs the whole cluster (core/whole_cluster_access)
+    # cluster, so this needs the whole cluster (core/whole_cluster_access).
     await verify_whole_cluster_access(request.cluster_id, db, user)
     try:
         return await rotation.verify(db, cert_manager, request.cluster_id, request.pending_cert_id)
@@ -311,7 +311,7 @@ async def cancel_renewal(
 ):
     verify_cluster_access(cluster_id)
     # important: a cluster's client certificate and its renewal act for every project on the
-    # cluster, so this needs the whole cluster (core/whole_cluster_access)
+    # cluster, so this needs the whole cluster (core/whole_cluster_access).
     await verify_whole_cluster_access(cluster_id, db, user)
     try:
         cancelled = await rotation.cancel(db, cert_manager, cluster_id)
@@ -347,7 +347,7 @@ async def remove_superseded_trust(
 ):
     verify_cluster_access(cluster_id)
     # important: a cluster's client certificate and its renewal act for every project on the
-    # cluster, so this needs the whole cluster (core/whole_cluster_access)
+    # cluster, so this needs the whole cluster (core/whole_cluster_access).
     await verify_whole_cluster_access(cluster_id, db, user)
     try:
         report = await trust_cleanup.sweep_cluster(
@@ -387,7 +387,7 @@ async def get_system_warnings(
     """Get all certificate and node warnings."""
     try:
         settings = get_settings()
-        # important: the same whole-cluster rule as the list (core/whole_cluster_access)
+        # important: the same whole-cluster rule as the list (core/whole_cluster_access).
         cluster_ids = await whole_clusters(
             await asyncio.to_thread(cert_manager.list_clusters, use_cache=False), db, user
         )
@@ -497,7 +497,7 @@ async def cleanup_pending_certificates(
 ):
     """Cleanup stale pending certificates."""
     try:
-        # important: only the clusters this caller holds whole (core/whole_cluster_access)
+        # important: only the clusters this caller holds whole (core/whole_cluster_access).
         cluster_ids = await whole_clusters(
             await asyncio.to_thread(cert_manager.list_clusters, use_cache=False), db, user
         )

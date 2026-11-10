@@ -2,12 +2,12 @@
 
 An API key and a snapshot schedule act for the person who created them, but neither carries a
 session, so the role their rule depends on is read from Authentik (authentik_role_reading). The
-answer is three-valued on purpose: True and False are answers, and None means the identity
-provider did not answer, which a caller turns into a retryable refusal, never into "not an Admin"
-(that would turn an IdP outage into a permanent 403) and never into "an Admin".
+answer has three values: None means the identity provider did not answer, which a caller turns
+into a retryable refusal, never into "not an Admin" (an IdP outage would become a permanent 403)
+and never into "an Admin".
 
-note: an account Authentik no longer carries, has disabled, or carries twice is a firm "not an
-Admin" (authentik_role_reading.ENDED_REASONS), and so is a deployment with no identity provider
+An account Authentik does not carry, has disabled, or carries twice is a firm "not an Admin"
+(authentik_role_reading.ENDED_REASONS), and so is a deployment with no identity provider
 configured. Answers are cached briefly per account; unknowns are not cached.
 """
 

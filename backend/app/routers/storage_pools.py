@@ -82,17 +82,15 @@ router = APIRouter(
     dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
 )
 
-# Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
-# Pool resource reads, one per cluster. Module level: the handlers used to build and abandon a
-# fresh pool on every call.
+# Pool resource reads, one per cluster, on one module-level pool shared by every call.
 _resources_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="pool_resources")
-# a pool write on LXD 6.9 is an operation; see NETWORK_WRITE_WAIT_SECONDS in networks.py
+# A pool write on LXD 6.9 is an operation; see NETWORK_WRITE_WAIT_SECONDS in networks.py.
 POOL_WRITE_WAIT_SECONDS = 120
 
 
 class StoragePoolInfo(BaseModel):
-    """Storage pool information."""
+    """A storage pool on one cluster."""
     name: str = Field(..., description="Pool name")
     description: str = Field("", description="Pool description")
     driver: Optional[str] = Field(..., description="Storage driver (zfs, dir, btrfs, etc); null for a Tenant")
@@ -128,14 +126,14 @@ def _fetch_pools_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[S
     """Every storage pool on one cluster, in one request. Runs in the thread pool.
 
     A storage pool is a cluster-wide object, so one recursion=1 listing carries every pool
-    with its driver, status and config; pylxd's manager listed at recursion 0 and synced each
-    pool afterwards. A failure of the listing itself propagates to the caller, which names the
+    with its driver, status and config (pylxd's manager lists at recursion 0 and syncs each
+    pool afterwards). A failure of the listing itself propagates to the caller, which names the
     cluster rather than reporting it as having no pools.
     """
     client = lxd_service.get_client_with_reconnect(node_name)
     if client is None:
-        # important: unreachable is not empty. Returning a bare list here
-        # made a dead node indistinguishable from one with nothing.
+        # important: unreachable is not empty. Raise so the caller names the node; a bare
+        # list would read as a node with no pools.
         raise LXDConnectionError(f"Could not connect to {node_name}")
     response = client.api.storage_pools.get(
         params={"recursion": 1}, timeout=ALL_PROJECTS_READ_TIMEOUT
@@ -163,7 +161,7 @@ def _fetch_node_pool_resources(lxd_service: LXDService, tenant_acl, node_name: s
     """Every visible pool's resources on one cluster. Runs in the thread pool.
 
     Returns None when the node could not be reached, so the caller can tell an outage apart
-    from a node that simply has no pools.
+    from a node that has no pools.
     """
     result = {}
     try:
@@ -188,13 +186,13 @@ def _fetch_node_pool_resources(lxd_service: LXDService, tenant_acl, node_name: s
 async def _read_all_pool_resources(lxd_service: LXDService, tenant_acl) -> tuple[dict, int]:
     """Resources for every pool the caller may see, and how many clusters answered.
 
-    note: shared by /resources-all and the legacy -resources path, which carried two copies.
-    `tenant_acl` is read by the caller on the loop: contextvars do not cross into the threads.
+    Shared by /resources-all and the legacy -resources path. `tenant_acl` is read by the caller
+    on the loop: contextvars do not cross into the threads.
     """
     nodes = lxd_service.connection_manager.get_node_names()
     if not nodes:
-        # important: get_node_names() lists only nodes holding a live client, so an empty fleet
-        # here is every cluster being down. Not an answer, never cached.
+        # important: get_node_names() lists only nodes holding a live client, so an empty list
+        # here means every cluster is down. It is not an answer and is never cached.
         return {"resources": {}}, 0
     loop = asyncio.get_event_loop()
     tasks = [
@@ -242,11 +240,10 @@ async def list_storage_pools(
             generation=lambda: get_resource_list_generation(cache, "storage_pools"),
         )
         
-        # important: two different things make a node absent, and both must be named.
-        # A node can fail during the fan-out, or never be asked at all, because
-        # connection_manager.get_node_names() returns only nodes with a live client while
-        # the fleet is whatever Vault has registered. Reporting only the first kind left a
-        # dead cluster silently missing rather than merely empty.
+        # important: two things make a node absent, and both must be named. A node can fail
+        # during the fan-out, or never be asked at all, because
+        # connection_manager.get_node_names() returns only nodes with a live client while the
+        # fleet is whatever Vault has registered. Naming only the first hides a dead cluster.
         seeded: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
@@ -257,11 +254,11 @@ async def list_storage_pools(
         unreachable_nodes.extend(fan.unreachable_nodes)
         all_pools = fan.rows
         # important: the seeding names two kinds of cluster, and only one of them may be
-        # remembered. A cluster this worker tried and found down is a correct answer, cached
-        # as it always was (a shorter TTL, so recovery shows within the healer's cadence). A
-        # cluster this worker has never tried, registered seconds ago, must not be: the cache
-        # is shared by every worker, and the one that did connect it would then serve
-        # "unreachable" for the whole TTL. See fanout.unattempted.
+        # cached. A cluster this worker tried and found down is a correct answer, cached with a
+        # shorter TTL so recovery shows within the healer's cadence. A cluster this worker has
+        # never tried, registered seconds ago, must not be: the cache is shared by every worker,
+        # and the one that did connect it would serve "unreachable" for the whole TTL. See
+        # fanout.unattempted.
         cacheable = fan.cacheable_despite_outages and not unattempted(
             seeded, lxd_service.connection_manager
         )
@@ -288,9 +285,8 @@ async def list_storage_pools(
             collected_at=datetime.now(timezone.utc),
         )
 
-        # important: an outage must not be remembered as the answer, and neither may a
-        # partial one: a cluster that failed its listing was cached as "no pools" for
-        # 180 seconds. See instances.py.
+        # important: cache neither an outage nor a partial answer, or a cluster that failed its
+        # listing would be cached as "no pools".
         if not cacheable:
             logger.warning("Not caching storage pools list: %s", fan.node_errors or "no node answered")
         return Built(value=response, body=response.model_dump(), fresh_for=ttl if cacheable else None)
@@ -322,7 +318,7 @@ async def get_all_storage_pool_resources(
     fresh: bool = False,
 
     # important: a pool's whole size and usage count every party's volumes. Partner and above,
-    # as the monitoring dashboard's pools (owner decision 2026-10-26).
+    # as for the monitoring dashboard's pools.
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Get resources for all storage pools on all nodes."""
@@ -330,9 +326,8 @@ async def get_all_storage_pool_resources(
 
     async def build() -> Built:
         response, answered = await _read_all_pool_resources(lxd_service, get_tenant_acl())
-        # important: an outage must not be remembered as the answer. See instances.py.
-        # Counting answers, not entries: a reachable fleet with no pools is legitimately
-        # empty, a fleet that is down is not.
+        # important: cache only when a cluster answered. Answers are counted rather than
+        # entries: a reachable fleet with no pools is empty, a fleet that is down is not.
         if not answered:
             logger.warning("Not caching storage pool resources: no node answered")
         return Built(value=response, body=response, fresh_for=60 if answered else None)
@@ -373,12 +368,10 @@ async def get_storage_pool(
             raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
         pool = client.storage_pools.get(safe_segment(pool_name))
         # important: this router is mounted with require_tenant(), and the list endpoint both
-        # filters used_by and drops a pool with nothing visible left. Without the same two
-        # steps here, a tenant could read another organization's instance and volume
-        # references through the detail route, and reach a pool absent from their own list.
-        # Written in the same two lines as the five sibling detail handlers, deliberately: one
-        # pass over the references, and the denial derived from what survived it, so a future
-        # edit cannot keep the gate while dropping the filter.
+        # filters used_by and drops a pool with nothing visible left. The detail route does the
+        # same, or a tenant could read another organization's instance and volume references and
+        # reach a pool absent from its own list. As in the sibling detail handlers, the denial is
+        # derived from the filtered references, so the gate cannot be kept while the filter goes.
         used_by = filter_visible_lxd_references(host, pool.used_by or [])
         if tenant_acl_active() and not used_by:
             raise HTTPException(status_code=403, detail="Access denied to this storage pool")
@@ -393,10 +386,9 @@ async def get_storage_pool(
             node=host,
         ), caller_tier())
     except HTTPException:
-        # important: let a deliberate status through. This try raises HTTPException
-        # itself, and the broad handler below rewrote it, so an unreachable cluster
-        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
-        # instead of 403.
+        # important: let an HTTPException through unchanged. This try raises its own, and the
+        # broad handler below would turn a 503 (unreachable cluster) or a 403 (tenant ACL
+        # denial) into a 500 or 404.
         raise
     except Exception as e:
         logger.error(f"Error getting storage pool {pool_name}: {e}")
@@ -432,13 +424,12 @@ async def create_storage_pool(
             if client is None:
                 raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
             if is_clustered(client):
-                # important: on a cluster a pool must be DEFINED on every member first
+                # important: on a cluster a pool must be defined on every member first
                 # (POST ?target=<member>, carrying only the member-specific keys) and then
-                # CREATED cluster-wide with the rest. One cluster-wide POST answered
-                # 'Pool not pending on any node (use --target <node> first)' on a 3-member
-                # MicroCloud, so no pool could be created from the console there. The console
-                # sends one config, so every member is defined with the same source and size,
-                # which is how MicroCloud itself lays out its local pool.
+                # created cluster-wide with the rest; a single cluster-wide POST answers
+                # 'Pool not pending on any node (use --target <node> first)'. The console sends
+                # one config, so every member is defined with the same source and size, which is
+                # how MicroCloud lays out its local pool.
                 member_config = {
                     k: v for k, v in (request.config or {}).items()
                     if k in MEMBER_SPECIFIC_POOL_KEYS
@@ -462,7 +453,7 @@ async def create_storage_pool(
                         timeout=POOL_WRITE_WAIT_SECONDS,
                     )
                 # LXD 6.9 answers with an operation (storage_and_network_operations); reading the
-                # pool back before it settles is a 404 for a pool the daemon is still creating
+                # pool back before it settles is a 404 for a pool the daemon is still creating.
                 wait_for_lxd_operation(
                     client,
                     client.api.storage_pools.post(
@@ -485,7 +476,6 @@ async def create_storage_pool(
                     "description": request.description
                 })
         
-        # Log activity: storage pool creation success
         activity_logger.log_activity(
             action="storage.pool.create",
             target_type="storage_pool",
@@ -511,14 +501,12 @@ async def create_storage_pool(
             )
         }
     except HTTPException:
-        # important: let a deliberate status through. This try raises HTTPException
-        # itself, and the broad handler below rewrote it, so an unreachable cluster
-        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
-        # instead of 403.
+        # important: let an HTTPException through unchanged. This try raises its own, and the
+        # broad handler below would turn a 503 (unreachable cluster) or a 403 (tenant ACL
+        # denial) into a 500 or 404.
         raise
     except Exception as e:
         logger.error(f"Error creating storage pool: {e}")
-        # Log activity: storage pool creation failure
         activity_logger.log_activity(
             action="storage.pool.create",
             target_type="storage_pool",
@@ -576,10 +564,9 @@ async def update_storage_pool(
             "message": f"Storage pool {pool_name} updated successfully"
         }
     except HTTPException:
-        # important: let a deliberate status through. This try raises HTTPException
-        # itself, and the broad handler below rewrote it, so an unreachable cluster
-        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
-        # instead of 403.
+        # important: let an HTTPException through unchanged. This try raises its own, and the
+        # broad handler below would turn a 503 (unreachable cluster) or a 403 (tenant ACL
+        # denial) into a 500 or 404.
         raise
     except Exception as e:
         logger.error(f"Error updating storage pool {pool_name}: {e}")
@@ -617,7 +604,6 @@ async def delete_storage_pool(
             pool = client.storage_pools.get(safe_segment(pool_name))
             pool.delete(wait=True)
         
-        # Log activity: storage pool deletion success
         activity_logger.log_activity(
             action="storage.pool.delete",
             target_type="storage_pool",
@@ -633,14 +619,12 @@ async def delete_storage_pool(
             "message": f"Storage pool {pool_name} deleted successfully"
         }
     except HTTPException:
-        # important: let a deliberate status through. This try raises HTTPException
-        # itself, and the broad handler below rewrote it, so an unreachable cluster
-        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
-        # instead of 403.
+        # important: let an HTTPException through unchanged. This try raises its own, and the
+        # broad handler below would turn a 503 (unreachable cluster) or a 403 (tenant ACL
+        # denial) into a 500 or 404.
         raise
     except Exception as e:
         logger.error(f"Error deleting storage pool {pool_name}: {e}")
-        # Log activity: storage pool deletion failure
         activity_logger.log_activity(
             action="storage.pool.delete",
             target_type="storage_pool",
@@ -652,10 +636,8 @@ async def delete_storage_pool(
         raise _pool_write_error(e, pool_name)
 
 
-# note: renamed off get_all_storage_pool_resources, which this shared with the /resources-all
-# handler above. FastAPI registers both routes from their decorators, so both endpoints worked,
-# but the second name shadowed the first in the module and anything importing it by name got the
-# wrong one.
+# Its own function name: sharing get_all_storage_pool_resources with the /resources-all handler
+# would shadow that function for anything importing it by name.
 @router.get(
     "-resources",
     response_model=dict,
@@ -667,7 +649,7 @@ async def get_all_storage_pool_resources_legacy_path(
     fresh: bool = False,
 
     # important: a pool's whole size and usage count every party's volumes. Partner and above,
-    # as the monitoring dashboard's pools (owner decision 2026-10-26).
+    # as for the monitoring dashboard's pools.
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Get storage pool resources for all pools."""
@@ -675,9 +657,8 @@ async def get_all_storage_pool_resources_legacy_path(
 
     async def build() -> Built:
         response, answered = await _read_all_pool_resources(lxd_service, get_tenant_acl())
-        # important: an outage must not be remembered as the answer. See instances.py.
-        # Counting answers, not entries: a reachable fleet with no pools is legitimately
-        # empty, a fleet that is down is not.
+        # important: cache only when a cluster answered. Answers are counted rather than
+        # entries: a reachable fleet with no pools is empty, a fleet that is down is not.
         if not answered:
             logger.warning("Not caching storage pool resources: no node answered")
         return Built(value=response, body=response, fresh_for=60 if answered else None)
@@ -727,10 +708,9 @@ async def get_storage_pool_resources(
             "resources": _serialize_pool_resources(resources)
         }
     except HTTPException:
-        # important: let a deliberate status through. This try raises HTTPException
-        # itself, and the broad handler below rewrote it, so an unreachable cluster
-        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
-        # instead of 403.
+        # important: let an HTTPException through unchanged. This try raises its own, and the
+        # broad handler below would turn a 503 (unreachable cluster) or a 403 (tenant ACL
+        # denial) into a 500 or 404.
         raise
     except Exception as e:
         logger.error(f"Error getting storage pool resources {pool_name}: {e}")

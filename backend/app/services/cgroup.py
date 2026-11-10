@@ -2,8 +2,8 @@
 cgroup and platform readers for the deployment scope of this process.
 
 Everything here reads files under the module path constants so a test can point them at a
-fake tree. Readers return None on any failure and never raise: a missing or unreadable file
-is a null field in the resource panel, not a 500.
+fake tree. Readers return None on any failure and never raise, so a missing or unreadable
+file shows as a null field in the resource panel instead of a 500.
 """
 
 import os
@@ -106,8 +106,8 @@ def _deduplicate_paths(paths: List[Path]) -> List[Path]:
     return unique_paths
 
 
-# note: nearest first, root last. A limit is picked by size so the order is moot for it, but
-# the unlimited fallback takes the first readable usage file, and under cgroupns=host the
+# Nearest first, root last. A limit is picked by size, so the order matters only for the
+# unlimited fallback, which takes the first readable usage file: under cgroupns=host the
 # root is the whole machine while the process's own cgroup is the container. With a private
 # namespace (Docker's default) /proc/self/cgroup reads "0::/" and the two are the same dir.
 def _candidate_cgroup_v2_files(filename: str) -> List[Path]:
@@ -134,7 +134,7 @@ def _candidate_cgroup_v1_files(controller: str, filename: str) -> List[Path]:
 
 
 def _sibling_controller_dir(path: Path, controller: str, sibling: str) -> Optional[Path]:
-    # note: cgroup v1 keeps cpu quota under cpu/ and the usage counter under cpuacct/ at the same
+    # cgroup v1 keeps cpu quota under cpu/ and the usage counter under cpuacct/ at the same
     # relative path, so the scope directory is re-rooted onto the sibling controller.
     try:
         relative = path.relative_to(CGROUP_ROOT / controller)
@@ -242,7 +242,7 @@ def select_memory_scope() -> Optional[MemoryScope]:
             scopes.append(MemoryScope(limit_path.parent, "v1", limit))
 
     if scopes:
-        # note: largest constrained scope matches the deployment instance when Docker runs inside LXD/VMs.
+        # The largest constrained scope is the deployment instance when Docker runs inside LXD/VMs.
         return max(scopes, key=lambda scope: scope.limit or 0)
 
     own = _first_readable_dir(v2_candidates, "memory.current")
@@ -338,7 +338,7 @@ def read_cpu_usage(scope: CpuScope) -> Optional[ContainerCpuReading]:
 
 
 # ---------------------------------------------------------------------------
-# Legacy accessors, kept for the flat memory_limit / cpu_limit fields
+# Accessors for the flat memory_limit / cpu_limit fields
 # ---------------------------------------------------------------------------
 
 def get_cgroup_memory_limit() -> Optional[int]:

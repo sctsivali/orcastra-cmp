@@ -1,29 +1,17 @@
-"""How a delivery proves it came from us, and how a receiver checks.
+"""How a delivery proves it came from this deployment, and how a receiver checks.
 
-The wire format is the one thing here that cannot be changed later without breaking every add-on
-already integrated, so it is written down once and the documentation quotes this module rather
-than describing it separately.
+important: the documentation quotes this wire format; changing it breaks every integrated
+add-on.
 
     X-Orcastra-Signature: v1,k=<fingerprint>:<hex> [v1,k=<fingerprint>:<hex> ...]
     X-Orcastra-Timestamp: <unix seconds>
     X-Orcastra-Event-Id:  <stable across every attempt>
-    X-Orcastra-Delivery-Id: <unique per attempt>
+    X-Orcastra-Delivery-Id: <one per delivery row, repeated on its retries and redeliveries>
 
-Four decisions, each of which a receiver depends on.
-
-The version is inside the signed material, not only in the header. An attacker who could strip
-`v1,` from the header and have a lenient verifier accept the rest would otherwise be downgrading
-the scheme for free.
-
-The header is a space-separated LIST. That is what makes secret rotation expressible: during the
-overlap both signatures are sent, and a receiver that accepts if any entry verifies can switch
-whenever it likes rather than on our schedule. It is also where an algorithm change would go.
-
-The timestamp is signed, and a receiver is told to reject one outside five minutes. Without a
-window, a signature captured from a receiver's own logs replays forever.
-
-The body is signed as the exact bytes on the wire. A receiver that parses JSON first and
-re-serialises will not match, and the difference is real: the sender emits compact separators.
+The version is signed too, so stripping `v1,` cannot downgrade a lenient verifier. Every live
+secret adds an entry, so a receiver accepting any match rotates on its own schedule. Receivers
+must reject a timestamp outside five minutes, or a captured signature replays forever. The body
+is signed as the exact wire bytes; re-serialised JSON will not match.
 """
 
 import hashlib
@@ -37,7 +25,7 @@ EVENT_ID_HEADER = "X-Orcastra-Event-Id"
 DELIVERY_ID_HEADER = "X-Orcastra-Delivery-Id"
 EVENT_TYPE_HEADER = "X-Orcastra-Event-Type"
 
-# Normative, not advice. Stated in the documentation as a requirement on the receiver.
+# A requirement on the receiver, stated as such in the documentation.
 REPLAY_WINDOW_SECONDS = 300
 
 
@@ -77,8 +65,7 @@ def verify(
 ) -> bool:
     """The receiver's side, implemented here so the documented recipe is executable.
 
-    Kept in the codebase rather than only in prose because a recipe nobody runs drifts from the
-    sender, and the drift is silent until an integration fails in production.
+    A recipe kept only in prose drifts from the sender without anyone noticing.
     """
     if abs(now - timestamp) > window_seconds:
         return False

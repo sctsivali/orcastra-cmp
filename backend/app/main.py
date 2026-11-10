@@ -1,7 +1,4 @@
-"""
-Orcastra CMP Backend API
-Main FastAPI application entry point.
-"""
+"""Orcastra CMP backend API: the FastAPI application entry point."""
 
 import asyncio
 import logging
@@ -20,8 +17,7 @@ from app.middleware.security import apply_security_headers
 import uvicorn
 import urllib3
 
-# Suppress InsecureRequestWarning for unverified HTTPS requests
-# This is expected behavior when connecting to LXD with self-signed certificates
+# LXD clusters serve self-signed certificates, so unverified HTTPS requests are expected.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from app.core import build_identity, vault_probe, vault_status
@@ -169,13 +165,10 @@ async def lifespan(app: FastAPI):
     if proxy_warning:
         logger.warning(proxy_warning)
 
-    # important: the per-key budget only isolates integrations from each other while it is
-    # strictly below the per-IP one. Buckets are evaluated together and the request is refused by
-    # whichever is reached first, so at or above it the IP bucket always refuses first and the
-    # per-key bucket never binds. Nothing fails when that happens: the feature is simply absent,
-    # and a chatty key goes back to spending everyone else's budget. It is a two-variable
-    # relationship an operator can break by tuning either one, so it is checked out loud here
-    # rather than left to whoever reads the config comment.
+    # important: the per-key budget isolates integrations from each other only while it is
+    # strictly below the per-IP one. The first bucket reached refuses the request, so at or above
+    # it the per-key bucket never binds and one key spends everyone else's budget. Nothing else
+    # reports that, so it is checked here.
     if (
         settings.rate_limit_enabled
         and settings.rate_limit_api_key_requests > 0
@@ -239,14 +232,11 @@ async def lifespan(app: FastAPI):
                 # the health probe must keep answering while it runs.
                 cluster_ids = await asyncio.to_thread(cert_manager.list_clusters)
 
-                # important: an empty list from a Vault that never answered is not the same fact
-                # as an empty registry, and list_clusters cannot raise because thirteen callers
-                # depend on it returning a list. A sealed Vault answers 503 to LIST, so without
-                # this check startup logged "Found 0 registered clusters", "Connected 0/0" and
-                # "started successfully", then handed the empty list to sync_registered_clusters
-                # which set the whitelist to the empty set. get_node_names() intersects against
-                # that, so every cluster vanished from the API even once the metrics collector
-                # reconnected one. Observed in the field, that state persisted for weeks.
+                # important: an empty list from a Vault that never answered is not an empty
+                # registry. list_clusters cannot raise (its callers depend on a list), and a sealed
+                # Vault answers 503 to LIST. Syncing that empty list would set the whitelist to the
+                # empty set, and get_node_names() intersects against it, so every cluster would
+                # vanish from the API even after the metrics collector reconnects one.
                 if vault_status.registry_readable() is False:
                     logger.error(
                         "Vault did not answer the cluster registry read. Not syncing the "
@@ -261,8 +251,8 @@ async def lifespan(app: FastAPI):
                     # to ensure get_node_names() only returns registered nodes
                     lxd_service.connection_manager.sync_registered_clusters(cluster_ids)
                 
-                # Connect to ALL registered clusters in parallel for faster startup
-                # This ensures clusters stay connected even after Docker restart
+                # Connect every registered cluster in parallel, so they are connected again after a
+                # container restart.
                 
                 async def _connect_cluster(cluster_id: str) -> tuple[str, bool, str | None]:
                     """Connect to a single cluster; returns (id, success, error)."""
@@ -311,9 +301,9 @@ async def lifespan(app: FastAPI):
             except Exception as vault_err:
                 logger.warning(f"Could not initialize Vault clusters: {vault_err}")
         
-        # important: bounded, parallel readiness check - never let a dead/slow
-        # cluster wedge startup. The parallel _connect_cluster pass above already
-        # populated the connection pool; this only logs per-node status.
+        # important: bounded, so a dead or slow cluster cannot wedge startup. The
+        # _connect_cluster pass above already filled the connection pool; this only
+        # logs per-node status.
         try:
             statuses = await asyncio.wait_for(
                 lxd_service.check_nodes_status_async(), timeout=30
@@ -361,8 +351,8 @@ async def lifespan(app: FastAPI):
     except Exception as prewarm_err:
         logger.warning(f"Could not schedule remote image catalog pre-warm: {prewarm_err}")
 
-    # Recover custom-image imports stranded at 'importing' by a worker restart/crash (the import is a
-    # detached in-process task; without this a rebuild leaves them stuck until OrcaHub's 30-min deadline).
+    # Recover custom-image imports stranded at 'importing' by a worker restart or crash. The import
+    # is a detached in-process task, so without this they stay stuck until OrcaHub's 30-min deadline.
     try:
         from app.routers.image_uploads import start_import_recovery
         start_import_recovery()
@@ -426,10 +416,9 @@ async def lifespan(app: FastAPI):
 
     # Reclaim expired upload sessions on a timer.
     #
-    # important: this sweep used to run only from inside create_upload, which made it
-    # unreachable exactly when it mattered. The active-session cap is per API key, so a key
-    # whose two slots are held by dead rows has every create refused before it can trigger the
-    # sweep that would free them. Two failed PATCHes locked an integration out for six hours.
+    # important: the sweep must not depend on create_upload. The active-session cap is per API
+    # key, so a key whose slots are held by dead rows has every create refused before it could
+    # trigger a sweep that would free them.
     try:
         from app.routers.image_uploads import start_expiry_sweep
         from app.routers.iso_uploads import start_expiry_sweep as start_iso_expiry_sweep
@@ -438,8 +427,8 @@ async def lifespan(app: FastAPI):
         logger.info("Upload expiry sweeps started")
 
         # Webhook delivery. Every worker runs it: rows are claimed with FOR UPDATE SKIP LOCKED,
-        # so four workers pulling from the queue is the parallelism rather than a race, and a
-        # worker dying mid-delivery is recovered by the reaper rather than stranding the row.
+        # so workers pulling from the same queue do not race, and a row whose worker died
+        # mid-delivery is recovered by the reaper.
         if settings.extensions_enabled:
             from app.core.database import async_session_maker
             from app.routers.integrations import get_vault_integrations_client
@@ -448,10 +437,10 @@ async def lifespan(app: FastAPI):
             start_dispatcher(async_session_maker, get_vault_integrations_client)
             logger.info("Webhook dispatcher started")
 
-            # The slow half of an installation's defence. The request path refuses a suspended or
-            # missing installation from a cached snapshot; this is what narrows a grant after the
-            # organization loses a cluster, and reclaims a credential whose row is gone. Both
-            # passes are idempotent, so every worker runs it without a leader lock.
+            # The request path refuses a suspended or missing installation from a cached
+            # snapshot; this sweep narrows a grant after the organization loses a cluster and
+            # reclaims a credential whose row is gone. Both passes are idempotent, so every worker
+            # runs it without a leader lock.
             from app.services.extension_reconcile import start_reconcile_sweep
 
             start_reconcile_sweep(
@@ -464,25 +453,20 @@ async def lifespan(app: FastAPI):
                 settings.extension_reconcile_interval_seconds,
             )
     except Exception as sweep_err:
-        # note: this block starts the upload sweeps, the webhook dispatcher and the reconcile
-        # sweep, so naming only the sweeps sent anyone debugging a dead dispatcher to the wrong
-        # subsystem. The exception is still swallowed on purpose: a background task failing to
-        # start must not stop the API from serving.
+        # Logged and swallowed: a background task failing to start must not stop the API from
+        # serving.
         logger.warning(f"Could not start a background task: {sweep_err}", exc_info=True)
 
-    # important: its own try, not the one above. That block already starts the upload sweeps, the
-    # webhook dispatcher and the reconcile sweep, and its handler once named only the sweeps, which
-    # sent someone debugging a dead dispatcher to the wrong subsystem. A fourth subsystem sharing
-    # it repeats that.
+    # Each background subsystem from here on gets its own try, so a failure is logged under that
+    # subsystem's name and does not keep the ones after it from starting.
     try:
         if settings.snapshot_schedules_enabled:
             from app.core.database import async_session_maker
             from app.services.snapshots.schedule_scheduler import start_scheduler
 
-            # Every worker runs this. Rows are claimed with FOR UPDATE SKIP LOCKED, so four workers
-            # pulling from the queue is the parallelism rather than a race, and no leader is
-            # elected: the lease this codebase already has deliberately fails open, so a Redis
-            # outage would make all four believe they lead and every schedule would fire four times.
+            # Every worker runs this; rows are claimed with FOR UPDATE SKIP LOCKED. No leader is
+            # elected because the Redis lease fails open: during a Redis outage every worker would
+            # believe it leads and each schedule would fire once per worker.
             start_scheduler(
                 async_session_maker,
                 get_lxd_service,
@@ -507,7 +491,6 @@ async def lifespan(app: FastAPI):
 
     # Project deletes their request could not settle (unknown outcome, or a worker that died
     # between sending the DELETE and reading the answer). Every worker sweeps; rows are leased.
-    # Its own try, for the reason the block above gives.
     try:
         from app.core.database import async_session_maker
         from app.services.project_delete_sweeper import start_project_delete_sweeper
@@ -589,7 +572,7 @@ async def lifespan(app: FastAPI):
         logger.error("Could not start the hypervisor release check: %s", hv_release_err, exc_info=True)
 
     # Host Health: one worker (Redis lease) re-checks Vault, logging, the IdP, Postgres, Redis and
-    # disk every HOST_HEALTH_INTERVAL_SECONDS. Its own try, for the reason the block above gives.
+    # disk every HOST_HEALTH_INTERVAL_SECONDS.
     try:
         from app.services.host_health import start_host_health_loop
 
@@ -599,7 +582,7 @@ async def lifespan(app: FastAPI):
         logger.error("Could not start the Host Health collector: %s", host_health_err, exc_info=True)
 
     # The task journal follower (one worker, elected on a Postgres advisory lock) and the prune
-    # loop (every worker, one wins each pass). Its own try, for the reason the block above gives.
+    # loop (every worker, one wins each pass).
     try:
         if settings.task_journal_enabled:
             from app.core.database import DATABASE_URL, async_session_maker
@@ -622,8 +605,7 @@ async def lifespan(app: FastAPI):
 
     # Removing the LXD trust entries of certificates the dashboard replaced. Every worker runs the
     # loop; a per-cluster Postgres lock decides who acts on a cluster each pass, and each worker
-    # also moves its own pooled connection onto the current certificate first. Its own try, for
-    # the reason the blocks above give.
+    # also moves its own pooled connection onto the current certificate first.
     try:
         if settings.lxd_trust_cleanup_enabled and settings.vault_enabled:
             from app.core.database import async_session_maker
@@ -652,9 +634,9 @@ async def lifespan(app: FastAPI):
     except Exception as sync_err:
         logger.error("Could not start the LXD breaker sync loop: %s", sync_err, exc_info=True)
 
-    # Fill the admin chart's history before the first read: the previous release's string key
-    # once, then what Postgres holds that the store lacks. Both merge by timestamp, so neither
-    # can overwrite a point the collector already wrote.
+    # Fill the admin chart's history before the first read: the legacy string key once, then
+    # what Postgres holds that the store lacks. Both merge by timestamp, so neither can
+    # overwrite a point the collector already wrote.
     try:
         from app.core.cache import get_cache_manager
         from app.routers.monitoring import COLLECTED_SCOPE_KEY
@@ -675,7 +657,7 @@ async def lifespan(app: FastAPI):
         session_tracker = get_session_tracker()
         await session_tracker.start_cleanup_loop()
 
-        # important: the Redis client is built HERE and nowhere else. redis.asyncio
+        # important: the Redis client is built here and nowhere else. redis.asyncio
         # binds its pool to the running loop lazily, so one created at import time
         # attaches to the wrong loop and fails intermittently under load.
         if settings.redis_enabled:
@@ -686,7 +668,7 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Could not start session tracker: {tracker_err}")
     
     # WebSocket tickets: their own block, so a failure above can never leave the store on its
-    # per-process fallback while four workers serve sockets. Redis is used whenever it answers,
+    # per-process fallback while several workers serve sockets. Redis is used whenever it answers,
     # and is required with REDIS_ENABLED or more than one worker (start_ticket_stores); a required
     # store that cannot reach it refuses mints with 503 and keeps trying.
     try:
@@ -704,7 +686,7 @@ async def lifespan(app: FastAPI):
         logger.error("WebSocket ticket store did not start: %s", ticket_err)
 
     # The channels of one SPICE display meet here to share one LXD operation. Without Redis a
-    # channel that cannot find its display's operation opens its own, as before.
+    # channel that cannot find its display's operation opens its own.
     try:
         from app.services.spice_session import get_spice_session_store
 
@@ -744,9 +726,8 @@ async def lifespan(app: FastAPI):
     
     yield
 
-    # note: guarded, because this runs BEFORE the rest of shutdown. An exception escaping here
-    # would skip the database close and the background collectors below, turning one subsystem's
-    # failure into a dirty shutdown of every other. Same rule the audit paths already follow.
+    # Guarded because this runs before the rest of shutdown: an exception escaping here would skip
+    # the database close and the background collectors below.
     try:
         await _mcp_stack.aclose()
     except Exception as mcp_stop_err:
@@ -901,9 +882,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
-    # Stop the snapshot schedule loop. A handle is kept for exactly this, unlike the rebuild
-    # driver beside it, so the loop is cancelled rather than left holding a session while the
-    # process tears down.
+    # Stop the snapshot schedule loop so it does not hold a session while the process tears down.
     try:
         from app.services.snapshots.schedule_scheduler import stop_scheduler
         await stop_scheduler()
@@ -924,7 +903,7 @@ def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
     
-    # disable API docs in production (when DEBUG=false)
+    # API docs are served only with DEBUG=true.
     is_debug = settings.debug if hasattr(settings, 'debug') else False
     
     app = FastAPI(
@@ -944,12 +923,12 @@ Ensure your client certificates are properly configured.
         lifespan=lifespan,
     )
     
-    # Configure CORS with environment-based origins
-    # When CORS_ORIGINS is "*", we use a custom approach to support credentials
+    # CORS origins come from the environment. "*" uses the custom middleware below so that
+    # credentials still work.
     cors_origins = settings.get_cors_origins()
 
-    # important: wildcard CORS with credentials is dangerous in production.
-    # Block it when DEBUG=false to prevent credential leakage to arbitrary origins.
+    # important: wildcard CORS with credentials leaks credentials to any origin, so it is
+    # refused unless DEBUG=true.
     if cors_origins == ["*"] and not is_debug:
         import logging as _logging
         _logging.getLogger(__name__).error(
@@ -962,8 +941,8 @@ Ensure your client certificates are properly configured.
         )
 
     if cors_origins == ["*"]:
-        # For wildcard CORS with credentials support, we need custom middleware
-        # that echoes back the request origin (more permissive, use only in dev/trusted environments)
+        # Wildcard CORS with credentials needs a middleware that echoes the request origin back.
+        # Reached only with DEBUG=true (refused above otherwise).
         @app.middleware("http")
         async def cors_allow_all_with_credentials(request: Request, call_next):
             # Handle preflight requests
@@ -987,7 +966,6 @@ Ensure your client certificates are properly configured.
                 response.headers["Access-Control-Allow-Credentials"] = "true"
             return response
     else:
-        # Use standard CORSMiddleware for specific origins
         app.add_middleware(
             CORSMiddleware,
             allow_origins=cors_origins,
@@ -997,7 +975,6 @@ Ensure your client certificates are properly configured.
             expose_headers=["*"],
         )
     
-    # Add GZip compression middleware
     app.add_middleware(GZipMiddleware, minimum_size=1000)
     
     # Block scanner probes and enforce IP plus subnet-aware throttling before routing
@@ -1014,10 +991,11 @@ Ensure your client certificates are properly configured.
         version=settings.app_version or "0.0.0"
     )
     
-    # Add Request ID middleware (must be added before access log to generate IDs)
+    # Request IDs. Added after the access log so it wraps it and the ID exists when the access
+    # log runs (the last middleware added is the outermost).
     app.add_middleware(RequestIdMiddleware)
     
-    # Add security headers outermost so blocked responses are hardened too
+    # Security headers wrap the security and logging middleware, so blocked responses get them too.
     app.add_middleware(SecurityHeadersMiddleware)
 
     # Outermost of all: see middleware/stream_cut.py for why a cut download needs this.
@@ -1056,17 +1034,13 @@ Ensure your client certificates are properly configured.
     app.include_router(integrations_router, prefix=settings.api_prefix)
     app.include_router(integrations_external_router, prefix=settings.api_prefix)
 
-    # MCP server. Same credential as external_router, different protocol. Appended to the raw
-    # router rather than include_router'd because the endpoint is an ASGI callable, not an
-    # APIRoute, and mounting it as a sub-app would cost a 307 on every JSON-RPC POST.
     if settings.extensions_enabled:
-        # important: the external router is included FIRST. Both routers sit on the /extensions
-        # prefix, and the authoring router owns /extensions/{slug}. Registered the other way
-        # round, an add-on calling /extensions/self would be matched by the slug route and
-        # answered 401 by a JWT dependency it has no way to satisfy. The installations router
-        # goes ahead of it for the same reason: /extensions/installations would otherwise be
-        # read as an add-on named 'installations'. The reserved-slug list is the second half
-        # of the same guard, and test_a_literal_route_is_not_read_as_a_slug is the third.
+        # important: the external router is included first. Both routers sit on the /extensions
+        # prefix, and the authoring router owns /extensions/{slug}. In the other order an add-on
+        # calling /extensions/self would match the slug route and get a 401 from a JWT
+        # dependency it cannot satisfy. The installations router goes ahead of it for the same
+        # reason (/extensions/installations is not an add-on). The reserved-slug list and
+        # test_a_literal_route_is_not_read_as_a_slug guard the same thing.
         from app.routers.extensions_external import external_router as extensions_external_router
         from app.routers.extensions import router as extensions_router
         from app.routers.extension_installs import router as extension_installs_router
@@ -1079,7 +1053,7 @@ Ensure your client certificates are properly configured.
         logger.info("Extensions surface enabled at %s/extensions", settings.api_prefix)
 
     if settings.public_openapi_enabled:
-        # important: this does NOT re-enable the internal document. `openapi_url` above stays
+        # important: this does not re-enable the internal document. `openapi_url` above stays
         # None in production; this is a separate, curated document describing only the surface
         # an add-on may call, selected by which routes authenticate with an API key.
         from app.routers.public_docs import router as public_docs_router
@@ -1093,22 +1067,19 @@ Ensure your client certificates are properly configured.
             )
 
     if settings.mcp_enabled:
-        # important: appended as a plain Route. NOT include_router, and NOT app.mount(). Three
-        # separate things break if this is tidied into either, and none of them fails loudly:
+        # important: the MCP endpoint (same credential as external_router, JSON-RPC protocol) is
+        # appended as a plain Route, never include_router or app.mount(). Either breaks quietly:
         #
         # 1. Lifespan. Starlette does not propagate lifespan into a mounted sub-app, so the SDK's
         #    session manager never gets its task group and every request raises "Task group is not
-        #    initialized". That is why the manager is built here and run from this app's lifespan.
+        #    initialized". The manager is built here and run from this app's lifespan instead.
         # 2. Rate limiting. mount() compiles to a prefix route, so a POST to the canonical path is
-        #    answered with a 307 to the trailing-slash form, and both the redirect and the retry
-        #    pass through RequestSecurityMiddleware. That spends two IP rate-limit tokens per
-        #    JSON-RPC message.
-        # 3. Route discovery. From FastAPI 0.141 include_router stores a nested router rather than
-        #    copying routes onto the parent: measured on this app, 50 top-level entries of which
-        #    only 3 expose `.path`. A plain Route stays at the top level, which is what keeps
-        #    `test_the_mcp_server_authenticates_every_call` meaningful rather than vacuous. The
-        #    host venv is on 0.128, which flattens, so a regression here would be invisible
-        #    locally and real in the image.
+        #    answered with a 307 to the trailing-slash form, and the redirect and the retry each
+        #    spend an IP rate-limit token in RequestSecurityMiddleware.
+        # 3. Route discovery. From FastAPI 0.141 include_router stores a nested router instead of
+        #    copying routes onto the parent. A plain Route stays at the top level, which keeps
+        #    `test_the_mcp_server_authenticates_every_call` from passing vacuously. Releases
+        #    before 0.141 flatten, so a test run on one of them passes either way.
         from app.mcp import build_mcp_route
         _mcp_route, _mcp_manager = build_mcp_route(settings)
         app.state.mcp_session_manager = _mcp_manager
@@ -1271,14 +1242,14 @@ Ensure your client certificates are properly configured.
     # Health check endpoint
     @app.get("/health", tags=["Health"])
     async def health_check():
-        """Health check endpoint.
+        """Liveness and dependency status. Public, and always answers 200.
 
-        important: always answers 200, including when temp storage is degraded. The container
-        healthcheck in docker-compose keys on this status code, so reporting unhealthy here would
-        restart the backend in a loop. The restart would even appear to work, because it clears
-        the tmpfs, which is precisely how this class of fault stays invisible. Reporting the
-        number instead is what lets monitoring see it coming.
+        Degraded temp storage, Vault or identity provider state is reported in fields, never as a
+        status code.
         """
+        # important: the container healthcheck in docker-compose keys on the status, so an unhealthy
+        # answer would restart the backend in a loop, and the restart clears the tmpfs and hides the
+        # fault.
         from app.services.lxd import cert_files
 
         temp_storage = cert_files.describe_usage()
@@ -1299,11 +1270,10 @@ Ensure your client certificates are properly configured.
         # This unauthenticated route publishes an allowlist. Error text can repeat the path or
         # include other filesystem details even when the `path` field itself is omitted.
 
-        # important: reported as a field, never as a status code, for the same reason as
-        # temp_storage above. A sealed Vault makes the cluster registry unreadable, and the
-        # empty list that comes back is indistinguishable from an empty deployment unless
-        # something says so. This is the only signal that tells them apart from outside the
-        # process. `error` carries a class name and a short reason, never a Vault address.
+        # important: a field, never a status code, for the same reason as temp_storage. A sealed
+        # Vault makes the cluster registry unreadable, and from outside the process this field is
+        # the only way to tell that from an empty deployment. `error` carries a class name and a
+        # short reason, never a Vault address.
         vault = vault_status.snapshot()
         # The seal probe's last answer, read without asking Vault (this route must never wait on
         # it). None until something has probed: the dashboard's status poll or a cluster route.
@@ -1327,11 +1297,9 @@ Ensure your client certificates are properly configured.
                 )
         # important: "service" is an identifier monitoring keys on, and Authentik registers
         # the same string as the OAuth2 audience. It does not follow the product name.
-        # important: the version and nothing else. f270eb0 took the build commit and date off the
-        # unauthenticated surface for the reason stated above, and that decision stands. The version
-        # is already published to these same callers by `/` below, so repeating it here discloses
-        # nothing new while giving a monitoring probe the build without a second request. The full
-        # identity lives behind a credential, on the integrations validate and whoami responses.
+        # important: the build identity here is the version only, which `/` already publishes.
+        # The build commit and date stay behind a credential, on the integrations validate and
+        # whoami responses.
         return {
             "status": "healthy",
             "service": "orcastra-dashboard-api",
@@ -1355,12 +1323,11 @@ Ensure your client certificates are properly configured.
     @app.get("/", tags=["Root"])
     async def root():
         """Root endpoint with API information."""
-        # note: the build commit and date name the exact source an unauthenticated caller is
-        # talking to. The version stays because clients and the footer read it.
+        # The version only: the build commit and date would name the exact source an
+        # unauthenticated caller is talking to. Clients and the footer read the version.
         #
-        # Through the helper, not `settings.app_version` directly: reading the setting raw answered
-        # the empty string on an unstamped build while `/health` answered null for the same build,
-        # which is exactly the drift a single reader exists to prevent.
+        # Read through build_identity rather than `settings.app_version`, so `/` and `/health`
+        # answer the same value (null on an unstamped build).
         response = {
             "name": settings.api_title,
             **build_identity.public(),
@@ -1374,25 +1341,22 @@ Ensure your client certificates are properly configured.
     async def sanitized_http_exception_handler(request: Request, exc: StarletteHTTPException):
         """Answer server faults with a reference instead of the exception text.
 
-        important: 169 handlers do `raise HTTPException(status_code=500, detail=str(e))`, and the
-        frontend surfaces `detail` verbatim as `error.message`. The text is written by pylxd,
-        requests, asyncpg and hvac, and carries control-plane URLs and ports, TLS failures naming
-        certificates, backend filesystem paths, Vault paths and SQL fragments. Most of those
-        routers are reachable by a tenant.
+        important: many handlers do `raise HTTPException(status_code=500, detail=str(e))`, and
+        the frontend surfaces `detail` verbatim as `error.message`. The text comes from pylxd,
+        requests, asyncpg and hvac, and carries control-plane URLs and ports, certificate names,
+        backend filesystem paths, Vault paths and SQL fragments, on routes a tenant can reach.
 
-        Only 5xx is rewritten. A 4xx is the caller's own request described back to them and is
-        the message an integrator needs; replacing those would trade a real leak for a support
-        burden. The full text still reaches the server log, tied to the reference the client is
-        given, so an operator loses no diagnostic ability.
+        Only 5xx is rewritten: a 4xx describes the caller's own request and is the message an
+        integrator needs. The full text still reaches the server log, tied to the reference the
+        client is given.
         """
         if exc.status_code < 500:
             return await http_exception_handler(request, exc)
 
         reference, full = reference_for(exc)
-        # note: a 502/503/504 here is an answer this application chose (a cluster known to be
-        # down, a saturated proxy), not a fault. Logging it at ERROR buried real faults: one
-        # caller polling a dead cluster wrote 577 ERROR lines an hour. The access log still
-        # records the status of each one.
+        # A 502/503/504 here is an answer this application chose (a cluster known to be down, a
+        # saturated proxy), so it logs at WARNING: at ERROR, one caller polling a dead cluster
+        # would bury real faults. The access log still records each status.
         if exc.status_code in (502, 503, 504):
             logger.warning(
                 "Unavailable %s on %s %s: %s",
@@ -1404,14 +1368,11 @@ Ensure your client certificates are properly configured.
                 reference, request.method, request.url.path, full,
             )
 
-        # important: 500 and the availability statuses are not the same thing, and treating them
-        # alike was wrong in both directions. A 500 is an unexpected fault whose text is a driver
-        # or database exception, and there is nothing in it a caller can act on, so it is replaced
-        # outright. A 502/503/504 is a deliberate answer this application wrote: "cluster X
-        # recently unreachable: certificate not trusted", "proxy saturated, retry shortly". That
-        # is exactly what an operator needs, and replacing it turned a diagnosis into a shrug.
-        # Those keep their message with URLs and paths stripped out of it, and the allowlisted
-        # structured codes keep their shape (`public_server_detail`).
+        # important: a 500 is an unexpected fault whose text is a driver or database exception,
+        # so it is replaced outright. A 502/503/504/507 is an answer this application wrote ("cluster
+        # X recently unreachable: certificate not trusted") that an operator needs, so it keeps
+        # its message with URLs and paths stripped, and the allowlisted structured codes keep
+        # their shape (`public_server_detail`).
         detail = public_server_detail(exc.status_code, exc.detail, reference)
 
         response = JSONResponse(
@@ -1429,9 +1390,8 @@ Ensure your client certificates are properly configured.
     ):
         """Handle a backend-side failure to write LXD TLS material.
 
-        Separate from the connection handler below on purpose. This is the backend's own disk,
-        not the cluster's reachability, and conflating the two told operators every hypervisor
-        was offline while they were all healthy.
+        Kept apart from the connection handler below: this is the backend's own disk, and
+        reporting it as a connection error would show every healthy cluster as offline.
         """
         logger.error(f"LXD local storage error: {exc}")
         return JSONResponse(

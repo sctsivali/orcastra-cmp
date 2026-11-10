@@ -173,10 +173,9 @@ async def set_password(guest: Guest, facts: GuestFacts, account: Account, passwo
 async def lock_warnings(guest: Guest) -> List[str]:
     """What a lock means for SSH on this guest, read from its sshd rather than assumed.
 
-    important: OpenSSH without PAM (Alpine's build) refuses every login of an account whose
-    password is locked, keys included; with PAM, key logins keep working. Measured live on
-    2026-11-03: Alpine 3.22 answered "Permission denied (publickey,...)" after a lock, Ubuntu
-    24.04 let the same key in.
+    OpenSSH without PAM (Alpine's build) refuses every login of an account whose password is
+    locked, keys included; with PAM, key logins keep working. Alpine 3.22 answers "Permission
+    denied (publickey,...)" after a lock, while Ubuntu 24.04 lets the same key in.
     """
     facts = await ssh_server(guest)
     if not facts["installed"]:

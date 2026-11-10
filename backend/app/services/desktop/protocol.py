@@ -1,9 +1,8 @@
 """The shapes a desktop provider speaks, and nothing about how any provider works.
 
-The point of the abstraction is that the MCP tool surface depends only on `Action` and
-`ActionResult`. A second provider - a framebuffer one for guests that cannot run capture tooling,
-which is the documented gap - is then a new file and a selection rule, and changes nothing a model
-sees.
+The MCP tool surface depends only on `Action` and `ActionResult`, so a second provider (ex; a
+framebuffer one for guests that cannot run capture tooling) is a new file and a selection rule,
+and changes nothing a model sees.
 """
 
 from dataclasses import dataclass, field
@@ -23,9 +22,8 @@ __all__ = [
 class Target:
     """Which guest. Never model-supplied: the MCP server holds this binding.
 
-    important: threading cluster, project and instance through the model on every action is three
-    fields it will eventually get wrong, and getting them wrong means acting inside somebody
-    else's guest.
+    important: a model passing cluster, project and instance on every action would eventually get
+    one wrong and act inside somebody else's guest.
     """
 
     cluster_id: str
@@ -62,14 +60,12 @@ class Display:
         return int(round(x / self.scale)), int(round(y / self.scale))
 
     def to_screenshot(self, x: int, y: int) -> tuple[int, int]:
-        """A guest coordinate in screenshot pixels: the inverse, and it must exist.
+        """A guest coordinate in screenshot pixels: the inverse of `to_guest`.
 
-        important: anything READ from the guest comes back in guest pixels, and everything the
-        model sends is in screenshot pixels. Reporting one in the other's units is a bug that only
-        appears when the two differ, so it survives every test on a display that happens to match
-        the target. Measured on a 1920x1080 guest: a pointer moved to screenshot (400,300) landed
-        correctly at guest (600,450) and was then reported back as (600,450), which the model would
-        read as the pointer having moved somewhere it did not.
+        important: anything read from the guest comes back in guest pixels, and everything the
+        model sends is in screenshot pixels. Mixing them only shows when the two differ: on a
+        1920x1080 guest a pointer moved to screenshot (400,300) lands at guest (600,450) and must be
+        reported back as (400,300).
         """
         if self.scale in (0, 1.0):
             return x, y
@@ -120,9 +116,8 @@ class ProbeReport:
     display: Optional[Display] = None
     capture_tool: Optional[str] = None
     input_tool: Optional[str] = None
-    # Probed rather than assumed. The Ubuntu noble xdotool manpage documents neither
-    # `getdisplaygeometry` nor `type --file`, while Debian's documents the latter, so version
-    # drift across distributions is real and each is tested once at probe time.
+    # Probed once instead of assumed: the Ubuntu noble xdotool manpage documents neither
+    # `getdisplaygeometry` nor `type --file`, while Debian's documents the latter.
     supports_type_file: bool = False
     supports_display_geometry: bool = False
     missing: List[str] = field(default_factory=list)
@@ -132,7 +127,7 @@ class ProbeReport:
 
 
 class DesktopProvider(Protocol):
-    """Deliberately two methods. Anything wider becomes a provider-specific surface by accident."""
+    """Two methods only; anything wider would turn into a provider-specific surface."""
 
     name: str
 

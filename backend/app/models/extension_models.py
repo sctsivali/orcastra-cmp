@@ -1,24 +1,15 @@
 """Add-on registry and per-organization installations.
 
-An add-on is an external application. It runs on its author's own infrastructure and reaches this
-deployment over the REST API and the MCP endpoint with a credential issued when it is installed.
-No add-on code runs in this process and none runs in the dashboard's browser origin, so nothing
-here describes a bundle, an entry point or a sandbox. What it describes is a grant.
+An add-on is an external application: it runs on its author's infrastructure and reaches this
+deployment over the REST API and the MCP endpoint with a credential issued at install. No add-on
+code runs in this process or in the dashboard's browser origin. `extensions` is what an author
+publishes; an installation is what an operator consents to, one per organization, and only an
+installation authorizes anything.
 
-Two tables, and the split matters. `extensions` is what an author publishes once. Installations
-are what an operator consents to, one row per organization, and they are the only thing that
-authorizes anything.
-
-important: the effective reach of an installation is never read from this table alone. It is
-recomputed as the intersection of what the manifest asked for, what the installing partner's own
-cluster scope holds, and which clusters the organization is still bound to. Storing a flattened
-grant and trusting it later is how an installation keeps working after the partner loses the
-cluster, so `granted_*` here is a record of what was consented to, not a licence.
-
-note: delivery endpoints deliberately do not live on the installation. A manifest may declare a
-default endpoint and event set, and that pre-fills the form, but the subscription table is the
-single authority for where anything is sent. Two places holding the same URL is how one of them
-goes stale.
+important: an installation's reach is recomputed at use as the intersection of what the manifest
+asked for, the installing partner's own cluster scope, and the clusters the organization is still
+bound to. `granted_*` records what was consented to; trusting it alone would keep an installation
+working after the partner loses the cluster. Delivery endpoints live only on the subscription.
 """
 
 from datetime import datetime, timezone
@@ -48,21 +39,18 @@ DELIVERY_STATES = ("pending", "inflight", "delivered", "failed", "dead", "droppe
 class Extension(Base):
     """An add-on definition, owned by the partner who published it.
 
-    The manifest is submitted as JSON rather than fetched from a URL the author controls. A
-    fetched manifest would be a second attacker-chosen server-side request in a codebase whose
-    own SSRF module documents the limits of what it can close, and it would make the consent
-    record meaningless, because the document could change between what an operator was shown and
-    what is enforced. Submitted JSON is immutable by construction: the bytes validated are the
-    bytes stored, and `manifest_digest` is what a consent is taken against.
+    The manifest is submitted as JSON, never fetched from an author-controlled URL: a fetch would be
+    another attacker-chosen server-side request, and the document could change between what an
+    operator was shown and what is enforced. The bytes validated are the bytes stored, and consent
+    is taken against `manifest_digest`.
     """
 
     __tablename__ = "extensions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
 
-    # important: immutable after create. The slug is the add-on's public identity, it appears in
-    # issued credentials and audit records, and letting it move would silently re-point every
-    # reference that ever named it.
+    # important: immutable after create. The slug is the add-on's public identity in issued
+    # credentials and audit records; changing it would silently re-point every reference to it.
     slug = Column(
         String(64), nullable=False, unique=True, index=True,
         comment="public identity, lowercase ASCII, immutable after create",
@@ -85,11 +73,9 @@ class Extension(Base):
     # The authoritative owner. An organization is attribution only.
     owner_email = Column(String(255), nullable=False, index=True)
 
-    # important: nullable with SET NULL, deviating from the CASCADE every other organization
-    # child uses. A partner may hold no organization yet, which is the same reason
-    # OrganizationCluster.organization_id is nullable. CASCADE would be worse than wrong here:
-    # deleting the publisher's organization would drop the definition while installations in
-    # OTHER organizations survive, and the constraint cannot see those.
+    # important: nullable with SET NULL, unlike the CASCADE other organization children use. A
+    # partner may hold no organization yet (as with OrganizationCluster.organization_id), and a
+    # CASCADE would drop the definition while installations in other organizations survive.
     publisher_organization_id = Column(
         Integer, ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True,
         comment="attribution only, never an authorization input",
@@ -104,8 +90,7 @@ class Extension(Base):
         comment="shape the manifest asks for: permission level, clusters, projects",
     )
 
-    # A closed vocabulary of field types the dashboard renders itself. The add-on never ships UI,
-    # so a schema it cannot describe is a form we cannot be made to draw.
+    # A closed vocabulary of field types the dashboard renders itself; an add-on never ships UI.
     settings_schema = Column(
         JSONB, nullable=True, comment="declared configuration fields, rendered by the dashboard"
     )
@@ -145,23 +130,19 @@ class Extension(Base):
 class ExtensionInstallation(Base):
     """One add-on bound to one organization, and the credential that came with it.
 
-    important: `cardinality(granted_capabilities) > 0` is hard rule two written into the database
-    rather than into a validator. An API key whose `capabilities` field is absent reads as
-    unrestricted, which is how the pre-capability keys still in Vault work, and an installation
-    must never be able to mint one of those. A Pydantic check can be bypassed by a second writer;
-    a row that cannot exist without a capability cannot authorize a credential without one.
+    important: `cardinality(granted_capabilities) > 0` is enforced by the database, not only by a
+    validator. An API key with no `capabilities` field reads as unrestricted (keys issued before
+    capabilities work that way), and an installation must never mint one. A second writer can
+    bypass a Pydantic check, never the constraint.
     """
 
     __tablename__ = "extension_installations"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
 
-    # important: RESTRICT on both, deviating from the CASCADE that OrganizationMember,
-    # OrganizationCluster, OrganizationPreferences and DesktopControlPolicy all use. Those are
-    # pure Postgres state. This is the first organization child that owns Vault credential
-    # material, and a CASCADE would delete the row while leaving a live key pair authenticating
-    # against this deployment with nothing left to describe it or find it. RESTRICT forces the
-    # teardown to run first, which is the behaviour wanted anyway.
+    # important: RESTRICT on both, unlike the CASCADE other organization children use. This row
+    # owns Vault credential material, and a CASCADE would delete it while the key pair still
+    # authenticates, with nothing left to find it by. RESTRICT forces the teardown to run first.
     extension_id = Column(
         Integer, ForeignKey("extensions.id", ondelete="RESTRICT"), nullable=False, index=True
     )
@@ -184,9 +165,9 @@ class ExtensionInstallation(Base):
 
     # Non-secret configuration values. Secret fields never appear here.
     settings = Column(JSONB, nullable=True, comment="values for the manifest's non-secret fields")
-    # important: the names of the secret fields that have a value, not the values. A read returns
-    # this list so the form can show a field as configured without the server ever handing back
-    # what was typed. The values themselves live beside the credential in Vault.
+    # important: names of the secret fields that have a value, never the values, so the form can
+    # show a field as configured without the server returning what was typed. The values live
+    # beside the credential in Vault.
     configured_secrets = Column(
         ARRAY(String), nullable=True, comment="which secret fields are set; never their contents"
     )
@@ -195,18 +176,17 @@ class ExtensionInstallation(Base):
         String(255), nullable=False, unique=True, index=True,
         comment="the live credential; free-text because the key itself lives in Vault",
     )
-    # Rotation mints a new key and retires the old one by shortening its expiry, so the auth path
-    # refuses it with no new enforcement code. These two columns are the grace window.
+    # Rotation mints a new key and retires the previous one by shortening its expiry, so the auth
+    # path refuses it with no new enforcement code. These two columns are the grace window.
     previous_api_key_id = Column(String(255), nullable=True)
     previous_key_expires_at = Column(DateTime(timezone=True), nullable=True)
     credential_generation = Column(Integer, nullable=False, server_default="1")
 
-    # What the operator was actually shown, so a manifest edited afterwards is detectable.
+    # What the operator was shown, so a later manifest edit is detectable.
     consent_version = Column(String(32), nullable=False)
     consent_manifest_digest = Column(String(64), nullable=False)
-    # important: the document, not only its digest. Publishing a new version replaces the manifest
-    # on the extension row, so without this copy the text an organization approved is gone and
-    # only a hash of it survives. An audit asks what was approved, not which hash it had.
+    # important: keep the document as well as its digest. Publishing a new version replaces the
+    # manifest on the extension row, and an audit needs the text the organization approved.
     consented_manifest = Column(JSONB, nullable=True)
     consented_at = Column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
@@ -229,8 +209,8 @@ class ExtensionInstallation(Base):
     )
 
     __table_args__ = (
-        # A second install into the same organization would silently mint a second credential
-        # nobody asked for, so it is a 409 naming the existing one instead.
+        # A second install into the same organization would mint an unrequested credential; the
+        # service answers 409 naming the existing installation.
         UniqueConstraint("extension_id", "organization_id", name="uq_extension_install"),
         CheckConstraint(
             "cardinality(granted_capabilities) > 0", name="ck_ext_install_caps_nonempty"
@@ -252,16 +232,13 @@ class ExtensionInstallation(Base):
 
 
 class WebhookSubscription(Base):
-    """Where an installation's events are delivered, and the secret that proves we sent them.
+    """Where an installation's events are delivered, and the secret that signs them.
 
-    important: the subscription owns the endpoint, not the installation and not the manifest. A
-    manifest may declare a default that pre-fills the form, but two places holding the same URL is
-    how one of them goes stale, and the stale one is the one still being POSTed to.
+    important: only the subscription stores the endpoint; a manifest default only pre-fills the
+    form, so a second stored copy cannot go stale and keep receiving events.
 
-    The signing secret is per subscription and is not the API credential. Signing with the
-    credential, which is what the existing OrcaHub emitter does, means a receiver must hold a live
-    control-plane key merely to verify that a delivery is genuine. With one partner that is one
-    receiver; with an open platform it is every author.
+    The signing secret is per subscription and is not the API credential, so a receiver can verify
+    a delivery without holding a live control-plane key.
     """
 
     __tablename__ = "extension_webhook_subscriptions"
@@ -277,7 +254,7 @@ class WebhookSubscription(Base):
     endpoint_url = Column(String(512), nullable=False)
     event_types = Column(ARRAY(String), nullable=False)
 
-    # Names only. The secrets themselves live in Vault beside the installation's credential.
+    # A fingerprint only. The secrets live in Vault beside the installation's credential.
     secret_fingerprint = Column(
         String(16), nullable=False, comment="first bytes of a hash, so an operator can tell two apart"
     )
@@ -290,8 +267,8 @@ class WebhookSubscription(Base):
         String(24), nullable=False, server_default="pending_verification", index=True,
         comment=" | ".join(SUBSCRIPTION_STATUSES),
     )
-    # A subscription does not go live until the endpoint answers a signed ping. Without that,
-    # our sender is a reflector anyone can aim at a victim who never agreed to receive anything.
+    # A subscription goes live only once the endpoint answers a signed ping, so the sender cannot
+    # be aimed at a receiver that never agreed to receive anything.
     verified_at = Column(DateTime(timezone=True), nullable=True)
 
     consecutive_failures = Column(Integer, nullable=False, server_default="0")
@@ -321,19 +298,15 @@ class WebhookSubscription(Base):
 
 
 class WebhookDelivery(Base):
-    """One attempt-bearing delivery, durable because an event that vanishes is not detectable.
+    """One delivery and its attempts, durable so an event cannot vanish unnoticed.
 
-    important: this table exists instead of a detached asyncio task. The emitter it replaces
-    created an unreferenced task per event, which CPython may collect mid-flight, held a database
-    session while making up to three ten-second HTTP calls, and did two blocking Vault reads per
-    recipient on the event loop. A bulk delete of five hundred instances created five hundred of
-    those at once.
+    important: deliver from this table, never from a detached asyncio task. CPython may collect an
+    unreferenced task mid-flight, and a per-event task holds a database session across slow HTTP
+    calls; a bulk action would start hundreds at once.
 
-    Rows are claimed with FOR UPDATE SKIP LOCKED rather than by electing a leader. The work is
-    many independent rows, so every worker pulling from it is the only source of delivery
-    parallelism, and it degrades gracefully when one dies. Leader election would be actively worse
-    here: the existing lease deliberately fails open, so a Redis outage would make all four workers
-    believe they lead and deliver every event four times.
+    Rows are claimed with FOR UPDATE SKIP LOCKED instead of through a leader: every worker pulls
+    independent rows, and losing one worker only slows delivery. The leader lease fails open, so a
+    Redis outage would make every worker lead and deliver each event once per worker.
     """
 
     __tablename__ = "extension_webhook_deliveries"
@@ -346,8 +319,7 @@ class WebhookDelivery(Base):
         index=True,
     )
 
-    # Stable across every attempt. This is the receiver's idempotency key, and delivery is
-    # at-least-once, so losing that property means a receiver cannot dedupe at all.
+    # Stable across every attempt: the receiver's idempotency key, since delivery is at-least-once.
     event_id = Column(String(64), nullable=False)
     event_type = Column(String(128), nullable=False, index=True)
     payload = Column(JSONB, nullable=False, comment="the envelope, already field-filtered")

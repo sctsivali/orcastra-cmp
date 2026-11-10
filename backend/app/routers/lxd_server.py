@@ -1,7 +1,4 @@
-"""
-API Router for LXD Server information.
-Provides endpoints for getting LXD server details and configuration.
-"""
+"""LXD server information and configuration, per cluster."""
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
 from typing import Optional, List, Dict, Any
@@ -36,24 +33,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
-# important: raised from require_tenant() to require_partner(). Every page that consumes this
-# router declares useRequireRole(Role.PARTNER), so the UI already treated it as partner-tier while
-# the API accepted a tenant. Mutations here were gated individually and reads were not, which is
-# the pattern this closes. Org scope still applies on top, so this narrows the tier rather than
-# replacing the boundary.
+# important: partner-tier, reads included, to match the pages that use this router
+# (useRequireRole(Role.PARTNER)). Org scope still applies on top.
 router = APIRouter(
     prefix="/server",
     tags=["Server"],
     dependencies=[Depends(require_partner()), Depends(org_scope_dependency)],
 )
 
-# Thread pool for parallel operations
+# Pool for the per-cluster listing fan-out.
 _executor = ThreadPoolExecutor(max_workers=5)
 SERVER_CONFIG_WRITE_WAIT_SECONDS = 60
 
 
 class ServerInfo(BaseModel):
-    """Server information."""
+    """Server information for one cluster; config and environment are filtered of secrets."""
     node: str = Field(..., description="Cluster name")
     node_type: str = Field("LXD", description="Cluster type (LXD, Incus, MicroCloud)")
     api_version: str = Field("", description="API version")
@@ -64,44 +58,39 @@ class ServerInfo(BaseModel):
 
 
 class ServerListResponse(FanoutReachability):
-    """Response for listing server info."""
+    """Server information across the requested clusters."""
     servers: List[ServerInfo] = Field(..., description="List of server information")
     total: int = Field(..., description="Total number of servers")
 
 
 def _fetch_server_info_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[ServerInfo]:
-    """Server info for a single node - runs in thread pool.
+    """Server info for one cluster. Runs in the thread pool.
 
-    important: a failure here is reported, not swallowed. The previous version returned None
-    on any error, and a node that returned None was in neither `servers` nor
-    `unreachable_nodes`, so the page rendered nothing and said nothing.
+    A failure raises instead of returning nothing: a node in neither `servers` nor
+    `unreachable_nodes` would leave the page empty and silent.
     """
     client = lxd_service.connection_manager.get_client(node_name)
     if client is None:
-        # important: unreachable is not empty. Without this the next line
-        # raises AttributeError on None, which the generic handler below
-        # turns into a partial result and the node is never named.
+        # important: unreachable is not empty. Raise the connection error so the
+        # node is named as unreachable; the next line would otherwise fail with an
+        # AttributeError on None and be reported as a failed read.
         raise LXDConnectionError(f"Could not connect to {node_name}")
-    # Get server info from host_info property
     server_data = client.host_info or {}
 
-    # Detect node type from api_extensions in the server response
-    # Build metadata dict similar to /1.0 endpoint response
+    # The cluster type is detected from the /1.0 payload's api_extensions and environment.
     metadata = {
         "api_extensions": server_data.get('api_extensions', []),
         "environment": server_data.get('environment') or {},
     }
-    # important: host_info comes from a trusted connection, so it outranks anything stored.
-    # This used to prefer the stored value through metadata_store.get_node(), a method
-    # NodeMetadataStore never defined - every call raised AttributeError into the debug
-    # log below, so the override silently never ran. The live payload is the one rule.
+    # important: host_info comes from a trusted connection, so the live payload outranks the
+    # stored type.
     stored_type = get_node_metadata_store().get_all_node_metadata().get(node_name, {}).get("type")
     detected_type = resolve_cluster_type(stored_type, client) or detect_cluster_type_from_metadata(metadata)
 
-    # note: LXD renders `config` as null for an identity without can_edit on the server (a
-    # restricted certificate). That is still a server that answered. The config and the
-    # environment go through the same filters as the single read: the raw block carries the
-    # cluster certificate and core.trust_password.
+    # important: config and environment go through the same filters as the single read, since
+    # the raw block carries the cluster certificate and core.trust_password. LXD renders `config`
+    # as null for an identity without can_edit on the server (a restricted certificate); that is
+    # still a server that answered.
     return NodeRead(rows=[ServerInfo(
         node=node_name,
         node_type=detected_type,
@@ -129,7 +118,7 @@ async def list_servers(
             verify_cluster_access(host)
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
-        # Fetch server info from all nodes in parallel
+        # All clusters in parallel.
         loop = asyncio.get_event_loop()
         tasks = [
             loop.run_in_executor(_executor, _fetch_server_info_for_node, lxd_service, node_name)
@@ -137,11 +126,10 @@ async def list_servers(
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # important: two different things make a node absent, and both must be named.
-        # A node can fail during the fan-out, or never be asked at all, because
-        # connection_manager.get_node_names() returns only nodes with a live client while
-        # the fleet is whatever Vault has registered. Reporting only the first kind left a
-        # dead cluster silently missing rather than merely empty.
+        # important: two things make a node absent, and both must be named. A node can fail
+        # during the fan-out, or never be asked at all: connection_manager.get_node_names()
+        # returns only nodes with a live client, while the fleet is whatever Vault has
+        # registered. Naming only the first kind leaves a dead cluster silently missing.
         unreachable_nodes: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
@@ -159,9 +147,8 @@ async def list_servers(
             node_errors=complete_reasons(unreachable_nodes, fan.node_errors, partial=fan.partial_nodes),
         )
     except HTTPException:
-        # note: an authorization refusal is a 403, not a server fault. The generic handler
-        # below would wrap it into a 500 whose body reads "403: Access denied ...", which
-        # misleads clients and pages an on-call for a working permission check.
+        # An authorization refusal stays a 403. The generic handler below would wrap it into
+        # a 500 reading "403: Access denied ...", which misleads clients and pages on-call.
         raise
     except Exception as e:
         logger.error(f"Error listing server information: {e}")
@@ -203,9 +190,8 @@ async def get_server_info(
             public=server_data.get('public', False)
         )
     except HTTPException:
-        # broad handler below converts it into a 500
-        # important: let require_client's 503 through. Without this the
-        # so an offline cluster does not read as a server fault.
+        # important: let require_client's 503 through. The broad handler below would turn
+        # it into a 500, so an offline cluster would read as a server fault.
         raise
     except Exception as e:
         logger.error(f"Error getting server info from {node_name}: {e}")
@@ -227,13 +213,12 @@ async def get_server_config(
     try:
         client = require_client(await client_for(lxd_service, node_name), node_name)
         server_data = client.host_info
-        # important: the same allowlist as the two ServerInfo builders above. This endpoint
-        # returned the raw block, which is where an LXD daemon keeps core.trust_password.
+        # important: the same allowlist as the two ServerInfo builders above. The raw block
+        # carries core.trust_password.
         return public_config(server_data.get('config', {}))
     except HTTPException:
-        # broad handler below converts it into a 500
-        # important: let require_client's 503 through. Without this the
-        # so an offline cluster does not read as a server fault.
+        # important: let require_client's 503 through. The broad handler below would turn
+        # it into a 500, so an offline cluster would read as a server fault.
         raise
     except Exception as e:
         logger.error(f"Error getting server config from {node_name}: {e}")
@@ -256,8 +241,7 @@ async def get_server_resources(
         return lxd_service.get_node_resources(node_name)
     except HTTPException:
         # important: let require_client's 503 through. The broad handler below would turn it
-        # into a 500, so an unreachable node would read as a server fault. The sibling config
-        # route above carries the same pair; this one was missing both halves.
+        # into a 500, so an unreachable node would read as a server fault.
         raise
     except Exception as e:
         logger.error(f"Error getting server resources from {node_name}: {e}")
@@ -290,10 +274,8 @@ async def update_server_config(
             except MigrationFenceConflict as exc:
                 raise HTTPException(status_code=409, detail=exc.detail) from exc
             client = require_client(await client_for(lxd_service, node_name), node_name)
-            # Update config using PUT method
-            # important: client.api is already rooted at <endpoint>/1.0, which is the server
-            # config endpoint itself. Indexing '1.0' again addressed /1.0/1.0, so this PUT
-            # never reached the config it was meant to write. pylxd's own code calls
+            # important: client.api is already rooted at <endpoint>/1.0, the server config
+            # endpoint itself; indexing '1.0' again would address /1.0/1.0. pylxd calls
             # `self.api.get()` for the same resource.
             response = client.api.put(
                 json={'config': config},

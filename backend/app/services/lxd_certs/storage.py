@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # spelling, a deregistered cluster) is reported once per process rather than on every poll.
 _absent_cluster_ids: set = set()
 _absent_lock = threading.Lock()
-# Bounded: the ids come from stored grants and request paths, not only from the registry.
+# Bounded because the ids come from stored grants and request paths as well as the registry.
 _ABSENT_MEMO_LIMIT = 1024
 # (cluster id, problem) pairs already warned about, for the same reason: the list, regions and
 # integration reads run every few minutes and would repeat one broken record on each.
@@ -32,11 +32,10 @@ def stored_location(cluster_id: str, metadata: Any) -> Optional[GeoLocation]:
 
     important: every reader of a stored location goes through this. Registration without a
     location stores {} (save_cluster_metadata below), and an older or hand-edited record can hold
-    null, part of a location, a string or a list. Built straight into GeoLocation, those answered
-    GET /clusters/{id} with 500 and degraded the list row to endpoint "unknown"; read with `.get`,
-    a null crashed the facilities, integrations and regions reads. Anything short of all nine
-    required fields reads as no location. The warning names the cluster and the fields, never the
-    stored value: it is operator free text.
+    null, part of a location, a string or a list. Built straight into GeoLocation, those turn
+    GET /clusters/{id} into a 500; read with `.get`, a null crashes the facilities, integrations
+    and regions reads. Anything short of all nine required fields reads as no location. The
+    warning names the cluster and the fields, never the stored value: it is operator free text.
     """
     if not isinstance(metadata, Mapping) or "location" not in metadata:
         return None
@@ -113,31 +112,21 @@ class VaultStorageMixin:
         location: Optional[Dict[str, Any]] = None,
         clustered: Optional[bool] = None
     ) -> bool:
-        """
-        Save cluster metadata to Vault.
+        """Save cluster metadata to Vault, merged over the stored record.
 
-            cluster_id: Unique cluster identifier
-            display_name: Human-readable display name
-            endpoint: LXD API endpoint (ex; https://xxx:8443)
-            zone: Geographical or logical zone
-            cluster_type: Type of cluster (auto-detected from hypervisor)
-            merchant_id: Merchant/organization identifier
-            location: Geographic location information (region, country, coordinates)
-            clustered: Whether the host proved itself clustered on its last trusted answer
+        ``endpoint`` is the LXD API endpoint (ex; https://host:8443), ``cluster_type`` is detected
+        from the hypervisor, ``merchant_id`` identifies the owning organization, and ``clustered``
+        says whether the host proved itself clustered on its last trusted answer.
 
-        important: this merges over whatever is already stored rather than replacing it. The
-        write is a whole-record `vault_kv_put`, so a key that is not a parameter here used to be
-        deleted by any unrelated save. Both internal callers re-save the full record by hand for
-        exactly that reason (routers/nodes.py on rename, routers/cluster_registration.py on a
-        location update), and the rename site even claimed to "preserve all fields" while
-        dropping every field this signature does not name. `server_type` was already lost that
-        way once. Merging fixes the class, not just the field that exposed it.
+        important: the write is a whole-record `vault_kv_put`. Replacing the record would delete
+        every stored key that is not a parameter here (ex; `server_type`) on any unrelated save,
+        such as a rename (routers/nodes.py) or a location update
+        (routers/cluster_registration.py).
         """
         path = f"{self.clusters_path}/{cluster_id}/metadata"
         try:
-            # note: uncached on purpose. This is the read half of a read-modify-write, and
-            # merging a cached body over a fresher one would drop exactly the keys this merge
-            # exists to keep.
+            # important: uncached. This is the read half of a read-modify-write, and merging a
+            # cached body over a fresher one would drop the keys this merge exists to keep.
             stored = self.vault.vault_read(path, use_cache=False) or {}
         except VaultClientError:
             # A first save has nothing to read back, and a Vault that cannot be read here will
@@ -171,9 +160,7 @@ class VaultStorageMixin:
         cluster_id: str,
         trust_password: Optional[str] = None
     ) -> bool:
-        """
-        Save cluster secrets to Vault.
-        """
+        """Save cluster secrets (the trust password, when given) to Vault."""
         secrets = {}
         if trust_password:
             secrets["trust_password"] = trust_password
@@ -193,19 +180,17 @@ class VaultStorageMixin:
         common_name: Optional[str] = None,
         ttl: str = "720h"
     ) -> Dict[str, str]:
-        """
-        Generate certificate via Vault PKI and store it.
-        """
+        """Issue a client certificate from Vault PKI and store it under the cluster."""
         if common_name is None:
             from app.core.config import get_settings
             domain = get_settings().orcastra_domain
             common_name = f"{cluster_id}.{domain}"
         
         try:
-            # Generate certificate (FQDN required for Vault PKI validation)
+            # Vault PKI requires an FQDN as the common name.
             cert_data = self.vault.generate_lxd_certificate(common_name, ttl)
-            
-            # Store certificate in Vault (only persistent storage)
+
+            # Vault is the only persistent store of the certificate.
             path = f"{self.clusters_path}/{cluster_id}/certs"
             self.vault.vault_kv_put(path, {
                 "client.crt": cert_data["cert"],
@@ -222,12 +207,7 @@ class VaultStorageMixin:
             raise LXDCertManagerError(f"Certificate generation failed: {str(e)}")
     
     def get_cluster_certificate(self, cluster_id: str) -> Dict[str, str]:
-        """
-        Retrieve cluster certificate from Vault.
-        
-        Certificates are fetched directly from Vault.
-        NO Redis caching - Vault is the only source of truth.
-        """
+        """The cluster's certificate material, read from Vault. `/certs` is never cached in Redis."""
         try:
             path = f"{self.clusters_path}/{cluster_id}/certs"
             cert_data = self.vault.vault_read(path)
@@ -238,17 +218,12 @@ class VaultStorageMixin:
             raise LXDCertManagerError(f"Certificate retrieval failed: {str(e)}")
 
     def remove_trust_password(self, cluster_id: str) -> bool:
-        """
-        Remove trust password from Vault after certificate is registered.
-        """
+        """Remove the trust password from Vault once the certificate is registered."""
         try:
             path = f"{self.clusters_path}/{cluster_id}/secrets"
-            # Read current secrets
             secrets = self.vault.vault_read(path)
-            # Remove trust_password if it exists
             if "trust_password" in secrets:
                 del secrets["trust_password"]
-                # Update secrets
                 self.vault.vault_kv_put(path, secrets)
                 logger.info(f"Removed trust password for cluster {cluster_id}")
             return True
@@ -257,20 +232,18 @@ class VaultStorageMixin:
             return False
     
     def get_cluster_info(self, cluster_id: str, include_cert_content: bool = False) -> Dict[str, Any]:
-        """
-        Get all cluster information from Vault.
-        """
+        """Cluster metadata from Vault, and whether a trust password and certificate exist."""
         try:
             metadata = self.vault.vault_read(f"{self.clusters_path}/{cluster_id}/metadata")
-            
-            # Try to read secrets (may not exist if not provided during registration)
+
+            # Secrets exist only when registration supplied them.
             try:
                 secrets = self.vault.vault_read(f"{self.clusters_path}/{cluster_id}/secrets")
             except VaultClientError:
                 logger.debug(f"No secrets found for cluster {cluster_id}")
                 secrets = {}
             
-            # For cert info, only read metadata unless full content is requested
+            # The certificate path is read only when include_cert_content asks for it.
             if include_cert_content:
                 try:
                     cert_data = self.vault.vault_read(f"{self.clusters_path}/{cluster_id}/certs")
@@ -278,15 +251,16 @@ class VaultStorageMixin:
                     logger.debug(f"No certificate found for cluster {cluster_id}")
                     cert_data = {}
             else:
-                # Just check if cert exists without reading full content (faster)
+                # Without reading `/certs`, the certificate is assumed present and named from the
+                # metadata.
                 cert_data = {"common_name": metadata.get("common_name", "")}
-            
-            # Sanitize secrets (don't return passwords)
+
+            # Whether a trust password exists, never the password.
             secrets_sanitized = {
                 "has_trust_password": "trust_password" in secrets
             }
-            
-            # Return certificate metadata only (unless full content requested)
+
+            # Never the certificate content: only whether it exists and its common name.
             cert_info = {
                 "has_certificate": bool(cert_data.get("client.crt")) if include_cert_content else True,
                 "common_name": cert_data.get("common_name", "")
@@ -302,8 +276,8 @@ class VaultStorageMixin:
             }
         except VaultClientError as e:
             if e.status_code == 404:
-                # note: not a Vault fault, a name with no registration. ERROR on every poll buried
-                # real Vault failures under ~50 lines an hour from one integration's stale grant.
+                # Not a Vault fault but a name with no registration (ex; a stale grant).
+                # Logged once, so a poller does not bury real Vault failures.
                 with _absent_lock:
                     first = cluster_id not in _absent_cluster_ids
                     if len(_absent_cluster_ids) < _ABSENT_MEMO_LIMIT:
@@ -320,22 +294,20 @@ class VaultStorageMixin:
     def read_registry(self, use_cache: bool = True, *, on_loop: Optional[bool] = None) -> "RegistryRead":
         """The unfiltered cluster registry, or the last copy of it that Vault answered with.
 
-        important: this is the one read in the mixin that swallows instead of raising, and
-        thirteen callers depend on that. What it must never do is turn a LIST that was lost
-        (a sealed Vault's 503, a token whose policy denies the metadata LIST, a 2 s connect
-        budget on a busy box) into an empty fleet: that emptied every node picker for the
-        length of the blip, and at boot it emptied the whitelist for the life of the process.
-        The registry cannot change while Vault is unreachable, because registration and
-        deregistration both write to Vault first, so the last answer is served until Vault
-        answers again. The outcome is recorded in vault_status for startup and /health.
+        important: unlike the other reads in this mixin it never raises, and callers depend on
+        that. It must never turn a lost LIST (a sealed Vault's 503, a token whose policy denies
+        the metadata LIST, the 2 s connect budget on a busy box) into an empty fleet: that would
+        empty every node picker for the length of the blip, and at boot the whitelist for the
+        life of the process. Registration and deregistration both write to Vault first, so the
+        registry cannot change while Vault is unreachable and the last answer is served until
+        Vault answers again. The outcome is recorded in vault_status for startup and /health.
         """
         # Convert secret/data/clusters to secret/metadata/clusters for LIST operation
         list_path = self.clusters_path.replace("/data/", "/metadata/")
         # important: a caller on the event loop (uvicorn runs it in the main thread; every
-        # off-loop call here is a worker thread) must not pay the LIST budget during an
-        # outage. The metrics sweep probes from a thread every 30 s, so the loop waits the
-        # longer hold and is served the memo; measured on the production-shaped stack, an
-        # on-loop probe held /health past five seconds while the LIST timed out.
+        # off-loop call here is a worker thread) must not pay the LIST budget during an outage,
+        # or /health stalls for seconds while the LIST times out. The metrics sweep probes from
+        # a thread every 30 s, so the loop waits the longer hold and is served the memo.
         if on_loop is None:
             on_loop = threading.current_thread() is threading.main_thread()
         hold = vault_status.LOOP_RETRY_HOLD_SECONDS if on_loop else vault_status.RETRY_HOLD_SECONDS
@@ -345,7 +317,6 @@ class VaultStorageMixin:
                 return RegistryRead(cluster_ids=known, source="last_known", readable=False)
         try:
             cluster_ids = self.vault.vault_list(list_path, use_cache=use_cache)
-            # Remove trailing slashes from cluster IDs
             cluster_ids = [cid.rstrip('/') for cid in cluster_ids]
             logger.debug(f"Found {len(cluster_ids)} clusters in Vault (cached: {use_cache})")
             vault_status.remember_registry(cluster_ids)
@@ -356,8 +327,8 @@ class VaultStorageMixin:
             vault_status.mark_unreadable(
                 f"{type(e).__name__}: {e}", served_last_known=known is not None
             )
-            # ERROR, not WARNING: the success line beside it is debug, so at production log
-            # level this is the only line about the registry and it has to stand out.
+            # Logged at ERROR: the success line is debug, so at production log level this is
+            # the only line about the registry and it has to stand out.
             if known is not None:
                 logger.error(
                     f"Failed to list clusters ({e}); serving the last known registry of "
@@ -376,28 +347,17 @@ class VaultStorageMixin:
         return vault_status.last_known_registry()
 
     def list_clusters(self, use_cache: bool = True) -> list:
-        """
-        List all registered clusters.
+        """Registered clusters, filtered by the request's org scope (``org_scope_dependency``).
 
-        Results are automatically filtered by the current request's
-        org-scope context variable (set by ``org_scope_dependency``).
-        Admin / background tasks see all clusters. A lost Vault LIST is answered from the
+        Admin and background tasks see every cluster. A lost Vault LIST is answered from the
         last known registry (see ``read_registry``), never as an empty fleet.
         """
         from app.core.org_scope import apply_cluster_filter
         return apply_cluster_filter(self.read_registry(use_cache).cluster_ids)
     
     def delete_cluster_data(self, cluster_id: str) -> bool:
-        """
-        Delete all cluster data from Vault.
-        
-        Removes:
-        - Cluster metadata from Vault
-        - Cluster secrets from Vault  
-        - Cluster certificates from Vault
-        """
+        """Delete the cluster's metadata, secrets and certificates from Vault."""
         try:
-            # Delete from Vault (metadata, secrets, certs)
             paths_to_delete = [
                 f"{self.clusters_path}/{cluster_id}/metadata",
                 f"{self.clusters_path}/{cluster_id}/secrets", 
@@ -411,7 +371,7 @@ class VaultStorageMixin:
                 except VaultClientError as e:
                     logger.debug(f"Path {path} may not exist: {e}")
             
-            # Invalidate cluster list cache (this is for API response caching, not certs)
+            # Drop the cluster's cached API responses (certificates are never cached).
             try:
                 from app.core.cache import get_cache_manager
                 cache = get_cache_manager()

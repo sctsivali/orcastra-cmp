@@ -1,19 +1,13 @@
 """A cluster's members, read side by side for the capacity aggregation.
 
-important: the aggregation used to read one member after another, and on each member one pool
-after another. A profile of the live monitoring sweep put 72% of a three-member cluster's
-aggregation in those pool reads, and the whole status check of that cluster at 6 to 16 seconds.
-Two rounds of parallel reads replace the loop: every member's resources and pool list, then every
-pool's space. The caller folds the answers in the members' order, so totals, GPU card indices and
-storage come out as the sequential loop produced them.
+Two rounds of parallel reads: every member's resources and pool list, then every pool's space.
+The caller folds the answers in the members' order, so totals, GPU card indices and storage come
+out as a sequential read would produce them. A member's pools are read only once its resources
+answered, and a pool that cannot be read is recorded as degraded rather than skipped.
 
-note: a member's pools are read only once its resources answered, and a pool that cannot be read
-is recorded, not skipped: the same rules and log lines as before.
-
-The members list itself is read with a bounded timeout, and a failed read is remembered for five
-minutes. A member that stops answering makes LXD wait for its own deadline (about 25 seconds)
-before failing the list, and every status check paid that again; the caller falls back to the
-connected member's own resources meanwhile, as it always did on this failure.
+The members list is read with a bounded timeout, and a failed read is remembered for five
+minutes: a member that stops answering makes LXD wait for its own deadline (about 25 seconds)
+before failing the list. Meanwhile the caller falls back to the connected member's resources.
 """
 
 import contextvars
@@ -50,8 +44,8 @@ class MemberRead:
 def _members_failure_key(node_name: str) -> str:
     from app.core.cache import MEMBER_RESOURCES_CACHE_PREFIX
 
-    # note: under the member-resources prefix, so a node refresh and a capacity invalidation
-    # both clear it along with the member figures they already drop.
+    # Under the member-resources prefix, so a node refresh and a capacity invalidation clear it
+    # together with the member figures.
     return f"{MEMBER_RESOURCES_CACHE_PREFIX}:{node_name}:members_read_failed"
 
 

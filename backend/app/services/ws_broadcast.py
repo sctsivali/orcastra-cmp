@@ -1,7 +1,4 @@
-"""
-WebSocket broadcast service for real-time monitoring push.
-Connected clients receive dashboard updates without polling.
-"""
+"""Pushes monitoring updates to connected WebSocket clients."""
 
 import asyncio
 import logging
@@ -13,11 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class MonitoringBroadcaster:
-    """
-    Manages WebSocket connections for monitoring data push.
-    The background metrics collector calls broadcast() after each collection cycle,
-    pushing fresh data to all connected clients simultaneously.
-    """
+    """Monitoring sockets; the metrics collector calls broadcast() after each cycle."""
 
     def __init__(self):
         self._clients: Set[WebSocket] = set()
@@ -35,7 +28,7 @@ class MonitoringBroadcaster:
         logger.debug(f"Monitoring WS client disconnected ({len(self._clients)} total)")
 
     async def broadcast(self, data: dict):
-        """Push serialized dashboard data to all connected WebSocket clients."""
+        """Send `data` as JSON to every client, dropping clients the send fails on."""
         async with self._lock:
             clients = list(self._clients)
         if not clients:
@@ -60,7 +53,6 @@ class MonitoringBroadcaster:
         return len(self._clients)
 
 
-# Singleton instance
 _broadcaster = MonitoringBroadcaster()
 
 

@@ -2,7 +2,7 @@
 
 These are the tools a model reaches for first: what may I see, and what is on it. They cost
 `inventory.read`, which every application-type preset seeds, so they are the tier most keys can
-actually use. whoami costs nothing beyond a key that authenticates, as its REST route does.
+use. whoami costs nothing beyond a key that authenticates, as its REST route does.
 """
 
 from typing import Annotated, Optional
@@ -37,10 +37,9 @@ def register(mcp: MCPServer) -> None:
         ),
     )
     async def orcastra_whoami() -> CallToolResult:
-        # note: kept on the surface deliberately, against the argument that it is reconnaissance
-        # for an agent under prompt injection. orcastra_list_clusters already discloses the same
-        # cluster map, so withholding this buys nothing and costs the model the only way it has to
-        # explain a refusal instead of retrying blindly.
+        # Kept despite the reconnaissance risk under prompt injection: orcastra_list_clusters
+        # already discloses the same cluster map, and this is the model's only way to explain a
+        # refusal instead of retrying blindly.
         return await run_inventory("whoami", capability=None)
 
     @mcp.tool(
@@ -129,7 +128,7 @@ def register(mcp: MCPServer) -> None:
             Field(default=None, description="Optional. A project this key holds on the cluster."),
         ] = None,
     ) -> CallToolResult:
-        # note: the project only has to pass the route's grant check; visibility is decided by the
+        # The project only has to pass the route's grant check; visibility is decided by the
         # operation's owner, so a key limited to other projects is not refused for omitting it.
         return await run_inventory(
             "get_integration_operation",

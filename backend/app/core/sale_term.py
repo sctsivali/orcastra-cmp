@@ -1,19 +1,14 @@
-"""A purchase's paid term, applied to everything the purchase reaches, not only to its own rules.
+"""A purchase's paid term, applied to everything the purchase reaches, its own rules included.
 
-Provisioning binds the seller's cluster to the buyer's organization with no registrant
-(`organization_clusters.registered_by IS NULL` on an OrcaHub organization): a sale-only binding.
-The buyer reaches that cluster only because it bought something there, so its reach follows the
-purchase's term, which lives on the OrcaHub policies of that organization naming the cluster:
+Provisioning binds the seller's cluster to the buyer's OrcaHub organization with no registrant
+(`organization_clusters.registered_by IS NULL`): a sale-only binding. The buyer's reach there
+follows that organization's OrcaHub policies naming the cluster: `active` while a live one's paid
+term runs, `read_only` (retention, view only) once every live one is past it, `ended` with none.
 
-  active     a live OrcaHub policy on the cluster whose paid term has not ended
-  read_only  every live OrcaHub policy there is past its paid term (retention): view only
-  ended      no live OrcaHub policy there: nothing
-
-core/tenant_term.py clamps the OrcaHub policies themselves. This module carries the same phase to
-what the purchase reaches indirectly: a buyer founder OrcaHub promoted to role_partner (no tenant
-ACL at all), and a local policy a founder wrote in the buyer organization, which would otherwise
-outlive the purchase. A binding someone registered, a local organization and the organization's
-creator are not sale-only and are untouched.
+core/tenant_term.py clamps the OrcaHub policies themselves. This module applies the same phase to
+what the purchase reaches indirectly: a buyer founder promoted to role_partner (no tenant ACL),
+and a local policy a founder wrote in the buyer organization. Registered bindings, local
+organizations and the organization's creator are not sale-only and are untouched.
 """
 
 from __future__ import annotations
@@ -112,7 +107,7 @@ async def partner_purchase_reach(db: AsyncSession, email: Optional[str]) -> Tupl
 
     For a role_partner account. On the first set it may not grant anything a purchase does not pay
     for (an integration key, an add-on, a binding); on the second it may look but not change
-    anything (owner decision 2026-10-27: during retention the buyer has view only).
+    anything, since during retention the buyer has view only.
     """
     if not email:
         return set(), set()
@@ -142,7 +137,7 @@ async def reaches_only_by_purchase(db: AsyncSession, email: Optional[str], clust
     """Whether this account reaches the cluster through purchases and nothing else.
 
     Such an account may not bind the cluster to another organization: the binding it wrote would
-    carry it as registrant and outlive the purchase (security review 2026-10-27).
+    carry it as registrant and outlive the purchase.
     """
     if not email:
         return False

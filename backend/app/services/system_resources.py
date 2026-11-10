@@ -1,11 +1,11 @@
 """
-Collector behind GET /system/resource-usage: two honest scopes.
+Collector behind GET /system/resource-usage, in two scopes.
 
 `host` is the kernel's view of the machine, `container` is this deployment's cgroup scope
 (limits, what counts against them, the uvicorn worker set); the legacy top-level blocks keep
-every key and its meaning (the timestamp is now UTC-aware). Nothing sleeps on the request path: every percent is a delta
-against the previous call held in a process-wide sampler, and every optional reader is
-wrapped so a missing source is a null field, never a 500.
+every key and its meaning, with a UTC-aware timestamp. Nothing sleeps on the request path:
+every percent is a delta against the previous call held in a process-wide sampler, and every
+optional reader is wrapped so a missing source is a null field, never a 500.
 """
 
 import logging
@@ -44,8 +44,8 @@ from app.services import cgroup
 
 _log = logging.getLogger(__name__)
 
-# note: Docker bind-mounts these three files from the host filesystem; they are not places an
-# operator stores anything, so they only clutter the filesystem list.
+# Docker bind-mounts these three files from the host filesystem; nothing is stored there, so they
+# would only clutter the filesystem list.
 DOCKER_FILE_MOUNTS = frozenset({"/etc/hosts", "/etc/hostname", "/etc/resolv.conf"})
 _HOST_BUSY_FIELDS = ("user", "nice", "system", "irq", "softirq", "steal")
 
@@ -54,7 +54,7 @@ class DeltaSampler:
     """Percent of a cumulative (busy, total) pair since the previous sample.
 
     Two polls inside the counter's resolution (two tabs, a refresh right after a poll) see no
-    delta at all. Those keep the old baseline and answer with the last window rather than a
+    delta at all. Those keep the previous baseline and answer with the last window rather than a
     false 0.0, so the next real poll still measures from the last point that moved.
     """
 
@@ -101,8 +101,8 @@ def _quiet(read: Callable[[], Any], default: Any = None) -> Any:
 
 
 def _self_process() -> Any:
-    # note: one Process object per worker so process.cpu_percent() has a baseline from the
-    # previous call; re-created when the psutil module is swapped (tests).
+    # One Process object per worker so process.cpu_percent() has a baseline from the previous
+    # call; re-created when the psutil module is swapped (tests).
     global _SELF_PROCESS
     if _SELF_PROCESS is None or not isinstance(_SELF_PROCESS, psutil.Process):
         _SELF_PROCESS = psutil.Process()
@@ -113,10 +113,10 @@ def _host_cpu_reading() -> Tuple[HostCpuTimes, Optional[Tuple[float, float]]]:
     # important: psutil 7 keeps the cpu_percent(interval=None) baseline per thread and the
     # collector runs on a fresh asyncio.to_thread worker, so psutil's helper would answer 0.0
     # on every call; a positive interval would sleep on the request path instead. The busy
-    # and total jiffies go through our own process-wide sampler.
-    # note: that sampler is per worker, so its window is the gap since this worker last
-    # answered, which can be minutes. The raw counters go out too, and the panel measures
-    # its own poll-to-poll window from them whichever worker answers.
+    # and total jiffies go through this module's process-wide sampler.
+    # That sampler is per worker, so its window is the gap since this worker last answered,
+    # which can be minutes. The raw counters are returned too, so the panel can measure its
+    # own poll-to-poll window whichever worker answers.
     times = psutil.cpu_times()
     busy = float(sum(getattr(times, field, 0.0) for field in _HOST_BUSY_FIELDS))
     total = busy + float(getattr(times, "idle", 0.0)) + float(getattr(times, "iowait", 0.0))
@@ -261,7 +261,7 @@ def _collect_workers() -> WorkersInfo:
     master_pid: Optional[int] = None
     master_uptime: Optional[float] = None
 
-    # note: under a uvicorn master the workers are our siblings, not every child of PID 1;
+    # Under a uvicorn master the workers are this process's siblings, not every child of PID 1;
     # the multiprocessing resource_tracker shares the exe but serves no requests.
     parent = me.parent()
     if parent is not None and my_exe is not None and _process_exe(parent) == my_exe:
@@ -304,8 +304,8 @@ def _container_memory(scope: Optional[cgroup.MemoryScope], containerised: bool) 
     reading = cgroup.read_memory_usage(scope)
     if reading is None:
         return ContainerMemory(limit=scope.limit)
-    # note: docker stats subtracts inactive_file, the page cache the kernel can reclaim
-    # without touching the workload, so that is the figure a limit is compared against.
+    # docker stats subtracts inactive_file, the page cache the kernel can reclaim without
+    # touching the workload, so that is the figure a limit is compared against.
     used = reading.current - reading.inactive_file if reading.inactive_file is not None else None
     percent = round(used / scope.limit * 100, 1) if used is not None and scope.limit else None
     return ContainerMemory(
@@ -352,7 +352,7 @@ def _collect_container(meta: Dict[str, Any], host_logical: int) -> ContainerInfo
     )
 
 
-# --- Legacy top-level blocks, assembled as before --------------------------
+# --- Legacy top-level blocks -----------------------------------------------
 
 def _deduplicate_disks(disks: List[DiskInfo]) -> List[DiskInfo]:
     """One entry per (device, total) pair, preferring the root mountpoint."""

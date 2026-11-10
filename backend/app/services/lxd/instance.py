@@ -1,6 +1,5 @@
 """
-Instance/VM operations module.
-Handles create, start, stop, restart, delete, and list operations for instances.
+LXD instance operations: list, create, start, stop, restart, rebuild and delete.
 """
 
 import logging
@@ -67,16 +66,13 @@ _CREATE_EVENT_TIMEOUT_SECONDS = 2.0
 
 
 def _announce_instance_created(host: str, project: str, name: str) -> None:
-    """Tell OrcaHub an instance exists, once it actually does.
+    """Tell OrcaHub an instance exists, once the create is verified.
 
-    important: paired with the add-on event above it and emitted for the same reason. The router
-    announced this the moment LXD accepted the request, so a create LXD then refused still told
-    OrcaHub an instance existed, with no correction to follow. On a cluster owned by two
-    organisations it said so twice. Proven live: a create that failed with "Image not provided
-    for instance creation" emitted instance.created to org 122 and org 6 seventy milliseconds
-    later.
+    important: emitted only after the create's verdict, like the add-on event, never when LXD
+    accepts the request. A create LXD then refuses must not announce an instance, since no
+    correction follows.
 
-    Fire-and-forget by contract, so a webhook problem cannot fail a create that worked.
+    Fire-and-forget, so a webhook problem cannot fail a create that worked.
     """
     from app.services.orcahub_webhook import schedule_orcahub_event
 
@@ -124,20 +120,18 @@ async def _emit_instance_created(
         )
 
 # The pooled client is built for fast failure detection (3s connect / 8s read).
-# That read timeout is shorter than the graceful-shutdown waits callers ask for,
-# so the HTTP read would expire before LXD's own operation timeout -- making the
-# caller's `timeout` argument meaningless and surfacing a raw connection error
-# instead of a clean result. Stop/restart therefore use a client whose read
-# timeout outlives the requested wait by this margin.
+# That read is shorter than the graceful-shutdown waits callers ask for, so the
+# HTTP read would expire before LXD's own operation timeout and surface a raw
+# connection error. Stop and restart use a client whose read timeout outlives
+# the requested wait by this margin.
 _GRACEFUL_READ_MARGIN_SECONDS = 30
 # How long a start may hold the HTTP response open. The LXD operation itself is usually
 # quick, but a loaded cluster is not, and the pooled client only allows an 8s read.
 _START_WAIT_SECONDS = 30
 
-# Hard ceiling on the wait a caller can request, mirroring VMActionRequest's
-# `le=600` bound. Clamped again here so any internal caller that bypasses the
-# request schema still can't hold an LXD operation request (and its worker) open
-# for an unbounded time.
+# Ceiling on the wait a caller can request, mirroring VMActionRequest's `le=600`.
+# Clamped here too, so an internal caller that bypasses the request schema cannot
+# hold an LXD operation request (and its worker) open indefinitely.
 _MAX_ACTION_TIMEOUT_SECONDS = 600
 
 # Connect leg for the raw rebuild calls. Kept separate from the (long) read leg because
@@ -145,21 +139,19 @@ _MAX_ACTION_TIMEOUT_SECONDS = 600
 # completing a TCP+TLS handshake.
 _REBUILD_CONNECT_TIMEOUT = 5
 
-# A rebuild holds its worker for as long as LXD takes to reinstall the root disk, up to
-# wait_timeout (default 1800s). asyncio.to_thread would put that on the loop's DEFAULT
-# executor, which is also where FastAPI runs every sync route handler -- a handful of
-# concurrent rebuilds would starve unrelated requests. Own pool, and shed past it rather
-# than queue.
 # A delete tears down the root disk, which on a `dir` pool is a full recursive remove. The pooled
 # client's 8 second read is far short of that, so the wait gets its own window.
 _DELETE_WAIT_SECONDS = 300
 
+# A rebuild holds its worker for as long as LXD takes to reinstall the root disk, up to
+# wait_timeout (default 1800s). The loop's default executor also runs FastAPI's sync route
+# handlers, so rebuilds get their own pool and are shed past it instead of queued.
 _rebuild_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="lxd_rebuild")
 _REBUILD_MAX_IN_FLIGHT = 8
 
-# POST /vms is intentionally synchronous from the caller's perspective, but pylxd's
-# connect/create(wait=True)/start/readback sequence is blocking. Keep it off the event loop and
-# refuse excess work instead of building an unbounded 30-minute queue behind a slow image pull.
+# POST /vms is synchronous for the caller, but pylxd's connect/create(wait=True)/start/readback
+# sequence blocks. It runs off the event loop and refuses excess work instead of building an
+# unbounded 30-minute queue behind a slow image pull.
 _CREATE_LXD_READ_TIMEOUT_SECONDS = 1800
 _CREATE_WALL_TIMEOUT_SECONDS = (
     _CREATE_LXD_READ_TIMEOUT_SECONDS
@@ -259,9 +251,9 @@ def _create_budget_spent(row: InstanceOperationJob) -> bool:
 
 
 async def _cluster_deregistered(cluster_id: str) -> bool:
-    """True only when the registry was read and no longer holds the cluster."""
+    """True only when the registry was read and does not hold the cluster."""
     try:
-        # fresh: a terminal verdict reads the registry as it is now, not the cached LIST.
+        # fresh=True: a terminal verdict must not trust the cached registry list.
         registered = await cluster_registry.registered_cluster_ids(fresh=True)
     except Exception as exc:  # noqa: BLE001 - an unreadable registry proves nothing
         logger.warning(
@@ -300,9 +292,9 @@ async def _upsert_materialized_create_tags(
 ) -> None:
     """Persist verified create tags inside the terminal job transaction.
 
-    This deliberately uses the supplied session rather than ``TagService``. The latter commits
-    internally and writes to LXD, either of which would split the tag assignment from the
-    terminal CAS. LXD already received the canonical ``user.tags`` value in the create payload.
+    Uses the supplied session instead of ``TagService``, which commits internally and writes to
+    LXD; either would split the tag assignment from the terminal CAS. LXD already received the
+    canonical ``user.tags`` value in the create payload.
     """
     if not tags:
         return
@@ -501,8 +493,8 @@ async def _mark_create_unknown(
         locked_at=None,
         finished_at=None,
     )
-    # The instance may exist or not; either way a list cached before this is no longer known to
-    # be true, and the browser reconciles an unknown verdict with one read.
+    # The instance may or may not exist, so any cached list may be wrong; the browser
+    # reconciles an unknown verdict with one read.
     try:
         get_cache_manager().invalidate_instance_cache()
     except Exception as exc:  # noqa: BLE001 - cache failure cannot change the verdict
@@ -617,14 +609,12 @@ async def _finish_create_job(
 def _is_graceful_timeout(exc: Exception) -> bool:
     """True if `exc` means the guest never completed a graceful shutdown.
 
-    Because `_rebind_for_wait` gives the client a read timeout of
-    ``timeout + _GRACEFUL_READ_MARGIN_SECONDS``, the HTTP read always outlives
-    LXD's own operation deadline, so the failure surfaces as LXD's message --
-    'Failed shutting down instance, status is "Running": context deadline
-    exceeded' -- and never as a raw HTTP read timeout. We therefore match only
-    those two guest-side shapes. Matching the bare substring "timed out" would
-    misclassify connection failures ('Connection to <ip> timed out', 'Connection
-    pool timed out ...') as a guest ACPI failure and wrongly tell the operator to
+    `_rebind_for_wait` gives the client a read timeout of
+    ``timeout + _GRACEFUL_READ_MARGIN_SECONDS``, so the HTTP read outlives LXD's
+    own deadline and the failure surfaces as LXD's message ('Failed shutting down
+    instance, status is "Running": context deadline exceeded'). Only those two
+    guest-side shapes match. The bare substring "timed out" would also match
+    connection failures ('Connection to <ip> timed out') and tell the operator to
     retry with force during a connectivity outage.
     """
     msg = str(exc).lower()
@@ -650,11 +640,9 @@ def _lxd_snapshot_names(client, name: str, project: str) -> List[str]:
 
 # Instance inventory and detail reads are synchronous all the way down: the cold path reads
 # Vault, reconnects and validates a pylxd client, and the detail projection may call /state.
-# Keep those paths off the event loop and give each one an explicit wall-clock and concurrency
-# budget. The underlying transports already carry their socket bounds: Vault point reads use
-# (2s, 3s), its registry LIST uses (3s, 10s), pooled LXD reads use (3s, 8s), and connection
-# validation uses (3s, 5s). The wall budgets below outlive those sockets while still refusing a
-# stalled or overloaded upstream promptly.
+# They run off the event loop with explicit wall-clock and concurrency budgets. The walls below
+# outlive the socket bounds underneath (Vault point reads (2s, 3s), its registry LIST (3s, 10s),
+# pooled LXD reads (3s, 8s), connection validation (3s, 5s)) and still refuse a stalled upstream.
 _INSTANCE_REGISTRY_TIMEOUT_SECONDS = 15.0
 _INSTANCE_NODE_TIMEOUT_SECONDS = 30.0
 
@@ -670,7 +658,7 @@ class FleetInventory(NamedTuple):
 def timed_out_reason(kind: str) -> str:
     """The node_errors text for a cluster FleetInventory names in ``timed_out``.
 
-    note: "busy" is this server's own pool, not the cluster, so it must not read as a slow cluster.
+    "busy" is this server's own pool, not the cluster, so it must not read as a slow cluster.
     """
     if kind == "busy":
         return "unreachable: not read, every inventory reader on this server was busy"
@@ -697,11 +685,9 @@ _instance_detail_executor = ThreadPoolExecutor(
 # (app.services.lxd.health) so every connection path skips the same dead cluster.
 
 
-# note: LXD reports the literal string "none" for an instance on a non-clustered target, not an
-# absent value. Passing that through means the UI prints "none" in a Cluster member field, which
-# reads as a member called none rather than as "this target is not clustered". Normalised once
-# here so neither consumer has to know.
-# Kept as a local name: the helper is shared with the GPU inventory (see utils).
+# LXD reports the literal string "none" as the location of an instance on a non-clustered
+# target. Passed through, the UI would show a member called none, so it is normalised once here.
+# The helper is shared with the GPU inventory (see utils).
 _cluster_member = normalize_cluster_member
 
 
@@ -795,20 +781,12 @@ def _list_instances_in_project(
 # Config keys some LXD versions refuse outright for a given instance type, mapped to the first
 # major version known to refuse them.
 #
-# `security.secureboot` is the one that matters and it is genuinely two-sided, which is why it
-# is filtered here rather than defaulted away in the form:
-#
-#   * LXD 5.x accepts it, and community VM images (Alpine, the daily Ubuntu builds) are not
-#     Secure Boot signed, so WITHOUT `security.secureboot=false` they create fine and then
-#     refuse to start: "The image used by this instance is incompatible with secureboot".
-#     Verified live on 5.21.7. Only signed release images carry
-#     `image.requirements.secureboot=false` and cope on their own.
-#   * LXD 6.9 answers `"security.secureboot" is not supported for "virtual-machine"` and
-#     refuses the create outright.
-#
-# So neither always-send nor never-send is correct, and the right answer depends on the target
-# cluster. That is knowledge about the cluster, so it lives here, next to the client that knows
-# which cluster it is, rather than in every caller that builds a config.
+# `security.secureboot` cuts both ways. LXD 5.x accepts it, and community VM images (Alpine, the
+# daily Ubuntu builds) are not Secure Boot signed, so without `security.secureboot=false` they
+# create and then refuse to start ("The image used by this instance is incompatible with
+# secureboot"). LXD 6.9 refuses the create: `"security.secureboot" is not supported for
+# "virtual-machine"`. The answer depends on the target cluster, so the key is filtered here,
+# next to the client, instead of in every caller that builds a config.
 _KEYS_REFUSED_FROM_MAJOR = {
     "security.secureboot": 6,
 }
@@ -832,9 +810,8 @@ def _server_major(client) -> Optional[int]:
 def _drop_unsupported_config(client, instance_type: str, config: dict) -> dict:
     """Remove config keys the target LXD is known to refuse, leaving everything else alone.
 
-    important: fail-safe direction is to KEEP the key. An unknown or unparseable version
-    behaves like 5.x, which is the behaviour verified against a live cluster; dropping on
-    uncertainty would silently reintroduce the unbootable-community-image case.
+    important: an unknown or unparseable version keeps the key and behaves like 5.x. Dropping
+    it on uncertainty would leave community VM images unable to boot.
     """
     if instance_type == "container" or not config:
         return config
@@ -872,8 +849,8 @@ class InstanceManager:
         self.connection_manager = connection_manager
         self.resource_manager = resource_manager
         self.cert_manager = cert_manager
-        # Strong refs to fire-and-forget background tasks (e.g. auto-start after
-        # create) so the event loop doesn't garbage-collect them mid-flight.
+        # Strong refs to fire-and-forget background tasks (ex; auto-start after
+        # create) so the event loop does not garbage-collect them mid-flight.
         self._bg_tasks: set = set()
     
     def _get_client_with_reconnect(self, node_name: str):
@@ -887,8 +864,7 @@ class InstanceManager:
             return None
 
         client = self.connection_manager.get_client(node_name)
-        
-        # If client is None (stale connection), try to reconnect via cert_manager
+
         if client is None and self.cert_manager:
             logger.info(f"Connection to {node_name} is stale, attempting reconnect...")
             try:
@@ -909,10 +885,9 @@ class InstanceManager:
         try:
             settings = get_settings()
             if self.cert_manager and self.cert_manager.vault:
-                # Cache is automatically used in vault_read
                 metadata = self.cert_manager.vault.vault_read(
                     f"{settings.vault_clusters_path}/{node_name}/metadata",
-                    use_cache=True  # Explicitly enable cache
+                    use_cache=True
                 )
                 return metadata.get("endpoint", "unknown")
         except Exception as e:
@@ -926,7 +901,6 @@ class InstanceManager:
         node_endpoint: str
     ) -> VMInfo:
         """Convert pylxd instance to VMInfo model."""
-        # Parse tags from config
         tags_str = instance.config.get("user.tags", "")
         tags = [tag.strip() for tag in tags_str.split(",") if tag.strip()] if tags_str else []
         
@@ -965,7 +939,7 @@ class InstanceManager:
         )
     
     async def list_all_vms(self) -> Tuple[List[VMInfo], List[str]]:
-        """List all instances while preserving the established two-value contract."""
+        """List all instances as (vms, connected_nodes)."""
         vms, connected, _incomplete = await self.list_all_vms_with_failures()
         return vms, connected
 
@@ -1008,11 +982,10 @@ class InstanceManager:
     ) -> Tuple[List[VMInfo], bool, bool]:
         """Read one exact project on one cluster in a bounded inventory worker.
 
-        The scoped list itself is the liveness probe, so do not precede it with ``get_client``'s
-        validation/reconnect requests or start the second Vault-backed reconnect path. Those calls
-        have independent socket budgets that can outlive this worker's wall cap. The background
-        healer owns a genuinely cold worker; this read fails fast and is never cached, so Refresh
-        can use the repaired connection.
+        The scoped list is the liveness probe, so it is not preceded by ``get_client``'s
+        validation and reconnect requests or the Vault-backed reconnect path, whose socket budgets
+        can outlive this worker's wall cap. The background healer handles a cold worker; this read
+        fails fast and is never cached, so Refresh can use the repaired connection.
         """
         client = self.connection_manager.get_cached_client(node_name)
         if client is None:
@@ -1139,10 +1112,9 @@ class InstanceManager:
     async def read_fleet_inventory(self) -> FleetInventory:
         """The fleet's instances for the monitoring sweep, which reports rather than raises.
 
-        important: a cluster whose read ran past the wall, or found the pool full, is named in
-        ``timed_out`` and the other clusters' answer stands. One hung cluster used to make the
-        list above raise for the whole fleet, so the dashboard answered 503 and wrote no history
-        point. Only a registry that cannot be read still raises.
+        A cluster whose read ran past the wall, or found the pool full, is named in
+        ``timed_out`` and the other clusters' answer stands, so one hung cluster cannot cost the
+        sweep its history point. Only a registry that cannot be read raises.
         """
         node_names = await self._inventory_registry()
         if not node_names:
@@ -1159,10 +1131,10 @@ class InstanceManager:
     async def list_node_instances(self, node_name: str) -> List[VMInfo]:
         """One cluster's instances across every project, read in the bounded inventory pool.
 
-        important: for an answer about one cluster (its metrics). The fleet read raises for the
-        whole fleet when any cluster passes the wall, so a slow neighbour such as a remote
-        cluster timing out made every cluster's metrics answer 500 for a partner. An unreachable
-        cluster here reads as no instances; its connection state is reported separately.
+        For an answer about one cluster, such as its metrics. `list_all_vms_with_failures` raises
+        when any cluster passes the wall, so a slow neighbour would fail this cluster's answer. An
+        unreachable cluster here reads as no instances; its connection state is reported
+        separately.
         """
         try:
             vms, connected, _complete = await self._fetch_inventory_node_bounded(node_name)
@@ -1175,12 +1147,11 @@ class InstanceManager:
     ) -> Tuple[List[VMInfo], bool]:
         """One node's instances across every project, for a caller that must not fan out.
 
-        important: this exists so the API-key surface can read instances without going through
-        ``list_all_vms``. An API-key request establishes no org scope, so
-        ``get_current_allowed_clusters()`` returns None and the cluster filter inside
-        ``get_client`` matches everything. A fleet-wide call from that context would therefore
-        reach past the key's own grant. Callers there iterate the grant and ask for one node at
-        a time, which is what this is.
+        important: the API-key surface reads instances through this, never ``list_all_vms``.
+        An API-key request establishes no org scope, so ``get_current_allowed_clusters()``
+        returns None and the cluster filter inside ``get_client`` matches everything; a
+        fleet-wide call would reach past the key's grant. Callers iterate the grant one node at
+        a time.
 
         ``node_endpoint`` only fills ``VMInfo.host_endpoint``; it has no effect on the fetch.
         """
@@ -1195,7 +1166,7 @@ class InstanceManager:
         node_name: str,
         node_endpoint: str,
     ) -> Tuple[List[VMInfo], bool]:
-        """Compatibility wrapper for callers that do not consume partial-read detail."""
+        """(vms, connected) for callers that do not need the completeness flag."""
         vms, connected, _complete = self._fetch_vms_from_node_detailed(
             node_name,
             node_endpoint,
@@ -1228,8 +1199,9 @@ class InstanceManager:
         if health.is_tripped(node_name):
             logger.debug(f"Skipping {node_name} - recently failed (cached)")
             return [], False, False
-        # And one whose trip lapsed while this worker still holds no client for it: the healer
-        # redials it, not a fleet read (see fanout.known_down). A caller's own client still reads.
+        # Also skip one whose trip lapsed while this worker holds no client for it: the healer
+        # redials it (see fanout.known_down), so a fleet read does not. A caller's own client
+        # still reads.
         if client_override is _NO_CLIENT_OVERRIDE and fanout.known_down(
             node_name, getattr(self, "connection_manager", None)
         ):
@@ -1237,7 +1209,6 @@ class InstanceManager:
             return [], False, False
 
         try:
-            # Try to get or reconnect client
             client = (
                 self.connection_manager.get_client(node_name)
                 if client_override is _NO_CLIENT_OVERRIDE
@@ -1264,22 +1235,18 @@ class InstanceManager:
                 except Exception as e:
                     logger.warning(f"Reconnect failed for {node_name}: {e}")
                     # Preserve a more specific diagnosis. connect_with_vault_cert records
-                    # KIND_UNAUTHORIZED for a host that answered and refused us, and a generic
-                    # overwrite here would make it read as powered off everywhere.
+                    # KIND_UNAUTHORIZED for a host that answered and refused the certificate,
+                    # and a generic overwrite here would make it read as powered off.
                     if health.get_kind(node_name) is None:
                         health.record_failure(node_name, str(e))
                     return [], False, False
             
             if client is None:
-                # important: do NOT trip the breaker on a missing client. connection.py's
-                # _auto_reconnect already refuses to, and says why: an empty in-process cache is
-                # the normal state for a cluster registered after this worker booted, and
-                # tripping there "seals the only doors that could reopen it". Every path that
-                # DID fail records its own kind before returning None, so the `get_kind is None`
-                # guard that used to sit here fired only in the case that must never trip: a
-                # cluster this worker has simply not connected to yet, or one the caller's org
-                # scope excluded. The effect was a freshly registered cluster reading offline
-                # across the product for a full breaker TTL, with no log line anywhere.
+                # important: never trip the breaker on a missing client. An empty in-process
+                # cache is normal for a cluster registered after this worker booted or one the
+                # caller's org scope excluded, and tripping would show it offline everywhere for
+                # a full breaker TTL (connection.py's _auto_reconnect refuses for the same
+                # reason). Every path that did fail has already recorded its own kind.
                 logger.debug(
                     "No client for %s in this worker; reporting unreachable without tripping "
                     "the breaker", node_name
@@ -1305,12 +1272,12 @@ class InstanceManager:
                         2,
                         request_timeout=_SCOPED_INSTANCE_STATE_READ_TIMEOUT,
                     )
-                # note: the midpoint of the list read. LXD gathers each row's state somewhere
-                # inside that request, so the midpoint is off by at most half its duration.
+                # The midpoint of the list read. LXD gathers each row's state somewhere inside
+                # that request, so the midpoint is off by at most half its duration.
                 read_at = (read_started + time.time()) / 2
             except requests_exc.ReadTimeout:
-                # A large partner cloud can outrun the read budget with state attached.
-                # Listing without addresses beats reporting the cluster unreachable.
+                # A large cluster can outrun the read budget with state attached. Listing
+                # without addresses is better than reporting the cluster unreachable.
                 logger.warning(
                     "Instance list with state on %s exceeded the read budget; re-reading "
                     "without state, addresses omitted", node_name,
@@ -1358,8 +1325,8 @@ class InstanceManager:
 
         important: an instance name is unique per project, not per host. Without `project`,
         callers at an authorization boundary must pass `project_filter` so only visible projects
-        are searched. Internal trusted callers may omit the filter when they intentionally need
-        the legacy cross-project lookup.
+        are searched. Trusted internal callers may omit the filter when they need the
+        cross-project lookup.
         """
         try:
             return await run_blocking(
@@ -1406,13 +1373,10 @@ class InstanceManager:
                 return None
             
             vm_info = self._instance_to_vm_info(instance, host, endpoint)
-            # important: the resolved project goes on the model, not into the config map. It used
-            # to be written as a synthetic config key that nothing reads, while VMInfo.project kept
-            # the bound client's project. So every single-instance read of an instance outside
-            # `default` answered project="default", and callers that trust the field (the detail
-            # dialog's Snapshots tab, and the tenant ACL check in the instances router) acted on
-            # the wrong project. The list path has always set it correctly, which is why only the
-            # detail reads were affected.
+            # important: the resolved project goes on the model. Without it an instance outside
+            # `default` reads as project="default", and callers that trust the field (the detail
+            # dialog's Snapshots tab, the tenant ACL check in the instances router) act on the
+            # wrong project.
             vm_info.project = project_name
             
             return vm_info
@@ -1435,7 +1399,7 @@ class InstanceManager:
         force: bool = False,
         project: Optional[str] = None,
     ) -> VMInfo:
-        """Start a VM (searches all projects)."""
+        """Start a VM in `project`, else in the first project that holds the name."""
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
@@ -1447,9 +1411,9 @@ class InstanceManager:
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")
 
-            # The project comes from the authoritative daemon lookup above. Checking here,
-            # immediately before the lifecycle decision, prevents a retained migration source
-            # from being reported as safely startable even if it has drifted back to Running.
+            # The project comes from the daemon lookup above. Checking here, just before the
+            # lifecycle decision, keeps a retained migration source from being reported as
+            # startable even if it has drifted back to Running.
             await assert_instance_not_migration_fenced(
                 cluster_id=host,
                 project=project_name,
@@ -1470,13 +1434,10 @@ class InstanceManager:
                 logger.info(f"Started VM {name} on {host} (project: {project_name})")
                 vm_info = self._instance_to_vm_info(started, host, endpoint)
             
-            # important: the resolved project goes on the model, not into the config map. It used
-            # to be written as a synthetic config key that nothing reads, while VMInfo.project kept
-            # the bound client's project. So every single-instance read of an instance outside
-            # `default` answered project="default", and callers that trust the field (the detail
-            # dialog's Snapshots tab, and the tenant ACL check in the instances router) acted on
-            # the wrong project. The list path has always set it correctly, which is why only the
-            # detail reads were affected.
+            # important: the resolved project goes on the model. Without it an instance outside
+            # `default` reads as project="default", and callers that trust the field (the detail
+            # dialog's Snapshots tab, the tenant ACL check in the instances router) act on the
+            # wrong project.
             vm_info.project = project_name
             
             return vm_info
@@ -1484,12 +1445,9 @@ class InstanceManager:
         except LXDAPIException as e:
             raise LXDOperationError(f"Could not start VM: {str(e)}")
         except (requests_exc.ConnectionError, requests_exc.Timeout) as e:
-            # important: the cluster stopped answering part-way through the start. That is an
-            # upstream availability problem the caller can retry, not an internal fault, and
-            # without this it reached the router's `except Exception` and became a 500 with a
-            # reference id. Observed live: a read timeout at 8.9s while the instance went on
-            # to reach Running, so the operator was told the server broke about an action
-            # that had in fact succeeded.
+            # The cluster stopped answering part-way through the start: an upstream problem the
+            # caller can retry. Left to the router's `except Exception` it would be a 500,
+            # although the instance may still reach Running.
             raise LXDConnectionError(
                 f"Lost the connection to {host} while starting {name}: {e}"
             )
@@ -1497,8 +1455,8 @@ class InstanceManager:
     def _rebind_for_wait(self, instance, host: str, project_name: str, timeout: int):
         """Re-fetch `instance` on a client whose read timeout outlives `timeout`.
 
-        Returns the original instance unchanged if such a client can't be built,
-        so a graceful stop/restart degrades to the old behaviour rather than
+        Returns the original instance unchanged if such a client cannot be built,
+        so a graceful stop or restart falls back to the pooled client instead of
         failing outright.
         """
         try:
@@ -1517,13 +1475,10 @@ class InstanceManager:
         """Start `instance` on a client whose read timeout outlives the start.
 
         important: the pooled client allows an 8s read (DEFAULT_LXD_TIMEOUT) and
-        `start(wait=True)` holds the HTTP response open for the whole LXD operation. A loaded
-        cluster takes longer than that, so the READ timed out while the instance went on
-        starting, and the caller reported a 500 for an action that had succeeded. Observed
-        live at 8.9s against a busy cluster, with the VM reaching Running anyway.
-        `stop`/`restart` already avoid this through `_rebind_for_wait`; start did not, which
-        is the asymmetry this closes. Falls back to the pooled client when no long-timeout
-        client can be built, so the worst case is the old behaviour.
+        `start(wait=True)` holds the HTTP response open for the whole LXD operation. On a loaded
+        cluster the read would time out while the instance goes on starting, and the caller
+        would report a 500 for an action that succeeded. Falls back to the pooled client when no
+        long-timeout client can be built.
         """
         target = self._rebind_for_wait(instance, host, project_name, _START_WAIT_SECONDS)
         target.start(wait=True)
@@ -1533,12 +1488,11 @@ class InstanceManager:
     @staticmethod
     def _graceful_timeout(name: str, action: str, timeout: int) -> LXDGracefulTimeoutError:
         # A graceful stop only works if software inside the guest acts on the ACPI
-        # power event. A fully-booted OS does so in about a second; the cases below
+        # power event. A fully-booted OS does so in about a second; the causes listed
         # never will, no matter how long the timeout.
-        # note: the remedy comes before the causes, and the whole message fits the 300
-        # characters a 5xx detail is cut to on the way out (core/error_sanitizer.py) with the
-        # longest legal name (63) and timeout (600). The old order lost "retry with force" to
-        # the cut on any name longer than a few characters.
+        # The remedy comes before the causes, and with the longest legal name (63) and timeout
+        # (600) the message fits the 300 characters a 5xx detail is cut to on the way out
+        # (core/error_sanitizer.py).
         return LXDGracefulTimeoutError(
             f"Timed out after {timeout}s waiting for '{name}' to shut down gracefully: "
             f"nothing in the guest acted on the ACPI request. Retry the {action} with "
@@ -1555,7 +1509,7 @@ class InstanceManager:
         timeout: int = 30,
         project: Optional[str] = None,
     ) -> VMInfo:
-        """Stop a VM (searches all projects)."""
+        """Stop a VM in `project`, else in the first project that holds the name."""
         timeout = max(1, min(timeout, _MAX_ACTION_TIMEOUT_SECONDS))
         try:
             client = self._get_client_with_reconnect(host)
@@ -1583,9 +1537,9 @@ class InstanceManager:
                     except Exception as e:
                         if not force and _is_graceful_timeout(e):
                             raise self._graceful_timeout(name, "stop", timeout) from e
-                        # note: Incus 7.6 fails a graceful VM stop sent in early boot with "The
-                        # instance is already running" and stops it anyway (reproduced with the
-                        # CLI). The state, not the operation, says whether the stop happened.
+                        # Incus 7.6 fails a graceful VM stop sent in early boot with "The
+                        # instance is already running" and stops it anyway. The state, not the
+                        # operation, says whether the stop happened.
                         if isinstance(e, LXDAPIException) and _reads_stopped(target):
                             logger.warning(
                                 "Stop of %s on %s reported '%s' but the instance is Stopped", name, host, e
@@ -1599,13 +1553,10 @@ class InstanceManager:
                 logger.info(f"Stopped VM {name} on {host} (project: {project_name})")
                 vm_info = self._instance_to_vm_info(target, host, endpoint)
 
-            # important: the resolved project goes on the model, not into the config map. It used
-            # to be written as a synthetic config key that nothing reads, while VMInfo.project kept
-            # the bound client's project. So every single-instance read of an instance outside
-            # `default` answered project="default", and callers that trust the field (the detail
-            # dialog's Snapshots tab, and the tenant ACL check in the instances router) acted on
-            # the wrong project. The list path has always set it correctly, which is why only the
-            # detail reads were affected.
+            # important: the resolved project goes on the model. Without it an instance outside
+            # `default` reads as project="default", and callers that trust the field (the detail
+            # dialog's Snapshots tab, the tenant ACL check in the instances router) act on the
+            # wrong project.
             vm_info.project = project_name
 
             return vm_info
@@ -1622,7 +1573,7 @@ class InstanceManager:
         timeout: int = 30,
         project: Optional[str] = None,
     ) -> VMInfo:
-        """Restart a VM (searches all projects)."""
+        """Restart a VM in `project`, else in the first project that holds the name."""
         timeout = max(1, min(timeout, _MAX_ACTION_TIMEOUT_SECONDS))
         try:
             client = self._get_client_with_reconnect(host)
@@ -1667,13 +1618,10 @@ class InstanceManager:
             logger.info(f"Restarted VM {name} on {host} (project: {project_name})")
             vm_info = self._instance_to_vm_info(target, host, endpoint)
 
-            # important: the resolved project goes on the model, not into the config map. It used
-            # to be written as a synthetic config key that nothing reads, while VMInfo.project kept
-            # the bound client's project. So every single-instance read of an instance outside
-            # `default` answered project="default", and callers that trust the field (the detail
-            # dialog's Snapshots tab, and the tenant ACL check in the instances router) acted on
-            # the wrong project. The list path has always set it correctly, which is why only the
-            # detail reads were affected.
+            # important: the resolved project goes on the model. Without it an instance outside
+            # `default` reads as project="default", and callers that trust the field (the detail
+            # dialog's Snapshots tab, the tenant ACL check in the instances router) act on the
+            # wrong project.
             vm_info.project = project_name
 
             return vm_info
@@ -1689,12 +1637,11 @@ class InstanceManager:
         force: bool = False,
         project: Optional[str] = None,
     ) -> str:
-        """Delete a VM, returning the project it was actually deleted from.
+        """Delete a VM, returning the project it was deleted from.
 
-        important: the RESOLVED project, not the requested one. Callers stamp tags, webhooks,
-        upstream events and the audit trail with it, and a caller that passed no project was
-        stamping "default" for an instance deleted from somewhere else entirely, so the audit
-        trail named a project the deletion never touched.
+        important: the resolved project, not the requested one. Callers stamp tags, webhooks,
+        upstream events and the audit trail with it; a caller that passed no project would
+        otherwise record "default" for an instance deleted from another project.
         """
         try:
             client = self._get_client_with_reconnect(host)
@@ -1712,13 +1659,10 @@ class InstanceManager:
                 instance_name=name,
             )
 
-            # important: both waits run OFF the event loop and on a client whose socket window
-            # outlives them. The pooled client reads for 8 seconds; tearing down a root disk on a
-            # `dir` pool, or on a loaded host, takes longer. The read then died first, the
-            # ReadTimeout surfaced as LXDOperationError and the caller was answered 500 for a
-            # delete LXD had in fact completed, so the operator saw a server error and an instance
-            # that was already gone. Same rule as stop and restart beside it, and the same rule the
-            # snapshot wait states: a wait has to outlast what it is waiting for.
+            # important: both waits run off the event loop, on a client whose socket window
+            # outlives them. The pooled client reads for 8 seconds, and tearing down a root disk
+            # on a `dir` pool or a loaded host takes longer; the ReadTimeout would answer 500 for
+            # a delete LXD completed. As with stop and restart, a wait has to outlast its work.
             def _do_delete():
                 target = self._rebind_for_wait(instance, host, project_name, _DELETE_WAIT_SECONDS)
                 if target.status in ("Running", "Frozen"):
@@ -1726,8 +1670,8 @@ class InstanceManager:
                 target.delete(wait=True)
 
             # Stop an active instance before deleting when force is set. A Frozen
-            # instance (billing-paused) is still active, so LXD refuses to delete
-            # it until it is stopped -- force-stop covers both Running and Frozen.
+            # instance (billing-paused) is still active, and LXD refuses to delete
+            # it until it is stopped, so force-stop covers both Running and Frozen.
             if instance.status in ("Running", "Frozen") and not force:
                 raise LXDOperationError(
                     f"VM {name} is {instance.status.lower()}. Stop it first or use force=true"
@@ -1743,7 +1687,7 @@ class InstanceManager:
 
     async def get_rebuild_preflight(self, name: str, host: str, project: Optional[str] = None) -> Dict[str, Any]:
         """Gather what the rebuild flow needs before it starts: the instance status,
-        its snapshots (the block condition -- LXD refuses to rebuild an instance that
+        its snapshots (the block condition: LXD refuses to rebuild an instance that
         has any), and a snapshot of the config + attached custom volumes for the job
         record. Blocking pylxd calls run off the event loop.
         """
@@ -1823,7 +1767,7 @@ class InstanceManager:
                 )
             await asyncio.to_thread(_set_ci)
 
-        endpoint = client.api._api_endpoint  # e.g. https://host:8443/1.0
+        endpoint = client.api._api_endpoint  # ex; https://host:8443/1.0
         session = client.api.session
         project_q = f"?project={project_name}" if project_name and project_name != "default" else ""
 
@@ -1843,7 +1787,7 @@ class InstanceManager:
             op_id = op_path.rstrip("/").rsplit("/", 1)[-1]
             # (connect, read): a scalar would grant the same 1800s budget to the connect leg,
             # so a peer that never completes the handshake would pin this thread for half an
-            # hour. The read leg genuinely needs to be long -- a rebuild is slow.
+            # hour. Only the read leg needs to be long, since a rebuild is slow.
             wresp = session.get(f"{endpoint}{op_path[4:]}/wait", verify=False,
                                 timeout=(_REBUILD_CONNECT_TIMEOUT, wait_timeout))
             wbody = wresp.json() or {}
@@ -1859,9 +1803,9 @@ class InstanceManager:
         try:
             op_id = await run_blocking(
                 _do_rebuild,
-                # The socket timeouts above are what actually free the worker; this only
-                # bounds how long the caller waits. Margin over wait_timeout so a normal
-                # slow rebuild reports LXD's own result rather than this cap.
+                # The socket timeouts above free the worker; this only bounds how long the
+                # caller waits. The margin over wait_timeout lets a slow rebuild report LXD's
+                # own result instead of this cap.
                 timeout=wait_timeout + _GRACEFUL_READ_MARGIN_SECONDS,
                 label=f"rebuild[{host}/{name}]",
                 executor=_rebuild_executor,
@@ -1964,9 +1908,9 @@ class InstanceManager:
             project = (project or "default").strip() or "default"
             # pylxd binds a project to the client. Creating through the pooled client would
             # silently place an authorized non-default request in `default`, then stamp the
-            # audit trail with the requested project. Build the scoped client before issuing
-            # any create call. The fallback preserves legacy default-project deployments whose
-            # connection manager predates short-lived project clients.
+            # audit trail with the requested project. The scoped client is built before any
+            # create call; when it cannot be, only a `default` create falls back to the pooled
+            # client.
             client = self.connection_manager.get_project_client(
                 host,
                 project,
@@ -1980,20 +1924,16 @@ class InstanceManager:
                 client = pooled_client
             endpoint = self._get_node_endpoint(host)
 
-            # Build instance configuration
             instance_config = config or {}
 
-            # Add cloud-init if provided
             if cloud_init:
                 instance_config["user.user-data"] = cloud_init
 
-            # Determine source configuration
             source = {"type": "image"}
 
-            # A full fingerprint or the prefix `lxc image list` prints; anything else an alias
+            # A full fingerprint or the prefix `lxc image list` prints; anything else an alias.
             source[image_source_key(image)] = image
 
-            # Create instance definition
             instance_def = {
                 "name": name,
                 "source": source,
@@ -2005,7 +1945,6 @@ class InstanceManager:
             if devices:
                 instance_def["devices"] = devices
 
-            # Create the instance
             if instance_type == "virtual-machine":
                 instance = client.virtual_machines.create(
                     instance_def, 
@@ -2019,7 +1958,6 @@ class InstanceManager:
 
             logger.info(f"Created {instance_type} {name} on {host}")
 
-            # Start if requested
             if start_on_create:
                 instance = self._start_and_wait(instance, host, project)
                 logger.info(f"Started {name} on {host}")
@@ -2061,8 +1999,8 @@ class InstanceManager:
         resolved locally (by fingerprint or alias). When start_on_create is set,
         a background task waits for the create to finish and then starts it.
 
-        This backs the dashboard's `POST /instances` flow. create_vm() is kept
-        separate and unchanged for Orcahub's `POST /vms`.
+        This backs the dashboard's `POST /instances` flow; create_vm() serves
+        OrcaHub's `POST /vms`.
         """
         project = (project or "default").strip() or "default"
         await assert_project_not_migration_fenced(
@@ -2157,10 +2095,9 @@ class InstanceManager:
                     f"An instance named '{name}' already exists in project '{project}' on {host}"
                 )
 
-            # important: fail fast on a NIC the project cannot reach. LXD accepts a create
-            # like that as an async 202 and only fails the background operation, and the
-            # console's placeholder row has nothing to clear it, so the instance sits at
-            # "Creating..." with empty columns and no reason.
+            # important: fail fast on a NIC the project cannot reach. LXD accepts such a create
+            # as an async 202 and fails only the background operation, which would leave the
+            # console's placeholder row at "Creating..." with no reason.
             #
             # The pooled client, not create_client: pylxd overwrites an explicit project
             # parameter with the client's own, so a project-bound client would check the
@@ -2183,17 +2120,15 @@ class InstanceManager:
                 raise LXDOperationError(str(nic_err)) from None
 
 
-            # Build instance configuration
             instance_config = config or {}
             if cloud_init:
                 instance_config["user.user-data"] = cloud_init
 
-            # Determine source configuration
             if source_type == "none":
                 # Blank VM: an empty root disk and no OS, equivalent to
-                # `lxc init <name> --empty --vm`. There is nothing to boot yet --
-                # an OS is installed afterwards by attaching an install ISO as
-                # boot media and driving the VGA console.
+                # `lxc init <name> --empty --vm`. An OS is installed afterwards
+                # by attaching an install ISO as boot media and driving the VGA
+                # console.
                 source = {"type": "none"}
             else:
                 source = {"type": "image"}
@@ -2322,9 +2257,9 @@ class InstanceManager:
                 task.add_done_callback(self._bg_tasks.discard)
 
             else:
-                # A create without auto-start had nobody watching its operation, so an
-                # asynchronous failure was silent. Watch it too, holding the same strong
-                # reference the branch above does so the loop cannot collect it mid-run.
+                # Without auto-start the create operation is still watched, so an
+                # asynchronous failure is recorded. Same strong reference as the branch
+                # above, so the loop cannot collect it mid-run.
                 watch = asyncio.create_task(
                     self._watch_create_operation(
                         create_client,
@@ -2355,7 +2290,7 @@ class InstanceManager:
             ) from e
         except LXDAPIException as e:
             # A project limit refusal is the one synchronous 4xx the form can act on: it names
-            # a field. Everything else stays the free text it always was.
+            # a field. Everything else stays free text.
             hit = project_limit_from_lxd_error(str(e))
             if hit is not None:
                 raise LXDProjectLimitError(f"Could not create VM: {_create_error(e)}", hit)
@@ -2428,11 +2363,10 @@ class InstanceManager:
 
         important: the one place a create is judged without an operation verdict. LXD drops an
         operation record soon after it ends, so recovery after a worker restart usually finds
-        none; that used to end a healthy instance as partial, or leave a job without an
-        operation id unknown for ever, holding the target's active-job index so no new job
-        could start. This only reads: it never submits create or start, and an unanswered
-        readback stays unknown for the next sweep. ``context`` is the job's ambiguity marker;
-        the terminal result keeps its correlation ids.
+        none; without this the job would stay unknown and hold the target's active-job index,
+        so no new job could start. This only reads: it never submits create or start, and an
+        unanswered readback stays unknown for the next sweep. ``context`` is the job's
+        ambiguity marker; the terminal result keeps its correlation ids.
         """
         instance, read_complete, read_error = readback
         if not read_complete:
@@ -2747,8 +2681,8 @@ class InstanceManager:
             )
             return
 
-        # note: an expired record is settled by the caller (_settle_create_from_readback). Any
-        # verdict short of success stays unknown here, because the path below may submit start.
+        # An expired record is settled by the caller (_settle_create_from_readback). Any verdict
+        # short of success stays unknown here, because the path below may submit start.
         if operation_verdict != "success":
             await _mark_create_unknown(
                 row,
@@ -2810,7 +2744,7 @@ class InstanceManager:
                 max_in_flight_per_key=_CREATE_MAX_IN_FLIGHT_PER_CLUSTER,
             )
         except BlockingPoolFull as exc:
-            # The action was not scheduled. This is a known partial result, not ambiguity.
+            # The start was never scheduled, so the outcome is a known partial result.
             await _finish_create_job(
                 row,
                 "partial",
@@ -3158,14 +3092,12 @@ class InstanceManager:
                                       host: str, project: str) -> bool:
         """Wait for the queued create and write the terminal audit record. True if it landed.
 
-        important: this is the single place a create is judged, and BOTH background branches go
-        through it. They used to disagree. `_watch_create_operation` recorded a rejected create
-        correctly but only ran when start_on_create was false, while the branch the form
-        actually defaults to logged the same failure as `instance.autostart` and dropped the
-        operation_id. So the guard written for this defect did not cover the path that hits it.
+        important: the single place a create is judged. Both background branches, with and
+        without auto-start, go through it, so a rejected create is always recorded as
+        `instance.create` with its operation_id.
 
         The router records the create as `accepted` when LXD takes the request; this writes the
-        verdict. One create, one final answer, either way.
+        verdict.
         """
         if not operation_id:
             # Nothing queued to wait on. The synchronous path already answered.
@@ -3222,11 +3154,10 @@ class InstanceManager:
         except Exception:  # noqa: BLE001
             pass
 
-        # important: the add-on event is emitted HERE and not at the router, for the same reason
-        # the terminal audit record is. The router answers "accepted" while LXD still has the
-        # create queued, so announcing it there would tell every subscriber an instance exists
-        # moments before LXD refuses it, with no correction to follow. This is the single place a
-        # create is judged, so it is the only honest place to say it happened.
+        # important: the add-on event is emitted here, not at the router, like the terminal
+        # audit record. The router answers "accepted" while LXD still has the create queued, so
+        # announcing it there could tell every subscriber an instance exists moments before LXD
+        # refuses it, with no correction to follow.
         await _emit_instance_created(host, project, name, operation_id)
         return True
 
@@ -3242,10 +3173,10 @@ class InstanceManager:
         worker_id: Optional[str] = None,
         heartbeat_task: Optional[asyncio.Task[Any]] = None,
     ) -> None:
-        """Background: record whether the create operation LXD queued actually succeeded.
+        """Background: record whether the create operation LXD queued succeeded.
 
         The no-autostart branch. Judging is shared with the autostart branch so the two cannot
-        drift again; see _judge_create_operation.
+        drift; see _judge_create_operation.
         """
         if job_id:
             try:
@@ -3283,13 +3214,9 @@ class InstanceManager:
     ) -> None:
         """Background: wait for the create operation to finish, then start the instance.
 
-        important: the create is judged BEFORE the start is attempted, and the two failures are
-        recorded under different actions. This used to be one try block covering both, logging
-        everything as `instance.autostart`, which meant a create LXD rejected was filed as a
-        start problem on an instance that had never existed, without its operation_id. And
-        because the form defaults start_on_create to true, that was the path almost every
-        operator took: `_watch_create_operation`, written specifically to catch a rejected
-        create, only ran on the other branch.
+        important: the create is judged before the start is attempted, and the two failures are
+        recorded under different actions (`instance.create`, `instance.autostart`), so a create
+        LXD rejected is never filed as a start problem on an instance that never existed.
         """
         if job_id:
             try:
@@ -3312,13 +3239,13 @@ class InstanceManager:
                 await _stop_create_heartbeat(heartbeat_task)
             return
 
-        # Phase 1: did the instance actually get created?
+        # Phase 1: was the instance created?
         if not await self._judge_create_operation(client, name, operation_id, host, project):
             # The instance does not exist, so there is nothing to start and no second failure
             # to report. The create failure has already been recorded.
             return
 
-        # Phase 2: it exists. A failure from here is genuinely about starting it.
+        # Phase 2: it exists, so a failure from here is about starting it.
         try:
             instance = await run_blocking(
                 client.instances.get,
@@ -3343,9 +3270,9 @@ class InstanceManager:
                 max_in_flight_per_key=_CREATE_MAX_IN_FLIGHT_PER_CLUSTER,
             )
             logger.info(f"Auto-started {name} on {host} (project={project})")
-            # important: the list cache was cleared when the create was accepted, and the
-            # console re-read it while the instance was still Stopped. Without clearing it
-            # again here the row read Stopped for a full TTL after the cluster had it Running.
+            # The list cache was cleared when the create was accepted, and the console may
+            # have re-read it while the instance was still Stopped. Without this the row reads
+            # Stopped for a full TTL after the cluster has it Running.
             self._invalidate_lists_after_background_change(name, host)
         except Exception as e:
             logger.error(

@@ -1,7 +1,7 @@
 """When each external API key was last used (app/models/api_key_usage_models.py).
 
-Readers take the newer of this and the `last_used_at` a key document still carries from before the
-table existed, so a key nobody has used since keeps showing its old time.
+Readers take the newer of this and the `last_used_at` stored on the key document, so a key with
+no recorded use here keeps showing that older time.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ def _maker() -> Callable[[], Any]:
 
 
 def _aware(value: datetime) -> datetime:
-    # note: SQLite hands timestamps back without a zone; every one stored here is UTC.
+    # SQLite hands timestamps back without a zone; every one stored here is UTC.
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 

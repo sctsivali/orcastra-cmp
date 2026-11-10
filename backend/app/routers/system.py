@@ -14,8 +14,8 @@ from app.core import build_identity
 from app.core.config import get_settings
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.dependencies import require_tenant, require_partner, require_admin, AuthenticatedUser
-# note: the resource-usage models moved to app.models.system_resources; they are re-exported
-# here so an importer of app.routers.system keeps working.
+# The resource-usage models live in app.models.system_resources; re-exported here for importers
+# of app.routers.system.
 from app.models.system_resources import (  # noqa: F401
     ContainerCPU,
     ContainerInfo,
@@ -59,10 +59,9 @@ class SystemSettings(BaseModel):
     read_only_mode: bool
     api_version: str
     debug: bool
-    # note: a capability, not a preference. The schedule routes are only mounted when the flag is
-    # on (main.py:689), so a console that cannot see the flag offers controls whose submit 404s.
-    # This endpoint is already polled every 60 seconds for read_only_mode, so the console learns
-    # what this deployment can do without a second request or a probe against a missing route.
+    # The schedule routes are mounted only when this flag is on (main.py), so a console that
+    # cannot see it offers controls whose submit 404s. The console already polls this endpoint
+    # for read_only_mode, so it needs no second request.
     snapshot_schedules_enabled: bool
     # The task panel is mounted only when the journal is on; the console hides the dock otherwise.
     task_journal_enabled: bool
@@ -84,7 +83,7 @@ class SystemSettings(BaseModel):
 
 
 class VersionInfo(BaseModel):
-    """Comprehensive version information."""
+    """Application, API and build version information."""
     app_version: str
     api_version: str
     build_date: Optional[str] = None
@@ -94,18 +93,14 @@ class VersionInfo(BaseModel):
 
 @router.get("/version", response_model=VersionInfo)
 async def get_version():
-    """
-    Get comprehensive version information for the entire application.
-    
-    Returns version details including app version, API version, build metadata.
-    This endpoint is used by the frontend to display version information.
+    """Return the application and API versions, the environment, and the build date and commit.
+
+    `build_date` and `build_commit` are null for an image built without them.
     """
     settings = get_settings()
-    # note: build_date and build_commit read through build_identity so an unstamped image answers
-    # null rather than the empty string. The getattr calls this replaces were written before the
-    # fields existed on Settings; once they landed with default="" they stopped returning None and
-    # started returning "", which a client testing `if (build_commit)` reads as a value.
-    # app_version and api_version stay raw strings: the frontend types both as required strings.
+    # build_identity turns an unstamped "" into None; a client testing `if (build_commit)` would
+    # read "" as a value. app_version and api_version stay raw strings: the frontend types both
+    # as required strings.
     return VersionInfo(
         app_version=settings.app_version,
         api_version=settings.api_version,
@@ -117,12 +112,7 @@ async def get_version():
 
 @router.get("/settings", response_model=SystemSettings)
 async def get_system_settings():
-    """
-    Get current system settings.
-    
-    Returns information about the system configuration including
-    whether read-only mode is enabled.
-    """
+    """Deployment settings and feature flags the console reads, read-only mode included."""
     settings = get_settings()
     return SystemSettings(
         read_only_mode=settings.read_only_mode,
@@ -172,7 +162,7 @@ class VaultStatusDetail(BaseModel):
 
 
 class VaultStatusResponse(BaseModel):
-    """What the dashboard's Vault notice shows (issue #15)."""
+    """What the dashboard's Vault notice shows."""
     state: VaultState
     checked_at: float
     # "vault" when the last registry read answered, "last_known" when a memo is being served.
@@ -222,11 +212,7 @@ async def get_vault_status(
 
 @router.get("/cache/stats")
 async def get_cache_stats():
-    """
-    Get cache statistics for monitoring performance.
-    
-    Returns hit/miss ratios and cache sizes for both Redis and in-memory caches.
-    """
+    """Return hit and miss counts for the in-memory and Redis caches, and the in-memory size."""
     try:
         from app.core.cache import get_cache_manager
         from app.core.encryption import get_encryption
@@ -254,9 +240,7 @@ async def clear_cache(
     namespace: Optional[CacheNamespace] = None,
     _rbac: AuthenticatedUser = Depends(require_admin()),
 ):
-    """
-    Clear cache for a specific namespace or all caches.
-    """
+    """Clear one cache namespace, or all of them. Administrator only; 503 when clearing fails."""
     from app.core.cache import get_cache_manager
     cache = get_cache_manager()
     targets = (namespace,) if namespace else CACHE_NAMESPACES
@@ -281,17 +265,15 @@ async def clear_cache(
     dependencies=[Depends(require_partner())],
 )
 async def get_system_resource_usage():
-    """
-    Real-time resource usage in two honest scopes.
+    """Current resource usage of the host and of this deployment's container.
 
-    Deployment-aware: `host` is the kernel's view of the machine, `container` is this
-    deployment's cgroup scope (limits, what counts against them, the worker set). The
-    top-level cpu/memory/disks/process/os blocks are kept for older clients and mix
-    both scopes. Partner and above only; the panel names host devices and PIDs.
+    `host` is the kernel's view of the machine, `container` is this deployment's cgroup scope
+    (limits, what counts against them, the worker set). The top-level cpu/memory/disks/process/os
+    blocks mix both scopes and remain for older clients. Partner and above only; the panel names
+    host devices and PIDs.
     """
     try:
-        # note: the collector reads /proc and /sys and psutil; it never sleeps, but it is
-        # sync work, so it runs on a thread rather than on the event loop.
+        # The collector reads /proc, /sys and psutil synchronously, so it runs on a thread.
         return await asyncio.to_thread(collect_resource_usage)
     except ImportError:
         raise HTTPException(

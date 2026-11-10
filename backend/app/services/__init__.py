@@ -1,4 +1,4 @@
-"""Services module for LXD operations."""
+"""Service layer; re-exports the LXD service."""
 
 from .lxd_service import (
     LXDService,

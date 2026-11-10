@@ -103,7 +103,7 @@ async def run_project_cleanup(
     ) is None:
         # important: an earlier run already deleted the source project (a delete that timed out
         # but landed, or a worker lost right after it). Only the bookkeeping is left; reading the
-        # missing project's inventory failed every Recheck instead.
+        # missing project's inventory would fail every Recheck.
         for resource in resources:
             await _resource_update(resource.resource_id, state="completed")
         await _finish(job, worker_id, resources)
@@ -136,7 +136,7 @@ async def run_project_cleanup(
         source_name, _target = _names(resource)
         current = await _read(source_client, job.source_project, source_name, f"migration.cleanup_exists[{source_name}]")
         if current is not None:
-            # Proven again right before the delete, not only in the drift pass.
+            # Proven again right before the delete, on top of the drift pass.
             if executor.instance_identity_fingerprint(current) != state.get("source_identity_hash"):
                 message = f"Retained source '{source_name}' was replaced."
                 if deleted_any:

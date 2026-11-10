@@ -181,7 +181,7 @@ async def refence_target_for_rollback(db: AsyncSession, job: MigrationJob) -> No
         return
     if owner is not None:
         # important: another job retains or works on this instance now; deleting it would
-        # destroy that job's rollback point (security review, pass 2).
+        # destroy that job's rollback point.
         raise RepositoryConflict("Another migration holds the target instance. Finish it first.")
     await db.execute(
         insert(MigrationResourceLock).values(

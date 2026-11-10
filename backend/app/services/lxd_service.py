@@ -1,7 +1,4 @@
-"""
-LXD Service - Compatibility wrapper.
-Re-exports from the modular lxd package for backward compatibility.
-"""
+"""Re-exports the public names of ``app.services.lxd``."""
 
 from .lxd import (
     LXDService,

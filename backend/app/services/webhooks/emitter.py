@@ -1,28 +1,14 @@
-"""Finding the subscriptions an event belongs to, which is the half that was missing.
-
-`enqueue_event` takes the subscriptions as a parameter, so somebody has to select them. Nobody
-did. The result was a platform where nine events were catalogued, served to add-on authors
-through `GET /extensions/self`, and documented publicly with a "when it fires" column, while
-`enqueue_event` had no caller anywhere and no event ever fired. A subscription verified, went
-active, showed a fingerprint, and then delivered nothing for the rest of its life.
-
-Two kinds of event, and they differ in a way that matters more than it looks.
+"""Selecting the subscriptions an event belongs to and enqueueing it.
 
 An INSTALLATION event (suspended, resumed, scope changed) is about a row this deployment owns, so
-it is enqueued inside the caller's transaction. That is what `enqueue_event`'s docstring asks for
-and it gives the property worth having: the event exists exactly when the change does, and a
-rolled-back suspension cannot leave a delivery claiming it happened.
-
-A RESOURCE event (an instance created, a volume deleted) is about something that happened on a
-cluster, not in Postgres. There is no transaction to join, because the authoritative write already
-happened over the network to LXD. So it opens its own session and commits, and it must never turn
-a successful operation into a failed response: the instance exists whether or not we managed to
-tell anybody about it. Losing an event is bad; losing the caller's instance because the event
-system had a bad day is worse.
+it is enqueued inside the caller's transaction: a rolled-back suspension cannot leave a delivery
+claiming it happened. A RESOURCE event (an instance created, a volume deleted) follows a write LXD
+already took, so there is no transaction to join: it opens and commits its own session, and must
+never turn a successful operation into a failed response.
 
 important: a resource event is enqueued only for installations whose stored grant still covers the
-cluster. `_still_authorised` re-checks the same thing at delivery time, deliberately, because the
-grant can change between enqueue and send. This is the cheap filter, not the boundary.
+cluster. This is the cheap filter; `_still_authorised` re-checks at delivery, since the grant can
+change between enqueue and send, and that check is the boundary.
 """
 
 import logging
@@ -64,11 +50,10 @@ __all__ = [
 
 # Which proxy operation announces which event, and what the resource is called.
 #
-# important: this is deliberately NOT every operation. An add-on subscribing to lifecycle wants to
-# know a thing came into or went out of existence; it does not want a delivery every time somebody
-# starts a container. `EXTENSION_EVENTS` is the catalogue and this is the half of it the proxy can
-# source. Volumes are absent here on purpose: there is no volume operation in the proxy
-# vocabulary, so those two events are sourced from the dashboard router instead.
+# Only operations that create or remove something: a lifecycle subscriber does not want a delivery
+# every time a container starts. `EXTENSION_EVENTS` is the catalogue and this is the part of it the
+# proxy can source. The proxy vocabulary has no volume operation, so volume events come from the
+# storage volume router.
 EVENT_FOR_OPERATION = {
     "create_instance": ("orcastra.instance.created.v1", "instance"),
     "delete_instance": ("orcastra.instance.deleted.v1", "instance"),
@@ -90,10 +75,9 @@ async def _subscriptions_for_cluster(
 ) -> List[WebhookSubscription]:
     """Active subscriptions on active installations whose grant still covers this cluster.
 
-    The cluster filter is applied in Python rather than as a JSONB containment query because
-    `granted_scope` is a list of grant objects rather than a list of ids, and a `@>` against a
-    partial object is easy to get subtly wrong. The row count here is the number of active
-    subscriptions in the deployment, not the number of instances, so this stays small.
+    The cluster filter runs in Python: `granted_scope` is a list of grant objects, and a JSONB `@>`
+    against a partial object is easy to get wrong. The rows are the deployment's active
+    subscriptions, so the set stays small.
     """
     rows = (
         await db.execute(
@@ -111,13 +95,12 @@ async def _subscriptions_for_cluster(
 
     # important: only grants for a registration still active (services/cluster_generations.py). A
     # grant left from an ended registration names an id another organization may hold now, and
-    # routing on it sent that organization's events to this add-on until the reconcile sweep
-    # narrowed the grant.
+    # routing on it would send that organization's events to this add-on.
     generations = await cluster_generations.current_or_none()
     deleted = event_type == PROJECT_DELETED
 
     def held(install: Any) -> Optional[bool]:
-        # note: a deleted project is out of every bound by the time its event goes out, so the
+        # A deleted project is out of every bound by the time its event goes out, so the
         # organizations whose policies held it are named by the delete itself.
         return (getattr(install, "organization_id", None) in reached_organizations) if deleted else None
 
@@ -127,9 +110,9 @@ async def _subscriptions_for_cluster(
             continue
         if cluster_id not in cluster_generations.reachable(install.granted_scope, generations):
             continue
-        # important: and the event's project must be one the installation reaches, its grant held
-        # to its installer's bound (services/key_party_bound.py). Routed by cluster alone, an add-on
-        # a Partner installed on a shared cluster heard the other party's names.
+        # important: the event's project must be one the installation reaches, its grant held to
+        # its installer's bound (services/key_party_bound.py). Otherwise an add-on a Partner
+        # installed on a shared cluster would hear the other party's project names.
         if project is not None and not install_grant_names(install, cluster_id, project):
             continue
         candidates.append((subscription, install))
@@ -179,10 +162,10 @@ async def emit_resource_event(
     project before the delete revoked them; their installations hear it although it has left
     their bound.
 
-    important: this never raises. It is called after an operation that already changed a customer's
-    cluster, so a failure here must not be reported to the caller as a failed create. The failure
-    is logged instead, and the reconcile sweep is not involved because a lost event is not
-    recoverable state, it is a lost notification.
+    important: never raises unless `raise_on_error` is set for a durable caller that retries. It
+    runs after an operation that already changed a customer's cluster, so a failure here must not
+    reach the caller as a failed create. The failure is logged; the reconcile sweep does not
+    recover lost events.
     """
     from app.core.database import async_session_maker
 
@@ -252,9 +235,9 @@ async def emit_installation_event(
 ) -> int:
     """Enqueue an event about an installation itself, in the caller's transaction.
 
-    Deliberately not swallowing: this one shares the transaction with the change it describes, so
-    if the enqueue fails the caller's rollback takes the change with it, and an add-on is never
-    told it was suspended by a suspension that did not happen.
+    Errors propagate: the enqueue shares the transaction with the change it describes, so a failed
+    enqueue rolls the change back with it, and an add-on is never told about a suspension that did
+    not happen.
     """
     subscriptions: Sequence[WebhookSubscription] = (
         (
@@ -272,8 +255,8 @@ async def emit_installation_event(
         return 0
 
     # An installation event still needs a cluster on the envelope, because `_still_authorised`
-    # filters on `data.cluster_id`. The installation's first remaining grant is the honest answer
-    # when the caller does not name one.
+    # filters on `data.cluster_id`. Without one from the caller, the installation's first remaining
+    # grant is used.
     if cluster_id is None:
         grants = [g for g in (installation.granted_scope or []) if isinstance(g, dict)]
         cluster_id = str(grants[0].get("cluster_id")) if grants else ""
@@ -301,8 +284,7 @@ async def emit_for_proxy_operation(
 ) -> int:
     """Announce a proxy operation that changed what exists, if it is one of those.
 
-    Kept beside the map rather than in the router so the vocabulary and its use stay together, and
-    so a new lifecycle operation is one edit rather than two.
+    Kept beside the map rather than in the router, so a new lifecycle operation is one edit.
     """
     mapped = EVENT_FOR_OPERATION.get(operation)
     if mapped is None:

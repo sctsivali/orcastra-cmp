@@ -1,13 +1,12 @@
-"""An async SFTP v3 client for one short-lived connection into one guest.
+"""Async SFTP v3 client for one short-lived connection into one guest.
 
-One reader task answers every in-flight request by id, which is what lets a transfer keep a window
-of requests outstanding: on LXD a read returns at most 32 KiB, so waiting for each reply gives
-35 MB/s where a window of 64 gives 126 MB/s (measured on 5.21.8).
+One reader task answers every in-flight request by id, so a transfer can keep a window of requests
+outstanding. On LXD a read returns at most 32 KiB: one request at a time gives 35 MB/s, a window of
+64 gives 126 MB/s (measured on LXD 5.21.8).
 
-important: any breach of the protocol or any timeout ends the whole connection. A connection that
-timed out might still deliver a late reply for a request nobody is waiting for, and telling that
-from a hostile reply is not worth the code. Callers open one per request, so losing one costs
-nothing.
+important: any protocol breach or timeout ends the whole connection. A timed-out connection may
+still deliver a late reply for a request no caller waits on, and telling that apart from a hostile
+reply is not worth the code. Callers open one connection per request, so losing one is cheap.
 """
 
 import asyncio
@@ -31,10 +30,10 @@ from .errors import (
 
 logger = logging.getLogger(__name__)
 
-# What LXD actually returns for one READ, so a larger ask only produces short reads.
+# The most LXD returns for one READ; a larger request only produces short reads.
 READ_CHUNK_BYTES = 32 * 1024
 READ_WINDOW = 64
-# Accepted by LXD up to its 256 KiB message ceiling; past it the connection resets (probed).
+# LXD accepts writes up to its 256 KiB message ceiling; past it the connection resets.
 WRITE_CHUNK_BYTES = 128 * 1024
 WRITE_WINDOW = 32
 
@@ -44,16 +43,16 @@ _DEFAULT_HELD_BYTES = 64 * 1024 * 1024
 
 
 class BudgetSpent(Exception):
-    """A walk used what it was given. What that means is the caller's to say."""
+    """A walk used up its budget. The caller decides what that means."""
 
 
 class Budget:
-    """How much of a directory walk one request may cost: entries, bytes held and wall clock.
+    """What one directory walk may cost: entries, bytes held and wall clock.
 
-    important: charged inside the read loop, for every consumer. A guest's READDIR need never
-    return end of file, and each batch can be a fresh megabyte of names, so a cap checked between
-    directories is never reached and a worker's memory grows until it dies, taking every other
-    tenant's consoles with it.
+    important: charge it inside the read loop, for every consumer. A guest's READDIR need never
+    return end of file and each batch can be a fresh megabyte of names, so a cap checked between
+    directories is never reached and the worker runs out of memory, taking every other tenant's
+    consoles with it.
     """
 
     def __init__(self, *, entries: int, seconds: float, held_bytes: int = _DEFAULT_HELD_BYTES) -> None:
@@ -179,7 +178,7 @@ class SftpClient:
         self._next_id = (self._next_id + 1) & 0xFFFFFFFF
         request_id = self._next_id
         future: "asyncio.Future[Tuple[int, bytes]]" = asyncio.get_running_loop().create_future()
-        # A window can fail with requests nobody will await, and that must not log as unhandled.
+        # Retrieve the exception, so a failed window's unawaited futures do not log as unhandled.
         future.add_done_callback(lambda done: done.cancelled() or done.exception())
         self._pending[request_id] = future
         self._writer.write(codec.encode_request(packet_type, request_id, payload))
@@ -275,9 +274,9 @@ class SftpClient:
     async def rename(self, source: bytes, target: bytes) -> None:
         """Plain RENAME.
 
-        important: unlike OpenSSH, LXD's server replaces an existing FILE here without a word
-        (probed on 5.21.8). A folder is refused over anything that exists. So this is safe for
-        moving a folder, and a file that must not overwrite goes through `link`.
+        important: unlike OpenSSH, LXD's server silently replaces an existing FILE here (LXD
+        5.21.8), and refuses a folder over anything that exists. Safe for moving a folder; a file
+        that must not overwrite goes through `link`.
         """
         await self._expect_ok(codec.FXP_RENAME, codec.string(source) + codec.string(target))
 
@@ -311,15 +310,15 @@ class SftpClient:
     ) -> Tuple[bytes, codec.Attrs]:
         """Open `path`, proving the handle is the object an lstat saw.
 
-        important: this service is root, it acts by path, and OPEN and SETSTAT follow links, while
-        SFTP has no O_NOFOLLOW and no lsetstat. An unprivileged user who owns the folder can swap
-        a temp for a link to /etc/shadow between two requests, and a chown by path would hand them
-        that file. So whatever changes an existing object goes through a handle checked here. The
+        important: this service is root and acts by path; OPEN and SETSTAT follow links, and SFTP
+        has no O_NOFOLLOW and no lsetstat. An unprivileged user who owns the folder can swap a
+        temp for a link to /etc/shadow between two requests, and a chown by path would hand them
+        that file. So every change to an existing object goes through a handle checked here. The
         file a swap could aim at has its own mtime, which the swapper cannot forge.
 
-        note: a folder moves by itself. Anything created in it changes its mtime, and on ZFS its
-        size, so parallel uploads into a new folder read as a swap. It gets another look, as strict
-        as the first. A file does not, and neither does a caller who brought its own lstat.
+        A folder changes by itself: anything created in it changes its mtime, and on ZFS its size,
+        so parallel uploads into a new folder look like a swap. A folder is checked up to
+        FOLDER_LOOKS times, each as strict as the first; a file, or a caller's own lstat, once.
         """
         for _ in range(FOLDER_LOOKS if seen is None else 1):
             before = seen if seen is not None else await self.lstat(path)
@@ -362,7 +361,7 @@ class SftpClient:
                 self._forget(self._send(codec.FXP_CLOSE, codec.string(handle))[0])
 
     def _forget(self, request_id: int) -> None:
-        """Stop waiting for a reply that no longer matters, without treating it as a breach."""
+        """Drop a pending request. A late reply to it is discarded and is no protocol breach."""
         future = self._pending.pop(request_id, None)
         if future is not None:
             future.cancel()

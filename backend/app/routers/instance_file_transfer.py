@@ -69,7 +69,7 @@ router = APIRouter(
 )
 
 # important: no role dependency, because a navigation carries no Bearer. The ticket is the
-# credential, and `redeem_download` runs the whole gate itself. A ratchet holds that it does.
+# credential, and `redeem_download` runs the whole gate itself; a test checks that it does.
 ticket_router = APIRouter(prefix="/instance-files", tags=["Instance Files"])
 
 
@@ -131,7 +131,7 @@ async def write_upload_chunk(
     bound = verify_file_access(host, project, instance_name)
     async with http_failures():
         session = _session_of(upload_token, user, host, bound, instance_name)
-    # note: the body is read only from here on. FastAPI parses nothing for a raw stream, so a caller
+    # The body is read only from here on. FastAPI parses nothing for a raw stream, so a caller
     # refused above has made this server hold none of it.
     async with guest_session(user, host, bound, instance_name, transfer=True, op_timeout=30.0, route="uploads") as guest:
         offset = await uploads.write_chunk(
@@ -367,7 +367,7 @@ class GuestDownload(Response):
             return
         raw, attrs = await operations.resolve_regular(guest, download.paths[0])
         stated = download.size or 0
-        # note: /proc/cpuinfo states size 0 and has content. Its length is unknown, so it travels
+        # /proc/cpuinfo states size 0 and has content. Its length is unknown, so it travels
         # chunked with a small cap rather than as an empty file.
         cap = stated if stated else 16_000_000
         handle = await guest.open(raw, codec.PFLAG_READ)
@@ -386,8 +386,8 @@ class GuestDownload(Response):
         }
         started = time.monotonic()
         result, code = "failure", None
-        # important: written now, not only at the end. A six-hour download a crash cuts short
-        # would otherwise leave no trace that it ever began.
+        # important: recorded at the start as well as at the end, so a long download that a
+        # crash cuts short still leaves a trace that it began.
         await write(
             "file.download.start", host=download.host, project=download.project, instance=download.instance,
             result="success", details=dict(record),
@@ -456,8 +456,8 @@ async def redeem_download(
         if not has_mapped_role(user):
             raise HTTPException(status_code=403, detail={"error": "permission_denied", "message": "No role."})
         _populate_request_state(request, user)
-    # note: `interactive` so that a partner past the paid term is refused here as at mint: a GET
-    # otherwise counts as a read, and a read is allowed there.
+    # important: `interactive` so that a partner past the paid term is refused here as at mint:
+    # a GET otherwise counts as a read, and a read is allowed there.
     await set_org_scope_for_ws(user, interactive=True)
     verify_file_access(download.host, download.project, download.instance)
     async with http_failures():

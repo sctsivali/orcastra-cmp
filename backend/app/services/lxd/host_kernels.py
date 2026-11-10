@@ -1,21 +1,16 @@
 """Every cluster member's kernel, as LXD reports it, for the kernel advisories.
 
-A standalone host is one entry taken from `host_info`, which the pooled client refreshes on
-connect. A cluster member answers `GET /1.0?target=<member>` with its own environment, so a
-cluster is read member by member: a cluster patched on one member and not another is exactly
-the case a single endpoint read would hide.
+A standalone host is one entry from `host_info`, which the pooled client refreshes on connect.
+A cluster is read member by member through `GET /1.0?target=<member>`, since a single endpoint
+read would hide a cluster patched on one member and not another.
 
-important: only facts are cached, never verdicts. The advisory data is code, so a deploy that
-learns of a vendor fix changes every verdict at once instead of waiting out a cache entry.
-Kernels change only on a reboot, which is why a complete read is kept for ten minutes.
+important: only facts are cached, never verdicts, so a deploy with new advisory data changes
+every verdict at once. Kernels change only on a reboot, so a complete read is kept ten minutes.
 
-important: a host is an untrusted source here. A Partner can register any endpoint, so every
-fact is type-checked and capped, a cluster is read at most MEMBER_CAP members deep through its
-own small pool with one deadline, and a member answer is size- and time-bounded. One hostile or
-broken host degrades to its own "unverified" rows; it cannot fail or starve the fleet's report.
-
-note: a slow or refused `?target` read is recorded on that member and never counts against
-the cluster's breaker. The endpoint answered; only one member did not.
+important: a host is an untrusted source; a Partner can register any endpoint. Every fact is
+type-checked and capped, a cluster is read at most MEMBER_CAP members deep through its own small
+pool under one deadline, and each member answer is size- and time-bounded. A slow or refused
+`?target` read is recorded on that member and never counts against the cluster's breaker.
 """
 
 import asyncio
@@ -46,8 +41,8 @@ MEMBER_READS_PER_CLUSTER = 4
 MEMBER_PHASE_SECONDS = 20.0
 MEMBER_BODY_LIMIT = 256 * 1024
 _TEXT_CAP = 128
-# note: server_version rides along so the release check can see a rolling upgrade
-# (services/hypervisor_releases); the read is the same, and the version is a fact like the kernel.
+# server_version is read too, so the release check (services/hypervisor_releases) can see a
+# rolling upgrade.
 _KERNEL_KEYS = ("kernel_version", "os_name", "os_version", "instance_types", "server_name", "server_version")
 _TEXT_FIELDS = ("kernel_version", "os_name", "os_version", "server_version")
 
@@ -160,7 +155,7 @@ def _read_member(client: Any, member: str, deadline: float) -> MemberKernel:
     answered_as = _text(environment.get("server_name")) or ""
     if answered_as != member:
         # important: a daemon that ignores `target` answers as the endpoint member, which
-        # would copy one kernel onto every member and report a half-patched cluster as patched
+        # would copy one kernel onto every member and report a half-patched cluster as patched.
         return MemberKernel(member=member, error=f"mismatch: answered as {answered_as[:64] or 'unknown'}")
     return _member_from(member, environment)
 
@@ -194,8 +189,8 @@ def _read_members(client: Any, listed: List[Tuple[str, str, str]], endpoint: str
         return members
 
     deadline = time.monotonic() + MEMBER_PHASE_SECONDS
-    # note: a pool per cluster read, not a shared one, so one slow cluster's members cannot queue
-    # ahead of every other cluster's. shutdown(wait=False) leaves stragglers to their socket timeout.
+    # A pool per cluster read, so one slow cluster's members cannot queue ahead of every other
+    # cluster's. shutdown(wait=False) leaves stragglers to their socket timeout.
     pool = ThreadPoolExecutor(max_workers=MEMBER_READS_PER_CLUSTER, thread_name_prefix="host_kernel_member")
     try:
         futures = {
@@ -286,7 +281,7 @@ async def fleet_kernels(
                 max_in_flight=8, concurrency_key=cluster_id, max_in_flight_per_key=1,
             )
         except BlockingPoolFull as exc:
-            # note: a read for this cluster is already running; its result lands in the cache
+            # A read for this cluster is already running; its result lands in the cache.
             return cached if cached is not None else exc
 
     results = await asyncio.gather(*(one(cid) for cid in cluster_ids), return_exceptions=True)

@@ -1,7 +1,7 @@
 """Bounded synchronous daemon operations used by the migration worker.
 
 This module never persists migration credentials. Cross-cluster pull secrets live only on the
-stack between source setup and target acceptance.
+stack between source setup and the target accepting the handoff.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ class MigrationOperationUnknown(MigrationUnknown):
 
 
 class OperationForgotten(MigrationOperationUnknown):
-    """The daemon no longer lists the operation, usually because it finished and was purged."""
+    """The daemon does not list the operation, usually because it finished and was purged."""
 
 
 def _is_not_found(exc: Exception) -> bool:
@@ -116,9 +116,9 @@ _TIMESTAMP = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z|[+-
 def _whole_second(value: Any) -> Any:
     """A snapshot timestamp at whole-second UTC precision.
 
-    note: a cross-cluster migration carries snapshot times in whole seconds, so the target
-    reads ``08:05:55Z`` where the source reads ``08:05:55.928374805Z`` (found live). Comparing
-    at second precision still pins every snapshot's identity.
+    A cross-cluster migration carries snapshot times in whole seconds, so the target reads
+    ``08:05:55Z`` where the source reads ``08:05:55.928374805Z``. Comparing at second precision
+    still pins every snapshot's identity.
     """
     if not isinstance(value, str):
         return value
@@ -253,8 +253,8 @@ def submit_create_project(
 def delete_project(client: Any, *, project: str) -> None:
     """Delete an empty project. LXD answers synchronously and refuses a non-empty one.
 
-    note: the project delete budget, not the pooled client's 8 s read: LXD can take longer just
-    after the project's last resource went. Callers read the project back afterwards.
+    Uses the project delete budget instead of the pooled client's 8 s read: LXD can take longer
+    just after the project's last resource went. Callers read the project back afterwards.
     """
     client.api.projects[safe_segment(project)].delete(timeout=project_delete.DELETE_TIMEOUT)
 
@@ -274,7 +274,7 @@ def wait_operation(
 ) -> dict[str, Any]:
     """Ask the daemon to hold the response until the operation settles or the wait ends.
 
-    note: callers going through ``_blocking`` must pass ``wait_seconds``. ``_blocking`` consumes
+    Callers going through ``_blocking`` must pass ``wait_seconds``. ``_blocking`` consumes
     ``timeout`` as its own wall-clock limit, so ``timeout`` never reaches this function there.
     """
     if wait_seconds is not None:
@@ -294,10 +294,9 @@ def wait_operation(
             raise OperationForgotten(
                 "The daemon no longer lists this operation. Target readback decides its outcome."
             ) from exc
-        # important: LXD answers the wait of a FAILED operation with an error-typed body that
-        # carries the operation's own error (verified on LXD 5.21: a VM stop past its timeout).
-        # One authoritative read of the operation tells that definitive failure apart from an
-        # outcome that really could not be read.
+        # LXD answers the wait of a FAILED operation with an error-typed body that carries the
+        # operation's own error (LXD 5.21: a VM stop past its timeout). One authoritative read
+        # of the operation tells that definitive failure apart from an unreadable outcome.
         try:
             outcome = read_operation(client, operation_id=operation_id, project=project)
         except OperationForgotten:
@@ -339,8 +338,8 @@ def submit_instance_state(
 ) -> Optional[str]:
     """Submit a state change. ``action_timeout`` is the guest shutdown budget for a stop.
 
-    note: callers going through ``_blocking`` must use ``action_timeout``, for the same reason
-    as ``wait_operation``.
+    Callers going through ``_blocking`` must use ``action_timeout``, for the same reason as
+    ``wait_operation``.
     """
     if action_timeout is not None:
         timeout = action_timeout

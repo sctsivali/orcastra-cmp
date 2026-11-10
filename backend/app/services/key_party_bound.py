@@ -1,20 +1,15 @@
 """A key a Partner created is held to its creator's projects on a cluster another party holds.
 
 The browser bounds a Partner on such a cluster to the projects its own organizations' policies
-name (org_scope.get_visible_projects). That bound lives in request contextvars no key route sets,
-so a key minted before services/api_key_grant_bound.py refused `*` there kept reading `*` as every
-project: another party's projects, their project deletes, pools and networks (security review of
-the RC5 follow-up round, 2026-11-06). A key acts for its creator, so its grants are narrowed to the
-creator's bound on every request, in a copy, the way cluster_generations.bind narrows them to live
-registrations. Every key door then applies the project-limited rules it already has.
-
-note: the creator is the add-on's installer for an add-on credential (key_default_view_only). The
-projects are the browser's (org_scope.partner_projects_on); the clusters it applies to follow the
-grant rule a key is minted under (api_key_grant_bound: another party holds the cluster), so a
-seller's key beside its own buyers keeps its grant. Inside the bound a Partner's key may still
-create and delete projects, as the browser lets a Partner do (owner decision 2026-11-06), under
-the browser's project policy: `project_change_refusal`, `shared_project_config` and
-`refuse_an_unisolated_project` say when it may not.
+name (org_scope.get_visible_projects), but that bound lives in request contextvars no key route
+sets, so a key holding `*` there would reach another party's projects, pools and networks. A key
+acts for its creator, so every request narrows its grants, in a copy, to the creator's bound
+(org_scope.partner_projects_on); the key routes then apply their project-limited rules as usual.
+An add-on credential's creator is its installer (key_default_view_only). Only clusters another
+party holds are bounded, the rule a key is minted under (api_key_grant_bound), so a seller's key
+beside its own buyers keeps its grant. Inside the bound
+a key may create and delete projects under the browser's project policy
+(`project_change_refusal`, `shared_project_config`, `refuse_an_unisolated_project`).
 """
 
 from __future__ import annotations
@@ -92,8 +87,8 @@ async def _bound(api_key: Mapping[str, Any], cluster_id: str, db: Any) -> Tuple[
     now = time.monotonic()
     with _lock:
         cached = _bounds.get(cache_key)
-    # note: only a held cluster's bound is checked against the shared stamp, so a key whose clusters
-    # nobody else holds pays no cache read for it.
+    # Only a held cluster's bound is checked against the shared stamp, so a key on clusters no other
+    # party holds pays no cache read for it.
     if cached is not None and now - cached[0] < BOUND_SECONDS and not (
         cached[2] is not None and _changed_since(cluster_id, cached[1])
     ):
@@ -112,9 +107,9 @@ async def party_bound(
     """(the projects this key is held to on `cluster_id`, or None for no bound; whether the
     creator's role was unknown). An Admin's key and a cluster no other party holds have no bound.
 
-    note: an identity provider that does not answer leaves the bound in place for that grant only
-    (fail closed), so an outage narrows an Admin's key on a shared cluster rather than refusing the
-    key everywhere. An unreadable party is a 503: the database is down for every request then.
+    An identity provider that does not answer leaves the bound in place for that grant only (fail
+    closed), so an outage narrows an Admin's key on a shared cluster instead of refusing the key
+    everywhere. An unreadable party is a 503: the database is down for every request then.
     """
     try:
         if db_gate is None:
@@ -176,9 +171,9 @@ async def narrow_to_party_bound(
 ) -> Dict[str, Any]:
     """The key with every grant on a cluster another party holds narrowed to its creator's bound.
 
-    important: a copy, never the cached document: the bound moves with the creator's policies and
-    bindings, and the stored grant must come back when it does. The stored grants stay in
-    `_held_cluster_permissions`, which /validate and /whoami report.
+    important: returns a copy, never the cached document. The bound moves with the creator's
+    policies and bindings, and the stored grant must come back when it does. The stored grants
+    stay in `_held_cluster_permissions`, which /validate and /whoami report.
     """
     grants = [g for g in (api_key.get("cluster_permissions") or []) if isinstance(g, dict)]
     if not grants:

@@ -1,19 +1,13 @@
-"""Changing one device on an existing instance.
+"""Changing one device on an existing instance, such as a NIC's fixed IPv4.
 
-Operators asked for a fixed IPv4 that can be set from the console rather
-than through `lxc config device set` on the hypervisor. Setting it at create time is half the
-answer; an address planned against a corporate IPAM catalogue also has to be changeable on an
-instance that already exists, and for an operator without SSH to the host that is the whole
-point of the request.
-
-Read, modify, write the whole device map rather than PATCH it. A PATCH merges, so it can set a
-key but cannot remove one, and clearing a fixed address back to DHCP is exactly as important as
-setting it. LXD's PUT replaces config, devices and profiles together, so the current object is
-read first and only the one device is changed.
+The device map is read, modified and written back whole instead of PATCHed: a PATCH merges, so
+it can set a key but not remove one, and clearing a fixed address back to DHCP needs a removal.
+LXD's PUT replaces config, devices and profiles together, so the current object is read first
+and only the one device changes.
 
 important: a NIC an instance inherits from a profile does not appear in the instance's own
-`devices`. Pinning its address writes the whole expanded device into the instance, which is
-what `lxc config device override` does and what the console already does at create time.
+`devices`. Pinning its address writes the whole expanded device into the instance, as
+`lxc config device override` does and as the console does at create time.
 """
 
 import logging
@@ -49,9 +43,9 @@ def resolve_device(
 def nic_network_of(device: Dict[str, str]) -> Optional[str]:
     """The managed network a NIC names, or None when it names a host interface.
 
-    Delegates to the create-path rule so the two entry points cannot drift: a macvlan NIC on a
-    physical parent has no managed network, and LXD has no fixed-address key for it, so the
-    caller reports that rather than hunting for a subnet the host interface will never have.
+    Uses the create-path rule so the two entry points cannot drift. A macvlan NIC on a physical
+    parent has no managed network and LXD has no fixed-address key for it, so the caller
+    reports that instead of looking for a subnet.
     """
     return managed_network_of(device)
 
@@ -98,9 +92,8 @@ def set_nic_address_sync(
 
     updated = apply_fixed_address(device, address)
     # important: writing an inherited device onto the instance is `lxc config device override`,
-    # and it is one way. Nothing in this console hands the device back to its profile, so a
-    # Save on an interface that is already on DHCP would detach it while changing nothing, and
-    # later edits to the profile's NIC would silently stop reaching this instance.
+    # and nothing here hands it back to its profile. A Save that changes nothing would detach
+    # it, and later edits to the profile's NIC would silently stop reaching this instance.
     if inherited and updated == device:
         logger.info(
             "No change to %s on %s/%s, leaving it inherited", device_name, project, name
@@ -128,11 +121,9 @@ def set_nic_address_sync(
     if etag:
         put_kwargs["headers"] = {"If-Match": etag}
     written = client.api.instances[safe_segment(name)].put(**put_kwargs)
-    # important: an instance PUT is an ASYNC LXD operation. It answers 202 with an operation id
-    # and does the work afterwards, so returning here reports a refusal as a success: the
-    # operator is told the address is reserved while the background job failed on a DHCP-less
-    # network, an address already leased, or a device LXD will not accept. Wait for the
-    # operation and let its error surface.
+    # important: an instance PUT is an async LXD operation that answers 202 and does the work
+    # afterwards. Wait for it, or a refusal (a DHCP-less network, an address already leased, a
+    # device LXD rejects) is reported as success.
     wait_for_lxd_operation(client, written, timeout=30)
     if inherited:
         logger.info(

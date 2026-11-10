@@ -1,17 +1,14 @@
 """Live usage per running instance for the monitoring dashboard, and its per-Cluster rollup.
 
-The fleet list (recursion=2) already carries every running instance's state, so usage comes
-from it without a request per instance. CPU and network rates go through the sampler and the
-sample builder the instance dialog uses, so the two surfaces read one baseline and agree.
+Usage comes from the fleet list (recursion=2), not a request per instance. Rates go through
+the instance dialog's sampler and sample builder, so both surfaces share one baseline.
 
-important: the sweep observes with a 10 s minimum window. While a dialog polls an instance
-every 5 s the sweep reads the rates that poll computed instead of moving the baseline with a
-list read whose timestamp is only good to half the list's duration. With no dialog open the
-sweep's own 30 s windows keep the baselines warm, so a dialog opened later answers at once.
+important: the sweep observes with a 10 s minimum window. While a dialog polls every 5 s the
+sweep reuses that poll's rates instead of moving the baseline with a list read whose timestamp
+is only good to half the list's duration; with no dialog open its 30 s windows keep it warm.
 
-note: Cluster CPU is busy hardware threads, not a vCPU-weighted figure. A fleet over-committed
-four to one can have its vCPUs a quarter busy while every thread is saturated; threads are what
-the allocation line beside it is measured against, so the two read together.
+Cluster CPU counts busy hardware threads, unweighted by vCPUs: the allocation line beside it is
+in threads, and a fleet over-committed four to one can saturate every thread at 25% of its vCPUs.
 """
 
 import logging
@@ -229,9 +226,9 @@ def rollup(nodes: Sequence[ClusterMonitoringMetrics], usages: Sequence[InstanceU
     rather than counted as idle, which would read a Cluster mid-recovery as quiet.
 
     important: the fleet is ready only once a Cluster that runs something has a reading, or
-    when nothing runs anywhere. An idle Cluster is a true 0, but on its own it made the whole
-    fleet "ready" at 0.0% while every busy Cluster was still calculating: seen live on the first
-    sweep after a restart, drawn as a dive to zero and persisted.
+    when nothing runs anywhere. An idle Cluster alone would mark the fleet "ready" at 0.0% while
+    every busy Cluster is still calculating (ex; the first sweep after a restart), and the chart
+    would draw and persist a dive to zero.
     """
     by_node: Dict[str, List[InstanceUsage]] = {}
     for usage in usages:
@@ -294,8 +291,8 @@ def select_consumers(
 ) -> List[InstanceUsage]:
     """Per Cluster, the leaders of each resource; the union, so any filter ranks exactly.
 
-    The old list took the top 20 by CPU and drew the storage and network rankings from those
-    20, so the heaviest disk or network user went missing whenever it was idle on CPU.
+    Each resource ranks on its own, so the heaviest disk or network user is kept even when it is
+    idle on CPU.
     """
     by_node: Dict[str, List[InstanceUsage]] = {}
     for usage in usages:
@@ -349,10 +346,10 @@ def summary(usage: InstanceUsage) -> InstanceMonitoringSummary:
 def legacy_top_lists(
     usages: Sequence[InstanceUsage], limit: int = CONSUMERS_PER_RESOURCE
 ) -> Tuple[List[InstanceMonitoringSummary], List[InstanceMonitoringSummary]]:
-    """The pre-consumers lists, kept for tabs opened before a deploy.
+    """The legacy top CPU and memory lists, kept for browser tabs loaded before a deploy.
 
-    note: CPU entries carry a percentage only. A tab from before this change formats
-    cpu_usage as a number, so an entry without one would break it mid-render.
+    CPU entries carry a percentage only. Such a tab formats cpu_usage as a number, so an entry
+    without one would break it mid-render.
     """
     cpu = sorted(
         (u for u in usages if u.cpu_percent is not None),

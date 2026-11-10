@@ -1,20 +1,16 @@
 """The browser-to-LXD relay behind ``/console/{instance}/ws``: the SPICE display and the serial console.
 
-Roles of one socket:
-
-- A SPICE channel whose ticket carries a display group either owns the display's LXD operation
-  (the first channel, normally main) or joins it (display, inputs, cursor). See spice_session.
-- A SPICE channel without a group (a ``?token=`` socket, or a store that failed) opens its own
-  operation, as every channel did before.
-- A serial console (``console_type=console``) is one operation with a control socket for resize.
-
-Every role also watches its instance's power (``watch_power``, see instance_power_watch): a
-restart left the serial console attached to a QEMU process that no longer existed.
+Roles of one socket: a SPICE channel whose ticket carries a display group owns the display's LXD
+operation (the first channel, normally main) or joins it (display, inputs, cursor; see
+spice_session). A SPICE channel without a group (a ``?token=`` socket, or a store that failed)
+opens its own operation. A serial console (``console_type=console``) is one operation with a
+control socket for resize. Every role watches its instance's power (``watch_power``, see
+instance_power_watch), so a restart does not leave the serial console attached to a QEMU process
+that is gone.
 
 important: setup runs through ``session_io`` and never on the event loop, and the migration
-admission lock is held only around the operation POST and the tracker registration, exactly as
-before. The relay is event driven (no polling timeouts), and whichever side ends first tears the
-other down at once.
+admission lock is held only around the operation POST and the tracker registration. The relay is
+event driven (no polling timeouts), and whichever side ends first tears the other down at once.
 """
 
 from __future__ import annotations
@@ -304,7 +300,7 @@ class ConsoleProxy:
         self._audit("success")
         self._operation_id = str(info.get("operation_id") or "") or None
         if self.role == "owner" and self._operation_id:
-            # note: before the sockets. The data socket is what makes QEMU drop the previous
+            # important: before the sockets. The data socket is what makes QEMU drop the previous
             # viewer, whose relay then reads this mark to tell a takeover from a lost connection.
             try:
                 await get_spice_session_store().mark_display(self.host, self.project, self.instance_name, self._operation_id)
@@ -312,7 +308,7 @@ class ConsoleProxy:
                 logger.debug("SPICE display mark failed: %s", type(exc).__name__)
 
         _, ssl_context, pin = await session_io(socket_material, self.host, label=f"console.material:{self.host}", host=self.host)
-        # note: control first. LXD ends a console operation whose control socket never arrives,
+        # important: control first. LXD ends a console operation whose control socket never arrives,
         # and a VGA data socket is what makes LXD dial QEMU's SPICE socket.
         self.control_ws = await open_lxd_socket(info["control_url"], ssl_context, pin=pin, timeout=_CONNECT_TIMEOUT_SECONDS, max_size=1024 * 1024)
         self.data_ws = await open_lxd_socket(info["ws_url"], ssl_context, pin=pin, timeout=_CONNECT_TIMEOUT_SECONDS)
@@ -365,8 +361,8 @@ class ConsoleProxy:
         try:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         finally:
-            # note: asyncio.wait leaves its tasks running when the relay itself is cancelled, and
-            # the power watch would then hold its events subscription until the instance next
+            # asyncio.wait leaves its tasks running when the relay itself is cancelled, and the
+            # power watch would then hold its events subscription until the instance next
             # powered down.
             self._window.release()
             for task in tasks:
@@ -404,7 +400,7 @@ class ConsoleProxy:
             text = message.get("text")
             if text and self.console_type == "console":
                 await self._serial_control(text)
-            # note: a SPICE client sends nothing but binary; stray text is not relayed into the
+            # A SPICE client sends nothing but binary; stray text is not relayed into the
             # protocol stream, where it would corrupt the session.
 
     async def _serial_control(self, text: str) -> None:
@@ -445,7 +441,7 @@ class ConsoleProxy:
             return False
         try:
             current = await get_spice_session_store().display_of(self.host, self.project, self.instance_name)
-        except Exception:  # noqa: BLE001 - unknown reads as a lost connection, as before
+        except Exception:  # noqa: BLE001 - unknown reads as a lost connection
             return False
         return bool(current) and current != self._operation_id
 
@@ -482,7 +478,7 @@ class ConsoleProxy:
                 await socket.close()
             except Exception:  # noqa: BLE001 - already closed
                 pass
-        # note: a failure record is left to expire, so a channel arriving late still reads why.
+        # A failure record is left to expire, so a channel arriving late still reads why.
         if self.role == "owner" and self.group and self._published:
             store = get_spice_session_store()
             # The operation ended with the control socket; give the other channels a moment to

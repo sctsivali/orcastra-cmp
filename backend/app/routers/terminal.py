@@ -1,7 +1,4 @@
-"""
-Terminal WebSocket Router.
-Provides WebSocket endpoints for interactive terminal access to LXD instances.
-"""
+"""Terminal WebSocket: an interactive shell in an LXD instance, proxied through the backend."""
 
 import asyncio
 import logging
@@ -30,15 +27,11 @@ router = APIRouter(
 )
 
 
-# note: `GET /terminal/session` used to live here. It created a real LXD exec operation and
-# returned `session_info` verbatim, which carries `ws_url` and `control_url` complete with the
-# operation's `?secret=` file-descriptor tokens and the cluster endpoint. Anyone holding that
-# response could talk to LXD directly: outside this proxy, outside session tracking, outside the
-# kill paths, and outside `watch_grant_while_open`, which is what revokes a break-glass session
-# mid-flight. Measured before removing it: zero calls in seven days and no caller anywhere in
-# `frontend/src`. The app uses the WebSocket below, which mints its own session internally and
-# never discloses the secret. Removed rather than redacted, because without the secret the
-# endpoint answers nothing anyone wanted.
+# important: never return an exec operation's `session_info` to a client. Its `ws_url` and
+# `control_url` carry the operation's `?secret=` tokens and the cluster endpoint, so a holder
+# could talk to LXD directly: outside this proxy, session tracking, the kill paths and
+# `watch_grant_while_open`, which revokes a break-glass session mid-flight. The WebSocket below
+# mints its own session and never discloses the secret.
 
 
 @router.websocket("/ws/{instance_name}")
@@ -49,33 +42,26 @@ async def terminal_websocket(
     project: str = Query("default"),
     user: Optional[AuthenticatedUser] = Depends(ws_user("terminal")),
 ):
-    """
-    WebSocket endpoint for terminal connection.
-    Acts as a proxy between browser and LXD instance exec.
+    """Proxy a browser terminal to an LXD exec session in the instance.
+
     Opened with a ticket from POST /ws-tickets; re-authorized every minute while open and
     closed with 4403 once access ends. A refusal accepts and then closes with a code the page can
     read (core/ws_close.py); a close before accept reaches the browser as a bare 1006.
     """
-    # Validate auth when enabled
     from app.core.config import get_settings as _gs
     _settings = _gs()
-    # important: gated on auth_enabled ALONE. This used to also require
-    # `_settings.authentik_issuer`, which is the variable whose absence produces the
-    # unauthenticated `user`, so the guard switched itself off in exactly the situation it
-    # existed to catch. ws_user now refuses a misconfigured server itself.
+    # important: gate on auth_enabled alone. Also requiring `_settings.authentik_issuer` would
+    # switch the guard off on the misconfiguration that leaves `user` unset; ws_user refuses
+    # that server itself.
     if _settings.auth_enabled and user is None:
         await ws_close.refuse(websocket, *refusal_of(websocket))
         return
 
-    # set org scope for WebSocket (context variable)
     await set_org_scope_for_ws(user, interactive=True)
 
-    # important: the console WebSocket added this and the terminal one never had it, so the
-    # organisation boundary here rested entirely on the break-glass gate below and on a flag whose
-    # default was off. verify_cluster_access appeared seventeen times in console.py and not
-    # once here, which is why this file was blanket-exempt from the cluster-scope ratchet; that
-    # exemption is gone now, so the ratchet enforces this call. Refusing rather than raising,
-    # since HTTPException is meaningless once the socket is being negotiated.
+    # important: this is the socket's organisation boundary; the break-glass gate below does not
+    # replace it. Refuse rather than raise: HTTPException means nothing once the socket is being
+    # negotiated.
     from fastapi import HTTPException as _HTTPExc
     try:
         # The project bound, the tenant's view grant and, behind the rollout flag, its console
@@ -123,11 +109,8 @@ async def terminal_websocket(
     user_id = user.user_id if user else "anonymous"
     logger.info(f"Terminal WebSocket connected: {instance_name}@{host} user={user_id}")
 
-    # important: this is the only emitter of terminal.session.create now, and until this line
-    # there was none on the socket at all. The removed REST endpoint carried it, so a client
-    # that connected straight to the WebSocket, which is what the app itself does, opened a root
-    # shell in a guest and left nothing in the activity index. Session tracking recorded it; the
-    # index a human reviews did not.
+    # important: the only emitter of terminal.session.create. Without it, opening a root shell in
+    # a guest would be recorded in session tracking alone and never reach the activity index.
     activity_logger.log_activity(
         action="terminal.session.create",
         target_type="instance",
@@ -142,7 +125,7 @@ async def terminal_websocket(
 
     # Extract user details for session tracking
     user_email = user.email if user else ""
-    # resolve via RBAC to get canonical role name (admin/partner/tenant)
+    # Resolve via RBAC to the canonical role name (admin/partner/tenant).
     if user:
         from app.core.rbac import resolve_roles, get_highest_role
         _roles = resolve_roles(user)
@@ -186,5 +169,5 @@ async def terminal_websocket(
     summary="Terminal service health check",
 )
 async def terminal_health():
-    """Check if terminal service is available."""
+    """Report that the terminal router is up. Contacts no cluster."""
     return {"status": "ok", "service": "terminal"}

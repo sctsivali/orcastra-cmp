@@ -1,10 +1,10 @@
 """A folder as a streamed .tar.gz, built from a walk over SFTP.
 
-important: this archive is opened by a person on their own machine, and its contents were written
-by a guest that may be hostile. Keeping symlinks "as they are" is the classic way to get a tar that
-writes outside its directory on extract: a link `x -> /etc` followed by `x/passwd`. So a name is
-validated part by part, a duplicate is dropped, ownership and special bits are removed, a link is
-kept only when it stays inside the archive, and what was left out is listed in SKIPPED.txt.
+A person extracts this archive on their own machine, and a guest that may be hostile wrote its
+contents. Symlinks kept as they are make a tar that writes outside its directory on extract: a link
+`x -> /etc` followed by `x/passwd`. So a name is validated part by part, a duplicate is dropped,
+ownership and special bits are removed, a link is kept only when it stays inside the archive, and
+what was left out is listed in SKIPPED.txt.
 """
 
 import itertools
@@ -118,7 +118,7 @@ async def tar_gz_stream(
         raw = to_guest(root)
         name = raw.rstrip(b"/").rsplit(b"/", 1)[-1] or b"root"
         attrs = await guest.lstat(raw)
-        # A link somebody chose to download means what it points at; a link inside a tree does not.
+        # A link chosen for download is followed; a link inside the tree is not.
         if is_symlink(attrs):
             raw = await guest.realpath(raw)
             attrs = await guest.lstat(raw)

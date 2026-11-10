@@ -31,26 +31,23 @@ from app.services.lxd import client_identities
 
 logger = logging.getLogger(__name__)
 
-# Identities Router
 identities_router = APIRouter(
     prefix="/identities",
     tags=["Identities"],
     dependencies=[Depends(require_partner()), Depends(org_scope_dependency)],
 )
 
-# Groups Router
 groups_router = APIRouter(
     prefix="/groups",
     tags=["Groups"],
     dependencies=[Depends(require_partner()), Depends(org_scope_dependency)],
 )
 
-# Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
 
 
 class IdentityInfo(BaseModel):
-    """Identity information."""
+    """An LXD identity, or on Incus a trust-store certificate."""
     id: str = Field(..., description="Identity ID")
     name: str = Field("", description="Identity name")
     type: str = Field("", description="Identity type (display name)")
@@ -71,7 +68,7 @@ class GroupIdentities(BaseModel):
 
 
 class GroupInfo(BaseModel):
-    """Group information."""
+    """An LXD authorization group and its permissions."""
     name: str = Field(..., description="Group name")
     description: str = Field("", description="Group description")
     identities: GroupIdentities = Field(default_factory=GroupIdentities, description="Identities in this group organized by auth type")
@@ -121,7 +118,7 @@ def _known_incus(client: Any) -> bool:
 
 
 def _pooled_is_incus(lxd_service: LXDService, node: str) -> bool:
-    """From what the node's pooled client already says, without a round trip."""
+    """Whether the node is Incus, from what its pooled client already says, without a round trip."""
     peek = getattr(lxd_service.connection_manager, "peek_client", None)
     return _known_incus(peek(node)) if callable(peek) else False
 
@@ -153,17 +150,15 @@ def _certificate_row(entry: Dict[str, Any], node_name: str) -> IdentityInfo:
 
 
 def _fetch_identities_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[IdentityInfo]:
-    """Fetch identities for a single node - runs in thread pool.
+    """One cluster's identities. Runs in the thread pool.
 
-    A refusal or a failed read propagates to the caller, which names the cluster; the
-    previous version logged it and returned an empty list, so a cluster whose identities
-    could not be read looked like a cluster with none.
+    A refusal or a failed read propagates to the caller, which names the cluster, so a cluster
+    whose identities could not be read never looks like a cluster with none.
     """
     client = lxd_service.connection_manager.get_client(node_name)
     if client is None:
-        # important: unreachable is not empty. Without this the next line
-        # raises AttributeError on None, which the generic handler below
-        # turns into a partial result and the node is never named.
+        # important: unreachable is not empty. Raise so the caller names the cluster; a None
+        # client would fail below with an AttributeError instead.
         raise LXDConnectionError(f"Could not connect to {node_name}")
     read: NodeRead[IdentityInfo] = NodeRead()
     if _known_incus(client):
@@ -230,11 +225,10 @@ async def list_identities(
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # important: two different things make a node absent, and both must be named.
-        # A node can fail during the fan-out, or never be asked at all, because
-        # connection_manager.get_node_names() returns only nodes with a live client while
-        # the fleet is whatever Vault has registered. Reporting only the first kind left a
-        # dead cluster silently missing rather than merely empty.
+        # important: two things make a node absent, and both must be named. A node can fail
+        # during the fan-out, or never be asked at all, because
+        # connection_manager.get_node_names() returns only nodes with a live client while the
+        # fleet is whatever Vault has registered. Naming only the first hides a dead cluster.
         unreachable_nodes: List[str] = (
             [] if host else [
                 node for node in sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
@@ -260,7 +254,7 @@ async def list_identities(
             node_errors=complete_reasons(unreachable_nodes, fan.node_errors, partial=fan.partial_nodes),
         )
     except HTTPException:
-        # note: a refusal or a 503 keeps its own status, never a 500 naming it
+        # A refusal or a 503 keeps its own status instead of becoming a 500.
         raise
     except Exception as e:
         logger.error(f"Error listing identities: {e}")
@@ -295,10 +289,8 @@ async def get_identity(
         
         if response.status_code == 200:
             identity_data = response.json().get('metadata', {})
-            # note: auth_type and node are declared on IdentityInfo and were the only two
-            # fields this handler did not populate, so the detail route answered with a shape
-            # the list route does not. Both are already in hand: the helper derives one from
-            # the type, and host is a required query parameter validated above.
+            # Same shape as the list route: auth_type is derived from the type, and node is the
+            # host validated above.
             return IdentityInfo(
                 id=identity_data.get('id', ''),
                 name=identity_data.get('name', ''),
@@ -320,11 +312,11 @@ async def get_identity(
 
 
 class _NoGroupsHere(Exception):
-    """The node turned out to be Incus once connected: unsupported, not unreachable."""
+    """The node turned out to be Incus once connected, so it is reported as unsupported."""
 
 
 def _fetch_groups_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[GroupInfo]:
-    """Fetch groups for a single node - runs in thread pool."""
+    """One cluster's groups. Runs in the thread pool."""
     client = lxd_service.connection_manager.get_client(node_name)
 
     # If client is None, try to reconnect
@@ -333,14 +325,13 @@ def _fetch_groups_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[
         try:
             client = lxd_service.cert_manager.connect_with_vault_cert(node_name, connection_manager=lxd_service.connection_manager)
         except Exception as e:
-            # important: a node we cannot reconnect to is unreachable, not empty.
-            # Returning here left the caller nothing to name.
+            # important: raise so the caller names the node as unreachable; returning would
+            # read as a node with no groups.
             logger.warning(f"Failed to reconnect to {node_name}: {e}")
             raise LXDConnectionError(f"Could not connect to {node_name}") from e
         if client is None:
-            # important: unreachable is not empty. Returning a bare collection
-            # here leaves the caller nothing to label, which is how a dead
-            # cluster read as a cluster with nothing.
+            # important: raise for the same reason; a bare collection would read as a
+            # cluster with no groups.
             raise LXDConnectionError(f"Could not connect to {node_name}")
     if _known_incus(client):
         raise _NoGroupsHere(node_name)
@@ -367,7 +358,7 @@ def _fetch_groups_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[
                 description=group_data.get('description') or '',
                 identities=GroupIdentities(tls=tls_identities, oidc=oidc_identities),
                 permissions=group_data.get('permissions') or [],
-                node=node_name  # Include node information
+                node=node_name
             ))
         except Exception as exc:  # noqa: BLE001 - one malformed row is named, not fatal
             read.lost(f"group {group_data.get('name', '?')}: {type(exc).__name__}")
@@ -400,8 +391,8 @@ async def list_groups(
         nodes_to_query = [host] if host else [
             node for node in lxd_service.connection_manager.get_node_names() if node not in held
         ]
-        # note: an Incus node has no /1.0/auth, so asking it answers 404, which read as an
-        # unreachable cluster. It is named apart instead, from what its pooled client already says.
+        # An Incus node has no /1.0/auth and answers 404, which would read as an unreachable
+        # cluster. It is listed as unsupported instead, from what its pooled client already says.
         unsupported_nodes = [n for n in nodes_to_query if _pooled_is_incus(lxd_service, n)]
         nodes_to_query = [n for n in nodes_to_query if n not in unsupported_nodes]
         
@@ -419,11 +410,10 @@ async def list_groups(
             kept = [(n, r) for n, r in zip(nodes_to_query, results) if n not in found_incus]
             nodes_to_query, results = [n for n, _ in kept], [r for _, r in kept]
 
-        # important: two different things make a node absent, and both must be named.
-        # A node can fail during the fan-out, or never be asked at all, because
-        # connection_manager.get_node_names() returns only nodes with a live client while
-        # the fleet is whatever Vault has registered. Reporting only the first kind left a
-        # dead cluster silently missing rather than merely empty.
+        # important: two things make a node absent, and both must be named. A node can fail
+        # during the fan-out, or never be asked at all, because
+        # connection_manager.get_node_names() returns only nodes with a live client while the
+        # fleet is whatever Vault has registered. Naming only the first hides a dead cluster.
         unreachable_nodes: List[str] = (
             [] if host else [
                 node for node in sorted(set(lxd_service.get_node_names()) - set(nodes_to_query) - set(unsupported_nodes))
@@ -444,7 +434,7 @@ async def list_groups(
             node_errors=complete_reasons(unreachable_nodes, fan.node_errors, partial=fan.partial_nodes),
         )
     except HTTPException:
-        # note: a refusal or a 503 keeps its own status, never a 500 naming it
+        # A refusal or a 503 keeps its own status instead of becoming a 500.
         raise
     except Exception as e:
         logger.error(f"Error listing groups: {e}")
@@ -495,7 +485,7 @@ async def get_group(
                 description=group_data.get('description', ''),
                 identities=GroupIdentities(tls=tls_identities, oidc=oidc_identities),
                 permissions=permissions_list,
-                node=host  # Include node information
+                node=host
             )
         else:
             raise HTTPException(status_code=404, detail=f"Group {group_name} not found")
@@ -543,7 +533,7 @@ async def create_group(
                 "message": f"Group {name} created successfully"
             }
         else:
-            # extract LXD error detail for debugging
+            # Extract LXD's error detail for the log and the response.
             try:
                 lxd_error = response.json()
                 error_msg = lxd_error.get("error", "Unknown LXD error")
@@ -561,9 +551,9 @@ async def create_group(
     except HTTPException:
         raise
     except LXDAPIException as e:
-        # important: pylxd raises on a 4xx, so LXD refusing the request (a permission naming a
-        # resource in a project the group cannot view, a duplicate name) reached the caller as
-        # a 500 and the dialog as "server error". LXD's own status and message are the answer.
+        # pylxd raises on a 4xx when LXD refuses the request (a permission naming a
+        # resource in a project the group cannot view, a duplicate name). Pass LXD's own status
+        # and message through instead of answering 500.
         status = getattr(getattr(e, "response", None), "status_code", None)
         logger.warning(f"LXD refused creating group {name}: {e}")
         raise HTTPException(status_code=status if status and 400 <= status < 500 else 502, detail=str(e))
@@ -593,24 +583,12 @@ async def update_group(
     db: AsyncSession = Depends(get_db),
     user: AuthenticatedUser = Depends(get_current_user),
 ):
-    """Update an existing group.
+    """Update a group's description and/or permissions.
     
-    CRITICAL LXD LIMITATION:
-    LXD's PATCH endpoint for groups has a bug/limitation where sending multiple permissions
-    in a single request may only persist one of them. Additionally, PATCH replaces the
-    entire permissions array rather than merging.
-    
-    SOLUTION:
-    We use PUT instead of PATCH and apply permissions incrementally:
-    1. Clear all existing permissions
-    2. For each new permission: GET current state -> merge new permission -> PUT complete list
-    3. Verify each step before proceeding
-    
-    This ensures reliable persistence of multiple permissions.
-    
-    For permissions that reference projects (like instance, network, image, profile, storage_pool),
-    LXD requires the project permission to exist BEFORE the nested permission can be validated.
-    This endpoint handles this by applying project permissions first, then nested permissions.
+    LXD replaces the whole permissions array on write and may persist only one of several
+    permissions sent together, so they are cleared and then added one at a time (GET, merge,
+    PUT, verify). Project and server permissions go first: LXD validates a nested permission
+    only once its project permission exists. A permission LXD refuses is skipped.
     """
     verify_cluster_access(host)
     await verify_whole_cluster_access(host, db, user)
@@ -631,7 +609,7 @@ async def update_group(
                 "message": f"No changes to update for group {group_name}"
             }
         
-        # Handle permissions - INCREMENTAL approach to work around LXD limitation
+        # Permissions are applied one at a time; see the docstring.
         if request.permissions is not None:
             permissions = request.permissions
             
@@ -650,7 +628,6 @@ async def update_group(
             logger.info(f"Updating group {group_name} with {len(sorted_permissions)} permissions using incremental approach")
             logger.info(f"Order: {len(project_perms)} project/server perms first, then {len(nested_perms)} nested perms")
             
-            # Helper function to check if permission already exists
             def permission_exists(perm, current_list):
                 for existing in current_list:
                     if (existing.get('entity_type') == perm.get('entity_type') and
@@ -659,7 +636,6 @@ async def update_group(
                         return True
                 return False
             
-            # Start with empty or keep description update
             accumulated_perms = []
             
             # First, clear all permissions
@@ -675,24 +651,23 @@ async def update_group(
                 logger.error(f"LXD returned error when clearing permissions: {error_detail}")
                 raise HTTPException(status_code=clear_response.status_code, detail=error_detail)
             
-            await asyncio.sleep(0.5)  # Delay after clear
+            await asyncio.sleep(0.5)
             
-            # LXD PATCH replaces permissions array, NOT merges
-            # So we need to GET current, add new permission to list, then PATCH with full list
-            # Also add long delay between operations to let LXD database persist
+            # LXD replaces the permissions array rather than merging, so each step reads the
+            # current list, adds one permission and PUTs the full list, pausing between steps
+            # to let LXD persist.
             for idx, perm in enumerate(sorted_permissions):
                 accumulated_perms.append(perm)
                 logger.info(f"Step {idx + 1}/{len(sorted_permissions)}: Adding permission {perm}")
                 
-                # CRITICAL: GET current state right before PATCH
-                await asyncio.sleep(0.3)  # Small delay before GET
+                # Read the current state right before the PUT.
+                await asyncio.sleep(0.3)
                 get_response = client.api.auth.groups[safe_segment(group_name)].get(timeout=(5, 30))
                 current_in_lxd = []
                 if get_response.status_code == 200:
                     current_in_lxd = get_response.json().get('metadata', {}).get('permissions', [])
                     logger.info(f"Current LXD state has {len(current_in_lxd)} permissions: {current_in_lxd}")
                 
-                # Build merged permission list
                 merged_perms = current_in_lxd.copy()
                 if not permission_exists(perm, merged_perms):
                     merged_perms.append(perm)
@@ -701,15 +676,13 @@ async def update_group(
                 put_data = {"permissions": merged_perms}
                 logger.info(f"Sending PUT with {len(merged_perms)} permissions: {merged_perms}")
                 
-                # Try PUT - which does a complete replacement
                 response = client.api.auth.groups[safe_segment(group_name)].put(json=put_data, timeout=(5, 30))
                 
                 if response.status_code not in [200, 202]:
                     error_detail = response.json().get('error', f'Could not add permission at step {idx + 1}')
                     logger.error(f"LXD returned error at step {idx + 1}: {error_detail}")
-                    # Don't fail completely - log and try to continue if possible
+                    # Skip this permission and continue with the rest.
                     logger.warning(f"Permission {perm} failed, but continuing with remaining permissions")
-                    # Remove failed permission from accumulated list
                     accumulated_perms.pop()
                 else:
                     # Longer delay between permissions to let LXD fully persist
@@ -724,7 +697,6 @@ async def update_group(
                         if verify_response.status_code == 200:
                             current_perms = verify_response.json().get('metadata', {}).get('permissions', [])
                             
-                            # Check if our permission is in the list
                             if permission_exists(perm, current_perms):
                                 logger.info(f"Verified: permission {perm.get('entitlement')} on {perm.get('url')} added successfully (attempt {attempt + 1})")
                                 verified = True
@@ -733,12 +705,7 @@ async def update_group(
                                 logger.warning(f"Permission {perm} not found after PATCH (attempt {attempt + 1}/{max_verify_attempts})")
                                 if attempt < max_verify_attempts - 1:
                                     await asyncio.sleep(0.5)
-                                    # Retry the PATCH
-                                    # note: mirrors the original call above. This line used to read
-                                    # `.patch(json=patch_data, ...)`, and patch_data does not exist
-                                    # in this scope, so the retry raised NameError the moment a
-                                    # permission failed to verify. Nothing exercised it, which is
-                                    # why it survived.
+                                    # Retry the PUT.
                                     retry_response = client.api.auth.groups[safe_segment(group_name)].put(json=put_data, timeout=(5, 30))
                                     if retry_response.status_code not in [200, 202]:
                                         logger.error(f"Retry PATCH failed: {retry_response.json().get('error', 'Unknown error')}")
@@ -766,19 +733,15 @@ async def update_group(
                 "message": f"Group {group_name} updated successfully with {len(accumulated_perms)} permissions"
             }
         else:
-            # No permissions to update - just description
-            # For description-only update, we need to fetch current group first
-            # then PUT with current permissions + new description
-            # This is because PATCH with empty string may be ignored by LXD
+            # Description only: PUT it with the current permissions, because LXD may ignore a
+            # PATCH that sets an empty string.
             logger.info(f"Updating group {group_name} description only to: '{update_data.get('description', '')}'")
             
-            # Get current group state
             get_response = client.api.auth.groups[safe_segment(group_name)].get(timeout=(5, 30))
             if get_response.status_code == 200:
                 current_group = get_response.json().get('metadata', {})
                 current_perms = current_group.get('permissions', [])
                 
-                # Build PUT data with new description and existing permissions
                 put_data = {
                     "description": update_data.get("description", ""),
                     "permissions": current_perms
@@ -888,10 +851,8 @@ async def add_identity_to_group(
                 "message": f"Identity {identity_id} already exists in group {group_name}"
             }
         
-        # Add group to identity's groups list
         updated_groups = current_groups + [group_name]
         
-        # Update identity with new groups list
         update_data = {"groups": updated_groups}
         
         logger.info(f"Adding identity {identity_id} to group {group_name}. Groups: {updated_groups}")
@@ -966,10 +927,8 @@ async def remove_identity_from_group(
                 detail="Cannot remove identity from its only group. Identity must belong to at least one group."
             )
         
-        # Remove group from identity's groups list
         updated_groups = [g for g in current_groups if g != group_name]
         
-        # Update identity with new groups list
         update_data = {"groups": updated_groups}
         
         logger.info(f"Removing identity {identity_id} from group {group_name}. Groups: {updated_groups}")
@@ -995,13 +954,12 @@ async def remove_identity_from_group(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Delete Identity Endpoint
 def _dashboard_fingerprints(cert_manager: Any, host: str) -> Set[str]:
     """Blocking. The fingerprints of the certificates Vault holds for this dashboard on `host`.
 
     Current and pending both count. Only "not there" (404) reads as absent: the certificates page
     reader treats every pending-read failure as no pending certificate, which here would leave a
-    rotation's new certificate unprotected (security review, 2026-11-08).
+    rotation's new certificate unprotected.
     """
     from app.core.vault_client import VaultClientError
     from app.services.lxd_certs.inspect import parse_certificate_pem
@@ -1025,9 +983,9 @@ def _dashboard_fingerprints(cert_manager: Any, host: str) -> Set[str]:
 async def _delete_incus_certificate(lxd_service: LXDService, client: Any, host: str, fingerprint: str) -> Dict[str, Any]:
     """Remove one client certificate from an Incus trust store, never the dashboard's own."""
     # important: removing a certificate this dashboard holds cuts it off the cluster, and only shell
-    # access to the host could bring it back. Deregistration is the way to do that on purpose. During
-    # a regenerate or a rotation that is more than the one this worker presents: Vault's current and
-    # pending certificates count too, and not being able to read them is not a yes.
+    # access to the host could bring it back; deregistration is the intended way to do that. During
+    # a regenerate or a rotation, Vault's current and pending certificates count as well as the one
+    # this worker presents, and a failed read of them refuses the delete.
     try:
         held = await asyncio.to_thread(_dashboard_fingerprints, lxd_service.cert_manager, host)
     except Exception:  # noqa: BLE001 - logged by the Vault client
@@ -1085,12 +1043,10 @@ async def delete_identity(
         
         auth_type_lower = auth_type.lower()
         
-        # Check if identity exists
         get_response = client.api.auth.identities[safe_segment(auth_type_lower)][safe_segment(identity_id)].get(timeout=(5, 30))
         if get_response.status_code != 200:
             raise HTTPException(status_code=404, detail=f"Identity {identity_id} not found")
         
-        # Delete the identity
         logger.info(f"Deleting identity {identity_id} (type: {auth_type}) from {host}")
         response = client.api.auth.identities[safe_segment(auth_type_lower)][safe_segment(identity_id)].delete(timeout=(5, 30))
         

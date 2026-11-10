@@ -1,6 +1,6 @@
 """Pending certificates: issuing one for Regenerate, reading one back for Verify, and expiry.
 
-Split from rotation.py, which holds renew, verify and cancel and the helpers both share.
+Renew, verify and cancel, and the helpers both modules use, live in rotation.py.
 """
 
 import secrets

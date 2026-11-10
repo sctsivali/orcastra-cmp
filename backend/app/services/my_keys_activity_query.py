@@ -1,14 +1,11 @@
 """What My Keys shows as a key's activity: its dashboard trail and what was done with it on a cluster.
 
-Two sources, one page:
-
-- dashboard rows: the `user.ssh_key.*` audit records in `cluster_log` (create, download, delete,
-  each with the client it came from);
-- usage rows: what LXD reported under the key's certificate. The follower stores a TLS
-  requestor's fingerprint as `actor_email` on an external row, so a row joins the registry
-  (`my_key_records.fingerprint`) on that, on the same cluster. Lifecycle events come from
-  `cluster_log`; exec and console sessions, which LXD reports as operations only, come from
-  `task_journal`.
+- Dashboard rows: the `user.ssh_key.*` audit records in `cluster_log` (create, download, delete,
+  each with the client it came from).
+- Usage rows: what LXD reported under the key's certificate. The follower stores a TLS
+  requestor's fingerprint as `actor_email` on an external row, which joins the registry
+  (`my_key_records.fingerprint`) on the same cluster. Lifecycle events come from `cluster_log`;
+  exec and console sessions, which LXD reports as operations only, come from `task_journal`.
 
 Scope matches the key list: an administrator reads everything; anyone else reads the keys they
 own (or that predate the owner field, on a cluster they reach), plus the dashboard rows of their
@@ -35,8 +32,8 @@ OUT_OF_BOUND = "Change outside your project scope"
 class Scope:
     """Who is asking. `allowed_clusters` None means an unrestricted caller (Administrator).
 
-    `shared_clusters` are the ones several organizations hold: a key there that predates owners is
-    nobody's to read but an Administrator's (routers/my_keys.py _owned_by_caller).
+    `shared_clusters` are the ones several organizations hold: there, a key that predates owners
+    is readable by an Administrator only (routers/my_keys.py _owned_by_caller).
     """
 
     caller_email: str
@@ -157,7 +154,7 @@ def _usage_tasks(scope: Scope, filters: Filters) -> Any:
                 TaskJournal.cluster_id == MyKeyRecord.cluster_id,
             ),
         )
-        # note: only the sessions (exec, console), which LXD reports as operations alone. A change
+        # Only the sessions (exec, console), which LXD reports as operations alone. A change
         # is already in cluster_log as its lifecycle event, and listing both would show it twice.
         .where(
             TaskJournal.actor_kind == "external",
@@ -260,7 +257,7 @@ def last_used_query(scope: Scope) -> Any:
 
 
 def _aware(value: datetime) -> datetime:
-    # note: SQLite test sessions hand back naive values for timestamptz columns; they were UTC.
+    # SQLite test sessions hand back naive values for timestamptz columns; they are UTC.
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 

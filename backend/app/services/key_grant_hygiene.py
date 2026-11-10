@@ -1,14 +1,14 @@
 """Keep API key grants naming only clusters that are registered.
 
-Grants are stored as typed. A cluster registered again under a new id (on dev `nuc-2` became
-`nuc2`, `blitz01` became `blitz001`) left its old id in key grants, where it authorises nothing
-but is reported as held, polled by the integration that owns the key, and looked up in Vault on
-every poll. Deregistration strips the id (`routers/cluster_registration.py`), grant writes refuse
-a new unregistered id (`routers/integrations.py`), and
-`backend/scripts/repair_key_grant_cluster_ids.py` repairs what earlier deregistrations left.
+Grants are stored as typed. A cluster registered again under a new id leaves its old id in key
+grants, where it authorises nothing but is reported as held, polled by the integration that owns
+the key, and looked up in Vault on every poll. Deregistration strips the id
+(`routers/cluster_registration.py`), grant writes refuse a new unregistered id
+(`routers/integrations.py`), and `backend/scripts/repair_key_grant_cluster_ids.py` repairs what
+earlier deregistrations left.
 
-important: never a remap. A cluster registered again is a new trust identity, possibly owned by
-another organization; granting it is a decision for the key's owner, not a cleanup.
+important: never remap an id. A cluster registered again is a new trust identity, possibly owned
+by another organization, so granting it is a decision for the key's owner.
 """
 
 from __future__ import annotations

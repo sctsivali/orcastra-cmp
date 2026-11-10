@@ -31,19 +31,17 @@ __all__ = [
     "wait_seconds",
 ]
 
-# Waits in progress on this worker. The pool a wait used to occupy bounded them; on the event loop
-# nothing did, and the per-instance budget is keyed on a caller-chosen name, so one key with
-# consent and a grant could hold an HTTP slot per made-up name. Same ceiling as the pool.
+# Waits in progress on this worker. Waits run on the event loop and the per-instance budget is
+# keyed on a caller-chosen name, so without this bound one key with consent and a grant could
+# hold an HTTP slot per made-up name. Same ceiling as the pool.
 _WAIT_SLOTS = asyncio.Semaphore(DESKTOP_MAX_IN_FLIGHT)
 
-# One proxy operation per capability, rather than one `desktop_action` operation covering all of
-# them.
+# One proxy operation per capability.
 #
-# important: GUEST_ACCESS_OPERATIONS maps an operation to exactly ONE capability, and it is what
-# the router enforces. A single operation whose real cost varied with an `action` field would be
-# gated at whatever that map named, so a caller granted only desktop.view could send
-# `action: "type"` and get input for free. Splitting the operation is what makes the static map
-# tell the truth, and `_assert_action_matches` closes the same hole from the other side.
+# important: GUEST_ACCESS_OPERATIONS maps an operation to exactly one capability, and the router
+# enforces that map. One operation whose cost varied with an `action` field would let a caller
+# granted only desktop.view send `action: "type"` and get input. `_assert_action_matches` closes
+# the same hole from the other side.
 OPERATION_CAPABILITY = {
     "desktop_probe": "desktop.view",
     "desktop_view": "desktop.view",
@@ -63,8 +61,8 @@ _FAMILY_CAPABILITY = (
 def _capability_for_action(name: str) -> Optional[str]:
     """The capability this action costs, or None for one that costs nothing.
 
-    `wait` is the only member of the last group: it never reaches the guest, so it neither reads
-    nor touches anything and pricing it would be theatre.
+    `wait` is the only action without one: it never reaches the guest, so it neither reads nor
+    touches anything.
     """
     for family, capability in _FAMILY_CAPABILITY:
         if name in family:
@@ -110,9 +108,8 @@ def _agent_present(inst: Any) -> bool:
 def _provider(inst: Any) -> DesktopProvider:
     """The provider for this guest.
 
-    One function rather than a constructor call at each site, because it is the seam a second
-    provider arrives through. A framebuffer provider for guests that cannot run capture tooling
-    is the documented gap, and it becomes a branch here rather than an edit at every call.
+    A second provider, ex; a framebuffer provider for guests that cannot run capture tooling,
+    becomes a branch here instead of an edit at every call site.
     """
     return GuestExecProvider(inst)
 
@@ -122,9 +119,8 @@ def _report_for(
 ) -> Tuple[ProbeReport, bool]:
     """The probe for this guest, and whether this call established the session.
 
-    The second value is what lets the router write one session row per session rather than one per
-    action. A tenant reading their session list wants to see that an agent connected to a guest,
-    not four hundred rows saying it moved the mouse.
+    The second value lets the router write one session row per session instead of one per action,
+    so a tenant's session list shows that an agent connected rather than every mouse move.
     """
     if not refresh:
         cached = session_store.load(target)
@@ -167,9 +163,8 @@ def wait_seconds(operation: str, params: Dict[str, Any]) -> Optional[float]:
     """How long a `wait` asks for, validated as `desktop_action` validates it; None otherwise.
 
     important: the proxy route serves a wait on the event loop with this answer instead of handing
-    it to `desktop_action` on the desktop pool. That pool has four workers, and the branch below
-    slept on one of them after fetching the instance from the cluster, so four agents waiting the
-    maximum refused every other desktop action on the deployment while they did.
+    it to `desktop_action` on the desktop pool. That pool has four workers, so four agents waiting
+    the maximum there would refuse every other desktop action on the deployment.
     """
     if operation not in ("desktop_view", "desktop_input", "desktop_clipboard"):
         return None
@@ -183,7 +178,7 @@ async def serve_wait(seconds: float) -> Dict[str, Any]:
     """A validated wait, served on the event loop and bounded per worker.
 
     Raises BlockingPoolFull when the worker already holds its share, which the proxy route answers
-    as `overloaded`, exactly as it answers a full desktop pool.
+    as `overloaded`, as it answers a full desktop pool.
     """
     if _WAIT_SLOTS.locked():
         raise BlockingPoolFull("desktop wait", DESKTOP_MAX_IN_FLIGHT)
@@ -200,9 +195,8 @@ def desktop_action(inst: Any, params: Dict[str, Any], operation: str = "desktop_
     target = _target(params, inst)
 
     if action.name == "wait":
-        # note: never sent to the guest. The proxy route answers a wait itself (`wait_seconds`),
-        # so this is reached only by a caller that skipped that, and sleeping is still the truthful
-        # answer for one.
+        # Never sent to the guest. The proxy route answers a wait itself (`wait_seconds`), so
+        # only a caller that skipped that reaches this, and sleeping is still the right answer.
         time.sleep(action.duration)
         return {"ok": True, "action": "wait", "waited_seconds": action.duration}
 

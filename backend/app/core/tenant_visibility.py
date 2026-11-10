@@ -79,7 +79,7 @@ def parse_lxd_reference(reference: str) -> tuple[str, Optional[str]]:
 def references_in_projects(references: object, visible_projects: "frozenset[str] | set[str]") -> list:
     """The references in `references` whose project is one of `visible_projects`.
 
-    note: for an API key's own grant, not for a tenant's policy (that is
+    For an API key's own grant, not for a tenant's policy (that is
     `filter_visible_lxd_references`). Anything that is not a string reference is dropped.
     """
     if not isinstance(references, list):
@@ -116,12 +116,11 @@ def tenant_can_view_lxd_reference(
     reference: str,
     required_permission: str = "view",
 ) -> bool:
-    """Check if a tenant can see the resource pointed to by an LXD reference.
+    """Whether a tenant can see the resource an LXD reference points to.
 
-    important: a reference that names no instance (a profile, network, ACL, custom volume or
-    image) is never visible to a Tenant. `check_tenant_permission(..., None)` passes it on any
-    rule in its project, so one instance rule in a project shared with another party handed over
-    that party's records (backlog A1-A7, owner decision 2026-11-05: strict). A record a Tenant's
+    A reference that names no instance (a profile, network, ACL, custom volume or image) is never
+    visible to a Tenant: `check_tenant_permission(..., None)` passes it on any rule in its
+    project, which would expose another party's records in a shared project. A record a Tenant's
     own instance uses still shows, through that instance's reference.
     """
     if not tenant_acl_active():
@@ -158,11 +157,9 @@ def filter_visible_lxd_references(
 ) -> list[str]:
     """Keep only used_by/resource references the caller may see.
 
-    The Partner project bound first: on a cluster shared by two organizations a record in the
-    default project (a profile, a network, a pool) is used by both organizations' instances,
-    and an unbounded used_by named the other one's. A bare reference parses to `default`,
-    which every bound contains, so nothing an unbounded caller sees changes. Then the tenant
-    ACL, as before.
+    The Partner project bound applies first: on a cluster shared by two organizations a record in
+    `default` (a profile, a network, a pool) is used by both organizations' instances. A bare
+    reference parses to `default`, which every bound contains. The tenant ACL applies second.
     """
     bounded = [
         reference for reference in (references or [])
@@ -170,7 +167,7 @@ def filter_visible_lxd_references(
     ]
     if not tenant_acl_active():
         return bounded
-    # note: a Tenant does not see the cluster member a reference names (`&target=` on a
+    # A Tenant does not see the cluster member a reference names (`&target=` on a
     # clustered pool), as `vm_for_tier` withholds an instance's location.
     return [
         without_member_target(reference) for reference in bounded
@@ -205,18 +202,12 @@ def tenant_acl_can_view_lxd_used_by(
 def tenant_may_see_project(cluster_id: str, project: Optional[str]) -> bool:
     """Whether a tenant may see a record OWNED by this project.
 
-    A security review pointed out that widening these lists past the default project changed
-    what the `used_by` filter alone protects. `parse_lxd_reference` yields no instance name for
-    a reference like `/1.0/networks/foo`, and `check_tenant_permission` then merges permissions
-    from any rule matching the project, so a tenant holding one instance-level rule in project
-    P could read every project-owned ACL in P, ingress and egress bodies included.
-
-    So ownership is checked as well as usage, and since 2026-11-05 the usage side refuses a
-    reference that names no instance (`tenant_can_view_lxd_reference`). `default` stays visible
-    unconditionally: it is
-    the shared project every other one draws its networks and profiles from when it does not
-    isolate them, and hiding it would take away resources the tenant's own instances are
-    attached to.
+    The `used_by` filter alone does not cover lists past the default project: a reference like
+    `/1.0/networks/foo` names no instance, and `check_tenant_permission` then merges permissions
+    from any rule matching the project, so one instance-level rule in project P would expose every
+    project-owned ACL in P. Ownership is therefore checked as well as usage. `default` stays
+    visible: projects that do not isolate networks and profiles draw them from it, and the
+    tenant's own instances are attached to them.
     """
     owner = project or "default"
     if owner == "default":

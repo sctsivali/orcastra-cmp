@@ -1,12 +1,10 @@
 """Whether a restore can run on the instance's storage, decided before anything is written.
 
-important: ZFS rolls an instance back only to its newest snapshot. LXD fails the restore of an
-older one ("cannot be restored due to subsequent snapshot(s)") unless `zfs.remove_snapshots`
-deletes every later snapshot. The safety copy a restore takes first is by construction later than
-the target, so on ZFS a restore with a safety copy could never succeed: it was refused at the
-daemon after the copy had been written. Verified on nuc2 (LXD 5.21, pool `default`), 2026-10-25.
-Ceph is documented upstream to share the restriction but has not been verified here, so only ZFS
-is listed.
+ZFS rolls an instance back only to its newest snapshot. LXD fails the restore of an older one
+("cannot be restored due to subsequent snapshot(s)") unless `zfs.remove_snapshots` deletes every
+later snapshot. The safety copy a restore takes first is always later than the target, so on ZFS a
+restore with a safety copy would be refused by the daemon after the copy was written. Upstream
+documents the same restriction for Ceph, but only ZFS has been verified, so only ZFS is listed.
 """
 
 import re
@@ -82,8 +80,7 @@ def plan_restore(
     """Decide from the driver and the instance's snapshots, in LXD's listing order.
 
     `name_driver` False is a Tenant's plan: the same decision, with the driver withheld and the
-    reason worded without it. The pool's driver is the provider's storage (owner decision
-    2026-10-26).
+    reason worded without it, because the pool's driver describes the provider's storage.
     """
     shown_driver = storage_driver if name_driver else None
     storage = "This instance is on ZFS storage, which" if name_driver else "This instance's storage"
@@ -98,7 +95,7 @@ def plan_restore(
         if index == position:
             continue
         row_at = _moment(row.get("created_at"))
-        # note: by time when both are known, by listing order otherwise. LXD lists an instance's
+        # By time when both are known, by listing order otherwise. LXD lists an instance's
         # snapshots oldest first, which is also the order ZFS counts "subsequent" in.
         later = row_at > target_at if (row_at and target_at) else index > position
         if later:
@@ -129,12 +126,11 @@ def plan_restore(
     )
 
 
-# important: LXD 5.21.5 and later re-check project policy on a snapshot restore (the CVE-2026-9640
-# fix) and refuse one that changes any `volatile.*` key, which most restores do, whenever the
-# project sets limits. Measured on 5.21.5 and 5.21.8 (2026-11-05): an instance's first restore
-# passes and every later one is refused; clearing the project's limits lets restores through and
-# setting them again brings the refusal back. Nothing on our side can change that, so the refusal
-# is explained instead of passed on as a daemon failure.
+# LXD 5.21.5 and later re-check project policy on a snapshot restore (the CVE-2026-9640 fix) and
+# refuse one that changes any `volatile.*` key, which most restores do, whenever the project sets
+# limits. On 5.21.5 and 5.21.8 an instance's first restore passes and every later one is refused
+# until the project's limits are cleared. The dashboard cannot change that, so the refusal is
+# explained instead of passed on as a daemon failure.
 _VOLATILE_REFUSAL = re.compile(r'Changing "volatile\.[^"]+" on \S+ ".+" in project ".+" is forbidden')
 
 

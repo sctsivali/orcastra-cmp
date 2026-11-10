@@ -1,13 +1,13 @@
 """`default` stays view only for a key a partner created, where another party holds the cluster.
 
 The browser rule (org_scope.refuse_default_operation) reads the request's own org scope, which no
-key route carries, so it answered nothing for a key: a key minted before that rule kept changing,
-opening and reading inside another party's guests in `default` through the structured proxy, MCP
-and the raw proxy (RC5 acceptance FU-1, 2026-11-06). A key acts for whoever created it, so the
-same rule is judged from that person: the party from the database, the role from Authentik.
+key route carries, so on its own it would let a key change, open and read inside another party's
+guests in `default` through the structured proxy, MCP and the raw proxy. A key acts for whoever
+created it, so the same rule is judged from that person: the party from the database, the role
+from Authentik.
 
-note: an add-on's key is judged by the person who installed it. Rotating the key rewrites
-`created_by` to whoever rotated it, so the installation row is the stable record.
+An add-on's key is judged by the person who installed it. Rotating the key rewrites `created_by`
+to whoever rotated it, so the installation row is the stable record.
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ async def _held_by_another_party(db: Any, creator: str, cluster_id: str) -> bool
 
 async def _judge(api_key: Mapping[str, Any], cluster_id: str, db: Any) -> Tuple[str, bool]:
     if db is None:
-        # Opened only here, so a key door that never touches `default` costs no session.
+        # Opened only here, so a key route that never touches `default` costs no session.
         from app.core.database import async_session_maker
 
         async with async_session_maker() as session:
@@ -102,7 +102,7 @@ async def refuse_key_default_operation(
     file inside a guest. Plain reads of `default` stay open. 403 for a key whose creator is not an
     Admin, 503 while the creator's role or the parties cannot be read.
 
-    `lands_in` answers where the write really goes when that differs from what the key named: LXD
+    `lands_in` answers where the write lands when that differs from what the key named: LXD
     keeps images, profiles, network ACLs and custom volumes in `default` for a project that does
     not isolate them, and an operation lives in the project of its resources. It costs a cluster
     read, so it is asked only once the cluster is known to be held by another party.

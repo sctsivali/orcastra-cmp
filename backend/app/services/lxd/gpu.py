@@ -73,8 +73,7 @@ def scan_gpu_allocations(
 ) -> GpuAllocations:
     """Walk the instance list once, producing both card attribution and the used count.
 
-    Replaces a usage map and a separate instance counter that walked the same list twice with
-    two disagreeing definitions of "holds a GPU".
+    One walk, so card attribution and the used count share one definition of "holds a GPU".
     """
     alloc = GpuAllocations()
     if instances is None:
@@ -86,9 +85,9 @@ def scan_gpu_allocations(
             if getattr(instance, "status", "") != "Running":
                 continue
 
-            # important: scope to this host. On a real cluster `client.instances.all()`
-            # returns every member's instances while capacity comes from ONE member, so an
-            # unscoped count reported another node's GPU consumers against this node's cards.
+            # important: scope to this host. On a cluster `client.instances.all()` returns
+            # every member's instances while capacity comes from ONE member, so an unscoped
+            # count would report another node's GPU consumers against this node's cards.
             # A standalone host reports location "none", which normalizes to None and belongs
             # to whichever member is being asked about.
             location = normalize_cluster_member(getattr(instance, "location", None))
@@ -99,11 +98,11 @@ def scan_gpu_allocations(
             config = getattr(instance, "expanded_config", None) or getattr(instance, "config", None) or {}
             name = getattr(instance, "name", "") or "unknown"
 
-            # nvidia.runtime and nvidia.driver.capabilities really do bind the GPU into the
-            # container, so each is an allocation on its own.
+            # nvidia.runtime and nvidia.driver.capabilities bind the GPU into the container,
+            # so each is an allocation on its own.
             # important: environment.LD_LIBRARY_PATH is NOT. An image can carry that variable
-            # with no device attached, and treating it as an allocation consumed the host's
-            # only GPU on a container that never touched it.
+            # with no device attached, and treating it as an allocation would consume the
+            # host's only GPU on a container that never touched it.
             holds_compute = (
                 str(config.get("nvidia.runtime", "")).strip().lower() in ("true", "1")
                 or bool(config.get("nvidia.driver.capabilities"))
@@ -142,8 +141,8 @@ def scan_gpu_allocations(
             if holds_compute:
                 alloc.compute_holders.add(name)
     except Exception as e:
-        # A failed enumeration must never be read as "nothing is allocated"; the caller keeps
-        # capacity intact and reports zero usage rather than a wrong usage.
+        # A failed scan must not read as "nothing is allocated": usage counts only the instances
+        # walked before the failure, so scan_failed flags it. Capacity stays intact.
         logger.debug(f"GPU allocation scan failed: {e}")
         alloc.scan_failed = True
     return alloc

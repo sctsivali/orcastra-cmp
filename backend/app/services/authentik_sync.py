@@ -1,12 +1,7 @@
-"""
-Authentik Sync Service - push user group assignments from Orcastra to Authentik.
+"""Push user role-group assignments from Orcastra to Authentik through the Admin API v3.
 
-Orcastra is the source of truth for RBAC group assignments.
-This service uses the Authentik Admin API v3 to:
-  - List/search users by email
-  - List/search groups
-  - Create groups (role_admin, role_partner, role_tenant)
-  - Add/remove users from groups
+Orcastra is the source of truth for RBAC group assignments. This service finds users and groups,
+creates missing role groups (role_admin, role_partner, role_tenant) and moves users between them.
 
 Config env vars:
   AUTHENTIK_API_URL   - ex; https://auth.example.com/api/v3
@@ -23,7 +18,7 @@ from app.services.authentik_role_reading import RoleReading, fetch_current_roles
 
 logger = logging.getLogger(__name__)
 
-# Authentik groups that map to our three-tier roles
+# Authentik groups that map to the three-tier roles.
 ROLE_GROUPS = ["role_admin", "role_partner", "role_tenant"]
 # The only groups an integration key may add. It cannot remove any account role.
 INTEGRATION_ROLE_GROUPS = frozenset({"role_partner", "role_tenant"})
@@ -62,14 +57,10 @@ class AuthentikSyncService:
     async def _ensure_role_groups_exist(
         self, client: httpx.AsyncClient, names: Iterable[str] = tuple(ROLE_GROUPS)
     ) -> dict[str, str]:
-        """
-        Ensure the named role groups (all three by default) exist in Authentik.
-        Returns mapping: group_name -> pk (UUID string).
-        """
+        """Ensure the named role groups (all three by default) exist; return name -> pk (UUID)."""
         group_map: dict[str, str] = {}
 
         for group_name in names:
-            # search by name
             resp = await client.get(
                 f"{self.api_url}/core/groups/",
                 params={"search": group_name},
@@ -82,7 +73,6 @@ class AuthentikSyncService:
                     group_map[group_name] = match["pk"]
                     continue
 
-            # create if not found
             create_resp = await client.post(
                 f"{self.api_url}/core/groups/",
                 json={"name": group_name, "is_superuser": group_name == "role_admin"},
@@ -97,7 +87,7 @@ class AuthentikSyncService:
         return group_map
 
     async def _find_user_pk(self, client: httpx.AsyncClient, email: str) -> Optional[int]:
-        """Find Authentik user PK by email."""
+        """First account matching the email case-insensitively; None also on a failed search."""
         resp = await client.get(
             f"{self.api_url}/core/users/",
             params={"search": email},
@@ -118,9 +108,9 @@ class AuthentikSyncService:
     async def get_user_role_groups(self, user_email: str) -> Optional[set[str]]:
         """Role groups a user currently holds, or None when Authentik cannot answer.
 
-        important: callers use this to refuse a privilege change they are not entitled to make,
-        so `None` means "unknown" and must NOT be read as "holds nothing". Returning an empty
-        set for an unreachable Authentik would let a caller demote an admin during an outage.
+        important: `None` means unknown and must not be read as "holds nothing", or a caller could
+        demote an admin during an outage. A failed or empty user search still answers an empty
+        set (_find_user_pk); read_current_roles is the strict read.
         """
         if not self.enabled:
             return None
@@ -153,13 +143,10 @@ class AuthentikSyncService:
         return await fetch_current_roles(self.api_url, self._headers(), user_email)
 
     async def sync_user_role(self, user_email: str, target_role: str) -> bool:
-        """
-        Set user's Authentik groups to match the target role.
-        Removes other role groups and adds the target one. A Partner promotion retains
-        role_tenant, the baseline group of an active account. An explicit admin removal
-        still uses remove_user_from_all_roles.
+        """Set the user's role groups to match `target_role` ("admin", "partner" or "tenant").
 
-        target_role: "admin" | "partner" | "tenant"
+        Removes the other role groups and adds the target one. A Partner keeps role_tenant, the
+        baseline group of an active account. Removing every role is remove_user_from_all_roles.
         """
         if not self.enabled:
             logger.warning("Authentik sync skipped: not configured")
@@ -171,19 +158,16 @@ class AuthentikSyncService:
             return False
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # ensure groups exist
             group_map = await self._ensure_role_groups_exist(client)
             if target_group not in group_map:
                 logger.error(f"Target group {target_group} not found in Authentik")
                 return False
 
-            # find user
             user_pk = await self._find_user_pk(client, user_email)
             if not user_pk:
                 logger.warning(f"User {user_email} not found in Authentik, skipping sync")
                 return False
 
-            # remove from other role groups
             for gname, gpk in group_map.items():
                 if gname != target_group and not (target_group == "role_partner" and gname == "role_tenant"):
                     remove_resp = await client.post(
@@ -195,7 +179,6 @@ class AuthentikSyncService:
                         logger.error("Failed to remove %s from %s: HTTP %s", user_email, gname, remove_resp.status_code)
                         return False
 
-            # add to target group
             resp = await client.post(
                 f"{self.api_url}/core/groups/{group_map[target_group]}/add_user/",
                 json={"pk": user_pk},
@@ -216,10 +199,10 @@ class AuthentikSyncService:
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             group_map = await self._ensure_role_groups_exist(client)
-            # important: the strict lookup the role read uses, not _find_user_pk. That one answers
-            # None for a failed search and for a missing account alike, and keeps the first of two
-            # accounts. Only a complete result naming no account means there is nothing to remove;
-            # an incomplete page, two accounts or a blank email stays unconfirmed (False).
+            # important: use the strict lookup the role read uses. _find_user_pk answers None for a
+            # failed search and a missing account alike, and keeps the first of two accounts. Only
+            # a complete result naming no account means there is nothing to remove; an incomplete
+            # page, two accounts or a blank email stays unconfirmed (False).
             account = await find_account(client, self.api_url, self._headers(), user_email)
             if account.reason == "user_not_found":
                 logger.info("Removal: %s has no Authentik account, so no role group to leave", user_email)
@@ -288,9 +271,9 @@ class AuthentikSyncService:
     async def get_sync_status(self) -> dict:
         """Whether role sync can reach Authentik, and which role groups exist. Read-only.
 
-        important: never _ensure_role_groups_exist here. It creates missing groups, role_admin as a
-        superuser, and the User Groups screen polls this every 30 seconds as a partner. The write
-        paths create groups when they first need one. `error` is a short reason, never the raw
+        important: never call _ensure_role_groups_exist here. It creates missing groups, role_admin
+        as a superuser, and the User Groups screen polls this every 30 seconds as a partner. The
+        write paths create groups when they need one. `error` is a short reason, never the raw
         exception, because the answer reaches partners.
         """
         if not self.enabled:

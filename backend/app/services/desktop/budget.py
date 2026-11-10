@@ -1,12 +1,11 @@
 """Per-target rate limits for desktop actions.
 
-Keyed per `(key, cluster, project, instance)` rather than per key, for two reasons. One runaway
-agent on one guest must not starve another guest the same key is legitimately driving, and raising
-the per-key limit for an unrelated integration must not silently widen this.
+Keyed per `(key, cluster, project, instance)` so one runaway agent on one guest cannot starve
+another guest the same key drives, and raising a key's general limit does not widen this one.
 
-Two buckets, because the costs are not comparable. An action is one short command inside the
-guest. A capture encodes and ships megabytes and then costs the model roughly 1334 visual tokens
-to read, so twenty a minute is already generous for a see-act loop and sixty would not be.
+Two buckets, because the costs differ. An action is one short command inside the guest. A capture
+encodes and ships megabytes and costs the model about 1334 visual tokens to read, so twenty a
+minute is generous for a see-act loop.
 """
 
 import logging
@@ -38,15 +37,12 @@ def consume(
 ) -> Tuple[bool, Optional[int]]:
     """Spend one action against this target's budget. Returns (allowed, retry_after_seconds).
 
-    A capture spends BOTH buckets: it is an action as well as a capture, so a screenshot loop
-    cannot dodge the action ceiling by never doing anything else.
+    A capture spends both buckets, so a screenshot loop cannot dodge the action ceiling.
 
-    important: `fail_closed` is the deliberate exception to this codebase's general rule. Every
-    other limiter here fails open, and `_shared_allow` documents why: a limiter that rejects when
-    its store is unreachable turns a Redis outage into a total product outage. That reasoning
-    holds for reads and for uploads. It does not hold for typing into a customer's desktop, where
-    the cost of allowing an unbounded number during an outage is higher than the cost of refusing
-    them, so input fails closed and everything else keeps the house rule.
+    important: `fail_closed` is the one exception to the fail-open rule every other limiter keeps.
+    `_shared_allow` explains that rule: a limiter that rejects when its store is unreachable turns a
+    Redis outage into a product outage. Unbounded typing into a customer's desktop during an outage
+    costs more than refusing it, so input fails closed.
     """
     checks = [("actions", DESKTOP_ACTIONS_PER_MINUTE)]
     if capture:

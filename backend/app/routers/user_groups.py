@@ -1,9 +1,7 @@
-"""
-User Group Assignment Router
+"""Settings -> User Groups: assign users by email to role groups and organizations.
 
-Provides endpoints for the Settings -> User Groups UI.
-Admin can assign users (by email) to role groups and organizations,
-with automatic push to Authentik.
+An Admin assigns any role; a Partner assigns the tenant role in organizations it runs. Every
+assignment, and an Admin's removal, is pushed to Authentik.
 """
 
 import logging
@@ -97,9 +95,9 @@ async def list_user_groups(
     user: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    List users with their role and organization memberships.
-    Admin sees all; partner sees only users in their own organizations.
+    """List users with their role and organization memberships.
+
+    An Admin sees everyone; a Partner sees the members of the organizations it runs.
     """
     roles = resolve_roles(user)
     highest = get_highest_role(roles)
@@ -117,8 +115,8 @@ async def list_user_groups(
     )
 
     # important: a partner sees the rosters of the organizations it runs, the same set assign and
-    # remove act on. Any membership used to count, so a partner who only bought from another
-    # partner read that seller's whole customer list.
+    # remove act on. Counting any membership would show a partner that bought from another
+    # partner that seller's whole customer list.
     if highest != Role.ADMIN:
         caller_orgs = sorted(await run_orgs(db, user.email))
         if not caller_orgs:
@@ -129,7 +127,7 @@ async def list_user_groups(
 
     rows = result.fetchall()
 
-    # aggregate by user; a row typed before emails were lowercased still lands on its person
+    # Aggregate by person: rows that differ only in email case land on one entry.
     user_map: dict[str, UserGroupEntry] = {}
     for email, role, org_id, org_name, org_slug in rows:
         key = _match_key(email)
@@ -157,10 +155,11 @@ async def assign_user_role(
     user: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Assign a user to a role group. For partner/tenant, also assigns to an organization.
-    Partners can only assign tenant role within their own organizations.
-    Admin can assign any role to any organization.
+    """Assign a user to a role group and, for partner or tenant, to an organization.
+
+    An Admin may assign any role in any organization. A Partner may assign only the tenant role,
+    in an organization it runs, and never to an existing Admin or Partner (403); 503 when
+    Authentik cannot confirm the target's current role.
     """
     roles = resolve_roles(user)
     highest = get_highest_role(roles)
@@ -204,12 +203,10 @@ async def assign_user_role(
                 detail="You can only assign tenants to organizations you own",
             )
 
-        # important: the checks above validate the ORGANISATION but said nothing about the
-        # TARGET. A partner could name an admin's email with role="tenant" in an org they own,
-        # and the Authentik push below strips that user's role_admin globally. A partner may
-        # only move someone who is not already an admin or another partner. An unknown answer
-        # is refused rather than assumed empty, so an Authentik outage cannot be used as the
-        # opening.
+        # important: the checks above validate the organisation only. Naming an admin's email
+        # with role "tenant" would make the Authentik push below strip that user's role_admin
+        # globally, so a partner may only move someone who is not already an admin or partner.
+        # An unknown answer is refused, so an Authentik outage is no opening.
         current_groups = await get_authentik_sync().get_user_role_groups(target_email)
         if current_groups is None:
             raise HTTPException(
@@ -290,14 +287,16 @@ async def remove_user_from_all(
     user: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Remove a user from organizations and Authentik role groups.
-    Admin: removes from all orgs. Partner: removes only from their own orgs.
+    """Remove a user from organizations.
+
+    An Admin removes them from every organization and every Authentik role group (502 when
+    Authentik does not confirm). A Partner removes them only from the organizations it runs: 404
+    when there are none, 409 when every one left is a roster OrcaHub keeps.
     """
     roles = resolve_roles(user)
     highest = get_highest_role(roles)
     user_email = (user_email or "").strip()
-    # important: refused at the boundary. A blank path once reached the identity provider as an
+    # important: refuse at the boundary. A blank address would reach the identity provider as an
     # empty search, which lists every account.
     if not _plausible_address(user_email):
         raise HTTPException(status_code=422, detail="Give the email address of the user to remove")
@@ -307,17 +306,17 @@ async def remove_user_from_all(
 
     kept: dict[int, str] = {}
     if highest == Role.ADMIN:
-        # admin: remove from all orgs
+        # An admin removes the user from every organization.
         removed = await db.execute(
             delete(OrganizationMember)
             .where(same_person)
             .returning(OrganizationMember.organization_id)
         )
     else:
-        # partner: only the organizations it runs (created, or a partner row there)
+        # A partner removes only from the organizations it runs (created, or a partner row there).
         # important: OrcaHub owns the roster of an organization it synced and lets only a platform
-        # admin remove a partner there, so the next sync would quietly bring such a row back. Those
-        # rows are kept and named, and the rest of the caller's organizations are still cleared.
+        # admin remove a partner there, so the next sync would bring such a row back. Those rows
+        # are kept and named, and the rest of the caller's organizations are still cleared.
         caller_orgs = set(await run_orgs(db, user.email))
         kept = await synced_partner_orgs(db, user_email, sorted(caller_orgs))
         removed = await db.execute(
@@ -331,8 +330,8 @@ async def remove_user_from_all(
     removed_org_ids = sorted({row[0] for row in removed.all()})
     if kept and not removed_org_ids:
         raise HTTPException(status_code=409, detail=synced_partner_refusal(user_email, list(kept.values())))
-    # note: a removal reaches only the orgs the caller runs, which is also all its list shows; a
-    # name typed by hand that matches none of them says so rather than answering success.
+    # A removal reaches only the orgs the caller runs, which is also all its list shows; an
+    # address that matches none of them gets a 404.
     if highest != Role.ADMIN and not removed_org_ids:
         raise HTTPException(
             status_code=404, detail=f"{user_email} is not a member of any organization you run"
@@ -367,7 +366,7 @@ async def remove_user_from_all(
 async def get_sync_status(
     user: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Check Authentik sync connectivity status."""
+    """Whether Authentik role sync is configured and reachable, and whether its role groups exist."""
     sync_svc = get_authentik_sync()
     result = await sync_svc.get_sync_status()
 

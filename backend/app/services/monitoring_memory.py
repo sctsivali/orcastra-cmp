@@ -1,7 +1,8 @@
 """Memory without reclaimable page cache for the dashboard's running instances.
 
 The fleet list's state reports a container's cgroup usage and a VM's MemTotal - MemFree, both
-of which count page cache the guest can reclaim, so Top Consumers ranked file I/O as memory.
+of which count page cache the guest can reclaim, so Top Consumers would rank file I/O as
+memory.
 One /1.0/metrics read per member carries every instance's meminfo; `honest_memory_for` turns it
 into what the guest's programs hold, behind the gate the instance dialog uses. The read is the
 member-wide one the dialog shares through the metrics cache, so a sweep and an open dialog on
@@ -63,7 +64,7 @@ async def apply_member_memory(
     groups = _groups(usages)
     phase_end = time.monotonic() + PHASE_SECONDS
     # important: run_blocking's per-cluster bound refuses a call past it rather than queueing
-    # it, so a third member of one Cluster was refused on every sweep. The gate queues them.
+    # it, so without this gate a third member of one Cluster would be refused on every sweep.
     gates = {cluster: asyncio.Semaphore(_PER_CLUSTER) for cluster, _ in groups}
 
     async def one(cluster: str, member: str) -> Optional[MemberScrape]:

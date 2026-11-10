@@ -1,15 +1,11 @@
 """Running one command inside a guest, for the key-authenticated surface.
 
-Split out of ``proxy_operations`` because it is a different kind of act from the rest of that
-vocabulary: everything else there manages an instance from outside, and this reaches in. It is
-also the only operation with bounds of its own, since the output size and the runtime are both
-chosen by the caller.
+Kept apart from ``proxy_operations``: everything else there manages an instance from outside,
+and this reaches in. It is also the only operation with bounds of its own, since the caller
+chooses the output size and the runtime.
 
-important: this exists because the power already did, without any of the controls. The raw proxy
-refuses exactly one path (``/certificates``), so ``POST /1.0/instances/<n>/exec`` ran arbitrary
-commands as root for any key holding ``lxd.proxy`` and ``write``, with no capability specific to
-it, no size cap, and an audit trail that recorded the path but never the command. Demonstrated
-against this deployment before the fix: ``uid=0(root)`` from an ordinary preset key.
+important: exec runs as root unless the caller names a user. It costs its own capability
+(``instance.exec``), its output is capped, and the audit record carries the command.
 """
 
 import logging
@@ -27,14 +23,12 @@ __all__ = ["exec_instance"]
 class _BoundedStream:
     """Collects one output stream, and stops collecting once it has enough.
 
-    important: the cap has to apply as frames ARRIVE, not to the finished result. pylxd appends
-    every frame to a list and joins it on access, so truncating afterwards bounds the response
-    while the worker has already held the whole thing, plus a copy, in memory. `cat /dev/zero`
-    would grow that until the container died. Passing a handler makes pylxd hand each frame here
-    instead of buffering it (``pylxd/models/instance.py``), so this is where the bound belongs.
+    important: the cap applies as frames arrive. pylxd buffers every frame and joins them on
+    access, so truncating afterwards would let `cat /dev/zero` exhaust the worker's memory.
+    Passing a handler makes pylxd hand each frame here instead (``pylxd/models/instance.py``).
 
-    note: bytes, not characters. The limit is advertised in bytes and a multibyte-heavy stream
-    would otherwise return several times what the caller was told.
+    The limit counts bytes, as advertised; counting characters would let a multibyte stream
+    return several times that.
     """
 
     def __init__(self, limit: int = EXEC_OUTPUT_LIMIT) -> None:
@@ -65,19 +59,17 @@ class _BoundedStream:
         return self._size
 
     def text(self) -> str:
-        # errors="replace" rather than a raise: a caller that runs `cat` on a binary should get
-        # replacement characters, not a failed call. pylxd's own decode has no error handler,
-        # which is why this reads the bytes itself.
+        # errors="replace" so `cat` on a binary returns replacement characters instead of
+        # failing. pylxd's own decode has no error handler, so this decodes the bytes itself.
         return b"".join(self._chunks).decode("utf-8", errors="replace")
 
 
 def _argv(params: Dict[str, Any]) -> List[str]:
     """The command, as an argv list.
 
-    important: a list, never a shell string. LXD takes argv, so accepting `"rm -rf /tmp/x"` would
-    mean this layer inventing a quoting rule, and every quoting rule invented at a boundary is a
-    place where the audit record and what actually ran disagree. A caller that genuinely wants a
-    shell asks for one: `["/bin/sh", "-c", "..."]`, which is explicit in the audit trail.
+    important: a list, never a shell string. LXD takes argv; splitting a string here would need a
+    quoting rule invented at this layer, and then the audit record and what ran could disagree. A
+    caller that wants a shell passes `["/bin/sh", "-c", "..."]`, which the audit trail shows.
     """
     command = params.get("command")
     if isinstance(command, str):
@@ -98,8 +90,7 @@ def _argv(params: Dict[str, Any]) -> List[str]:
 def _identity(params: Dict[str, Any], field: str) -> Optional[int]:
     """A uid or gid, validated here rather than handed to LXD to reject.
 
-    Passing a string through produced an LXD unmarshal error surfaced with LXD's own wording,
-    which tells a caller nothing about which field it got wrong.
+    LXD rejects a wrong type with an unmarshal error that does not name the field.
     """
     value = params.get(field)
     if value is None:
@@ -168,9 +159,8 @@ def _exec_recorded(
         "stderr_bytes": len(stderr.encode("utf-8")),
         "truncated": truncated,
         "output_limit_bytes": EXEC_OUTPUT_LIMIT,
-        # Which path ran, so a caller can tell whether it is subject to the streaming path's
-        # frame loss. cwd is not supported by the recorded form, so a request naming one falls
-        # back and says so here.
+        # Which path ran, so a caller can tell whether the streaming path's frame loss applies.
+        # The recorded form does not support cwd, so a request naming one runs as "streaming".
         "transport": "recorded",
     }
 
@@ -178,9 +168,8 @@ def _exec_recorded(
 def exec_instance(inst: Any, params: Dict[str, Any]) -> Dict[str, Any]:
     """Run one command inside a guest and return what it did.
 
-    note: a non-zero exit code is a SUCCESSFUL call reporting a failed command. Mapping it to an
-    error would make "grep found nothing" indistinguishable from "the cluster is unreachable",
-    which is the distinction an unattended caller most needs.
+    A non-zero exit code is a successful call reporting a failed command. Mapping it to an
+    error would make "grep found nothing" look the same as "the cluster is unreachable".
     """
     command = _argv(params)
     stdin_payload = _validated_stdin(params)
@@ -190,22 +179,17 @@ def exec_instance(inst: Any, params: Dict[str, Any]) -> Dict[str, Any]:
 
     if stdin_payload is None and not params.get("cwd"):
         # important: the default path, because the streaming one loses output. pylxd's `execute`
-        # waits for the operation to report a return code, then calls `finish_soon()`, and the
-        # first frame to arrive after that marks the socket finished and stops the manager. Frames
-        # still in flight are dropped. Measured against LXD 5.21.7: 12000 bytes asked for returned
-        # 12000, 16000 returned 0, and 16384 returned 8192, every one of them with exit_code 0 and
-        # `truncated` FALSE, so a caller was told the command succeeded and handed a short or
-        # empty result with nothing to indicate loss.
+        # calls `finish_soon()` once the operation reports a return code, and the next frame to
+        # arrive stops the manager, dropping frames still in flight. On LXD 5.21.7, 16000 bytes
+        # of output came back as 0 and 16384 as 8192, with exit_code 0 and `truncated` false.
         #
-        # `record-output` has LXD write both streams to files on its own host, which are then read
-        # with an ordinary bounded GET and deleted. No race, and still nothing written inside the
-        # guest.
+        # `record-output` has LXD write both streams to files on its own host, read back with a
+        # bounded GET and deleted. No race, and nothing is written inside the guest.
         return _exec_recorded(inst, command, environment, user, group, params)
 
-    # note: stdin keeps the streaming path because LXD refuses `wait-for-websocket` together with
-    # `record-output`, and stdin needs the websocket. The loss above therefore still applies to a
-    # call that sends stdin AND reads back more than about 12 KiB. `transport` in the response
-    # says which path ran, so that limitation is visible to a caller rather than silent.
+    # stdin keeps the streaming path: LXD refuses `wait-for-websocket` together with
+    # `record-output`, and stdin needs the websocket. The loss above still applies to a call that
+    # sends stdin and reads back more than about 12 KiB; `transport` tells the caller which ran.
     stdout, stderr = _BoundedStream(), _BoundedStream()
     result = inst.execute(
         command,
@@ -216,9 +200,8 @@ def exec_instance(inst: Any, params: Dict[str, Any]) -> Dict[str, Any]:
         decode=False,
         stdout_handler=stdout,
         stderr_handler=stderr,
-        # note: passing these through is a security feature, not a convenience. LXD execs as root
-        # by default, and naming a user is the only way an integration can drop privilege inside
-        # the guest.
+        # important: LXD execs as root by default; naming a user is the only way an integration
+        # can drop privilege inside the guest.
         user=user,
         group=group,
         cwd=params.get("cwd"),

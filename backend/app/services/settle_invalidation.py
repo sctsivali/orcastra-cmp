@@ -6,9 +6,9 @@ it for that list's TTL: the instance a proxy caller just deleted is listed again
 `dir` pool is still copying never appears. One bounded waiter per accepted operation clears the
 same caches a second time at the moment the cluster reports the operation settled.
 
-important: best effort and bounded. A waiter never holds the request, never raises, and gives up
-after SETTLE_DEADLINE_SECONDS; past MAX_WAITERS per worker a write falls back to its TTL, which
-is the behaviour before this existed, and says so in the log.
+Best effort and bounded: a waiter never holds the request, never raises, and gives up after
+SETTLE_DEADLINE_SECONDS. Past MAX_WAITERS per worker a write relies on its cache TTL and says so
+in the log.
 """
 
 from __future__ import annotations
@@ -25,12 +25,12 @@ from app.services.lxd.snapshots import wait_for_operation
 logger = logging.getLogger(__name__)
 
 MAX_WAITERS = 32
-# note: per owner (one API key, or the dashboard's own routes), so one integration starting
-# long operations cannot take every slot from the others
+# Per owner (one API key, or the dashboard's own routes), so one integration starting long
+# operations cannot take every slot from the others.
 MAX_WAITERS_PER_BUCKET = 8
 SETTLE_DEADLINE_SECONDS = 600
-# note: one LXD wait call per slice, on this module's own threads, so a long operation never
-# holds a thread for minutes and never queues behind (or in front of) request work.
+# One LXD wait call per slice, on this module's own threads, so a long operation never holds a
+# thread for minutes and never queues behind (or in front of) request work.
 WAIT_SLICE_SECONDS = 10
 MIN_POLL_SECONDS = 1.0
 

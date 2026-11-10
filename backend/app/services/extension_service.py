@@ -1,8 +1,7 @@
 """Publishing, updating and withdrawing an add-on definition.
 
-Nothing here authorizes access to anything. An `Extension` row is a description that an operator
-later consents to; the installation is what grants. Keeping that separation explicit is what stops
-"the author updated their manifest" from becoming "the add-on gained a capability".
+An `Extension` row only describes what an add-on asks for. Access is granted by an installation an
+operator consents to, so updating a manifest never widens what an installed add-on can do.
 """
 
 import logging
@@ -20,12 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 def _not_found() -> HTTPException:
-    """404 rather than 403 for something the caller may not see.
-
-    The same shape `_authorize_api_key` uses, and for the same reason: an id outside the caller's
-    reach must not be distinguishable from one that does not exist, or the refusal itself becomes
-    an enumeration oracle.
-    """
+    """404 for anything the caller may not see, so ids cannot be enumerated (as in `_authorize_api_key`)."""
     return HTTPException(status_code=404, detail="Extension not found")
 
 
@@ -93,12 +87,10 @@ async def create_extension(
 
 
 def _semver_tuple(version: str) -> tuple:
-    """Compare on the numeric core only. A pre-release suffix does not order a version here.
+    """Version key from the numeric core only.
 
-    note: `VERSION_RE` permits a `-rc.1` style suffix, and comparing those correctly means
-    implementing the whole semver precedence rule. Rather than half-implement it, the core is what
-    orders and a suffix-only change is refused as not-greater, which is the safe direction: it
-    refuses an ambiguous bump instead of accepting one nobody can reason about.
+    `VERSION_RE` allows a pre-release suffix such as `-rc.1`, but full semver precedence is not
+    implemented, so a suffix-only bump compares equal and is refused as not greater.
     """
     core = version.split("-")[0].split("+")[0]
     return tuple(int(part) for part in core.split("."))
@@ -109,10 +101,8 @@ async def publish_version(
 ) -> Extension:
     """Replace what an add-on asks for, under a strictly greater version.
 
-    Existing installations are deliberately untouched. Their grants live on their own row, so they
-    keep working at the version they consented to, and their stored digest no longer matches this
-    one, which makes any rescope answer 409 until an operator approves the new manifest. That is
-    the re-consent the documentation already promises.
+    Existing installations keep the grants they consented to. Their stored digest no longer matches,
+    so a rescope answers 409 until an operator approves the new manifest.
     """
     if manifest.slug != extension.slug:
         raise HTTPException(
@@ -199,12 +189,10 @@ async def list_extensions(
 async def update_extension(
     db: AsyncSession, extension: Extension, update: ExtensionUpdate
 ) -> Extension:
-    """Presentation may change. What the add-on asks for may not.
+    """Update presentation fields and status. What the add-on asks for cannot change here.
 
-    important: the slug is immutable and the version is not editable here. A consent binds to a
-    version and a digest, so moving either would leave every installation claiming agreement to a
-    document that no longer exists. Changing the ask is `publish_version`, which is a deliberate
-    act with its own re-consent consequence rather than a side effect of fixing a typo.
+    important: slug and version are fixed because consent binds to a version and digest. Changing
+    the requested access goes through `publish_version`, which requires re-consent.
     """
     document: Dict[str, Any] = dict(extension.manifest or {})
     for field in ("name", "description", "homepage_url", "support_url"):
@@ -216,11 +204,8 @@ async def update_extension(
         extension.status = update.status
 
     extension.manifest = document
-    # important: the digest deliberately does NOT move here. It used to be recomputed on every
-    # edit, so correcting a typo in a description silently invalidated the consent of every
-    # existing installation and answered 409 on their next rescope. Nothing on this path changes
-    # what the add-on asks for, and a digest is a promise about that, not about the prose. Only
-    # `publish_version` may move it, because only a version bump changes the ask.
+    # important: keep the digest. Recomputing it here would invalidate every installation's consent
+    # over a description edit; only `publish_version` changes what the add-on asks for.
     await db.commit()
     await db.refresh(extension)
     return extension
@@ -229,8 +214,7 @@ async def update_extension(
 async def delete_extension(db: AsyncSession, extension: Extension) -> None:
     """Refuse while anything is installed.
 
-    The application-layer twin of ON DELETE RESTRICT. Either alone leaves the other as the only
-    thing standing, and the database's refusal surfaces as a 500 rather than an explanation.
+    Mirrors the ON DELETE RESTRICT constraint so the caller gets a 409 with a reason instead of a 500.
     """
     count = await db.execute(
         select(func.count())
@@ -251,10 +235,10 @@ async def delete_extension(db: AsyncSession, extension: Extension) -> None:
 
 
 def manifest_matches(extension: Extension, digest: str) -> bool:
-    """Whether the operator consented to the document that is stored now.
+    """Whether the operator consented to the stored manifest.
 
-    Recomputed rather than compared to the stored column, so a digest written by an older code
-    path cannot be what a consent is checked against.
+    Recomputes the digest instead of trusting the stored column, which an older code path may have
+    written.
     """
     return manifest_digest(extension.manifest or {}) == digest
 

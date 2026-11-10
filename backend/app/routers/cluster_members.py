@@ -1,6 +1,5 @@
 """
-API Router for MicroCloud cluster members.
-Provides endpoints for listing cluster members in a MicroCloud setup.
+Cluster member endpoints: the member list, one member's record and one member's resources.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -59,7 +58,7 @@ _CLUSTER_MEMBERS_CACHE_KIND = "cluster_members"
 
 
 def _resource_generation(cache: object, kind: str) -> Optional[str]:
-    """Read a resource generation, allowing deliberately minimal cache test doubles."""
+    """Read a resource generation; None from a cache without generations (ex; a test double)."""
     read = getattr(cache, "resource_list_generation", None)
     return read(kind) if callable(read) else None
 
@@ -91,10 +90,9 @@ def _member_record_status(client, member_name: str) -> Optional[Tuple[str, str]]
 def _refuse_offline_member(client, member_name: str) -> None:
     """Refuse at once when the cluster reports the member as not Online.
 
-    important: a member the cluster itself reports as Offline never answers `?target=`: the
-    request hangs on the cluster until the pooled read timeout, and the dialog waited through
-    that and a retry for a generic failure. The member record answers at once, so ask it
-    first and let the operator read the cluster's own reason.
+    A member the cluster reports as Offline never answers `?target=`: the request hangs until
+    the pooled read timeout. The member record answers at once and carries the cluster's own
+    reason for the operator.
     """
     record = _member_record_status(client, member_name)
     if record and record[0] and record[0].lower() != "online":
@@ -105,11 +103,8 @@ def _percent(used: float, total: float) -> float:
     """Usage as a percentage, with a zero total reported as zero rather than dividing."""
     return round((used / total * 100), 2) if total > 0 else 0.0
 
-# important: raised from require_tenant() to require_partner(). Every page that consumes this
-# router declares useRequireRole(Role.PARTNER), so the UI already treated it as partner-tier while
-# the API accepted a tenant. Mutations here were gated individually and reads were not, which is
-# the pattern this closes. Org scope still applies on top, so this narrows the tier rather than
-# replacing the boundary.
+# important: Partner tier for reads too, matching the pages that use this router
+# (useRequireRole(Role.PARTNER)). Org scope still applies on top.
 router = APIRouter(
     prefix="/cluster-members",
     tags=["Cluster Members"],
@@ -153,24 +148,19 @@ async def list_cluster_members(
 ):
     """List all cluster members for a given node."""
     verify_cluster_access(node)
-    # Try cache first (30 second cache)
     cache = get_cache_manager()
     cache_key = get_scope_cache_key(f"cluster_members:list:host={node}")
     cached_data = None if fresh else cache.get("api_responses", cache_key)
     if cached_data is not None:
         logger.debug(f"Returning cached cluster members for host={node}")
-        # Reconstruct Pydantic model from cached dict
         return ClusterMembersResponse(**cached_data)
     members_generation = _resource_generation(cache, _CLUSTER_MEMBERS_CACHE_KIND)
     
     try:
-        # important: an unreachable cluster answers 503 here like everywhere else. This
-        # used to return is_clustered=False, and the members page renders that as
-        # "Not a Clustered Node", so an outage read as a configuration fact. The sibling
-        # get_member_resources has always used require_client.
+        # important: an unreachable cluster answers 503. is_clustered=False would render as
+        # "Not a Clustered Node" and make an outage read as a configuration fact.
         client = require_client(await client_for(lxd_service, node), node)
 
-        # Check if clustering is enabled
         host_info = client.host_info
         environment = host_info.get("environment", {})
         is_clustered = environment.get("server_clustered", False)
@@ -184,14 +174,11 @@ async def list_cluster_members(
                 total=0
             )
         
-        # Get cluster members
         try:
-            # Use the cluster API endpoint with recursion to get full member data
-            # Without recursion=1, LXD returns just member URLs instead of full objects
+            # Without recursion=1 LXD returns member URLs instead of full objects.
             response = client.api.cluster.members.get(params={"recursion": 1})
             response_data = response.json()
-            
-            # Handle different response formats
+
             if isinstance(response_data, dict):
                 members_data = response_data.get("metadata", [])
             elif isinstance(response_data, list):
@@ -204,13 +191,11 @@ async def list_cluster_members(
             
             members = []
             for member_data in members_data:
-                # Skip if member_data is not a dict
                 if not isinstance(member_data, dict):
                     logger.warning(f"Skipping non-dict member data: {member_data}")
                     continue
-                
-                # Get roles directly from LXD API response
-                # LXD returns roles as a list like ["database-leader", "database"] or ["database"]
+
+                # LXD reports roles as a list, ex; ["database-leader", "database"].
                 roles = member_data.get("roles", [])
                 
                 member = ClusterMember(
@@ -228,7 +213,6 @@ async def list_cluster_members(
                 members.append(member)
                 logger.debug(f"Added member: {member.server_name} with roles: {roles}")
             
-            # Create response
             response = ClusterMembersResponse(
                 node=node,
                 is_clustered=True,
@@ -237,7 +221,6 @@ async def list_cluster_members(
                 total=len(members)
             )
             
-            # Cache as dict for 180 seconds
             if (
                 _resource_generation(cache, _CLUSTER_MEMBERS_CACHE_KIND)
                 == members_generation
@@ -251,7 +234,7 @@ async def list_cluster_members(
             
         except Exception as e:
             logger.error(f"Error fetching cluster members from {node}: {e}")
-            # If we can't get members but it's clustered, return empty list
+            # Clustered, but the member list could not be read: answer an empty list.
             return ClusterMembersResponse(
                 node=node,
                 is_clustered=True,
@@ -261,8 +244,8 @@ async def list_cluster_members(
             )
         
     except HTTPException:
-        # important: let require_client's 503 through. Without this it is caught two
-        # lines later and re-raised as a 500.
+        # important: let require_client's 503 through; the broad handler below would turn it
+        # into a 500.
         raise
     except Exception as e:
         logger.error(f"Error getting cluster members for {node}: {e}")
@@ -284,14 +267,12 @@ async def get_cluster_member(
     verify_cluster_access(node)
     try:
         client = require_client(await client_for(lxd_service, node), node)
-        
-        # Get specific member
+
         response = client.api.cluster.members[safe_segment(member_name)].get()
         member_data = response.json().get("metadata", {})
-        
-        # important: LXD reports roles itself, as the list endpoint above already reads them.
-        # Deriving them from the `database` flag named every database member the leader,
-        # which is how a 3-member MicroCloud read as three leaders on the member page.
+
+        # Roles come from LXD, as in the list above. The `database` flag is set on every
+        # database member, so a role derived from it would name each of them leader.
         return ClusterMember(
             server_name=member_data.get("server_name", member_name),
             url=member_data.get("url", ""),
@@ -306,16 +287,13 @@ async def get_cluster_member(
         )
         
     except HTTPException:
-        # broad handler below converts it into a 500
-        # important: let require_client's 503 through. Without this the
-        # so an offline cluster does not read as a server fault.
+        # important: let require_client's 503 through, so an offline cluster does not read as a
+        # missing member. The broad handler below would turn it into a 404.
         raise
     except Exception as e:
         logger.error(f"Error getting cluster member {member_name} from {node}: {e}")
         raise HTTPException(status_code=404, detail=f"Member '{member_name}' not found")
-"""
-Additional endpoint for cluster members resources
-"""
+
 
 @router.get(
     "/{member_name}/resources",
@@ -340,7 +318,6 @@ async def get_member_resources(
     settings = get_settings()
     cache_ttl = settings.cache_ttl_lxd_data
 
-    # Check cache first
     cache_key = get_scope_cache_key(f"{MEMBER_RESOURCES_CACHE_PREFIX}:{node}:{member_name}")
     cached_resources = None if fresh else cache.get("lxd_resources", cache_key)
     if cached_resources is not None:
@@ -351,8 +328,8 @@ async def get_member_resources(
     logger.info(f"Cache MISS for member resources: {node}/{member_name}")
 
     try:
-        # note: get_client revalidates the pooled connection with a live request and may rebuild
-        # it through a TLS handshake, so it is blocking work and does not belong on the loop.
+        # get_client revalidates the pooled connection with a live request and may rebuild it
+        # through a TLS handshake, so it runs off the event loop.
         raw_client = await run_blocking(
             lxd_service.connection_manager.get_client,
             node,
@@ -379,11 +356,10 @@ async def get_member_resources(
         memory_total = memory_info.get("total", 0) or 0
         memory_used = memory_info.get("used", 0) or 0
 
-        # important: the instance list now spans every project, and it feeds both the counts
-        # and build_gpu_inventory, whose cards carry `used_by` instance NAMES. This router is
-        # reachable by a Tenant, so without a filter the widening publishes another
-        # organization's instance names on the member panel. The captured ACL is used rather
-        # than the contextvar, so the rule is the same whichever thread reads it.
+        # important: the instance list spans every project and feeds both the counts and
+        # build_gpu_inventory, whose cards carry `used_by` instance names. Filter it by any tenant
+        # ACL in effect, so another organization's instance names never reach the member panel.
+        # The captured ACL, not the contextvar, keeps the rule the same on any thread.
         acl = get_tenant_acl()
         if acl is not None:
             fanout.instances = [
@@ -402,11 +378,9 @@ async def get_member_resources(
 
         usage = count_member_instances(fanout.instances, member_name)
 
-        # Storage: a storage pool is a cluster-wide object, so the member's pool list carries
-        # the cluster's shared ceph pools on top of its own disks, and summing them gave each
-        # member the whole cluster's storage (local 1.7 TB reported as 12.4 TB). The readings
-        # are folded by summarise_cluster_storage, the same rule the node card uses: a local
-        # pool is this member's, a shared pool is the cluster's and is reported once, marked
+        # A storage pool is cluster-wide, so the member's pool list carries the shared ceph pools
+        # on top of its own disks. summarise_cluster_storage folds them by the node card's rule:
+        # a local pool is this member's; a shared pool is the cluster's, reported once and marked
         # `scope: shared` with the members it is defined on.
         fold = summarise_cluster_storage(
             PoolReading(
@@ -432,17 +406,16 @@ async def get_member_resources(
                 storage_local_total += int(entry["space_total"])
                 storage_local_used += int(entry["space_used"])
             storage_pools.append(entry)
-        # storage_total keeps its meaning of "the sum of the pool rows below": what this member
-        # can place work on, shared pools included. The local and shared subtotals are what
-        # make the per-member figures additive across the cluster.
+        # storage_total is the sum of the pool rows: what this member can place work on, shared
+        # pools included. The local and shared subtotals make per-member figures additive
+        # across the cluster.
         storage_total = storage_local_total + storage_shared_total
         storage_used = storage_local_used + storage_shared_used
         storage_partial = any(part.startswith(PART_STORAGE) for part in fanout.degraded_parts)
         instances_partial = PART_INSTANCES in fanout.degraded_parts
 
-        # GPU capacity, allocation and card detail from the canonical inventory, scoped to
-        # this member. Counting cards here by hand is what made this endpoint report two GPUs
-        # on a Jetson while the rest of the product reported one.
+        # GPU capacity, allocation and card detail come from the shared inventory, scoped to
+        # this member, so every endpoint counts cards the same way.
         gpu_inv = build_gpu_inventory(
             fanout.resources_body, fanout.instances, member=member_name
         )
@@ -451,9 +424,9 @@ async def get_member_resources(
             member_name=member_name,
             cpu_total=cpu_total,
             cpu_used=usage.cpu_used,
-            # Allocation, not utilisation, so it may exceed the thread count: 307 vCPUs on 80
-            # threads is a legitimate KVM over-commit. The remainder is clamped and the ratio
-            # is what the UI presents; a negative "available" and a 383 % bar were the bug.
+            # Allocation, not utilisation, so it may exceed the thread count under KVM
+            # over-commit (ex; 307 vCPUs on 80 threads). The remainder is clamped at zero and
+            # the UI presents the ratio.
             cpu_available=clamp_available(cpu_total, usage.cpu_used),
             cpu_usage_percent=_percent(usage.cpu_used, cpu_total),
             cpu_allocated=usage.cpu_used,
@@ -492,10 +465,8 @@ async def get_member_resources(
             degraded_parts=fanout.degraded_parts,
         )
 
-        # important: a partial read gets a much shorter TTL. Caching a body whose storage or
-        # instance numbers are floors for the full minute would keep serving them long after
-        # the transient that caused it, and the operator has no way to ask for a rebuild that
-        # the cache would not answer.
+        # important: a partial read gets a much shorter TTL. Its storage or instance numbers are
+        # floors, and a full TTL would keep serving them after the transient failure has passed.
         if _resource_generation(cache, CAPACITY_GENERATION_KIND) == capacity_generation:
             cache.set(
                 "lxd_resources",
@@ -518,8 +489,8 @@ async def get_member_resources(
         return resources
 
     except HTTPException:
-        # important: let require_client's 503 through, so an offline cluster does not read as a
-        # server fault. Without this the broad handler below converts it into a 500.
+        # important: let require_client's 503 through with its own detail; the broad handler
+        # below would replace it with a generic one.
         raise
     except MemberUnavailableError as e:
         logger.info(f"Member {member_name} on {node} is {e.status}: {e.message}")
@@ -535,9 +506,8 @@ async def get_member_resources(
             detail="Cluster reads are saturated right now, please retry shortly",
         ) from None
     except LXDAPIException as e:
-        # important: LXD answers 404 for `?target=<name>` on a host that is not clustered, and
-        # for a member name that does not exist. Neither is a server fault, and reporting them
-        # as 500 sent an operator looking for a backend bug that was not there.
+        # LXD answers 404 for `?target=<name>` on a host that is not clustered and for a member
+        # name that does not exist. Neither is a server fault.
         status = getattr(getattr(e, "response", None), "status_code", None)
         if status == 404:
             logger.info(f"No cluster member '{member_name}' on {node}: {e}")
@@ -551,8 +521,8 @@ async def get_member_resources(
             detail=f"Cluster '{node}' rejected the member resource request: {str(e)}",
         )
     except (requests_exc.ConnectionError, requests_exc.Timeout) as e:
-        # important: a read timeout reaches here as ConnectionError, not ReadTimeout, because
-        # the pooled adapter runs Retry(read=0). lxd_errors.read_timed_out carries the proof.
+        # important: a read timeout arrives as ConnectionError, not ReadTimeout, because the
+        # pooled adapter runs Retry(read=0); lxd_errors.read_timed_out tells the two apart.
         logger.error(f"Transport failure reading resources for {member_name} from {node}: {e}")
         raise lxd_transport_error(e, node, f"reading resources for '{member_name}'") from None
     except Exception as e:

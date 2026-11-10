@@ -1,18 +1,14 @@
 """The per-worker feed behind `/tasks/ws`: tails the journal tables and fans deltas out.
 
-Postgres is the only source of truth (D1), so a worker learns about a change by reading the
-tables, not from the writer: the follower may live on another worker and the sink writes from
-every worker. One task per worker polls once a second while a subscriber exists and stops on
-the last unsubscribe, the events hub's lazy shape.
+Postgres is the only source of truth (the follower may live on another worker, the sink writes
+from every worker), so one task per worker polls the tables once a second while a subscriber
+exists and stops on the last unsubscribe, like the events hub. Ordering is by `seq` (bumped on
+every task change) and by `id` for log lines. The watermark is the database clock read in the
+same transaction as the rows; every tick looks back five seconds with a bounded dedupe, because a
+row from a transaction that started before the previous watermark can commit after it.
 
-Ordering is by `seq` (bumped on every task change) and by `id` for log lines. The watermark
-is the database clock read in the same transaction as the rows, and every tick looks back
-five seconds behind it with a bounded dedupe, because a row committed by a transaction that
-started before the previous watermark can land after it.
-
-This module names no scope helper. The predicate each subscriber hands in is judged under
-that subscriber's captured context before a frame is queued, so a frame a caller may not see
-never enters its queue (the hub's rule, copied here).
+This module names no scope helper: each subscriber's predicate is judged under its captured
+context before a frame is queued, so a frame a caller may not see never enters its queue.
 """
 
 from __future__ import annotations
@@ -161,8 +157,8 @@ class TaskFeedTailer:
                 logs = list((await db.execute(_LOG_PAGE, params)).mappings().all())
             if check_follower or self._follower_active is None:
                 follower = await repository.follower_is_active(db)
-        # important: the first tick only sets the watermark, so a reconnecting tab does not
-        # replay history it will refetch on `hello` anyway.
+        # The first tick only sets the watermark, so a reconnecting tab does not replay history
+        # it refetches on `hello` anyway.
         first = self._watermark is None
         self._watermark = now
         if follower is not None:
@@ -189,8 +185,8 @@ class TaskFeedTailer:
             try:
                 allowed = sub.ctx.run(sub.accept, frame)
             except Exception:
-                # Fail closed and keep the loop alive for everyone else; one bad predicate
-                # must not stop the feed for the other subscribers on this worker.
+                # Fail closed; one bad predicate must not stop the feed for the other
+                # subscribers on this worker.
                 if not sub.accept_failed:
                     sub.accept_failed = True
                     logger.exception("task feed subscriber predicate raised; its frames are dropped")

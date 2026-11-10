@@ -1,8 +1,8 @@
 """The storage pool an instance's root disk lives on.
 
-note: exactly one disk device mounted at "/" with a pool, or no answer. Two root disks, or one
-without a pool, is not something to guess about: the migration checks compare this value before
-and after a move, and the disk I/O gate reads the pool's driver from it.
+Exactly one disk device mounted at "/" with a pool, or no answer. Two root disks, or one without
+a pool, are not guessed about: the migration checks compare this value before and after a move,
+and the disk I/O gate reads the pool's driver from it.
 """
 
 from typing import Any, Mapping, Optional

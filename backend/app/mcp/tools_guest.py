@@ -1,11 +1,11 @@
 """Reaching inside a guest: running a command, and reading or writing a file.
 
-Its own module because it is its own security review. Everything else on this surface manages an
-instance from outside; these three reach in, and they cost a capability no application type seeds
-and no key issued before capabilities existed inherits.
+Everything else on this surface manages an instance from outside; these three reach in, so they
+cost a capability no application type seeds and no key issued before capabilities existed
+inherits.
 
-Registered only when MCP_GUEST_TOOLS_ENABLED, on top of that capability, on top of the per-cluster
-level, on top of the project allow-list.
+Registered only when MCP_GUEST_TOOLS_ENABLED, on top of that capability, the per-cluster level and
+the project allow-list.
 """
 
 from typing import Annotated, Dict, List, Optional
@@ -42,9 +42,9 @@ def _size(n: int) -> str:
 
 
 def register(mcp: MCPServer) -> None:
-    # note: read at registration, from the same constants the guest paths enforce. These limits
-    # are all tunable by environment, and a description that stated the defaults would promise a
-    # model sizes the deployment then refuses.
+    # Read at registration, from the same constants the guest paths enforce. These limits are
+    # tunable by environment, so a description that stated the defaults could promise a model
+    # sizes the deployment then refuses.
     exec_budget = f"{lxd_proxy.EXEC_TIMEOUT:g}s"
     exec_output = _size(lxd_proxy.EXEC_OUTPUT_LIMIT)
     exec_stdin = _size(lxd_proxy.EXEC_STDIN_LIMIT)

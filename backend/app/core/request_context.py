@@ -1,8 +1,4 @@
-"""
-Request Context Module
-Provides context variables for request-scoped data like request_id.
-Uses Python's contextvars for thread-safe async context.
-"""
+"""Request-scoped data (request id, caller, client) in a ContextVar, read by logging and audit."""
 
 import uuid
 from contextvars import ContextVar
@@ -13,15 +9,13 @@ from datetime import datetime, timezone
 
 @dataclass
 class RequestContext:
-    """
-    Request context data that flows through the request lifecycle.
-    """
+    """Request data that flows through the request lifecycle."""
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     start_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     user_id: Optional[str] = None
     user_role: Optional[str] = None  # admin | partner | tenant
     user_groups: list = field(default_factory=list)
-    user_orgs: list = field(default_factory=list)  # org names/slugs user belongs to
+    user_orgs: list = field(default_factory=list)  # names of orgs the user belongs to or created
     session_id: Optional[str] = None
     client_ip: Optional[str] = None
     user_agent: Optional[str] = None
@@ -31,7 +25,7 @@ class RequestContext:
     path: Optional[str] = None
     extra: Dict[str, Any] = field(default_factory=dict)
 
-    # backward-compatible alias - user_type is always identical to user_role
+    # Alias of user_role, kept for existing readers.
     @property
     def user_type(self) -> Optional[str]:
         return self.user_role
@@ -56,9 +50,9 @@ class RequestContext:
         """Where the request came from, as the access log names it, for the audit record.
 
         `ip_source` says which header the address came from ("direct" when none was trusted), and
-        `proxy_trusted` whether the peer was a proxy allowed to say. A direct address from a
-        trusted proxy is the proxy's own, not the browser's, and a reader must be told so.
-        The user agent is the browser's own claim, capped and stripped of control characters.
+        `proxy_trusted` whether the peer was a proxy allowed to say. A "direct" address behind a
+        trusted proxy is the proxy's own address. The user agent is the browser's own claim,
+        capped and stripped of control characters.
         """
         agent = "".join(ch for ch in (self.user_agent or "") if ch.isprintable())[:256]
         return {
@@ -81,39 +75,33 @@ class RequestContext:
         }
 
 
-# Context variable to store request context
 _request_context: ContextVar[Optional[RequestContext]] = ContextVar(
     "request_context", default=None
 )
 
 
 def get_request_context() -> Optional[RequestContext]:
-    """Get the current request context."""
     return _request_context.get()
 
 
 def set_request_context(context: RequestContext) -> None:
-    """Set the current request context."""
     _request_context.set(context)
 
 
 def get_request_id() -> Optional[str]:
-    """Get the current request ID."""
     ctx = get_request_context()
     return ctx.request_id if ctx else None
 
 
 def get_current_user_id() -> Optional[str]:
-    """Get the current user ID from context."""
     ctx = get_request_context()
     return ctx.user_id if ctx else None
 
 
 def generate_request_id() -> str:
-    """Generate a new request ID."""
     return str(uuid.uuid4())
 
 
 def generate_event_id() -> str:
-    """Generate a new event ID for audit logs."""
+    """A new event id for an audit record."""
     return f"evt_{uuid.uuid4()}"

@@ -1,13 +1,13 @@
-"""One answer for "the cluster registry could not be read and nothing is known" (issue #15).
+"""One answer for "the cluster registry could not be read and nothing is known".
 
-A sealed Vault after a reboot made /nodes, /instances, /projects, the monitoring dashboard and the
-regions overview answer 200 with nothing in them, and /nodes and /regions cached that for minutes.
-To an operator it read as "no clusters registered". A route that read the registry and got an
-empty list now asks whether that list is an answer or a failure, and answers 503 for a failure,
-before anything is cached.
+With Vault sealed and no last known registry, a registry read returns an empty list, so /nodes,
+/instances, /projects, the monitoring dashboard and the regions overview would answer 200 with
+nothing in them, cache it, and tell an operator "no clusters registered". A route that gets an
+empty list asks whether it is an answer or a failure, and answers 503 for a failure before
+anything is cached.
 
-note: only "nothing known" refuses. While the last known registry is served the data is real and
-the routes answer it as usual; the dashboard's Vault notice says the list may be out of date.
+Only "nothing known" refuses. While the last known registry is served the data is real and the
+routes answer it as usual; the dashboard's Vault notice says the list may be out of date.
 """
 
 from typing import Sequence

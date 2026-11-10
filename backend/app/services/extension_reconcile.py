@@ -1,38 +1,18 @@
-"""The slow half of an installation's defence: catching drift the request path deliberately skips.
+"""Background sweep for installation drift that the request path does not check.
 
-`extension_scope` refuses a credential whose installation is suspended or gone, and it does that
-from a cached snapshot so authentication stays cheap. What it deliberately does not do is re-check
-whether the organization still reaches every cluster in the grant. That join on every
-authenticated request is the worse trade, so the drift is left to this sweep and the window is
-named by `EXTENSION_RECONCILE_INTERVAL_SECONDS`.
+`extension_scope` authenticates from a cached snapshot and does not re-check that the organization
+still reaches every granted cluster, so an installation whose organization lost a cluster would
+keep reaching it. This sweep checks every `EXTENSION_RECONCILE_INTERVAL_SECONDS`, against the
+organization's bindings only: a binding is what entitles an installation after install time, and
+`get_current_allowed_clusters` has no value in a background task.
 
-note: the organization's bindings, not the installing partner's own scope. Install time enforces
-the intersection of both, and this reconciles only the organization half. That is deliberate on
-one ground and forced on another. The ground: an installation is granted to an organization, and
-the organization's binding is what entitles it afterwards, so a partner later losing personal
-access does not retract an entitlement the organization still holds. The force:
-`get_current_allowed_clusters` is a ContextVar with no value in a background task, so the
-install-time helper cannot be reused here, and reimplementing a nearly-identical notion of partner
-scope would risk narrowing grants that are in fact correct. Partner-scope drift is therefore not
-reconciled, and this says so rather than leaving the docstring claiming a guarantee.
+Two idempotent passes, so every worker runs them without a leader lock:
 
-important: without this the stored grant is trusted indefinitely, which is the exact failure
-`extension_scope`'s own docstring names. On a platform where clusters are rented, an installation
-whose organization lost a cluster would keep reading it after the hardware changed hands.
-
-Two passes, both idempotent, so every worker can run them without a leader lock:
-
-1. Narrow a grant to the clusters the organization is still bound to. An installation left with
-   nothing it can reach is suspended rather than left holding an empty grant, because an empty
-   grant reads like a configuration mistake while a suspension says what happened.
-2. Revoke a credential whose installation is gone. Vault is written before the row is deleted on
-   purpose (`extension_teardown`), so a teardown interrupted between the two leaves a key that
-   still authenticates with nothing left to say whose it is. This is what reclaims it.
-
-note: both passes revoke even a credential that owns OrcaHub organizations, because a credential
-no installation claims, or one whose organization reaches nothing, must stop. The record then
-names the organizations the revocation freezes (services/integration_key_ownership.py), so an
-administrator can transfer them.
+1. Narrow each grant to the clusters its organization is still bound to; an installation left
+   with nothing is suspended and its credentials revoked.
+2. Revoke credentials no installation claims: a failed teardown delete, or an install or rotation
+   whose row never committed. Both passes revoke even a key that owns OrcaHub organizations; the
+   audit record names what that freezes so an administrator can transfer them.
 """
 
 import asyncio
@@ -62,8 +42,8 @@ _task: Optional[asyncio.Task] = None
 
 # important: how old a credential no installation claims must be before it is revoked. An install or a
 # rotation writes the key to Vault before its row commits, so a key minted moments ago can be missing
-# from the rows read below without being an orphan. A real orphan is refused at authentication anyway
-# (extension_scope.assert_install_is_live); this revocation is the backstop, so waiting costs nothing.
+# from the rows read below without being an orphan. Authentication already refuses a real orphan
+# (extension_scope.assert_install_is_live), so waiting costs nothing.
 ORPHAN_MIN_AGE = timedelta(minutes=10)
 
 
@@ -85,7 +65,7 @@ FROZEN_WARNING = (
 async def _owned_by(db, key_id: str) -> Optional[List[str]]:
     """Slugs of the active OrcaHub organizations a credential owns, or None when unreadable.
 
-    note: a failed read is rolled back here, so the session stays usable for the rest of the pass.
+    A failed read is rolled back here, so the session stays usable for the rest of the pass.
     """
     try:
         return [org.slug for org in await owned_organizations(db, key_id)]
@@ -110,37 +90,21 @@ def _frozen_fields(owned: Optional[List[str]]) -> Dict[str, Any]:
 async def _narrow_drifted_scope(db, vault_client) -> int:
     """Trim every grant to what its organization still reaches. Returns rows changed.
 
-    important: suspended rows are narrowed too. Filtering on active looked like a saving and was a
-    hole: `resume` only flips the status back, so suspending an installation, losing a cluster and
-    resuming it returned a grant naming a cluster the organization no longer has, until the next
-    tick. Narrowing a suspended row costs nothing and closes the window instead of shortening it,
-    which is better than narrowing on resume because it does not depend on the second path
-    remembering to.
+    important: suspended rows are narrowed too. `resume` only flips the status back, so a skipped
+    suspended row would return holding a cluster its organization no longer has.
 
-    important: the CREDENTIAL is rewritten, not just the row, and that is the whole point. This
-    pass shipped writing `granted_scope` and nothing else, which did nothing at all: the request
-    path authorizes clusters from the Vault key's `cluster_permissions`, never from the row, and
-    the one request-time reader of `granted_scope` is called without a cluster to check. So an
-    organization that lost one of several clusters got a narrowed row, an audit record saying so,
-    and an add-on that kept full access to the cluster it lost. `_rewrite_key_grant` states that
-    invariant in its own comment and the operator-driven path already honoured it; only this one
-    did not.
+    important: the credential is rewritten, not only the row. The request path authorizes clusters
+    from the Vault key's `cluster_permissions`, never from `granted_scope`, so a row-only narrowing
+    would leave the add-on its full reach while webhooks and self-describe showed the narrower list.
 
-    Worse than merely inert, because the two places that DO read `granted_scope` hid the drift:
-    webhook deliveries for the dropped cluster stopped and the add-on's self-describe reported the
-    shortened list, so an operator saw a narrowing that had not happened.
-
-    Vault first, row second. A failure then leaves the credential WIDER than the row rather than
-    the row narrower than the credential, so the row never claims a reach the key does not have.
-    Each row is its own transaction with its own guard: a Vault outage or a bad row delays that
-    installation to the next tick instead of ending the pass for everyone.
+    Vault first, row second: a failure leaves the row wider than the credential, never narrower, so
+    the row never shows a narrowing the key did not get. Each row is its own transaction, so a
+    Vault outage or a bad row delays that installation to the next tick instead of ending the pass.
     """
-    # important: candidates as plain values, read once. Each change below is made on the row read
+    # important: candidates are plain values, read once. Each change below is made on the row read
     # again under lock_installation_id with the keys' locks held, so a rotation or a rescope in
-    # between is seen rather than overwritten (a stale row rewrote the retired key, and the new one
-    # kept the dropped cluster for good, since the next tick compared the row with itself). And no
-    # ORM object is touched after a rollback, which expires them all: one failing row used to make
-    # the next attribute read raise and end the pass, the orphan pass included.
+    # between is seen rather than overwritten. Plain values also survive a rollback, which expires
+    # every ORM object, so one failing row cannot make the next attribute read raise.
     candidates: List[Tuple[int, int, List[Any]]] = [
         (row.id, row.organization_id, list(row.granted_scope or []))
         for row in (await db.execute(select(ExtensionInstallation))).scalars().all()
@@ -159,7 +123,7 @@ async def _narrow_drifted_scope(db, vault_client) -> int:
         try:
             async with AsyncExitStack() as held:
                 install = await lock_installation_id(db, install_id)
-                # note: the bindings read again too, under the row's lock; a narrowing is not undone
+                # The bindings are read again under the row's lock: a narrowing is never undone.
                 reachable = await _bound_clusters(db, install.organization_id)
                 granted: List[Any] = list(install.granted_scope or [])
                 kept = [
@@ -180,13 +144,10 @@ async def _narrow_drifted_scope(db, vault_client) -> int:
                 keys = live_credentials(install)
                 for key_id in keys:
                     await held.enter_async_context(serialize_key_ownership(db, key_id))
-                # important: an empty grant is NEVER written. `ck_ext_install_scope_nonempty` refuses
-                # it, so the old code's total-loss branch raised IntegrityError on commit, rolled the
-                # suspension back with it, and escaped to the loop's blanket handler: one
-                # totally-drifted installation aborted the entire scope pass on every tick, forever,
-                # taking unrelated partial narrowings with it. The constraint is right - an
-                # installation with no reach is a contradiction - so the row keeps its last grant as
-                # the record of what was withdrawn and every live credential is revoked instead.
+                # important: never write an empty grant. `ck_ext_install_scope_nonempty` refuses it,
+                # and the IntegrityError would roll back the suspension and fail this row on every
+                # tick. On total loss the row keeps its last grant as the record of what was
+                # withdrawn, and every live credential is revoked instead.
                 total_loss = not kept
                 if total_loss:
                     for key_id in keys:
@@ -216,7 +177,7 @@ async def _narrow_drifted_scope(db, vault_client) -> int:
                 install_id, exc,
             )
             continue
-        # The row moved without the Vault key moving, so only the install tombstone carries it.
+        # The install snapshot cache is separate from the key cache, so evict it for the changed row.
         for key_id in keys:
             evict_install_cache(key_id)
         changed += 1
@@ -266,7 +227,7 @@ async def _revoke_orphaned_credentials(db, vault_client) -> int:
     """Revoke install credentials no live installation claims. Returns keys revoked."""
     from app.routers.integrations import list_api_keys_from_vault
 
-    # note: taken before the rows are read, so any key minted earlier than it has its row visible below
+    # Taken before the rows are read, so any key minted earlier than it has its row visible below.
     cutoff = now_utc() - ORPHAN_MIN_AGE
     live: Set[str] = set()
     rows = await db.execute(
@@ -280,14 +241,13 @@ async def _revoke_orphaned_credentials(db, vault_client) -> int:
             live.add(previous)
 
     revoked = 0
-    # important: off the event loop. The listing is one blocking Vault read per key ever minted,
-    # 1286 on the dev deployment, and this pass runs in every worker every interval. Inline, it
-    # stalled each worker's loop for the whole read on every tick.
+    # important: off the event loop. The listing is one blocking Vault read per key ever minted, and
+    # this pass runs in every worker every interval.
     try:
         keys = await asyncio.to_thread(list_api_keys_from_vault, vault_client)
     except HTTPException as exc:
-        # A sealed Vault answers the listing with 503 now rather than an empty list. Revoking
-        # nothing is what that empty list did, so the pass waits for the next interval.
+        # A sealed Vault answers the listing with 503; the pass revokes nothing and waits for the
+        # next interval.
         if exc.status_code != 503:
             raise
         logger.warning("Orphan credential pass skipped: the key store is unavailable")
@@ -296,8 +256,8 @@ async def _revoke_orphaned_credentials(db, vault_client) -> int:
         install_id = key.get("extension_install_id")
         if install_id is None:
             continue
-        # note: the credential metadata calls it "id"; there is no "key_id" field, and a
-        # wrong name here would make the pass return a confident zero rather than fail.
+        # The metadata field is "id"; there is no "key_id" field, and a wrong name here would
+        # make the pass silently revoke nothing.
         key_id = key.get("id")
         if not key_id or key_id in live:
             continue
@@ -307,8 +267,8 @@ async def _revoke_orphaned_credentials(db, vault_client) -> int:
             continue
 
         try:
-            # note: a call inside a lambda, not the function passed by name, so the ratchet in
-            # test_every_write_that_ends_a_key_checks_what_it_owns.py still sees this pass end a key
+            # A call inside a lambda, not the function passed by name, so the ratchet in
+            # test_every_write_that_ends_a_key_checks_what_it_owns.py sees this pass end a key.
             await asyncio.to_thread(lambda: revoke_install_credential(vault_client, key_id))
         except Exception as exc:
             # One unreadable key must not abandon the rest of the pass. The next tick retries it.
@@ -332,10 +292,8 @@ async def _revoke_orphaned_credentials(db, vault_client) -> int:
 async def reconcile_once(session_factory, vault_factory) -> Dict[str, int]:
     """One full pass. Safe to run concurrently on every worker: both passes are idempotent.
 
-    important: the Vault client is obtained FIRST now, because both passes need it. The scope pass
-    used to run without one, which is exactly why its narrowing never reached a credential. A
-    sealed Vault therefore skips both passes rather than running a scope pass that would write a
-    row the credential does not match - the state this function exists to prevent.
+    The Vault client is obtained first because both passes need it. Without one both passes are
+    skipped, since a scope pass without Vault would write rows the credentials do not match.
     """
     try:
         vault_client = vault_factory()

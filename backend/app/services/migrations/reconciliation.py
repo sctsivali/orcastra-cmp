@@ -37,7 +37,7 @@ class _OperationEvidence:
     settled: bool = False
     failed: bool = False
     operation_id: str | None = None
-    # The daemon no longer lists the recorded operation, so it is not in flight any more.
+    # The daemon does not list the recorded operation, so it is not in flight.
     forgotten: bool = False
 
 
@@ -70,7 +70,7 @@ _RECONCILIATION_MAX_DELAY_SECONDS = 15 * 60
 def journal_progress(resources: Any) -> str:
     """What a job has done so far, as one value: each resource's state and the markers it records.
 
-    note: operation references are left out. A start that keeps failing adds a reference each try
+    Operation references are left out. A start that keeps failing adds a reference each try
     yet changes nothing else, and must not read as progress.
     """
     entries = sorted(
@@ -128,7 +128,7 @@ def _reconciliation_backoff_values(
     if progress is not None:
         # important: only a journal not seen before in this cycle is progress. A journal that swings
         # between two states (a step fails, a reconcile is inconclusive, the step fails again) must
-        # not reset the count on every pass (security review 2026-11-05).
+        # not reset the count on every pass.
         if isinstance(recorded, str) and recorded != progress and progress not in seen:
             streak = 0
         if progress not in seen:
@@ -379,7 +379,8 @@ def _discover_operation(
         if operation["description"] not in _OPERATION_DESCRIPTIONS[kind]:
             continue
         created_at = _parse_timestamp(operation.get("created_at"))
-        # A missing or wide causal window is ambiguity, not permission to adopt history.
+        # Only an operation created inside the submission window can be ours; anything older or
+        # later is never adopted.
         if not (
             submitted_at - timedelta(seconds=5)
             <= created_at

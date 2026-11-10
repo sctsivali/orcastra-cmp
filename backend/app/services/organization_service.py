@@ -1,7 +1,6 @@
-"""
-Organization Service - CRUD operations for organizations, members, and cluster bindings.
+"""CRUD for organizations, their members and cluster bindings.
 
-Handles scoping: Admin sees all, Partner sees own, Tenant sees assigned.
+Scoping: Admin sees all, Partner sees its own, Tenant sees assigned.
 """
 
 import re
@@ -44,19 +43,17 @@ class OrganizationService:
         user_email: Optional[str] = None,
         user_role: Optional[str] = None,
     ) -> list[Organization]:
-        """
-        List organizations scoped by role.
-        - Admin: all orgs
-        - Partner: orgs created by this user
-        - Tenant: orgs where user is a member
+        """Active organizations scoped by role.
+
+        Admin (or no role, dev mode) sees all, Partner those it created or belongs to,
+        Tenant those it belongs to.
         """
         query = select(Organization).where(Organization.is_active == True)
 
         if user_role == "admin" or user_role is None:
-            # admin or dev mode - all
+            # No role is dev mode.
             pass
         elif user_role == "partner":
-            # partner: orgs they created OR orgs where they are a member
             member_org_ids = (
                 select(OrganizationMember.organization_id)
                 .where(OrganizationMember.user_email == user_email)
@@ -65,7 +62,6 @@ class OrganizationService:
                 (Organization.created_by == user_email) | (Organization.id.in_(member_org_ids))
             )
         else:
-            # tenant: only orgs where they're a member
             member_org_ids = (
                 select(OrganizationMember.organization_id)
                 .where(OrganizationMember.user_email == user_email)
@@ -95,13 +91,12 @@ class OrganizationService:
     async def create_organization(
         self, name: str, description: Optional[str], created_by: str
     ) -> Organization:
-        """Create a new organization. Creator is automatically added as partner member."""
+        """Create an organization and add its creator with the legacy "member" role."""
         slug = _slugify(name)
 
         # ensure slug uniqueness
         existing = await self.get_organization_by_slug(slug)
         if existing:
-            # append numeric suffix
             count = await self.db.execute(
                 select(func.count()).select_from(Organization).where(Organization.slug.like(f"{slug}%"))
             )
@@ -146,8 +141,8 @@ class OrganizationService:
     async def migration_history(self, org_id: int) -> tuple[int, int]:
         """Migration jobs and plans that name this organization, as source or target.
 
-        Their foreign keys are RESTRICT on purpose: a migration record is audit history and is
-        never detached from the organization it ran for.
+        Their foreign keys are RESTRICT: a migration record is audit history and stays
+        attached to the organization it ran for.
         """
         from app.models.migration_models import MigrationJob, MigrationPlan
 
@@ -319,20 +314,16 @@ class OrganizationService:
         return result.scalar_one_or_none() is not None
 
     async def get_user_cluster_ids(self, user_email: str, user_role: str) -> list[str]:
-        """
-        Get list of cluster IDs the user can access.
-        Admin: all, Partner: own orgs, Tenant: assigned orgs.
-        Returns empty list for admin (meaning "all" - caller should skip filtering).
+        """Cluster ids bound to the user's organizations; [] for admin means no filter.
 
-        note: currently unused. It scopes by org membership only and does NOT honor
-        OrganizationCluster.registered_by, so it would miss a partner's own unbound
-        clusters. Do not wire it into a live scope path - use
-        app.core.org_scope.get_user_allowed_clusters instead.
+        important: unused; never wire it into a live scope path. It scopes by organization
+        membership only and ignores OrganizationCluster.registered_by, so it misses a partner's
+        own unbound clusters. Use app.core.org_scope.get_user_allowed_clusters instead.
         """
         if user_role == "admin":
-            return []  # empty = no filter = all
+            return []  # empty means no filter
 
-        # find org IDs user belongs to
+        # Organizations the user created (partner) or belongs to.
         if user_role == "partner":
             org_ids_q = (
                 select(Organization.id)
@@ -354,7 +345,7 @@ class OrganizationService:
             org_ids = [row[0] for row in result.fetchall()]
 
         if not org_ids:
-            return ["__no_access__"]  # sentinel - no clusters accessible
+            return ["__no_access__"]  # sentinel: no clusters accessible
 
         cluster_result = await self.db.execute(
             select(OrganizationCluster.cluster_id)

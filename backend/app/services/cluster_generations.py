@@ -7,7 +7,7 @@ it again. An owner registering a live id again (a new endpoint, say) keeps the r
 grants follow it.
 
 important: the server stamps every grant it writes and ignores a stamp a caller sends. A stamp is
-authority, and a request body is not where authority comes from.
+authority and must never be taken from a request body.
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ class Generations:
         generation = self.active.get(grant.get("cluster_id"))
         if generation is None:
             # Before adoption closes, an id without a row is one registered before generations
-            # existed and not yet adopted: its grants keep matching as they did.
+            # existed and not yet adopted: its grants keep matching.
             return not self.closed
         stamp = grant.get(STAMP)
         if stamp:
@@ -147,7 +147,7 @@ async def current(*, fresh: bool = False) -> Generations:
 
 async def current_or_none() -> Optional[Generations]:
     """For checks that keep working without it (scope, event routing, reports): None means count
-    every grant, as before generations; also None with the KEY_GRANT_GENERATIONS kill switch off."""
+    every grant. Also None with the KEY_GRANT_GENERATIONS kill switch off."""
     from app.core.config import get_settings
 
     if not get_settings().key_grant_generations:
@@ -170,7 +170,7 @@ def reachable(grants: Any, generations: Optional[Generations]) -> set:
 def known() -> Optional[Generations]:
     """The last state this worker read, for labelling what a reader sees; None before any read.
 
-    note: display only. Every decision about access reads `current()`.
+    Display only. Every decision about access reads `current()`.
     """
     return _last_known
 
@@ -310,7 +310,7 @@ async def _backfill_until_closed(read_registry: Callable[[], Any], retry_seconds
             logger.warning("Registration generations: registry not readable from Vault; retrying")
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001 - retried; until then unstamped grants match as before
+        except Exception:  # noqa: BLE001 - retried; until then unstamped grants keep matching
             logger.warning("Registration generation backfill failed; retrying", exc_info=True)
         await asyncio.sleep(retry_seconds)
 
@@ -391,7 +391,7 @@ async def stamped(
     """`stamp` from a fresh read of the registrations, for a grant write; 503 when it cannot read.
 
     With the KEY_GRANT_GENERATIONS kill switch off, grants are stored unstamped (a caller's stamp
-    still dropped), as before generations existed.
+    is still dropped).
     """
     from app.core.config import get_settings
 

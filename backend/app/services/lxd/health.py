@@ -15,9 +15,8 @@ from typing import Dict, Iterable, Optional, Tuple
 # How long a cluster stays "tripped" after a failure before it is probed again.
 DEFAULT_TTL = 60.0
 
-# Why the cluster failed. The breaker is consulted by paths that have to answer "is this
-# cluster offline or is it refusing our certificate", and re-deriving that from the reason
-# string is exactly the substring matching that put "Pending Trust" on dead clusters.
+# Why the cluster failed. Callers have to tell an offline cluster from one refusing the
+# dashboard's certificate, and matching substrings of the free-text reason mislabels them.
 KIND_OFFLINE = "offline"
 KIND_UNAUTHORIZED = "unauthorized"
 
@@ -29,7 +28,7 @@ _failed: Dict[str, Tuple[float, str, str]] = {}
 # and breaker_sync needs to know that window too.
 _last_failed: Dict[str, float] = {}
 # cluster_id -> (reason, kind) of that last failure, kept and cleared with _last_failed. A reader that
-# skips a known-dead cluster still has to say whether it was offline or refusing our certificate.
+# skips a known-dead cluster still has to say whether it was offline or refusing the certificate.
 _last_verdict: Dict[str, Tuple[str, str]] = {}
 # cluster_id -> epoch of this worker's last successful connect. A failure another worker observed
 # before it must never be adopted here (see adopt): the local proof is newer.
@@ -46,8 +45,7 @@ _ADOPTED_REASON = {
 def record_failure(cluster_id: str, reason: str = "", *, kind: str = KIND_OFFLINE) -> None:
     """Mark a cluster as failed so callers skip it until the TTL expires.
 
-    `kind` is keyword-only with a default so existing call sites need no change; only the
-    paths that know the host answered pass KIND_UNAUTHORIZED.
+    Only the paths that know the host answered pass KIND_UNAUTHORIZED.
     """
     with _lock:
         now = time.time()
@@ -95,7 +93,7 @@ def is_tripped(cluster_id: str, ttl: float = DEFAULT_TTL) -> bool:
             return False
         if time.time() - entry[0] < ttl:
             return True
-        # expired - evict so the next probe runs fresh
+        # Expired: evict so the next probe runs fresh.
         del _failed[cluster_id]
         return False
 
@@ -103,10 +101,9 @@ def is_tripped(cluster_id: str, ttl: float = DEFAULT_TTL) -> bool:
 def known_unreachable(cluster_id: str) -> bool:
     """True while this worker's last word on the cluster is a failure, tripped or not.
 
-    note: this outlives the TTL on purpose. A dead peer is retried only once the trip expires, so
-    between trips is_tripped is False while nothing has connected since. Fleet reads use this to
-    tell that peer apart from a worker that simply has not connected yet, which answered the whole
-    project inventory with 503 most of the time on a fleet with offline clusters.
+    This outlives the TTL. A dead peer is retried only once the trip expires, so between trips
+    is_tripped is False although nothing has connected since. Fleet reads use this to tell that
+    peer apart from a worker that has not connected yet.
     """
     with _lock:
         return cluster_id in _failed or cluster_id in _last_failed
@@ -144,8 +141,8 @@ def failure_times() -> Dict[str, float]:
 def forget_unregistered(registered: Iterable[str]) -> None:
     """Drop everything recorded for clusters outside the registry.
 
-    note: _last_failed outlives the TTL, so a cluster deregistered while failing would otherwise
-    cost breaker_sync one marker read per pass in this worker until a restart.
+    _last_failed outlives the TTL, so a cluster deregistered while failing would otherwise cost
+    breaker_sync one marker read per pass in this worker until a restart.
     """
     keep = set(registered)
     with _lock:

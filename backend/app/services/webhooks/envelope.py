@@ -1,29 +1,17 @@
 """What a delivery is allowed to contain.
 
-An event leaves this deployment and lands on infrastructure a third party runs, so the payload is
-built from a typed object with named fields. There is no dict passthrough and no `**kwargs`,
-because the alternative is a rule enforced by review, and review is where this class of leak comes
-from: someone adds a field that is obviously useful and not obviously identifying.
+An event lands on infrastructure a third party runs, so the payload comes from a typed object
+with named fields, never a dict or `**kwargs` passthrough. Never included:
 
-What is deliberately absent, and why each one:
-
-  * anything derived from inside a guest: exec output, file contents, screenshots, clipboard,
-    console buffer. The audit log already refuses to record these; a webhook carrying them would
-    be a lower-friction exfiltration path than the API it complements.
-  * IP and MAC addresses, and network device configuration. On a shared cluster these map a
-    co-tenant's topology.
-  * an instance's `config` and `devices` maps. They carry `user.*` metadata and cloud-init, which
-    routinely contain credentials.
-  * certificates and fingerprints of any kind. The proxy already refuses `/1.0/certificates` for
-    exactly this reason.
-  * API key ids, secrets, hashes, Vault paths, callback URLs.
-  * hardware totals and resource figures. Those exist on the pull API where the caller's grant is
-    checked per request; a push has no such check.
+  * anything from inside a guest (exec output, files, screenshots, clipboard, console buffer).
+  * IP and MAC addresses and network device configuration: a co-tenant's topology.
+  * an instance's `config` and `devices` maps: `user.*` metadata and cloud-init carry credentials.
+  * certificates and fingerprints; API key ids, secrets, hashes, Vault paths, callback URLs.
+  * hardware and resource figures; the pull API checks the caller's grant per request.
   * anything about another organization sharing the same cluster.
 
-note: `resource_name` is included, and it is the one judgement call. An instance name is chosen by
-the tenant and can encode who they are, which is why fan-out is filtered by project grant before a
-delivery is created rather than after.
+`resource_name` is included. A tenant chooses it and it can identify them, so fan-out is filtered
+by project grant before a delivery is created.
 """
 
 from dataclasses import dataclass, field
@@ -31,8 +19,8 @@ from typing import Any, Dict, Optional
 
 SPEC_VERSION = "1.0"
 
-# Every field a `data` block may carry. The builder refuses anything else, so a new field is a
-# decision somebody makes here rather than one that arrives with a feature.
+# Every field a `data` block may carry. The builder refuses anything else, so a new field has to
+# be added here.
 ALLOWED_DATA_FIELDS = frozenset(
     {"cluster_id", "project", "resource_type", "resource_name", "state", "operation_id"}
 )
@@ -62,8 +50,8 @@ class ResourceEvent:
             "state": self.state,
             "operation_id": self.operation_id,
         }
-        # `extra` exists so a future event can add a field without a new dataclass, and it is
-        # filtered rather than trusted. A caller that puts an IP address in here gets nothing.
+        # `extra` lets an event add a field without a new dataclass; only ALLOWED_DATA_FIELDS keys
+        # pass, anything else is dropped.
         for key, value in self.extra.items():
             if key in ALLOWED_DATA_FIELDS:
                 payload[key] = value
@@ -81,9 +69,8 @@ def build_envelope(
     """The document that is signed and sent.
 
     `id` is stable across every attempt and is the receiver's idempotency key; delivery is
-    at-least-once and the documentation says so rather than implying otherwise. `sequence` is
-    monotonic per subscription, so a gap tells a receiver something was dropped rather than
-    leaving it to infer silence.
+    at-least-once. The caller supplies `sequence`; the dispatcher uses the enqueue time in epoch
+    milliseconds, which orders deliveries roughly but is neither gap-free nor unique.
     """
     return {
         "specversion": SPEC_VERSION,
@@ -99,10 +86,9 @@ def build_envelope(
 
 
 def assert_payload_is_clean(payload: Dict[str, Any]) -> None:
-    """A last structural check, so a future builder cannot quietly widen the shape.
+    """A last structural check, so a change to the builder cannot quietly widen the shape.
 
-    Raises ValueError naming the field. Called on the enqueue path rather than only in a test,
-    because a test protects the code that exists today and this protects the row.
+    Raises ValueError naming the field. Runs on the enqueue path, so it guards every stored row.
     """
     data = payload.get("data", {})
     if not isinstance(data, dict):

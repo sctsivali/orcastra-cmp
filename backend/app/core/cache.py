@@ -1,7 +1,4 @@
-"""
-Caching layer for Orcastra CMP.
-Provides Redis caching with fallback to in-memory cache.
-"""
+"""Redis cache with an in-memory fallback."""
 
 import logging
 import json
@@ -23,41 +20,18 @@ logger = logging.getLogger(__name__)
 # read instead.
 _SHARED_ONLY_NAMESPACES = frozenset({"vault"})
 
-# Bump when the SHAPE or the MEANING of a cached resource payload changes. A freshly deployed
-# backend must not keep serving a pre-change body for the rest of its TTL: gpu_total went from
-# "every DRM card" to "compute GPUs only", so an old body shows 2 where the new UI says 1.
-# Old keys are never read again and expire on their own.
-# v3: NodeResources gained `hardware`. A v2 body deserializes with hardware=None, which
-# the UI cannot tell apart from a node that detected nothing.
-# v4: NodeStatus gained `reachable`. A v3 body deserializes with reachable=None, which the
-# status derivation cannot tell apart from a host that never answered, so every dead cluster
-# would read Offline even when it answered and refused our certificate.
-# v5: resource payloads gained `collected_at`. A v4 body deserializes with collected_at=None,
-# which the UI is required to render as "unknown" rather than "now" - correct, but it would
-# describe every cached body for a full TTL after deploy as having no known age, on exactly the
-# surfaces someone would be watching to confirm the fix. Re-keying costs one cold window.
-# v6: MemberResources gained `degraded` and `degraded_parts`. A v5 body deserializes with
-# degraded=False, which is indistinguishable from a read that actually completed, so for one
-# full TTL after deploy the surface someone is watching to confirm the fix would report every
-# cached body as healthy. Same argument as v5.
-# v7: NodeResources.storage_total changed MEANING on a clustered host, from a per-member sum
-# (which was zero in practice, because the read was against a key LXD does not send) to usable
-# capacity with a shared backing store counted once. A v6 body deserializes fine and reports a
-# different number under the same name, which is the one thing a cached body must never do.
-# v8: member resources gained the local/shared storage split, storage_partial and
-# instances_partial, and every resource body gained cpu_allocated, cpu_allocation_ratio and
-# cpu_overcommitted (allocation counted from expanded_config per member). A v7 body would
-# render a member's shared pools as its own disk and an over-committed member as idle for a
-# TTL after deploy.
+# Bump when the shape or the meaning of a cached resource payload changes, so a freshly deployed
+# backend does not serve a pre-change body for the rest of its TTL. An old body that deserializes
+# with a new field at its default (None, False) or a changed number under the same name misreports
+# the very surface being checked after a deploy. Old keys are never read again and expire.
 RESOURCE_SCHEMA_VERSION = "v8"
-# e1: the body moved into the stale-while-revalidate envelope (core/cache_envelope.py). A build
-# from before it would read an envelope as a status body, so the key changes rather than the shape.
+# `e1` marks the stale-while-revalidate envelope (core/cache_envelope.py), so a build that predates
+# the envelope never reads one as a status body.
 NODES_STATUS_CACHE_KEY = f"nodes:status:all:{RESOURCE_SCHEMA_VERSION}:e1"
 # Per-cluster host kernel facts (services/lxd/host_kernels.py), cleared with the cluster.
 HOST_KERNELS_CACHE_PREFIX = "host_kernels:v1"
 REGIONS_OVERVIEW_CACHE_KEY = f"regions:overview:{RESOURCE_SCHEMA_VERSION}"
-# The stale-while-revalidate body (an envelope, not the plain body the old key held). Under the
-# prefix above, so every sweep of it still matches.
+# The stale-while-revalidate envelope. Under the prefix above, so every sweep of it still matches.
 REGIONS_OVERVIEW_SWR_KEY = f"{REGIONS_OVERVIEW_CACHE_KEY}:e1"
 # Cheap per-cluster reachability for pickers. Short TTL paired with the metrics collector's
 # 30s cycle, the same way the monitoring dashboard's 35s cache is paired with it.
@@ -67,18 +41,16 @@ NODES_AVAILABILITY_CACHE_TTL = 45
 # the registry from before a cluster was added, removed or re-pinned.
 AVAILABILITY_GENERATION_KIND = "availability"
 MEMBER_RESOURCES_CACHE_PREFIX = f"member_resources:{RESOURCE_SCHEMA_VERSION}"
-# Not under the `instances:` pattern on purpose: it must survive the clearance it records.
+# Outside the `instances:` pattern: it must survive the clearance it records.
 INSTANCE_LIST_GENERATION_KEY = "instance_list_generation"
-# Not only the project lists: a project created with its own features gets a default profile (and
-# may get its own images and volumes), and deleting one takes those with it. The profile list
-# caches for 180 s, so it showed the new project's profile missing, or a deleted project's profile
-# still there, for that long.
+# More than the project lists: a project created with its own features gets a default profile (and
+# may get its own images and volumes), and deleting one takes those with it.
 PROJECT_CACHE_KINDS = ("projects", "project_usage", "profiles", "networks", "images", "storage_volumes")
-# Not under the `snapshots_fleet:` pattern so an invalidation can clear list entries while leaving
-# the token that tells already-running fleet reads their answer is stale.
+# Outside the `snapshots_fleet:` pattern so an invalidation can clear list entries and keep the
+# token that tells fleet reads already running that their answer is stale.
 SNAPSHOT_FLEET_GENERATION_KEY = "snapshot_fleet_generation"
-# Per-host snapshot size map (services/snapshots/fleet_sizes.py). Kept outside the
-# `snapshots_fleet:` list sweep on purpose; a cluster's own invalidation drops its map.
+# Per-host snapshot size map (services/snapshots/fleet_sizes.py). Outside the
+# `snapshots_fleet:` list sweep; a cluster's own invalidation drops its map.
 SNAPSHOT_SIZES_KEY_PREFIX = "snapshot_sizes:host="
 RESOURCE_LIST_GENERATION_KEY_PREFIX = "resource_list_generation"
 CACHE_CLEAR_GENERATION_KEY = "cache_clear_generation"
@@ -103,7 +75,7 @@ def get_resource_list_generation(cache: Any, kind: str) -> Optional[str]:
     return getter(kind)
 
 
-# Lazy import encryption to avoid circular imports
+# Imported lazily to avoid a circular import.
 _encryption_module = None
 
 def get_encryption():
@@ -135,7 +107,7 @@ except ImportError:
 
 
 class LRUCache:
-    """Simple thread-safe LRU cache implementation."""
+    """In-process LRU cache with a per-entry expiry time. It takes no lock."""
     
     def __init__(self, maxsize: int = 1000):
         self.cache: OrderedDict = OrderedDict()
@@ -144,7 +116,7 @@ class LRUCache:
         self.misses = 0
     
     def get(self, key: str) -> Optional[tuple]:
-        """Get value from cache. Returns (value, timestamp) or None."""
+        """Return (value, expires_at) or None."""
         if key in self.cache:
             self.cache.move_to_end(key)
             self.hits += 1
@@ -153,7 +125,7 @@ class LRUCache:
         return None
     
     def set(self, key: str, value: Any, ttl: int = 300):
-        """Set value in cache with TTL."""
+        """Store a value that expires after ``ttl`` seconds."""
         if key in self.cache:
             self.cache.move_to_end(key)
         self.cache[key] = (value, time.time() + ttl)
@@ -162,18 +134,16 @@ class LRUCache:
             self.cache.popitem(last=False)
     
     def delete(self, key: str):
-        """Delete key from cache."""
         if key in self.cache:
             del self.cache[key]
     
     def clear(self):
-        """Clear all cache."""
+        """Drop every entry and reset the hit counters."""
         self.cache.clear()
         self.hits = 0
         self.misses = 0
     
     def get_stats(self) -> Dict[str, int]:
-        """Get cache statistics."""
         total = self.hits + self.misses
         hit_rate = (self.hits / total * 100) if total > 0 else 0
         return {
@@ -184,21 +154,18 @@ class LRUCache:
         }
 
 
-# Default memory cache size, tunable via CACHE_MEMORY_SIZE env var.
-# 5000 supports ~50 tenants each with dashboard + history + nodes + misc.
+# Entries in the per-worker memory cache (CACHE_MEMORY_SIZE). 5000 holds the dashboard, history
+# and node entries of about 50 tenants.
 _DEFAULT_MEMORY_CACHE_SIZE = int(os.environ.get("CACHE_MEMORY_SIZE", "5000"))
 
 
 class CacheManager:
-    """
-    Unified cache manager with Redis support and in-memory fallback.
-    Supports encryption for sensitive data namespaces.
-    """
+    """Redis cache with an in-memory fallback and encryption for sensitive namespaces."""
     
     def __init__(
         self, 
         redis_url: Optional[str] = None,
-        default_ttl: int = 300,  # 5 minutes default
+        default_ttl: int = 300,  # seconds
         memory_cache_size: int = _DEFAULT_MEMORY_CACHE_SIZE,
         sensitive_namespaces: Optional[list] = None
     ):
@@ -210,27 +177,24 @@ class CacheManager:
         # workers may still hold stale shared entries, so a strict invalidation must fail.
         self._redis_configured = bool(redis_url)
         
-        # Define namespaces that should be encrypted
-        # NOTE: LXD certificates are NOT cached in Redis for security
-        # They are only stored in Vault (source of truth) and memory (runtime)
+        # Namespaces encrypted before caching. LXD certificates are never cached in Redis: they
+        # live only in Vault (the source of truth) and in process memory.
         self.sensitive_namespaces = sensitive_namespaces or [
             'vault',           # Vault data may contain certificates
-            'vault_certs',     # Certificate data
-            'vault_secrets',   # Secret data
-            'credentials',     # Any credentials
+            'vault_certs',
+            'vault_secrets',
+            'credentials',
         ]
         
-        # Try to connect to Redis with connection pooling
         if redis_url and REDIS_AVAILABLE:
             try:
-                # important: behind the guard (core/redis_guard.py). Without it a Redis that stopped
-                # answering held every caller for 10 s per command, most of them on the event loop.
+                # important: connect through the guard (core/redis_guard.py). Without it a Redis that
+                # stops answering holds every caller for 10 s per command, most on the event loop.
                 from app.core import redis_guard
 
                 self.redis_client = redis_guard.connect(redis_url)
-                # Test connection
                 self.redis_client.ping()
-                # sanitize URL - never log credentials
+                # Never log the credentials in the URL.
                 from urllib.parse import urlparse
                 _parsed = urlparse(redis_url)
                 _safe_url = f"{_parsed.scheme}://{_parsed.hostname}:{_parsed.port or 6379}"
@@ -245,11 +209,9 @@ class CacheManager:
         return client.unskipped if isinstance(client, GuardedRedis) else client
 
     def _make_key(self, namespace: str, key: str) -> str:
-        """Create namespaced cache key."""
         return f"orcastra:{namespace}:{key}"
     
     def _should_encrypt(self, namespace: str) -> bool:
-        """Check if data in this namespace should be encrypted."""
         return namespace in self.sensitive_namespaces
     
     def _encrypt_data(self, data: Any) -> Any:
@@ -259,16 +221,14 @@ class CacheManager:
             return data
         
         try:
-            # If it's a dict, only encrypt truly sensitive fields (certs, keys, passwords)
+            # A dict: encrypt only the sensitive fields (certs, keys, passwords).
             if isinstance(data, dict):
-                # Quick check: does this dict have any sensitive fields?
                 has_sensitive = any(self._is_sensitive_field(key) and isinstance(value, str) 
                                   for key, value in data.items())
                 if not has_sensitive:
-                    # No sensitive fields, check nested dicts
                     has_nested = any(isinstance(value, dict) for value in data.values())
                     if not has_nested:
-                        return data  # No encryption needed
+                        return data
                 
                 encrypted_data = {}
                 for key, value in data.items():
@@ -279,7 +239,7 @@ class CacheManager:
                     else:
                         encrypted_data[key] = value
                 return encrypted_data
-            # If it's a string, encrypt it (only for sensitive namespaces)
+            # A string is encrypted whole; only sensitive namespaces reach this method.
             elif isinstance(data, str):
                 return encryption.encrypt(data)
             return data
@@ -294,7 +254,6 @@ class CacheManager:
             return data
         
         try:
-            # If it's a dict, decrypt sensitive fields
             if isinstance(data, dict):
                 decrypted_data = {}
                 for key, value in data.items():
@@ -305,7 +264,6 @@ class CacheManager:
                     else:
                         decrypted_data[key] = value
                 return decrypted_data
-            # If it's a string, try to decrypt
             elif isinstance(data, str) and encryption.is_encrypted(data):
                 return encryption.decrypt(data)
             return data
@@ -315,11 +273,9 @@ class CacheManager:
     
     def _is_sensitive_field(self, field_name: str) -> bool:
         """Check if a field name indicates sensitive data."""
-        # important: 'raw' is here because the field that leaked was named `raw`, not anything
-        # this list would have guessed. The Vault path allowlist is the primary control now
-        # (vault_client._is_cacheable_path); this is the second layer, and it only helps if it
-        # covers field names chosen for brevity rather than for description. Over-matching costs
-        # a needless encrypt/decrypt round trip, which is the cheap direction to be wrong in.
+        # important: second layer behind the Vault path allowlist (vault_client._is_cacheable_path).
+        # It has to match terse field names such as `raw` as well. Over-matching only costs a
+        # needless encrypt/decrypt round trip.
         sensitive_patterns = [
             'password', 'token', 'secret', 'key', 'cert', 'certificate',
             'credential', 'auth', 'private', 'trust_password', 'client.crt',
@@ -329,14 +285,10 @@ class CacheManager:
         return any(pattern in field_lower for pattern in sensitive_patterns)
     
     def get(self, namespace: str, key: str) -> Optional[Any]:
-        """
-        Get value from cache.
-        Tries Redis first, falls back to memory cache.
-        Automatically decrypts data from sensitive namespaces.
+        """Read a value: Redis first, then the memory fallback; sensitive namespaces decrypted.
 
-        note: a value written through the stale-while-revalidate envelope (cache_envelope.py)
-        comes back as its plain body, so every reader that predates SWR keeps working on keys
-        that SWR now writes.
+        A value written through the stale-while-revalidate envelope (cache_envelope.py) comes back
+        as its plain body, so plain readers keep working on keys that SWR writes.
         """
         raw, _authoritative = self.get_entry(namespace, key)
         return unwrap(raw).value if is_envelope(raw) else raw
@@ -347,12 +299,11 @@ class CacheManager:
         Authoritative means Redis answered, or this deployment runs without Redis. A value from
         the per-worker memory fallback while a configured Redis is failing is not: another
         worker's invalidation could not have reached it, so a reader must not treat it as more
-        than today's Redis-down fallback (stale-while-revalidate counts it as a miss once stale).
+        than a Redis-down fallback (stale-while-revalidate counts it as a miss once stale).
         """
         cache_key = self._make_key(namespace, key)
         should_decrypt = self._should_encrypt(namespace)
 
-        # Try Redis first with fast timeout.
         redis_answered = False
         if self.redis_client:
             try:
@@ -361,7 +312,6 @@ class CacheManager:
                 if value is not None:
                     logger.debug(f"Redis cache HIT: {cache_key}")
                     data = json.loads(value)
-                    # Decrypt if from sensitive namespace
                     if should_decrypt:
                         data = self._decrypt_data(data)
                     return data, True
@@ -372,18 +322,16 @@ class CacheManager:
             except Exception as e:
                 logger.warning(f"Redis get error: {e}, falling back to memory")
 
-        # Redis answered with a MISS -> that is authoritative; do NOT consult the
-        # per-worker memory cache. We run multiple uvicorn workers, each with its
-        # own memory cache, and an invalidation (delete/delete_pattern) can only
-        # clear Redis + the *local* worker's memory. Falling through to memory on
-        # a Redis miss makes the other workers keep serving stale entries until
-        # their TTL expires. The memory cache is a Redis-is-down fallback only.
+        # important: a Redis miss is authoritative; do not consult the per-worker memory cache.
+        # Each uvicorn worker has its own memory cache and an invalidation (delete/delete_pattern)
+        # clears only Redis and the local worker's memory, so falling through would let other
+        # workers serve stale entries until their TTL expires. Memory is a Redis-down fallback.
         if redis_answered:
             logger.debug(f"Cache MISS (redis authoritative): {cache_key}")
             return None, True
 
-        # Redis unavailable/errored -> degraded mode, fall back to memory cache.
-        # note: getattr because a few tests build a bare manager without __init__.
+        # Redis unavailable or failing: degraded mode, fall back to memory.
+        # getattr because a few tests build a bare manager without __init__.
         authoritative = not getattr(self, "_redis_configured", False)
         if not authoritative and namespace in _SHARED_ONLY_NAMESPACES:
             # A miss sends the caller to the source, which is what these entries must never skip.
@@ -393,12 +341,10 @@ class CacheManager:
             value, expiry = cached
             if time.time() < expiry:
                 logger.debug(f"Memory cache HIT: {cache_key}")
-                # Decrypt if from sensitive namespace
                 if should_decrypt:
                     value = self._decrypt_data(value)
                 return value, authoritative
             else:
-                # Expired, remove it
                 self.memory_cache.delete(cache_key)
         
         logger.debug(f"Cache MISS: {cache_key}")
@@ -413,10 +359,10 @@ class CacheManager:
         *,
         require_shared: bool = False,
     ):
-        """
-        Set value in cache with TTL.
-        Stores in both Redis and memory cache for redundancy.
-        Automatically encrypts data for sensitive namespaces.
+        """Store a value in memory and Redis, encrypting sensitive namespaces.
+
+        With ``require_shared`` a Redis write that fails, or a configured Redis that is not
+        connected, raises CacheInvalidationError.
         """
         if ttl is None:
             ttl = self.default_ttl
@@ -424,14 +370,13 @@ class CacheManager:
         cache_key = self._make_key(namespace, key)
         should_encrypt = self._should_encrypt(namespace)
         
-        # Encrypt if sensitive namespace
         cached_value = self._encrypt_data(value) if should_encrypt else value
         
-        # Always store in memory cache first (fast and reliable)
+        # Memory first, so a failed Redis write below still leaves this worker a copy.
         self.memory_cache.set(cache_key, cached_value, ttl)
         logger.debug(f"Cached in memory: {cache_key} (TTL: {ttl}s, Encrypted: {should_encrypt})")
         
-        # Try to store in Redis (best effort - don't block on failure)
+        # Redis is best effort unless require_shared.
         if self.redis_client:
             try:
                 self._writer().setex(
@@ -456,11 +401,10 @@ class CacheManager:
             raise CacheInvalidationError(f"shared cache is unavailable for {cache_key}")
     
     def delete(self, namespace: str, key: str, *, require_shared: bool = False):
-        """Delete value from cache."""
+        """Delete one key; with ``require_shared`` a failed Redis delete raises."""
         cache_key = self._make_key(namespace, key)
         
         shared_error: Optional[CacheInvalidationError] = None
-        # Delete from Redis
         if self.redis_client:
             try:
                 self._writer().delete(cache_key)
@@ -471,7 +415,6 @@ class CacheManager:
         elif require_shared and self._redis_configured:
             shared_error = CacheInvalidationError("shared cache is unavailable")
         
-        # Delete from memory
         self.memory_cache.delete(cache_key)
         logger.debug(f"Deleted from cache: {cache_key}")
         if shared_error is not None:
@@ -490,7 +433,6 @@ class CacheManager:
         excluded = {self._make_key(namespace, key) for key in exclude_keys}
         shared_error: Optional[CacheInvalidationError] = None
         
-        # Delete from Redis
         if self.redis_client:
             try:
                 writer = self._writer()
@@ -515,7 +457,6 @@ class CacheManager:
                 f"shared cache is unavailable for {full_pattern}"
             )
         
-        # Clear matching keys from memory cache
         matcher = compile_cache_glob(full_pattern)
         keys_to_delete = [
             key for key in list(self.memory_cache.cache.keys())
@@ -527,40 +468,29 @@ class CacheManager:
             raise shared_error
     
     def invalidate_cluster_cache(self, cluster_id: str = None):
-        """
-        Invalidate all cluster-related cache entries.
-        If cluster_id is provided, only invalidate that cluster.
-        Otherwise, invalidate all cluster listings.
-        """
+        """Clear the cluster list caches, and one cluster's own entries when ``cluster_id`` is given."""
         if cluster_id:
             # Fence before the scoped sweep. A member read that started before this cluster
             # mutation must not restore its old body after the matching keys are deleted.
             self._advance_resource_generation("cluster_members")
-            # Clear specific cluster caches
             self.delete("vault", f"secret/data/clusters/{cluster_id}/metadata")
             self.delete("vault", f"secret/data/clusters/{cluster_id}/secrets")
             self.delete("vault", f"secret/data/clusters/{cluster_id}/certs")
-            # Clear cluster member cache for this specific cluster
-            # important: the ':' before the * is load-bearing too. A bare
-            # '{cluster_id}*' also matched sibling ids, so invalidating nuc2
-            # wiped nuc22 and nuc2-prod. The scope suffix always starts with ':'.
-            # important: trailing * is load-bearing. Redis SCAN treats a pattern
-            # without it as an exact match, but the real key carries a
-            # ":scope=..." suffix from get_scope_cache_key(), so this deleted
-            # nothing from Redis while the memory branch (prefix match) passed.
-            # get() treats Redis as authoritative, so the stale entry was served
-            # for the full TTL after a cluster changed.
+            # important: keep both the ':' and the trailing '*'. Without the ':' the
+            # pattern also matches sibling ids (`c1` would clear `c12` and `c1-prod`).
+            # Without the '*' Redis SCAN matches exactly and misses the ":scope=..."
+            # suffix from get_scope_cache_key(), so Redis, which get() treats as
+            # authoritative, keeps serving the stale entry.
             self.delete_pattern("api_responses", f"cluster_members:list:host={cluster_id}:*")
-            # important: host kernel facts are keyed by the cluster id alone. A deleted id that is
-            # registered again, by another organization or for other hardware, must not be
-            # served the old members' kernels for the rest of the TTL.
+            # important: host kernel facts are keyed by the cluster id alone. An id registered again,
+            # by another organization or for other hardware, must not be served the previous
+            # members' kernels for the rest of the TTL.
             self.delete("api_responses", f"{HOST_KERNELS_CACHE_PREFIX}:{cluster_id}")
             # Same reason for snapshot sizes: they are keyed by the cluster id alone.
             self.delete("api_responses", f"{SNAPSHOT_SIZES_KEY_PREFIX}{cluster_id}")
             logger.info(f"Cleared cache for specific cluster {cluster_id}")
 
-        # Always clear list caches to force fresh fetch
-        # These are the paths that cert_manager.list_clusters() uses
+        # Always clear the cluster list caches: the paths cert_manager.list_clusters() reads.
         for list_path in (
             "secret/metadata/clusters",
             "secret/metadata/clusters/",
@@ -575,24 +505,22 @@ class CacheManager:
         logger.info(f"Invalidated cluster list cache{f' for {cluster_id}' if cluster_id else ' (all)'}")
 
     def invalidate_cluster_reachability(self, *cluster_ids: str) -> None:
-        """Drop every cached view that says whether a cluster answers us.
+        """Drop every cached view that says whether a cluster answers.
 
         For the moments a cluster is proven reachable again: Check Authentication, a verified
-        certificate adopted, a worker's breaker released by breaker_sync. Verify used to clear only
-        the Vault layer, so the cluster list kept showing Pending Trust for its 180s TTL after a
-        repair that had already worked.
+        certificate adopted, a worker's breaker released by breaker_sync. Clearing only the Vault
+        layer would leave the cluster list showing Pending Trust for its 180s TTL after a repair
+        that worked.
 
-        note: the lists it clears are fleet-wide, so a caller that recovered several clusters calls
-        it once with all of them; the ids only name the event in the log.
+        The lists it clears are fleet-wide, so a caller that recovered several clusters calls it
+        once with all of them; the ids only name the event in the log.
         """
         from app.core.config import get_settings
 
-        # note: warnings too. Both feeds name an unreachable cluster, and they are cached now.
-        # Images as well: a cluster that answers again brings its image store back into the list.
-        # The storage, network and IPAM lists remember an outage too, and would keep naming a
-        # recovered cluster for their degraded TTL.
-        # Fleet snapshots name an unreachable cluster as well, and since they are served stale for
-        # up to SWR_MAX_STALE_SECONDS they would otherwise keep naming a recovered one that long.
+        # Every cached list that names an unreachable cluster: warnings, images (a cluster that
+        # answers again brings its image store back), the storage, network and IPAM lists (which
+        # remember an outage for their degraded TTL) and fleet snapshots (served stale for up to
+        # SWR_MAX_STALE_SECONDS).
         self.invalidate_resource_cache(
             "clusters", "projects", "regions", "warnings", "images",
             "storage_pools", "storage_pool_resources", "storage_volumes",
@@ -610,9 +538,9 @@ class CacheManager:
     def invalidate_after_access_change(self) -> None:
         """Clear what a tenant's grant shapes, after a grant was added, narrowed, ended or revoked.
 
-        note: a tenant's scoped keys already hash the ACL (org_scope.get_scope_cache_key), so a
-        changed grant reads fresh keys anyway. This clears the shared lists that do not, and
-        is the one call provisioning, revoke, the term sweeper and policy edits make.
+        A tenant's scoped keys already hash the ACL (org_scope.get_scope_cache_key), so a changed
+        grant reads fresh keys anyway. This clears the shared lists that do not, and is the one
+        call provisioning, revoke, the term sweeper and policy edits make.
         """
         self.invalidate_resource_cache("clusters", "projects", "regions", "warnings", "monitoring")
         self.invalidate_instance_cache()
@@ -640,14 +568,9 @@ class CacheManager:
     def invalidate_instance_cache(self):
         """Invalidate cached responses an instance lifecycle change makes stale.
 
-        Storage volumes belong here even though no volume endpoint was called: LXD backs each
-        instance with a root volume of type `virtual-machine`, so a create or delete changes the
-        volume list too. Without this the volume list served that change from cache for its full
-        180s TTL, long enough to create an instance and not find its disk.
-
-        The fleet snapshot listing belongs here for the same reason: deleting an instance takes
-        its snapshots with it on the cluster, and that listing gained a cache without gaining a
-        second reason to be cleared.
+        Storage volumes belong here although no volume endpoint was called: LXD backs each
+        instance with a root volume, so a create or delete changes the volume list too. The fleet
+        snapshot listing as well: deleting an instance deletes its snapshots on the cluster.
         """
         self.invalidate_instance_lists()
         # Instance lifecycle also changes every LXD `used_by` projection. Clear those list
@@ -663,12 +586,12 @@ class CacheManager:
             "storage_volumes",
             "snapshots_fleet",
         )
-        # a create, a delete or a NIC address pin changes the allocation table the IPAM page
-        # reads, and its 120 s TTL is long enough to pin an address and not see it
+        # A create, a delete or a NIC address pin changes the allocation table the IPAM page
+        # reads (120 s TTL).
         self.delete_pattern("api_responses", "ipam:*")
-        # important: a list read that was already in flight when this ran still holds the old
-        # picture and would write it back over the clearance a moment later (a fleet read takes
-        # ten seconds with a dead cluster registered). The generation lets such a read notice.
+        # important: a list read already in flight still holds the old picture and would write
+        # it back over this clearance (a fleet read takes ten seconds with a dead cluster
+        # registered). The generation tokens advanced above let such a read notice.
         logger.info(
             "Cleared instance, VM, monitoring, storage volume, IPAM, project usage, fleet snapshot and capacity caches"
         )
@@ -781,8 +704,8 @@ class CacheManager:
     def invalidate_availability_cache(self, *, require_shared: bool = False) -> None:
         """Fence, then clear, every scope's cluster availability.
 
-        note: the trailing * takes every org-scope suffix. The fence comes first so a read that
-        began before this cannot write its result back once the keys are gone.
+        The trailing * takes every org-scope suffix. The fence comes first so a read that began
+        before this cannot write its result back once the keys are gone.
         """
         self._advance_resource_generation(
             AVAILABILITY_GENERATION_KIND, require_shared=require_shared
@@ -852,10 +775,8 @@ class CacheManager:
         """Drop the cached list responses for the named resource kinds.
 
         Every list endpoint caches under `<kind>:list:...`, so a mutation that does not clear
-        its own kind leaves readers on a stale list until the TTL expires. That window is 30s
-        for instances and projects and 180s for profiles, storage volumes and storage pools,
-        which is long enough for an operator to create something, look at the list, and not
-        find it.
+        its own kind leaves readers on a stale list until the TTL expires (30s for instances and
+        projects, 180s for profiles, storage volumes and storage pools).
 
         Pass the key prefixes the handler's own list endpoint uses, ex;
         `invalidate_resource_cache("storage_pools", "storage_pool_resources")`.
@@ -942,7 +863,6 @@ class CacheManager:
             ) from failures[0]
     
     def get_stats(self) -> Dict[str, Any]:
-        """Get cache statistics."""
         stats = {
             "memory": self.memory_cache.get_stats(),
             "redis_available": self.redis_client is not None
@@ -968,7 +888,6 @@ def cache_key_generator(*args, **kwargs) -> str:
         if isinstance(arg, (str, int, float, bool)):
             key_parts.append(str(arg))
         else:
-            # For complex objects, use type name
             key_parts.append(type(arg).__name__)
     
     for k, v in sorted(kwargs.items()):
@@ -976,20 +895,16 @@ def cache_key_generator(*args, **kwargs) -> str:
             key_parts.append(f"{k}={v}")
     
     key_string = ":".join(key_parts)
-    # Hash long keys
     if len(key_string) > 200:
         return hashlib.md5(key_string.encode()).hexdigest()
     return key_string
 
 
 def cached(namespace: str, ttl: Optional[int] = None, key_func=None):
-    """
-    Decorator for caching function results.
-    """
+    """Decorator that caches a function's result in ``namespace``."""
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
-            # Get cache manager from settings or create default
             try:
                 from app.core.config import get_settings
                 settings = get_settings()
@@ -1000,7 +915,6 @@ def cached(namespace: str, ttl: Optional[int] = None, key_func=None):
             except:
                 cache_manager = CacheManager()
             
-            # Generate cache key
             if key_func:
                 cache_key = key_func(*args, **kwargs)
             else:
@@ -1008,12 +922,10 @@ def cached(namespace: str, ttl: Optional[int] = None, key_func=None):
                 func_args = args[1:] if args and hasattr(args[0], '__dict__') else args
                 cache_key = f"{func.__name__}:{cache_key_generator(*func_args, **kwargs)}"
             
-            # Try to get from cache
             cached_value = cache_manager.get(namespace, cache_key)
             if cached_value is not None:
                 return cached_value
             
-            # Call function and cache result
             result = func(*args, **kwargs)
             cache_manager.set(namespace, cache_key, result, ttl)
             return result
@@ -1041,15 +953,14 @@ _last_uncertain_clear = 0.0
 def clear_instance_lists_after_failure(error: Optional[BaseException]) -> None:
     """Clear the instance lists after an instance lifecycle call that did not succeed.
 
-    Success clears in the route, right after LXD answers. A failure may still have changed the
-    instance (a timeout, a lost connection mid-delete) or found that it is already gone (a 404
-    for a listed row), so it clears as well, at most once per
-    UNCERTAIN_CLEAR_INTERVAL_SECONDS per worker. `error` is None on success: nothing to do.
+    Success clears in the route, and `error` is None then. A failure may still have changed the
+    instance (a timeout, a lost connection mid-delete) or found it already gone (a 404 for a
+    listed row), so it clears too. A refusal raised before the cluster was asked (the migration
+    fence's 409) clears nothing.
 
-    important: throttled because anyone allowed to call can make a call fail cheaply. One
-    clearance per failure let a caller keep every scope's list rebuilding from the clusters,
-    outside the forced-refresh budget. A refusal raised before the cluster was asked (the
-    migration fence's 409) clears nothing.
+    important: at most once per UNCERTAIN_CLEAR_INTERVAL_SECONDS per worker. Any caller can make a
+    call fail cheaply, and one clearance per failure would keep every scope's list rebuilding from
+    the clusters outside the forced-refresh budget.
     """
     global _last_uncertain_clear
     if error is None or getattr(error, "status_code", None) == 409:

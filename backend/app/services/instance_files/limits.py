@@ -4,9 +4,9 @@ A queue would hold a request open on a guest that may be stalling, and a stalled
 of the 200 connections `--limit-concurrency` gives this worker. So an over-limit call answers 429
 at once and the client backs off.
 
-note: per worker on purpose, so these numbers multiply by WEB_CONCURRENCY. Sharing them through
-Redis would add a lease with its own expiry and failure mode to bound something a process-local
-count already bounds: one guest can cost at most (instance limit x workers) slots.
+The limits are per worker, so these numbers multiply by WEB_CONCURRENCY. Sharing them through
+Redis would add a lease with its own expiry and failure mode, while a process-local count already
+bounds one guest to (instance limit x workers) slots.
 """
 
 from collections import Counter

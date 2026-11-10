@@ -82,28 +82,20 @@ router = APIRouter(
     dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
 )
 
-# Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
 
 
-# The volume types LXD itself defines. A closed vocabulary rather than a pattern, because the set is
-# finite and known: `core/tenant_visibility.py` already owns two of these to tell an instance's own
-# root disk from a custom volume.
+# The volume types LXD defines, as a closed vocabulary because the set is finite and known.
 #
-# important: this is a REQUEST-BOUNDARY guard, not decoration. `volume_type`, `volume_name` and
-# `pool` are interpolated into an LXD request path by pylxd, which builds URLs by string
-# concatenation and escapes nothing, so each one is a path segment rather than data. A `?` ends the
-# path and moves the request to a different resource, and `requests` collapses `..` before sending,
-# so a caller controls the path STRUCTURE and not merely one segment. `pool` is the widest of the
-# three: a path segment cannot carry `/`, but a query parameter carries it verbatim.
-#
-# core/lxd_names.py:1-22 records the rule this restores: refuse the name at the boundary, before any
-# client is built, any cluster is contacted, or any authorization decision is made.
+# important: a request-boundary guard. pylxd interpolates `volume_type`, `volume_name` and `pool`
+# into the LXD request path by concatenation and escapes nothing, so a `?` ends the path early and
+# `requests` collapses `..`; `pool` also arrives as a query parameter, which carries `/` verbatim.
+# As in core/lxd_names.py, the name is refused at the boundary, before any cluster is contacted.
 VolumeType = Literal["custom", "container", "virtual-machine", "image"]
 
 
 class StorageVolumeInfo(BaseModel):
-    """Storage volume information."""
+    """A storage volume on one cluster."""
     name: str = Field(..., description="Volume name")
     type: str = Field(..., description="Volume type")
     pool: str = Field(..., description="Storage pool name")
@@ -148,10 +140,10 @@ def _volume_node(client, pool: str, volume_type: str, volume_name: str):
 def _address_params(project: Optional[str], location: Optional[str]) -> Dict[str, str]:
     """Query parameters that address a volume outside the default project or on one member.
 
-    note: the list now carries `project` and `location` on every row (the volumes of a
-    per-member pool exist once per member, and other projects hold their own). A detail,
-    update or delete that names only (pool, type, name) would land on the default project's
-    copy, so callers pass the row's own values back.
+    Every list row carries `project` and `location` (the volumes of a per-member pool exist
+    once per member, and other projects hold their own). A detail, update or delete that names
+    only (pool, type, name) would land on the default project's copy, so callers pass the row's
+    own values back.
     """
     params: Dict[str, str] = {}
     if project and project != DEFAULT_PROJECT:
@@ -171,7 +163,7 @@ def _pool_names(client, pool_filter: Optional[str]) -> List[str]:
     names: List[str] = []
     for entry in response.json().get("metadata") or []:
         if isinstance(entry, str):
-            # the URL carries the name percent-escaped; safe_segment escapes it again later
+            # The URL carries the name percent-escaped; safe_segment escapes it again later.
             names.append(unquote(entry.rstrip("/").rsplit("/", 1)[-1].split("?")[0]))
         elif isinstance(entry, dict) and entry.get("name"):
             names.append(entry["name"])
@@ -183,23 +175,22 @@ def _fetch_volumes_for_node(
 ) -> NodeRead[StorageVolumeInfo]:
     """Every volume on one cluster, one request per pool. Runs in the thread pool.
 
-    important: pylxd's collection manager listed at recursion 0 in the default project and
-    then synced every volume one request at a time. On a clustered host a per-member pool
-    lists its volumes as `.../volumes/custom/backups?target=member-a`, which the sync
-    could not read, and the first refusal dropped the rest of that pool. Nothing is synced
-    now, every project is read, and a pool that cannot be read is named, not skipped.
+    pylxd's collection manager is not used: it lists at recursion 0 in the default project and
+    syncs every volume one request at a time, and on a clustered host a per-member pool lists
+    its volumes as `.../volumes/custom/backups?target=member-a`, which that sync cannot read.
+    Every project is read, and a pool that cannot be read is named rather than skipped.
     """
     client = lxd_service.connection_manager.get_client(node_name)
     if client is None:
-        # important: unreachable is not empty. See the sibling routers.
+        # important: unreachable is not empty. Raise so the caller names the node.
         raise LXDConnectionError(f"Could not connect to {node_name}")
     read: NodeRead[StorageVolumeInfo] = NodeRead()
     for pool_name in _pool_names(client, pool_filter):
         try:
             rows, complete = list_pool_volumes(client, pool_name)
         except LXDAPIException as exc:
-            # note: only LXD's own refusal is a per-pool problem; a transport error means the
-            # rest of the cluster cannot be read either and is classified by the caller.
+            # Only LXD's own refusal is a per-pool problem; a transport error means the rest
+            # of the cluster cannot be read either and is classified by the caller.
             read.lost(f"pool {pool_name}: LXD answered {getattr(exc.response, 'status_code', '?')}: "
                       f"{' '.join(str(exc).split())[:200]}")
             continue
@@ -227,7 +218,7 @@ def _fetch_volumes_for_node(
 def _invalidate_volume_lists() -> None:
     """A volume write changes the volume list and the pool rows that count and list it."""
     cache = get_cache_manager()
-    # one family per call: some cache stand-ins accept a single kind
+    # One family per call: some cache stand-ins accept a single kind.
     for kind in ("storage_volumes", "storage_pools", "storage_pool_resources"):
         cache.invalidate_resource_cache(kind)
 
@@ -259,8 +250,8 @@ async def list_storage_volumes(
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
         # Fetch volumes from all nodes in parallel, at most CLUSTER_WALL_SECONDS each. A cluster
-        # still reading then (central-1's volumes take 17 to 24 s on dev) is named late and
-        # finishes in the background; see fanout.gather_clusters.
+        # still reading then is named late and finishes in the background; see
+        # fanout.gather_clusters.
         results = await gather_clusters(
             nodes_to_query,
             lambda node_name: _fetch_volumes_for_node(lxd_service, node_name, pool),
@@ -270,11 +261,10 @@ async def list_storage_volumes(
             generation=lambda: get_resource_list_generation(cache, "storage_volumes"),
         )
         
-        # important: two different things make a node absent, and both must be named.
-        # A node can fail during the fan-out, or never be asked at all, because
-        # connection_manager.get_node_names() returns only nodes with a live client while
-        # the fleet is whatever Vault has registered. Reporting only the first kind left a
-        # dead cluster silently missing rather than merely empty.
+        # important: two things make a node absent, and both must be named. A node can fail
+        # during the fan-out, or never be asked at all, because
+        # connection_manager.get_node_names() returns only nodes with a live client while the
+        # fleet is whatever Vault has registered. Naming only the first hides a dead cluster.
         seeded: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
@@ -283,17 +273,17 @@ async def list_storage_volumes(
             nodes_to_query, results, noun="storage volumes", reasons_visible=not tenant_acl_active()
         )
         unreachable_nodes.extend(fan.unreachable_nodes)
-        # important: the rows now span every project, and a Partner is scoped by cluster, not
-        # by project. On a cluster bound to two organizations this is the only thing keeping
-        # one organization's volumes out of the other's console. The cache key already
-        # carries the bound (get_scope_cache_key), so the cached body is per scope.
+        # important: the rows span every project, and a Partner is scoped by cluster rather than
+        # project. On a cluster bound to two organizations this keeps one organization's volumes
+        # out of the other's console. The cache key already carries the bound
+        # (get_scope_cache_key), so the cached body is per scope.
         all_volumes = [v for v in fan.rows if project_is_visible(v.node, v.project)]
         # important: the seeding names two kinds of cluster, and only one of them may be
-        # remembered. A cluster this worker tried and found down is a correct answer, cached
-        # as it always was (a shorter TTL, so recovery shows within the healer's cadence). A
-        # cluster this worker has never tried, registered seconds ago, must not be: the cache
-        # is shared by every worker, and the one that did connect it would then serve
-        # "unreachable" for the whole TTL. See fanout.unattempted.
+        # cached. A cluster this worker tried and found down is a correct answer, cached with a
+        # shorter TTL so recovery shows within the healer's cadence. A cluster this worker has
+        # never tried, registered seconds ago, must not be: the cache is shared by every worker,
+        # and the one that did connect it would serve "unreachable" for the whole TTL. See
+        # fanout.unattempted.
         cacheable = fan.cacheable_despite_outages and not unattempted(
             seeded, lxd_service.connection_manager
         )
@@ -314,7 +304,6 @@ async def list_storage_volumes(
         if tenant_acl_active():
             all_volumes = [volume for volume in all_volumes if volume.used_by]
         
-        # Store in variable first
         response = StorageVolumeListResponse(
             total=len(all_volumes),
             volumes=all_volumes,
@@ -328,9 +317,8 @@ async def list_storage_volumes(
             collected_at=datetime.now(timezone.utc),
         )
         
-        # important: an outage must not be remembered as the answer, and neither may a
-        # partial one: a cluster that failed its listing was cached as "no volumes" for
-        # 180 seconds. See instances.py.
+        # important: cache neither an outage nor a partial answer, or a cluster that failed its
+        # listing would be cached as "no volumes".
         if not cacheable:
             logger.warning("Not caching storage volumes list: %s", fan.node_errors or "no node answered")
         return Built(value=response, body=response.model_dump(), fresh_for=ttl if cacheable else None)
@@ -405,9 +393,9 @@ async def get_storage_volume(
             location="" if loc == "none" else loc,
         ), caller_tier())
     except HTTPException:
-        # broad handler below converts it into a 500
-        # important: let require_client's 503 through. Without this the
-        # so an offline cluster does not read as a server fault.
+        # important: let an HTTPException through unchanged. The broad handler below would turn
+        # require_client's 503 or a refusal above into a 404, so an offline cluster would read
+        # as a missing volume.
         raise
     except Exception as e:
         logger.error(f"Error getting storage volume {volume_name}: {e}")
@@ -436,8 +424,8 @@ async def create_storage_volume(
 ):
     """Create a new storage volume.
 
-    note: the project is named on the call. Without it every volume landed in `default`
-    whatever project the caller worked in (RC5 acceptance F-02).
+    The volume is created in the named project, or in `default` when no project is given or the
+    named project has no volumes of its own.
     """
     verify_cluster_access(host)
     requested_project = project or DEFAULT_PROJECT
@@ -480,8 +468,7 @@ async def create_storage_volume(
             )
         
         # Announce the lifecycle change to any subscribed add-on. Volumes have no operation in
-        # the integrations proxy vocabulary, so this router is their only source: without it two
-        # of the nine catalogued events could never fire at all.
+        # the integrations proxy vocabulary, so this router is the only source of their events.
         from app.services.webhooks.emitter import emit_resource_event
 
         await emit_resource_event(
@@ -492,7 +479,6 @@ async def create_storage_volume(
             project=owner,
         )
 
-        # Log activity: storage volume creation success
         activity_logger.log_activity(
             action="storage.volume.create",
             target_type="storage_volume",
@@ -522,13 +508,12 @@ async def create_storage_volume(
             )
         }
     except HTTPException:
-        # broad handler below converts it into a 500
-        # important: let require_client's 503 through. Without this the
-        # so an offline cluster does not read as a server fault.
+        # important: let an HTTPException through unchanged. The broad handler below would turn
+        # require_client's 503 or a refusal above into a 500, so an offline cluster would read
+        # as a server fault.
         raise
     except Exception as e:
         logger.error(f"Error creating storage volume: {e}")
-        # Log activity: storage volume creation failure
         activity_logger.log_activity(
             action="storage.volume.create",
             target_type="storage_volume",
@@ -599,7 +584,7 @@ async def update_storage_volume(
                 body["description"] = description
             elif current.get("description") is not None:
                 body["description"] = current.get("description")
-            # PATCH would merge; the previous pylxd save() sent the whole object, which is PUT
+            # PUT the whole object; PATCH would merge.
             node.put(json=body, params=params)
         
         # Readers hold a cached list; without this the change is invisible until the TTL.
@@ -609,9 +594,9 @@ async def update_storage_volume(
             "message": f"Storage volume {volume_name} updated successfully"
         }
     except HTTPException:
-        # broad handler below converts it into a 500
-        # important: let require_client's 503 through. Without this the
-        # so an offline cluster does not read as a server fault.
+        # important: let an HTTPException through unchanged. The broad handler below would turn
+        # require_client's 503 or a refusal above into a 500, so an offline cluster would read
+        # as a server fault.
         raise
     except Exception as e:
         logger.error(f"Error updating storage volume {volume_name}: {e}")
@@ -625,9 +610,8 @@ _ATTACHMENTS_NAMED_IN_ERROR = 5
 def _in_use_detail(volume_name: str, references: List[str]) -> str:
     """Name what is holding a volume, from its raw LXD used_by references.
 
-    The references are API paths, ex; /1.0/instances/web-01?project=acme. Showing those to an
-    operator is showing them the wire, so they are resolved through the same parser the tenant
-    visibility filter uses rather than a second regex written here.
+    The references are API paths, ex; /1.0/instances/web-01?project=acme. They are resolved to
+    instance names through the same parser the tenant visibility filter uses.
     """
     names = []
     for reference in references:
@@ -701,10 +685,9 @@ async def delete_storage_volume(
             node = _volume_node(client, pool, volume_type, volume_name)
             params = _address_params(owner, location) or None
 
-            # important: refuse before asking the daemon. LXD rejects an attached volume anyway,
-            # but its message arrived here as a bare Exception and left as a 500, so an operator
-            # error read as a server fault and the fix it needs was never stated. Unlike an image,
-            # there is no force: an attached volume genuinely cannot be removed.
+            # Refuse before asking the daemon, so the 409 names what holds the volume. LXD would
+            # reject an attached volume anyway, and unlike an image there is no force: an
+            # attached volume cannot be removed.
             current = node.get(params=params).json().get("metadata") or {}
             attached = list(current.get("used_by") or [])
             if attached:
@@ -716,8 +699,7 @@ async def delete_storage_volume(
             node.delete(params=params)
 
         # Announce the lifecycle change to any subscribed add-on. Volumes have no operation in
-        # the integrations proxy vocabulary, so this router is their only source: without it two
-        # of the nine catalogued events could never fire at all.
+        # the integrations proxy vocabulary, so this router is the only source of their events.
         from app.services.webhooks.emitter import emit_resource_event
 
         await emit_resource_event(
@@ -728,7 +710,6 @@ async def delete_storage_volume(
             project=owner,
         )
 
-        # Log activity: storage volume deletion success
         activity_logger.log_activity(
             action="storage.volume.delete",
             target_type="storage_volume",
@@ -752,13 +733,11 @@ async def delete_storage_volume(
             "message": f"Storage volume {volume_name} deleted successfully"
         }
     except HTTPException:
-        # broad handler below converts it into a 500
-        # important: let require_client's 503 and the 409 above through. Without this the
-        # so an offline cluster does not read as a server fault.
+        # important: let an HTTPException through unchanged. The broad handler below would remap
+        # require_client's 503 or a refusal above, such as the 409 for an attached volume.
         raise
     except Exception as e:
         logger.error(f"Error deleting storage volume {volume_name}: {e}")
-        # Log activity: storage volume deletion failure
         activity_logger.log_activity(
             action="storage.volume.delete",
             target_type="storage_volume",
@@ -767,6 +746,6 @@ async def delete_storage_volume(
             result="failure",
             error_message=str(e)
         )
-        # note: was a blanket 500. The pre-check above catches the common in-use case, but the
-        # daemon still owns the race, and a name it cannot resolve is a 404 rather than a fault.
+        # The pre-check above catches the common in-use case, but the daemon still owns the
+        # race, and a name it cannot resolve is a 404 rather than a fault.
         raise lxd_http_error(e, "Storage volume", volume_name)

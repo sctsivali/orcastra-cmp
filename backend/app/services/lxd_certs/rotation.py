@@ -1,21 +1,16 @@
 """Renew, verify and cancel: replacing a cluster's client certificate without losing the old one.
 
-Every path here runs under the cluster's certificate lock and records the certificate it lets go of
-BEFORE overwriting it in Vault (trust_cleanup_store.record_superseded). Written in that order, a
-failed overwrite leaves a record of a certificate that is still current, which the sweep cancels,
-instead of a trusted certificate nothing remembers. Paths that let go of a certificate:
+important: every path here runs under the cluster's certificate lock and records each certificate
+it lets go of BEFORE overwriting it in Vault (trust_cleanup_store.record_superseded). A failed
+overwrite then leaves a record of a still-current certificate, which the sweep cancels, never a
+trusted certificate nothing remembers. Renew lets go of the old active (and a replaced pending)
+one, or of the new one when activation fails after trust was added; verify of the old active one;
+cancel and the 24 hour pending cleanup of the pending one, which may already be trusted.
 
-- renew, automatic: the old active certificate (and a replaced pending one);
-- renew whose activation write fails after trust was added: the new certificate;
-- verify: the old active certificate;
-- cancel and the 24 hour pending cleanup: the pending certificate, which the operator may already
-  have added to trust.
-
-Regenerate issues a pending certificate too (`regenerate`), so the active one keeps working until
-the cluster trusts its replacement and Verify activates it; it used to overwrite the active
-certificate at once, cutting off any worker that reconnected before trust was added.
-
-Vault and LXD calls block, so each goes through run_blocking with its own executor.
+Regenerate (pending.py) also issues a pending certificate, so the active one keeps working until
+Verify activates the trusted replacement; overwriting it at once would cut off any worker that
+reconnects before trust is added. Vault and LXD calls block, so each goes through run_blocking
+with this module's executor.
 """
 
 import logging
@@ -104,9 +99,9 @@ _SUFFIX_ALPHABET = string.ascii_lowercase + string.digits
 def trust_identity_name(cluster_id: str, now: Optional[datetime] = None) -> str:
     """The `--name` of a trust entry: `orca-<id>-YYYYMMDD-HHMMSSmmm-xxxx`.
 
-    The shape registration has always used, now shared by renew and regenerate, because it is what
-    an operator reads in `lxc config trust list` when auditing which entry is whose. The suffix only
-    breaks ties inside one millisecond; nothing authenticates on it.
+    Registration, renew and regenerate share this shape because it is what an operator reads in
+    `lxc config trust list` when auditing which entry is whose. The suffix only breaks ties inside
+    one millisecond; nothing authenticates on it.
     """
     now = now or datetime.now(timezone.utc)
     suffix = "".join(secrets.choice(_SUFFIX_ALPHABET) for _ in range(4))
@@ -157,9 +152,9 @@ def _issue_and_trust(
             ))
         except Exception as exc:  # noqa: BLE001 - falls through to the password, then manual
             logger.warning("Auto-renewal failed for %s: %s", cluster_id, exc)
-    # important: a certificate can be valid and still untrusted, which is the state every cluster
-    # lands in after its trust entry is replaced or dropped on the LXD side, so the trust password
-    # is tried whenever the existing certificate could not do it, not only once it has expired.
+    # A certificate can be valid and still untrusted (ex; its trust entry was replaced or dropped
+    # on the LXD side), so the trust password is tried whenever the existing certificate could not
+    # add trust, whether or not it has expired.
     if not auto and request.trust_password:
         try:
             auto = bool(cert_manager.add_trust_with_password(
@@ -188,11 +183,14 @@ def _activate(cert_manager: Any, cluster_id: str, material: Dict[str, str]) -> N
 
 
 def _adopt(cluster_id: str, endpoint: str, cert: str, key: str) -> None:
-    """Blocking. Switch the worker that served this request. Its trusted connect announces the
-    cluster, and services/lxd/breaker_sync.py moves the other workers within seconds.
+    """Blocking. Switch the worker that served this request to the new certificate.
 
-    note: the reachability caches are dropped here, after the connect, not in _activate. A list
-    rebuilt between the two would otherwise be cached again with the old Pending Trust status.
+    Its trusted connect announces the cluster, and services/lxd/breaker_sync.py moves the other
+    workers within seconds.
+
+    important: the reachability caches are dropped here, after the connect, and not in
+    _activate. A list rebuilt between the two would be cached again with the stale Pending
+    Trust status.
     """
     from app.core.cache import get_cache_manager
     from app.services.lxd_service import get_lxd_service

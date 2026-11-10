@@ -1,20 +1,14 @@
 """What an API key's grant already holds, and the tenant rules a key writes, kept inside its reach.
 
-Provisioning, and the policy sync beside it, checked only that the key's own grant covers the
-project, and a '*' grant covers every project on the cluster, another organization's included. The
-rule they write widens the key creator's Partner bound and hands the listed emails that project.
+A '*' grant covers every project on the cluster, another organization's included, and a rule that
+provisioning or the policy sync writes widens the key creator's Partner bound and hands the listed
+emails that project. So a rule a key writes may not name a project another organization's policies
+already name, unless that organization is on the key's side: one the key owns (organization_owners)
+or one its creator runs (services.cluster_parties). A project no policy names yet still provisions.
+A rule the policy sync writes must also sit inside the key's own grant.
 
-- A rule a key writes may not name a project another organization's policies already name, unless
-  that organization is on the key's side: one the key is an owner of, or one its creator runs
-  (services.cluster_parties). A project nobody names yet, which is every fresh
-  purchase, still provisions.
-- A rule the policy sync writes must sit inside the key's own grant.
-
-The dashboard half, a grant past the caller's project bound, is refuse_a_grant_past_the_project_bound,
-asked by API key minting, edits and rotation and by add-on installation and rescope.
-
-Forward-ported from the v1.0.0-RC4-hotfix line (7d0d79e3, 2d2a0961) through 17215e29, with the key's
-side read from the owner set (organization_owners) rather than the single api_key_id column.
+The dashboard half, refuse_a_grant_past_the_project_bound, is asked by API key minting, edits and
+rotation and by add-on installation and rescope.
 """
 
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple
@@ -89,8 +83,8 @@ async def refuse_a_grant_past_the_project_bound(
         for project in (_field(grant, "projects") or [])
         if not carried_over(_field(grant, "cluster_id"), _field(grant, "permissions"), project)
         # important: `default` counts like '*' there. It carries the other party's instances, and a
-        # key reaches them through the raw proxy and /proxy (owner decision 2026-11-05, as the LXD
-        # TLS keys in services/lxd_key_bounds.py already refuse it).
+        # key reaches them through the raw proxy and /proxy. The LXD TLS keys refuse it the same
+        # way (services/lxd_key_bounds.py).
         and (project in ("*", "default") or not project_is_visible(_field(grant, "cluster_id"), project))
     })
     if refused:
@@ -111,8 +105,8 @@ async def refuse_a_project_another_party_holds(
 ) -> None:
     """Raise 403 when another organization's policies already name this project on this cluster.
 
-    note: org_scope.project_is_visible cannot stand in for this. The external router carries no
-    user scope, so it answers True for every project there.
+    org_scope.project_is_visible cannot stand in for this: the external router carries no user
+    scope, so it answers True for every project there.
     """
     from app.models.db_models import TenantAccessPolicy, TenantPolicyRule
     from app.services.organization_owners import owners_of
@@ -134,10 +128,10 @@ async def refuse_a_project_another_party_holds(
     own_orgs = set(await cluster_parties.run_orgs(db, creator)) if creator else set()
 
     def on_the_keys_side(org_id: int) -> bool:
-        # note: any owner row, an enrolled co-owner's included. The key already provisions into an
-        # organization it owns, and that organization's own policies naming the project are its
-        # own purchase, not another party's. Co-ownership lends no party for managing keys
-        # (cluster_parties), a different question.
+        # Any owner row counts, an enrolled co-owner's included: the key already provisions into
+        # an organization it owns, and that organization's policies naming the project are its own
+        # purchase. Whether co-ownership lends a party for managing keys is a separate rule
+        # (cluster_parties).
         keys = {row.api_key_id for row in owners.get(org_id, [])}
         return (bool(key_id) and key_id in keys) or org_id in own_orgs
 
@@ -158,7 +152,7 @@ def rule_outside_the_key_grant(api_key: Mapping[str, Any], cluster_id: str, proj
     grant = by_cluster.get(cluster_id)
     if grant is None:
         return f"rule names cluster '{cluster_id}', which this key is not granted"
-    # note: a missing list means `default`, an empty one means nothing, as on every proxy door. A grant
+    # A missing list means `default`, an empty one means nothing, as on every proxy door. A grant
     # held to its creator's bound can be empty (services/key_party_bound.py).
     projects = grant.get("projects", ["default"])
     if "*" not in projects and project_name not in projects:

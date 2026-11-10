@@ -4,8 +4,8 @@
 from background tasks with no request at all. It offers each record here and returns; one
 writer task per worker drains the queue in batches, one transaction per batch. The stdout line
 the logger already wrote is the audit of record, so nothing in this module may raise into the
-caller, and a batch the database refuses three times is dropped with an error line rather than
-held.
+caller, and a batch the database still refuses after three retries is dropped with an error line
+rather than held.
 """
 
 from __future__ import annotations
@@ -250,7 +250,7 @@ class JournalSink:
             log_row["target_organization_id"] = org_id
 
     async def _org_for(self, db: Any, cluster_id: str) -> Tuple[Optional[int], Optional[str]]:
-        # note: a DB label lookup memoised per worker, not a scope helper; it names the org a
+        # A database label lookup memoised per worker, not a scope helper: it names the org a
         # cluster is bound to so a Partner's own rows carry their org without a join on read.
         now = time.monotonic()
         cached = self._org_memo.get(cluster_id)

@@ -1,10 +1,10 @@
 """A per-account budget for the routes that probe a cluster endpoint and issue a certificate.
 
 Registration sends an unauthenticated GET to an endpoint the caller types and asks Vault PKI for
-a client certificate. Private targets are the point (clusters live on private networks), so the
-endpoint is not filtered; what stops one account from using it to map the networks the backend
-reaches, or from draining PKI, is this budget (RC5 acceptance FU-7). It is keyed on the signed-in
-account, not the address, because the address is only as good as the proxy trust in front of it.
+a client certificate. Clusters live on private networks, so the endpoint is not filtered; this
+budget is what stops one account from mapping the networks the backend reaches or draining PKI.
+It is keyed on the signed-in account because a client address is only as good as the proxy trust
+in front of it.
 """
 
 from __future__ import annotations

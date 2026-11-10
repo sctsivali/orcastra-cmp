@@ -6,8 +6,8 @@ API (role and group sync) fails. The browser reaches the IdP on its own path, wh
 cannot see; a sign-in can still fail while this reads healthy, never the reverse.
 
 important: never `authentik_sync.get_sync_status()` here. It runs three group searches per call
-(it once also created missing role groups), and this runs every 30 seconds; the token probe below
-answers the same question with one cached read.
+and this runs every 30 seconds; the token probe below answers the same question with one cached
+read.
 """
 
 from __future__ import annotations
@@ -57,8 +57,8 @@ def _admin_api(api_url: str, token: str, now: float) -> str:
 
     parsed = urlparse(api_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
-    # important: the same root role sync uses. Dev sets a bare domain, and asking
-    # {domain}/core/users/me/ answered 404, which read as "admin API not ready".
+    # important: the same root role sync uses. The setting may be a bare domain, where
+    # {domain}/core/users/me/ answers 404 and reads as "admin API not ready".
     api_root = api_base(api_url)
     verdict = "ok"
     try:

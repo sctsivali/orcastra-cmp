@@ -1,15 +1,11 @@
-"""
-RBAC (Role-Based Access Control) Module (Three-Tier Model)
+"""Three-tier role-based access control, with roles mapped from Authentik groups.
 
-Implements the ORCA Operations Center Dashboard three-tier RBAC:
   1. Admin: full system-wide access
-  2. Partner: full control over own clusters / organizations
+  2. Partner: full control over its own clusters and organizations
   3. Tenant: project-level access within assigned organizations
 
-Authentik group naming convention:
-  - role_admin   → Admin
-  - role_partner → Partner
-  - role_tenant  → Tenant
+The canonical groups are role_admin, role_partner and role_tenant; AUTHENTIK_GROUP_MAP lists the
+accepted aliases.
 """
 
 import logging
@@ -27,7 +23,7 @@ activity_logger = get_activity_logger()
 
 
 # ---------------------------------------------------------------------------
-# Role definitions - strict three-tier
+# Roles
 # ---------------------------------------------------------------------------
 
 class Role(str, Enum):
@@ -37,26 +33,25 @@ class Role(str, Enum):
     TENANT = "tenant"    # End user: assigned projects only
 
 
-# Role hierarchy: higher index = more privileged
+# Higher value = more privileged.
 ROLE_HIERARCHY: dict[Role, int] = {
     Role.TENANT: 0,
     Role.PARTNER: 1,
     Role.ADMIN: 2,
 }
 
-# Map Authentik group names → internal Role
-# Keys MUST be lowercase - resolve_user_role() lowercases before lookup.
+# Authentik group name to role. Keys must be lowercase: mapped_roles lowercases before the lookup.
 AUTHENTIK_GROUP_MAP: dict[str, Role] = {
-    # canonical names (recommended - create these in Authentik)
+    # Canonical names; create these in Authentik.
     "role_admin": Role.ADMIN,
     "role_partner": Role.PARTNER,
     "role_tenant": Role.TENANT,
-    # short aliases
+    # Short aliases.
     "admin": Role.ADMIN,
     "partner": Role.PARTNER,
     "tenant": Role.TENANT,
     "admins": Role.ADMIN,
-    # common Authentik default groups
+    # Authentik's default admin group and other common names.
     "authentik admins": Role.ADMIN,
     "orcastra-admins": Role.ADMIN,
     "orcastra-partners": Role.PARTNER,
@@ -113,7 +108,7 @@ class Permission(str, Enum):
     ORG_MEMBER_WRITE = "org:member:write"
 
 
-# Permission matrix - three-tier
+# Permissions per role.
 ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
     Role.ADMIN: set(Permission),  # full access
 
@@ -172,11 +167,11 @@ def mapped_roles(group_names: list[str]) -> list[Role]:
 
 
 def _resolve_roles_uncached(user: AuthenticatedUser) -> list[Role]:
-    """Map Authentik groups to roles (no cache).
+    """Map Authentik groups to roles.
 
-    note: still answers TENANT for a caller with no role group, because tenant grants, the
-    integration rebind and the role reader resolve through here and a key or membership row is not
-    a session. Whether a session may act at all is decided by refuse_unmapped below.
+    A caller with no role group resolves to TENANT: tenant grants, the integration rebind and the
+    role reader resolve through here, and a key or membership row is not a session. Whether a
+    session may act at all is decided by refuse_unmapped.
     """
     return mapped_roles(user.groups) or [Role.TENANT]
 
@@ -189,10 +184,9 @@ def roles_for_group_names(group_names: list[str]) -> list[Role]:
 def resolve_roles(user: AuthenticatedUser) -> list[Role]:
     """Map the caller's Authentik groups to roles.
 
-    important: computed from the token's own groups on every call, never cached. A per-user cache in
-    Redis used to outrank the token for a minute: its entries were unsigned, so anyone able to write
-    to Redis could give themselves Admin, and a demoted user kept the old role until it expired. The
-    mapping is a few dictionary lookups, so there is nothing to save by caching it.
+    important: computed from the token's own groups on every call, never cached. A cached role
+    would outrank the token: a demoted user would keep the role until the entry expired, and
+    unsigned entries in Redis would let anyone who can write to Redis grant themselves Admin.
     """
     return _resolve_roles_uncached(user)
 
@@ -207,9 +201,9 @@ def get_highest_role(roles: list[Role]) -> Role:
 def is_admin(user: AuthenticatedUser) -> bool:
     """Whether the caller is an Administrator, from its groups as require_admin decides it.
 
-    important: not `Role.ADMIN.value in user.roles`. AuthenticatedUser.roles holds the token's raw
-    "role_*" group names ("role_admin"), so that test was never true and an Administrator was treated
-    as a partner of its own organizations only.
+    important: never test `Role.ADMIN.value in user.roles`. AuthenticatedUser.roles holds the
+    token's raw "role_*" group names ("role_admin"), so that test is never true and would treat an
+    Administrator as a partner of its own organizations only.
     """
     return get_highest_role(resolve_roles(user)) == Role.ADMIN
 
@@ -240,10 +234,10 @@ def has_mapped_role(user: AuthenticatedUser) -> bool:
 
 
 def refuse_unmapped(request: Request, user: AuthenticatedUser) -> None:
-    """Refuse a signed-in caller whose groups map to no role (issue #17).
+    """Refuse a signed-in caller whose groups map to no role.
 
-    important: such a caller used to resolve to Tenant and receive 200 with empty lists, which reads
-    as a broken or emptied deployment. A role is now required before any session route answers.
+    important: resolve_roles reads such a caller as Tenant, which would answer 200 with empty lists
+    and look like a broken or emptied deployment, so a session route needs a mapped role first.
     Integration keys and MCP authenticate elsewhere and never reach this.
     """
     if has_mapped_role(user):
@@ -264,7 +258,7 @@ def refuse_unmapped(request: Request, user: AuthenticatedUser) -> None:
 
 
 def _populate_request_state(request: Request, user: AuthenticatedUser) -> None:
-    """Write resolved RBAC info into request.state AND RequestContext for logging."""
+    """Write the resolved roles into request.state and the RequestContext for logging."""
     roles = resolve_roles(user)
     highest = get_highest_role(roles)
     request.state.user_id = user.user_id
@@ -275,8 +269,7 @@ def _populate_request_state(request: Request, user: AuthenticatedUser) -> None:
     request.state.rbac_roles = [r.value for r in roles]
     request.state.rbac_permissions = [p.value for p in get_user_permissions(roles)]
 
-    # sync resolved role into the RequestContext ContextVar so that
-    # ActivityLogger and AccessLogMiddleware read the correct values
+    # ActivityLogger and AccessLogMiddleware read the role from the RequestContext.
     ctx = get_request_context()
     if ctx is not None:
         ctx.user_id = user.user_id
@@ -289,7 +282,7 @@ def _populate_request_state(request: Request, user: AuthenticatedUser) -> None:
 # ---------------------------------------------------------------------------
 
 def require_roles(*allowed_roles: Role):
-    """Ensures user holds at least one of allowed_roles (hierarchy-aware)."""
+    """Dependency: the caller's highest role ranks at least the lowest of `allowed_roles`."""
     async def _dependency(
         request: Request,
         user: Optional[AuthenticatedUser] = Depends(get_current_user),
@@ -331,7 +324,7 @@ def require_roles(*allowed_roles: Role):
 
 
 def require_permissions(*required_permissions: Permission):
-    """Ensures user has ALL specified permissions."""
+    """Dependency: the caller holds every one of `required_permissions`."""
     async def _dependency(
         request: Request,
         user: Optional[AuthenticatedUser] = Depends(get_current_user),
@@ -373,7 +366,7 @@ def require_permissions(*required_permissions: Permission):
 
 
 def require_authenticated():
-    """Any authenticated user. Populates request.state for logging."""
+    """Dependency: any signed-in caller with a mapped role. Populates request.state for logging."""
     async def _dependency(
         request: Request,
         user: Optional[AuthenticatedUser] = Depends(get_current_user),
@@ -390,11 +383,11 @@ def require_authenticated():
 
 
 # ---------------------------------------------------------------------------
-# Convenience aliases - three-tier
+# Convenience aliases
 # ---------------------------------------------------------------------------
 
 def require_admin():
-    """Admin only - system-wide access."""
+    """Admin only."""
     return require_roles(Role.ADMIN)
 
 

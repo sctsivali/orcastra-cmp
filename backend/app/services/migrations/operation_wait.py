@@ -1,10 +1,10 @@
 """Waiting on long daemon operations without losing the job to reconciliation.
 
-A transfer of a large VM disk legitimately runs for many minutes. A single bounded wait used to
-turn every such transfer into ``unknown``, and reconciliation could later only prove the outcome
-by reading an operation id the daemon had already purged. This loop keeps asking the daemon in
-short slices, proves the mutation lease before each slice (the heartbeat task renews it), and
-gives up only after a deadline sized to the data being moved.
+A transfer of a large VM disk can run for many minutes. A single bounded wait would turn it
+into ``unknown``, and reconciliation could then only prove the outcome from an operation id the
+daemon may already have purged. This loop asks the daemon in short slices, proves the mutation
+lease before each slice (the heartbeat task renews it), and gives up only after a deadline sized
+to the data being moved.
 """
 
 from __future__ import annotations
@@ -73,7 +73,8 @@ async def await_operation(
                 project=project,
                 wait_seconds=poll_seconds,
                 label=label,
-                # The daemon holds the response for poll_seconds and the socket allows 10 more.
+                # The daemon holds the response for poll_seconds and the socket read allows 10
+                # more; this wall-clock limit sits above both.
                 timeout=poll_seconds + 30,
             )
         except executor.OperationForgotten:

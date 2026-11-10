@@ -107,8 +107,8 @@ async def upsert_operation(db: AsyncSession, frame: OperationFrame) -> UpsertRes
     if frame.action and not (frame.resource_type and frame.resource_name):
         # LXD named no resource ("Creating instance", "Deleting project"): the newest dashboard
         # row for the same action in the same project is this operation, and the row keeps the
-        # name the audit gave it. Without this the frame opened a nameless second row that no
-        # merge could ever pair.
+        # name the audit gave it. Otherwise the frame would open a nameless second row that no
+        # merge could pair.
         attached = returned_id(
             await db.execute(
                 text(
@@ -412,9 +412,9 @@ async def find_task_by_key(
 ) -> Optional[str]:
     """The newest task for a lifecycle frame's key, claimed or not, for the log link only.
 
-    Found live: the dashboard's own stop had claimed the row before its `instance-stopped`
-    frame arrived, `attach_requestor` rightly left the actor alone, and the lifecycle line
-    never reached the task's Log tab.
+    The dashboard's own action can claim the row before its lifecycle frame arrives (a stop
+    before `instance-stopped`); `attach_requestor` then leaves the actor alone, and this lookup
+    still links the lifecycle line to the task's Log tab.
     """
     return returned_id(
         await db.execute(

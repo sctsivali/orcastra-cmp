@@ -1,7 +1,7 @@
 """Installing an add-on into an organization, and everything an operator does to one afterwards.
 
-Every write here is audited with the operator as the actor, because these are the actions that
-hand a third party access to a customer's infrastructure and take it away again.
+Every write here is audited with the operator as the actor: these actions hand a third party access
+to a customer's infrastructure and take it away again.
 """
 
 import logging
@@ -61,9 +61,8 @@ def _audit(
 ) -> None:
     """The operator is the actor; log_activity reads them from the request context.
 
-    important: `target_organization_id` is passed so the record lands attributable to the tenant
-    that was acted upon, which is what makes it visible in a tenant-scoped view of the audit
-    rather than only to whoever ran the action.
+    `target_organization_id` attributes the record to the organization acted upon, so it also
+    shows in that organization's view of the audit.
     """
     try:
         activity_logger.log_activity(
@@ -149,7 +148,7 @@ async def install_preview(
     )
     allowed = await _allowed_org_ids(user, db)
     if allowed is not None and organization_id not in allowed:
-        # Same shape as everywhere else: not visible is not distinguishable from not there.
+        # 404 as elsewhere, so an organization the caller may not see looks like a missing one.
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="Organization not found")
@@ -287,13 +286,11 @@ async def get_installation(
 def _credential_health(key_id: str) -> Optional[Dict[str, Any]]:
     """When the credential was last used and when it expires, or None if it cannot be read.
 
-    important: only the detail read pays for this. The listing renders many installations and a
-    Vault round trip each would make opening the page cost one request per row.
+    Only the detail read calls this; in the listing it would cost one Vault round trip per row.
 
-    A failure here must not fail the page. An operator opening an installation because something
-    looks wrong is the worst moment to answer 503, and Vault sealing itself is a live condition on
-    this deployment. None is returned and the response says the credential was unreadable, which
-    is honest and different from "never used".
+    A failure here must not fail the page: Vault can be sealed, and an operator often opens an
+    installation because something looks wrong. None makes the response say the credential was
+    unreadable, which differs from "never used".
     """
     try:
         from app.routers.integrations import (
@@ -504,8 +501,8 @@ async def uninstall(
 ) -> None:
     record, extension, org_slug = await _load(db, install_id, user)
     organization_id = record.organization_id
-    # note: record.api_key_id is read after the call: the service locks the row and reads it again, so
-    # a rotation that committed in between is the key the audit names
+    # important: read record.api_key_id after the call. The service locks the row and reads it
+    # again, so a rotation that committed in between is the key the audit names.
     try:
         removed = await extension_install.uninstall(
             db, get_vault_integrations_client(), install=record, user=user

@@ -1,28 +1,20 @@
-"""When a schedule fires, as pure arithmetic.
+"""When a schedule fires, as pure arithmetic: no clock, no I/O, no database.
 
-No clock of its own, no I/O, no database. Every function takes the moment it should reason about,
-which is what makes a three-day outage testable without waiting three days.
+Every function takes the moment it reasons about, so a multi-day outage is testable directly.
 
-Two properties this file exists to hold.
-
-**Slots are anchored, never chained.** A slot is a property of the calendar and the schedule, not of
-when the last run happened. Computing the next run as `finished_at + period` lets a run that took
-forty seconds push every future run forty seconds later, forever, and the drift is invisible until
-an operator notices their nightly snapshot has wandered into the working day.
-
-**UTC only, and the field names say so.** A local-time schedule at 02:30 either fires twice or not
-at all on a daylight-saving transition, and the arithmetic that gets that right is exactly the
-arithmetic nobody exercises. UTC has no transitions. An operator in Jakarta wanting 03:00 local
-picks 20:00 UTC, and the console renders the label with both. That is a display problem, not a
-storage one.
+Slots are anchored to the calendar and the schedule, never chained from the last run. Computing the
+next run as `finished_at + period` would let a run that took forty seconds push every later run
+forty seconds further. Times are UTC only, and the field names say so: a local-time schedule fires
+twice or not at all on a daylight-saving transition. The console renders the label in both UTC and
+local time.
 """
 
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
-# The closed vocabulary. A cron string would be more expressive and would also need a parser, a
-# dependency, and a validator for a syntax an operator would have to be taught. Four shapes cover
-# what an operator console is actually asked for, and a Select cannot produce an invalid value.
+# The closed vocabulary. A cron string would need a parser, a dependency and a validator for a
+# syntax operators would have to learn. Four shapes cover what operators ask for, and a Select
+# cannot produce an invalid value.
 FREQUENCIES: Dict[str, int] = {
     "every_6_hours": 6,
     "every_12_hours": 12,
@@ -30,12 +22,11 @@ FREQUENCIES: Dict[str, int] = {
     "weekly": 168,
 }
 
-# Quarter hours only. This is the one knob that spreads load across a fleet, and four values an
-# operator picks from a list spread it as well as sixty do while keeping the vocabulary small
-# enough to reason about.
+# Quarter hours only. The minute is what spreads load across a fleet, and four values spread it
+# as well as sixty while keeping the vocabulary small.
 MINUTES: tuple = (0, 15, 30, 45)
 
-# 2000-01-03 was a Monday, which makes it the natural origin for a weekday-anchored schedule.
+# Weekday-anchored schedules count from a Monday, `2000-01-03`.
 _WEEK_ORIGIN = datetime(2000, 1, 3, tzinfo=timezone.utc)
 _DAY_ORIGIN = datetime(2000, 1, 1, tzinfo=timezone.utc)
 
@@ -70,9 +61,8 @@ def validate(
 ) -> None:
     """Refuse a recurrence that cannot be stored, naming the field that is wrong.
 
-    The database carries the same rules as CHECK constraints. Both, deliberately: the constraint is
-    what keeps a row written by anything other than this service honest, and the message is what an
-    operator can act on.
+    The database carries the same rules as CHECK constraints, which hold for rows written by
+    anything else; this message is what an operator can act on.
     """
     period(frequency)  # raises on an unknown frequency
     if not isinstance(hour_utc, int) or not 0 <= hour_utc <= 23:
@@ -87,9 +77,8 @@ def validate(
         if not isinstance(weekday, int) or not 0 <= weekday <= 6:
             raise RecurrenceError("weekday must be 0 (Monday) through 6 (Sunday).")
     elif weekday is not None:
-        # Not pedantry: a weekday stored against a daily schedule is a value the console would
-        # render and the runner would ignore, which is how a schedule comes to say one thing and
-        # do another.
+        # A weekday stored on a non-weekly schedule would be rendered by the console and ignored
+        # by the runner.
         raise RecurrenceError("Only a weekly schedule takes a weekday.")
 
 
@@ -136,8 +125,8 @@ def latest_slot_at_or_before(
 ) -> datetime:
     """The most recent slot that has already come round.
 
-    This is what a run names itself after, and it is why a backend that was down for a day takes
-    ONE snapshot named for today rather than a day's worth named for yesterday.
+    A run names itself after this slot, so a backend that was down for a day takes one snapshot
+    named for today rather than a day's worth named for yesterday.
     """
     anchor = _anchor(frequency, hour_utc, minute_utc, weekday)
     step = period(frequency)
@@ -154,9 +143,8 @@ def slots_between(
 ) -> int:
     """How many slots fall after `start` and at or before `end`.
 
-    Used to count what an outage cost. Nothing is replayed: every catch-up snapshot would capture
-    the same state, the current one, so five of them are five restore points wearing misleading
-    timestamps rather than five moments anyone can go back to.
+    Counts what an outage cost. Missed slots are not replayed: every catch-up snapshot would
+    capture the same current state under a misleading timestamp.
     """
     anchor = _anchor(frequency, hour_utc, minute_utc, weekday)
     step = period(frequency)
@@ -166,9 +154,8 @@ def slots_between(
 def _as_utc(moment: datetime) -> datetime:
     """A naive datetime is read as UTC rather than rejected.
 
-    Postgres hands back an aware value for a timestamptz column, but a value that has been through
-    a serialisation boundary may not be, and refusing it here would turn a formatting detail into a
-    schedule that stops.
+    Postgres returns an aware value for a timestamptz column, but a value that crossed a
+    serialisation boundary may be naive, and refusing it would stop the schedule.
     """
     if moment.tzinfo is None:
         return moment.replace(tzinfo=timezone.utc)
@@ -178,8 +165,8 @@ def _as_utc(moment: datetime) -> datetime:
 def describe(frequency: str, hour_utc: int, minute_utc: int, weekday: Optional[int]) -> str:
     """One sentence naming when this fires, for an audit record and an API response.
 
-    The console composes its own copy from the fields; this exists so a log line and a refusal read
-    the same way as the screen without the reader holding four numbers in their head.
+    The console composes its own copy from the fields; this keeps log lines and refusals worded
+    like the screen.
     """
     at = f"{hour_utc:02d}:{minute_utc:02d} UTC"
     if frequency == "weekly":

@@ -1,12 +1,11 @@
 """The one place the task journal's reads are scoped.
 
-The journal is written as facts by two background writers that must never name a scope helper
-(their ContextVars are unset, and unset means allowed). Scope is applied on read, here, as the
-exact translation of the instance-list rule: the caller's cluster set, the Partner project bound
-on a shared cluster, and the tenant ACL. Each rule exists twice on purpose: once as SQL, so a
-page is filtered before it is loaded, and once as a Python predicate, so every row is judged
-again after the load and the WebSocket feed can judge a frame before it is queued. The corpus
-test holds the two forms equal.
+The journal's two background writers must never name a scope helper: their ContextVars are unset,
+and unset means allowed. Scope is applied on read, here, as the translation of the instance-list
+rule: the caller's cluster set, the Partner project bound on a shared cluster, and the tenant ACL.
+Each rule exists as SQL, so a page is filtered before it is loaded, and as a Python predicate, so
+every loaded row and every WebSocket frame is judged again. The corpus test holds the two forms
+equal.
 
 important: this module lives outside `app/services/task_journal` because that package is
 ratcheted against naming any of these helpers. Only this module and the routers may.
@@ -49,8 +48,8 @@ def _owner_project(model: Any) -> Any:
 
 def _named_project(model: Any) -> Any:
     # important: LXD's project-created, -updated and -deleted events carry no name, so those rows
-    # hold the project in `project` alone. Skipping it read them as `default`, the one project every
-    # tenant may see, which printed other customers' project names to anyone on the cluster.
+    # hold the project in `project` alone. Without this fallback they read as `default`, the one
+    # project every tenant may see, and show other customers' project names to anyone on the cluster.
     return func.coalesce(model.resource_name, model.project, "default")
 
 
@@ -107,9 +106,8 @@ def _acl_condition(model: Any, acl: Mapping[str, Any]) -> Any:
         branches.append(and_(*project_terms))
 
     # `default` stays visible unconditionally while a tenant ACL is in force, with or without a
-    # `view` rule, exactly as tenant_may_see_project reads it (the review found the SQL side
-    # answering false() for a tenant whose grants carry no view while the Python twin admitted
-    # the row); the cluster set predicate bounds which clusters.
+    # `view` rule, exactly as tenant_may_see_project reads it; the cluster set predicate bounds
+    # which clusters.
     branches.append(and_(model.resource_type == "project", _named_project(model) == "default"))
     return or_(*branches)
 
@@ -140,10 +138,10 @@ def task_conditions(model: Any) -> List[Any]:
     return _scope_conditions(model)
 
 
-# important: a My Keys row names a private credential by id (the only thing between a partner and
-# another owner's PFX download) on the key's cluster, so cluster scope would show it to every
-# partner sharing that cluster. These rows reach Admin and the person who acted, like a host-less row.
-# A key, the group cleanup, and a key that was asked for and not issued (its own type, never a key id).
+# important: a My Keys row names a private credential by id on the key's cluster, and that id
+# alone guards the owner's PFX download, so cluster scope would expose it to every partner on the
+# cluster. These rows reach only Admin and the actor, like a host-less row. Types: a key, the group
+# cleanup, and a key requested but not issued (never a key id).
 KEY_RESOURCE_TYPES = ("ssh_key", "ssh_key_cleanup", "ssh_key_request")
 
 
@@ -153,7 +151,7 @@ def _is_own(model: Any, caller_email: str) -> Any:
 
 def log_conditions(model: Any, *, caller_email: Optional[str]) -> List[Any]:
     """WHERE terms for `cluster_log`. A host-less row (identity, settings, an access denial) and
-    a My Keys row reach Admin and their own actor; nobody else."""
+    a My Keys row reach only Admin and their own actor."""
     if get_current_allowed_clusters() is None:
         return []
     not_a_key_row = or_(model.resource_type.is_(None), model.resource_type.notin_(KEY_RESOURCE_TYPES))
@@ -209,9 +207,9 @@ def log_is_visible(row: Mapping[str, Any], *, caller_email: Optional[str]) -> bo
 def disconnected_for_caller(states: Iterable[Mapping[str, Any]]) -> List[str]:
     """Followed clusters in the caller's scope whose event stream is not connected.
 
-    note: a cluster the follower recorded as `unregistered` is no longer followed, so it is not
-    reported as disconnected; it would otherwise name a deregistered cluster to Admin until
-    the row is pruned.
+    A cluster the follower recorded as `unregistered` is not followed, so it is not reported as
+    disconnected; it would otherwise name a deregistered cluster to Admin until the row is
+    pruned.
     """
     return apply_cluster_filter(
         [

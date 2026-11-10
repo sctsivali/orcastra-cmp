@@ -2,19 +2,13 @@
 
 A cluster keeps its own copy of its location in Vault metadata, so a catalogue correction (a
 moved point, a renamed regency, a retired id) reaches it only when the location is saved again.
-This finds every stored location the catalogue disagrees with and, with --apply, rewrites it the
+This lists every stored location the catalogue disagrees with and, with --apply, rewrites it the
 way PATCH /clusters/{id}/location does: catalogue fields replaced, facility fields kept, zone
 re-synced only when it still held the old city or region name, caches dropped, and one audit
-event per cluster with the location before and after.
+event per cluster. A region id the catalogue does not know (an API client's own) is left alone.
 
-Deployment data, not schema, so it is not a migration. Run inside the backend container,
-dry-run by default:
-
-    python -m app.services.region_location_backfill            # list what would change
-    python -m app.services.region_location_backfill --apply    # rewrite
-
-Idempotent: once applied, a second run finds nothing to change. Locations whose region id the
-catalogue does not know (an API client's own) are listed and left alone.
+Run inside the backend container; dry run by default, idempotent once applied:
+`python -m app.services.region_location_backfill [--apply]`.
 """
 
 from __future__ import annotations
@@ -53,8 +47,8 @@ def _metadata_path(cert_manager: Any, cluster_id: str) -> str:
 
 
 def _read_metadata(cert_manager: Any, cluster_id: str) -> Dict[str, Any]:
-    # note: uncached. A plan judged against a cached body could report a cluster up to date
-    # that is not, or rewrite one from a stale read.
+    # Uncached: a plan judged against a cached body could report a cluster up to date that is
+    # not, or rewrite one from a stale read.
     return cert_manager.vault.vault_read(_metadata_path(cert_manager, cluster_id), use_cache=False) or {}
 
 
@@ -83,8 +77,8 @@ def plan(cert_manager: Any, catalog: Optional[RegionCatalog] = None) -> Backfill
             continue
         location = metadata.get("location") or {}
         if not isinstance(location, dict):
-            # important: a stored string or list is not a location this pass can repair, and a .get()
-            # on it ended the whole plan outside the per-cluster try above.
+            # A stored string or list is not a location this pass can repair, and a .get() on it
+            # would raise outside the per-cluster try above and end the whole plan.
             result.unreadable.append((cluster_id, "the stored location is not an object"))
             continue
         region_id = location.get("region_id")
@@ -103,11 +97,10 @@ def plan(cert_manager: Any, catalog: Optional[RegionCatalog] = None) -> Backfill
 
 def apply(cert_manager: Any, backfill: BackfillPlan, catalog: Optional[RegionCatalog] = None,
           cache: Any = None, activity: Any = None) -> List[str]:
-    """Write every planned change. Returns the ids actually rewritten.
+    """Write every planned change. Returns the ids rewritten.
 
     Each cluster is re-read and re-judged just before its write, so a location an operator
-    changed after the plan was printed is judged on what is stored now, not overwritten with
-    a stale decision.
+    changed after the plan was printed is judged on what is stored now.
     """
     catalog = catalog or get_region_catalog()
     written: List[str] = []
@@ -181,10 +174,10 @@ def _route_audit_to_the_container_log() -> None:
     """Make this process's audit records land where the server's do.
 
     important: run through `docker compose exec`, this is a second process. Without
-    setup_logging the audit logger has no handler and Python drops INFO records outright, and
-    even with it the records would reach only the exec session's terminal. Fluent Bit ships the
-    container's own stdout, which is PID 1's, so the records are written there as well. The
-    task journal copy needs the server's event loop and is not available here.
+    setup_logging the audit logger has no handler and drops INFO records, and with it the
+    records reach only the exec session's terminal. Fluent Bit ships the container's stdout,
+    which is PID 1's, so records are written there too. The task journal copy needs the
+    server's event loop and is skipped here.
     """
     import logging
 

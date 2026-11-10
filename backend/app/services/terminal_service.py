@@ -1,7 +1,4 @@
-"""
-Terminal Service - LXD Exec WebSocket Handler.
-Provides interactive terminal access to LXD instances via WebSocket.
-"""
+"""Starts the LXD exec operations behind interactive terminal sessions."""
 
 import logging
 import ssl
@@ -32,7 +29,6 @@ class ControlCode(IntEnum):
 
 @dataclass
 class TerminalSession:
-    """Represents an active terminal session."""
     session_id: str
     instance_name: str
     host: str
@@ -45,10 +41,7 @@ class TerminalSession:
 
 
 class TerminalService:
-    """
-    Service for managing terminal connections to LXD instances.
-    Handles LXD exec API integration with WebSocket forwarding.
-    """
+    """Opens interactive exec operations; terminal_proxy.py relays their sockets."""
     
     def __init__(self):
         self.settings = get_settings()
@@ -58,14 +51,12 @@ class TerminalService:
     
     @property
     def lxd_service(self):
-        """Lazy load LXD service."""
         if self._lxd_service is None:
             self._lxd_service = get_lxd_service()
         return self._lxd_service
     
     @property
     def cert_manager(self) -> LXDCertificateManager:
-        """Lazy load certificate manager."""
         if self._cert_manager is None:
             vault_client = get_vault_client(
                 self.settings.vault_addr,
@@ -78,25 +69,18 @@ class TerminalService:
         return self._cert_manager
     
     def get_shell_command(self, instance_type: str = "container") -> list:
-        """
-        Get appropriate shell command for instance type.
-        For VMs with lxd-agent, use login shell.
-        For containers, use smart shell detection that works on any distro.
-        """
+        """The exec command: bash when the image has it, else /bin/sh; a VM gets a login shell."""
         if instance_type == "virtual-machine":
-            # /bin/sh is guaranteed on all distros; try bash (login) for nicer UX
-            # and fall back to sh. Hardcoding bash broke minimal VM images (e.g.
-            # Alpine) that ship no bash -> exec exits instantly -> the terminal
-            # disconnect/reconnect loop.
+            # Minimal images (ex; Alpine) ship no bash, and an exec of a missing
+            # shell exits at once, which the terminal sees as a reconnect loop.
+            # /bin/sh is always present.
             return ["/bin/sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash --login; else exec sh; fi"]
         else:
-            # important: /bin/sh is guaranteed on all Linux distros (Alpine, BusyBox, Ubuntu, etc.)
-            # This tries bash first for better UX (tab completion, history), falls back to sh.
-            # Fixes immediate disconnect on minimal containers that only have /bin/sh.
+            # Same fallback: minimal containers may only have /bin/sh.
             return ["/bin/sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi"]
     
     def get_fallback_shell(self) -> list:
-        """Fallback shell when smart detection fails."""
+        """Fallback shell when detection fails."""
         return ["/bin/sh"]
     
     @staticmethod
@@ -141,8 +125,8 @@ class TerminalService:
         client = lxd_client(host)
         if client is None:
             raise SessionSetupError(f"Cannot reach cluster {host}", retryable=True)
-        # important: LXD accepts an exec on a VM whose agent is down and only then drops its
-        # sockets, so the reason has to be found before submitting it.
+        # LXD accepts an exec on a VM whose agent is down and only then drops its sockets,
+        # so the reason has to be found before submitting it.
         if self._vm_agent_unreachable(client, instance, instance_name, project):
             raise SessionSetupError(_NO_AGENT_MESSAGE, retryable=False)
         exec_data = {
@@ -166,7 +150,7 @@ class TerminalService:
         operation = response.json()
         if response.status_code >= 400 or operation.get("type") == "error":
             message = str(operation.get("error") or response.status_code)
-            # note: an exec into a VM needs its lxd-agent; say so rather than the daemon's wording.
+            # An exec into a VM needs its lxd-agent; say so rather than the daemon's wording.
             if "agent" in message.lower():
                 raise SessionSetupError(_NO_AGENT_MESSAGE, retryable=False)
             raise SessionSetupError(f"The cluster refused the shell: {message}", retryable=False)
@@ -186,25 +170,16 @@ class TerminalService:
         }
 
     def get_ssl_context(self, host: str) -> ssl.SSLContext:
-        """
-        Create SSL context for WebSocket connection to LXD.
-        Uses certificates from Vault.
-        
-        Note: Temp files are kept for the process lifetime to avoid SSL errors
-        during long-running connections.
-        """
-        # Get certificates from Vault
+        """SSL context for a WebSocket connection to LXD, from the cluster's Vault certificate."""
         cert_data = self.cert_manager.get_cluster_certificate(host)
         
         return create_lxd_ssl_context(cert_data)
     
 
-# Singleton instance
 _terminal_service: Optional[TerminalService] = None
 
 
 def get_terminal_service() -> TerminalService:
-    """Get or create terminal service singleton."""
     global _terminal_service
     if _terminal_service is None:
         _terminal_service = TerminalService()

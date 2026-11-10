@@ -3,10 +3,10 @@
 Three requests are built from that URL, each carrying a credential: the lifecycle webhook (an
 HMAC), the member push (the key's plaintext secret) and the organization refresh (the secret's
 hash, with the answer upserted as organizations). The value is checked when it is stored
-(`integrations._refuse_a_callback_this_server_must_not_call`), but a name checked once can answer
-differently later, and a plain client resolved it again at every call (RC5 acceptance FU-4,
-2026-11-06). These go through the pinned helpers instead, held to the same boundary the stored
-value passed: https, no private network, and no redirect, so a credential never follows a hop.
+(`integrations._refuse_a_callback_this_server_must_not_call`), but a name checked once can resolve
+differently later. These requests go through the pinned helpers, held at every call to the same
+boundary the stored value passed: https, no private network, and no redirect, so a credential
+never follows a hop.
 """
 
 from __future__ import annotations

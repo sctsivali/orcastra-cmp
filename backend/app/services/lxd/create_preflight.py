@@ -583,5 +583,5 @@ async def preflight_instance_create(
     lxd_service: Any,
     request: InstanceCreateRequest,
 ) -> InstanceCreatePreflightResponse:
-    """Compatibility wrapper for callers that need only the public response."""
+    """Run the preflight and return only the public response."""
     return (await evaluate_instance_create(lxd_service, request)).response

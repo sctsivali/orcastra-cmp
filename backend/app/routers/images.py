@@ -1,6 +1,6 @@
 """
-API Router for LXD image operations.
-Provides endpoints for listing available images on each node.
+API router for LXD images: each cluster's image stores, the remote catalogs, image usage and
+deletion.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Path, Query
@@ -64,16 +64,15 @@ router = APIRouter(
     dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
 )
 
-# Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
 
 # A delete waits on a real LXD operation that has to unlink the image's storage volume, so it
 # is slower than a read but nowhere near an instance create.
 IMAGE_DELETE_TIMEOUT = 60.0
 IMAGE_DELETE_MAX_IN_FLIGHT = 5
-# One node's instance list, every project. The dashboard's preflight waits 8 s on it, so the
-# read has to be that cheap on a healthy node; a node that is not answering trips the breaker
-# well before this.
+# One cluster's instance list, every project. The dashboard's preflight waits 8 s on it, so the
+# read has to be that cheap on a healthy cluster; one that is not answering trips the breaker
+# sooner.
 IMAGE_USAGE_TIMEOUT = 20.0
 # How many dependent instances a 409 names before it stops listing and starts counting. Long
 # enough to act on, short enough that the message stays readable in a toast.
@@ -82,7 +81,7 @@ DEPENDENTS_NAMED_IN_ERROR = 5
 
 # The project whose image store a caller asks about. A create in that project can only use
 # what its store holds, so the create form reads with it; the Images page reads every store.
-# note: the same shape as PROJECT_NAME_RE, spelled with anchors pydantic's regex engine accepts.
+# The same shape as PROJECT_NAME_RE, spelled with anchors pydantic's regex engine accepts.
 _PROJECT_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$"
 PROJECT_QUERY = Query(
     "default",
@@ -125,12 +124,10 @@ async def _fetch_images_for_node(
             project=project,
         )
     except Exception as e:
-        # important: this except, not the gather below, is the path a dead cluster takes.
-        # The connection breaker short-circuits before any network call, list_images
-        # raises, and this returns a perfectly valid empty response. Labelling it is the
-        # whole point: an unlabelled empty host is indistinguishable from a host with no
-        # images, which is what made the create form say "no images available" for a
-        # cluster that was simply down.
+        # important: a dead cluster takes this path rather than the gather below. The connection
+        # breaker short-circuits before any network call, list_images raises, and this returns
+        # an empty response. It must carry reachable=False: an unlabelled empty host reads as
+        # a host with no images, and the create form says "no images available".
         logger.warning(f"Could not list images from {node_name}: {e}")
         return ImageListResponse(
             host=node_name,
@@ -208,24 +205,22 @@ async def list_all_images(
     project: Optional[str] = PROJECT_QUERY_OPTIONAL,
 ):
     """List images from every LXD node: every store, or the store `project` reads."""
-    # Try cache first (60 second cache)
+    # Cached per caller scope for 180 s; `fresh` skips the read.
     cache = get_cache_manager()
     cache_key = get_scope_cache_key(f"images:list:all:project={project or '*'}")
     cached_data = None if fresh else cache.get("api_responses", cache_key)
     if cached_data is not None:
         logger.debug("Returning cached images list")
-        # Reconstruct Pydantic models from cached dict
         return [ImageListResponse(**item) for item in cached_data]
-    
+
     list_generation = get_resource_list_generation(cache, "images")
 
-    # Fetch images from all nodes in parallel
     node_names = lxd_service.get_node_names()
     allowed_images = await _allowed_image_fingerprints_by_host(lxd_service)
     tasks = [_fetch_images_for_node(lxd_service, node_name, project) for node_name in node_names]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # Filter out exceptions
+
+    # An exception becomes an unreachable row for its host.
     response = []
     answered = 0
     for i, result in enumerate(results):
@@ -240,21 +235,17 @@ async def list_all_images(
                 error=failure_text(host, result),
             ))
         else:
-            # important: count hosts that actually answered, not calls that returned.
-            # _fetch_images_for_node catches its own failures, so every call "returns"
-            # and an earlier version of this counter never reached zero, which made the
-            # do-not-cache-an-outage guard below structurally present and inert.
+            # important: count hosts that answered rather than calls that returned.
+            # _fetch_images_for_node catches its own failures, so every call returns, and
+            # counting calls would leave the do-not-cache-an-outage guard below inert.
             if result.reachable:
                 answered += 1
             response.append(_filter_images_for_tenant(result, allowed_images))
 
-    # important: a node that failed now carries reachable=False, so a caller can tell it
-    # apart from a node with no images. Caching a fleet where nothing answered would
-    # still pin an outage for 180s, and a forced refresh during one would replace a good
-    # catalog with it, so that case is still not remembered.
-    # note: a partial failure is still cached, so one dead cluster does not make every
-    # request pay the full fan-out. The cached entry carries that host's reachable=False,
-    # so it reads as unreachable rather than empty for the life of the TTL.
+    # important: never cache a result where nothing answered. It would pin an outage for
+    # 180 s, and a forced refresh during one would replace a good catalog with it.
+    # A partial failure is cached, so one dead cluster does not make every request pay the
+    # full fan-out; that host's row carries reachable=False for the life of the TTL.
     cache_data = [item.model_dump() for item in response]
     if answered:
         if get_resource_list_generation(cache, "images") == list_generation:
@@ -344,7 +335,6 @@ async def list_node_images(
     if all_projects and project:
         raise HTTPException(status_code=422, detail="all_projects excludes project")
     try:
-        # Validate host
         valid_nodes = lxd_service.get_node_names()
         if host not in valid_nodes:
             raise HTTPException(
@@ -384,22 +374,21 @@ async def list_node_images(
 def _image_fingerprint_of(vm) -> Optional[str]:
     """The fingerprint an instance was built from, or None.
 
-    Same two keys, in the same order, as the tenant filter above. They must not drift: one
-    deciding an image is unused while the other decides it is visible is exactly the kind of
-    disagreement that makes a delete look safe when it is not.
+    Same two keys, in the same order, as the tenant filter above. They must not drift, or a
+    delete can look safe when it is not.
     """
     config = getattr(vm, "config", None) or {}
     return config.get("volatile.base_image") or config.get("image.fingerprint")
 
 
 def _store_must_be_visible(host: str, store: str) -> None:
-    """Refuse unless the caller may see the image store that actually answers.
+    """Refuse unless the caller may see the image store that answers.
 
-    important: the store, not the project the caller named. A project that shares the host's
-    default store answers with default-store rows, which a bounded Partner may see even when
-    the project itself is outside their bound; refusing on the name would take away the
-    catalogue a create in that project can still use. A project that keeps its own store is
-    its own store's name, and that is what the bound is checked against.
+    important: check the store rather than the project the caller named. A project that
+    shares the default store answers with default-store rows, which a bounded Partner may see
+    even when the project is outside the bound; refusing on the name would hide the catalogue
+    a create in that project can use. A project with its own store is checked under its own
+    name.
     """
     if not project_is_visible(host, store):
         raise HTTPException(status_code=403, detail="Access denied to this image store")
@@ -439,25 +428,13 @@ async def _instances_using_image(
 ) -> _Dependents:
     """Instances on `host` created from `fingerprint` out of `store`.
 
-    Only the instances whose project reads `store` count: the same fingerprint can sit in a
-    project's own store and in the default store, and deleting one copy does not touch the
-    other's instances. `volatile.base_image` is the fingerprint at create time, so an
-    instance whose project flipped `features.images` afterwards is attributed to the store
-    its project reads today; that under-counts only for a project that switched stores
-    after the instance was built.
-
-    The names are held to the caller's project bound: a bounded Partner on a shared cluster
-    learns that instances in projects outside the bound exist and how many, never what they
-    are called. The refusal still counts them, because the image is their base image
-    whoever owns them.
-
-    note: one node, not the fleet. This used to go through ``list_all_vms``, which fans out to
-    every cluster the caller may see; on a fleet with a dead member or a large partner cloud
-    that took longer than the dashboard's preflight budget, so the confirm dialog fell back to
-    its own tenant-filtered count and offered a delete with no dependents to acknowledge. The
-    callers have already passed ``verify_cluster_access(host)``, so a single-node read stays
-    inside the caller's scope. A node that does not answer is an error, never an empty list:
-    a delete must not proceed on the strength of a read that did not happen.
+    Only instances whose project reads `store` today count: a fingerprint can sit in a
+    project's own store and in the default store, and deleting one copy leaves the other's
+    instances alone. This under-counts a project that switched stores after an instance was
+    built (`volatile.base_image` is the create-time fingerprint). Instances outside the caller's
+    project bound are counted in `hidden`, never named. Callers have passed
+    ``verify_cluster_access(host)``. A cluster that does not answer raises, never returns an
+    empty list, so a delete never proceeds on a missed read.
     """
     try:
         vms, connected = await run_blocking(
@@ -558,9 +535,9 @@ async def image_usage(
     host: str = Query(..., description="Target cluster"),
     project: str = PROJECT_QUERY,
     lxd_service: LXDService = Depends(get_lxd_service),
-    # important: partner, not tenant. This names instances across the whole org scope without
-    # the tenant ACL narrowing, which is correct for the operator who may delete the image and
-    # would be a disclosure surface for anyone who may not.
+    # important: Partner and above only. This names instances across the whole org scope without
+    # tenant ACL narrowing: right for an operator who may delete the image, a disclosure for
+    # anyone who may not.
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """List the instances on `host` that were created from `fingerprint` out of the store
@@ -663,8 +640,8 @@ async def delete_image(
         except MigrationFenceConflict as exc:
             raise HTTPException(status_code=409, detail=exc.detail) from exc
 
-        # important: the refusal is here, not only in the UI. The dashboard's own dependent
-        # count is tenant-filtered, and an API key reaching this route has no UI at all.
+        # important: refuse here as well as in the UI. The dashboard's dependent count is
+        # tenant-filtered, and an API key reaching this route has no UI.
         dependents = await _instances_using_image(lxd_service, host, fingerprint, image.project)
         if dependents and not force:
             raise HTTPException(status_code=409, detail=_dependents_detail(fingerprint, dependents))
@@ -681,7 +658,7 @@ async def delete_image(
                 max_in_flight=IMAGE_DELETE_MAX_IN_FLIGHT,
             )
         except BlockingTimeout as timeout_error:
-            # the delete goes on in its worker thread; clear the list when it actually ends
+            # The delete continues in its worker thread; clear the list when it ends.
             timeout_error.when_finished(
                 lambda: get_cache_manager().invalidate_resource_cache("images")
             )

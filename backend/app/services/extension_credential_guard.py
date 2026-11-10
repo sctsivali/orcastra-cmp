@@ -1,9 +1,8 @@
 """Who may hand an add-on's organizations to a new secret, and the installation row lock that decides it.
 
-Split from extension_install: rotation, uninstall, rescope and the reconcile sweep decide on the
-installation row read again under lock_installation, and a rotation, which carries what the old
-credential owns, is refused to anyone who does not run the installation's organization
-(RotationNeedsAPartner).
+Rotation, uninstall, rescope and the reconcile sweep decide on the installation row read again
+under lock_installation. A rotation, which carries what the previous credential owns, is refused to
+anyone who does not run the installation's organization (RotationNeedsAPartner).
 """
 
 import logging
@@ -45,13 +44,15 @@ async def lock_installation(db: AsyncSession, install: ExtensionInstallation) ->
 async def lock_installation_id(db: AsyncSession, install_id: int) -> ExtensionInstallation:
     """The installation row, locked and read again, for a decision about its credentials.
 
-    important: rotation, uninstall, rescope and the sweep decide on this row, never on a copy read before. Two
-    rotations, or a rotation and an uninstall, each read the same api_key_id before either wrote, so the
-    second carried or checked a key the first had already retired, and organizations were left on a
+    important: rotation, uninstall, rescope and the sweep decide on this row, never on a copy read before.
+    Otherwise two rotations, or a rotation and an uninstall, read the same api_key_id before either writes,
+    the second carries or checks a key the first already retired, and organizations are left on a
     credential no installation claims.
-    note: FOR NO KEY UPDATE, so an organization delete's foreign-key check (FOR KEY SHARE) is not held up
+
+    FOR NO KEY UPDATE, so an organization delete's foreign-key check (FOR KEY SHARE) is not held up
     behind a rotation's Vault calls; the rotation's UPDATE and the uninstall's DELETE take the full lock.
-    note: lock order is this row, then keys (sorted), then organizations (sorted, organization_owners);
+
+    important: lock order is this row, then keys (sorted), then organizations (sorted, organization_owners);
     nothing locks an installation row while holding a key or organization lock. Call it before changing
     the object: populate_existing overwrites the session's copy.
     """
@@ -89,11 +90,11 @@ async def owned_org_ids_or_503(db: AsyncSession, key_id: str) -> List[int]:
 def _runs(email: str):
     """The organizations a user runs: a partner row there, or its creator when it was made in this dashboard.
 
-    note: a creator is stored with a "member" row (OrganizationService.create_organization), so it is
+    A creator is stored with a "member" row (OrganizationService.create_organization), so it is
     counted through created_by, but only for a local organization: an OrcaHub one's created_by is the
-    minter of the key that provisioned it (cluster_parties.home_partner_keys), a seller, not its runner.
-    A "member" or "tenant" row is a buyer's or a teammate's, and an "admin" row is one a demotion left
-    behind (cluster_parties.RUNNING_ROLES).
+    minter of the key that provisioned it (cluster_parties.home_partner_keys), a seller and not its
+    runner. A "member" or "tenant" row is a buyer's or a teammate's, and an "admin" row is one a
+    demotion left behind (cluster_parties.RUNNING_ROLES).
     """
     from app.models.db_models import OrganizationMember
     from app.services.cluster_parties import RUNNING_ROLES

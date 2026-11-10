@@ -1,18 +1,11 @@
-"""Instance rebuild endpoints (dashboard, JWT).
+"""Instance rebuild endpoints (dashboard, JWT) on ``/instances``, apart from OrcaHub's ``/vms``.
 
-Rebuild reinstalls an instance's root disk from a fresh source (image, empty, or
-image + cloud-init) while LXD preserves the instance's identity, config and
-attached custom volumes -- it is NOT delete-then-create. Backed by LXD
-`POST /1.0/instances/{name}/rebuild` (the `instances_rebuild` API extension).
-
-Because a rebuild is a multi-step, potentially slow orchestration (stop ->
-rebuild -> start -> wait for provisioning), it runs as a detached background task
-and its progress is recorded in the durable ``rebuild_jobs`` table, which the UI
-polls. The one thing enforced synchronously is the snapshot guard: LXD refuses to
-rebuild an instance that has snapshots, so we return a clear 409 up front.
-
-Kept on the dashboard's ``/instances`` surface (Partner + org-scope). OrcaHub's
-``/vms`` is untouched.
+Rebuild reinstalls the root disk from an image, an empty disk or an image plus
+cloud-init, while LXD keeps the instance's identity, config and custom volumes
+(`POST /1.0/instances/{name}/rebuild`, API extension `instances_rebuild`).
+Stop -> rebuild -> start -> provisioning wait runs as a detached task that records
+progress in ``rebuild_jobs`` for the UI to poll. LXD refuses to rebuild an instance
+with snapshots, so that check runs synchronously and answers 409 up front.
 """
 import asyncio
 import secrets
@@ -62,17 +55,15 @@ def _verify_instance_access(
     instance_name: str,
     permission: str = "view",
 ) -> str:
-    """Authorize an action on ONE instance, not merely on its cluster.
+    """Authorize an action on one instance rather than on its whole cluster.
 
-    `verify_cluster_access` answers "may this caller reach this cluster", which for a tenant
-    scoped to a single instance is true of every instance their neighbours run on the same one.
-    Behind the same flag as the rest of the tenant ACL.
+    `verify_cluster_access` only says the caller may reach the cluster, which for a tenant scoped
+    to one instance holds for every neighbour's instance there. The view check always runs;
+    other permissions follow the tenant ACL enforcement flag.
 
-    important: `project` is used AS GIVEN. The helper used to normalise it with `or "default"`,
-    which reintroduced the very split it exists to close: an empty `?project=` authorized
-    `default` here while the service saw a falsy value and searched every project. The caller
-    normalises once and passes the same value to the action, so there is exactly one project in
-    play per request.
+    important: `project` is used as given. Normalising it here (`or "default"`) would authorize
+    `default` while the service sees a falsy value and searches every project. The caller
+    normalises once and passes the same value to the action.
     """
     scoped_project = verify_project_access(host, project)
     verify_tenant_permission(host, scoped_project, instance_name, "view")
@@ -106,7 +97,6 @@ class RebuildRequest(BaseModel):
     cloud_init: Optional[str] = Field(None, description="cloud-init user-data (cloud-init mode)")
     # Destructive-action gate: the client must echo the instance name.
     confirm_name: str
-    # Options
     run_provisioning: bool = True          # wait for cloud-init/agent after start
 
 
@@ -159,9 +149,8 @@ async def _set_status(job_id: str, status: Optional[str] = None, **fields: Any) 
             setattr(row, k, v)
         await db.commit()
 
-    # A rebuild walks the instance through stopping, rebuilding, starting and ready, and the
-    # instance list carries that status. Invalidating on every transition rather than only at
-    # the end keeps the list honest while the job runs, and covers the failure path for free.
+    # The instance list carries the rebuild status (stopping, rebuilding, starting, ready), so
+    # every transition invalidates it; that also covers the failure path.
     if status is not None:
         get_cache_manager().invalidate_instance_cache()
 
@@ -200,7 +189,7 @@ async def _run_rebuild(job_id: str, run_provisioning: bool) -> None:
 
     op_id: Optional[str] = None
     try:
-        # Hold the same cluster advisory lock used by migration acceptance through the final
+        # Hold the same cluster advisory lock used by migration execution through the final
         # daemon mutation/readback. A migration that wins first fences this job before stop;
         # a rebuild that wins first makes migration wait and preflight the rebuilt instance.
         async with guard_instance_mutation(
@@ -257,9 +246,9 @@ async def _refuse_a_rebuild_in_an_unisolated_project(
 ) -> None:
     """409 for a Partner's rebuild on a shared cluster in a project that does not isolate itself.
 
-    note: a rebuild takes its image from the project's store, which for a project without
-    features.images is `default`'s, where another party's private images live (security review of
-    the RC5 follow-up round, 2026-11-06). Instance create and config writes already refuse it.
+    A rebuild takes its image from the project's store, which for a project without
+    features.images is `default`'s, where another party's private images live. Instance create
+    and config writes refuse it the same way.
     """
     from app.services.instance_security_policy import (
         InstanceSecurityPolicyViolation,
@@ -387,12 +376,11 @@ async def rebuild_preflight(
 ):
     """Read-only pre-check for the rebuild dialog: current status, snapshots (the
     block condition), the custom volumes that will survive, and the base image."""
-    # The preflight returns the instance's snapshot names, its custom volumes, its base image and
-    # its status. A cluster check alone handed all of that to any tenant who could reach the host.
+    # The preflight returns the instance's snapshot names, custom volumes, base image and status,
+    # so a cluster check alone is not enough.
     #
-    # important: normalised once, here, and the SAME value goes to the resolver. `?project=` is
-    # falsy, and the service reads a falsy project as "search every project", so authorizing the
-    # raw value and resolving the raw value are only the same thing once it is normalised.
+    # important: normalised once, here, and the same value goes to the resolver. An empty
+    # `?project=` is falsy, and the service reads a falsy project as "search every project".
     scoped_project = _verify_instance_access(host, project, instance_name, "view")
     try:
         pf = await lxd_service.get_rebuild_preflight(instance_name, host, scoped_project)
@@ -457,25 +445,22 @@ async def get_latest_rebuild_job(
 
 # ── recovery ────────────────────────────────────────────────────────────────────────────────
 
-# A rebuild holds its worker for as long as LXD takes to reinstall the root disk, and the job is
-# driven by a bare `asyncio.create_task` whose handle nobody keeps. A backend restart, which on
-# this box is a routine `make up`, therefore loses the driver while the row stays mid-flight and
-# the instance stays stopped. Nothing ever revisits it, so the operator sees "rebuilding" forever
-# on an instance that is not being rebuilt.
+# A rebuild is driven by a bare `asyncio.create_task`, so a backend restart loses the driver while
+# the row stays mid-flight and the instance stays stopped. Without this sweep the operator would
+# see "rebuilding" forever on an instance that is not being rebuilt.
 #
-# The window is deliberately generous: LXD's own rebuild wait is up to 1800s, so anything younger
-# than that could still be a live job on another worker. Only rows older than the longest a real
-# rebuild can take are declared stranded.
+# LXD's own rebuild wait is up to 1800s, so a younger row could still be a live job on another
+# worker. Only rows older than the longest a real rebuild can take are declared stranded.
 _REBUILD_STRANDED_AFTER_SECONDS = 2 * 3600
 _IN_FLIGHT_STATUSES = ("pending", "stopping", "rebuilding", "starting", "provisioning")
 
 
 async def recover_stranded_rebuilds() -> int:
-    """Fail rebuild jobs no worker can still be driving, so the row stops lying.
+    """Fail rebuild jobs that no worker can still be driving.
 
-    important: marked `failed` with a reason naming what to check, never silently retried. The
-    instance may be stopped with a half-written root disk, and deciding what to do with it is an
-    operator's call, not a sweep's.
+    important: mark them `failed` with a reason naming what to check, never retry silently. The
+    instance may be stopped with a half-written root disk, and what to do with it is the
+    operator's decision.
     """
     from app.core.database import async_session_maker
 

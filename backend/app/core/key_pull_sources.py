@@ -1,19 +1,14 @@
 """What an API key may make the hypervisor fetch or send: the trusted catalogues and its own clusters.
 
-An instance, image or custom volume create (and a rebuild) can name a source the daemon fetches
-itself: an image server, a URL, or another daemon's migration operation. Through the raw proxy that
-was a request forgery from the hypervisor to any address it can reach, and a way to feed a crafted
-image or instance to an unpatched daemon (demonstrated on the Incus lab, 2026-11-08; see
-tests/test_a_key_cannot_make_the_cluster_fetch_from_anywhere.py). A key may name only the
-servers the image picker offers (services/remote_image_catalog.py) or a cluster registered in this
-dashboard (an image copied between its own clusters), and never a URL, migration or conversion
-source. Migrations go through Migration Center, which runs its own preflight.
-
-The same holds the other way round: a body `target` is a host the daemon sends to (a push
-migration's operation, an image export's receiver, an Incus backup's S3 URL), so a key may not
-name one. The rule reads the body, not the path: a path list missed rebuild (security review,
-2026-11-08), and no LXD or Incus endpoint takes a `source` or `target` object it does not act on.
-A move between members of one cluster names the member in the query, not in the body.
+important: a create or rebuild can name a source the daemon fetches itself (an image server, a URL,
+another daemon's migration). Through the raw proxy that is request forgery from the hypervisor and
+a way to feed a crafted image or instance to an unpatched daemon. A key may name only the image
+picker's servers (services/remote_image_catalog.py), a host in KEY_IMAGE_SERVERS_ALLOW, or a cluster
+registered here; never a URL, migration or conversion source. Likewise a body `target` is a host the
+daemon sends to (push migration, image export receiver, Incus backup S3 URL), so a key may not name
+one. The rule reads the body, not a path list: no LXD or Incus endpoint takes a `source` or `target`
+object it does not act on. Migrations go through Migration Center; a move inside one cluster names
+the member in the query string.
 """
 
 from __future__ import annotations
@@ -78,7 +73,7 @@ def _is_registered_cluster(server: str) -> bool:
     if parsed.scheme != "https" or not parsed.hostname:
         return False
     try:
-        # note: the daemon dials `https://host` on 443; only a registered endpoint defaults to 8443.
+        # The daemon dials `https://host` on 443; only a registered endpoint defaults to 8443.
         wanted = (parsed.hostname.lower(), parsed.port or 443)
         from app.services.lxd_service import get_lxd_service
 

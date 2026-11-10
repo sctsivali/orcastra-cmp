@@ -1,20 +1,12 @@
-"""A second OpenAPI document describing only what an add-on may call.
+"""Public OpenAPI document for the API surface add-ons call.
 
-Production serves no OpenAPI at all: `docs_url`, `redoc_url` and `openapi_url` are None unless
-DEBUG. That is the right default for the internal surface, which is large, JWT-authenticated and
-would hand a reader a complete map of the control plane. It is also the reason nobody could build
-against this API, because there was nothing machine-readable to build from.
+The internal OpenAPI is served only in DEBUG because it maps the whole JWT-authenticated control
+plane. This module builds a separate, curated document instead.
 
-So this module emits a curated document instead, and leaves the internal one switched off.
-
-Selection is by DEPENDANT TREE, not by a tag or a marker. A public route is one whose dependency
-graph contains `validate_api_key`. Three reasons that beats the alternatives: it is already true
-of every external route without editing anything, a new external endpoint acquires it
-automatically rather than being remembered, and it cannot drift, because a route that stops
-depending on API-key authentication has stopped being public by definition.
-
-`operation_id` is derived from the method and path, never from the Python function name, so
-renaming a handler is not a breaking change for a generated client.
+Routes come from the API-key routers (`_api_key_routers`) and are kept only when their dependency
+tree contains `validate_api_key`, so a route that stops using API-key auth drops out by itself.
+`operation_id` is derived from method and path, so renaming a handler does not break generated
+clients.
 """
 
 import logging
@@ -26,11 +18,10 @@ from fastapi.routing import APIRoute
 
 logger = logging.getLogger(__name__)
 
-# The dependency whose presence means "authenticated by an integration API key".
+# Dependency that marks a route as authenticated by an integration API key.
 API_KEY_DEPENDENCY = "validate_api_key"
 
-# Handlers that belong in the public document but do not depend on validate_api_key, each with
-# the reason. Mirrors the EXEMPT convention the capability ratchet already uses.
+# Public handlers that do not depend on validate_api_key, each with the reason.
 EXTRA_PUBLIC_HANDLERS: Dict[str, str] = {
     "validate_api_key_endpoint": (
         "authenticates from the request body rather than the headers, so its dependant contains "
@@ -38,8 +29,7 @@ EXTRA_PUBLIC_HANDLERS: Dict[str, str] = {
     ),
 }
 
-# A route carrying any of these is part of the dashboard's own surface. Their presence in the
-# public document would be the leak this whole module exists to avoid.
+# A route with any of these dependencies belongs to the dashboard itself and must never be public.
 NEVER_PUBLIC_DEPENDENCIES: Set[str] = {
     "get_current_user",
     "require_roles",
@@ -47,8 +37,7 @@ NEVER_PUBLIC_DEPENDENCIES: Set[str] = {
     "get_ws_user",
 }
 
-# OpenAPI models OPTIONS badly and generators emit noise for it. HEAD is kept, because tus
-# resumption genuinely depends on it.
+# OPTIONS only adds noise to generated clients. HEAD stays: tus resumption needs it.
 EXCLUDED_METHODS = {"OPTIONS"}
 
 SECURITY_SCHEMES = {
@@ -56,9 +45,8 @@ SECURITY_SCHEMES = {
     "OrcastraKeySecret": {"type": "apiKey", "in": "header", "name": "X-API-Key-Secret"},
 }
 
-# important: ONE requirement object containing BOTH schemes, which OpenAPI reads as AND. Two
-# separate list items would read as OR and would document that either header alone authenticates,
-# which is false and is the easiest thing in this file to get wrong.
+# important: one requirement object holding both schemes, which OpenAPI reads as AND. Two list
+# items would mean OR, documenting that either header alone authenticates.
 SECURITY_REQUIREMENT = [{"OrcastraKeyId": [], "OrcastraKeySecret": []}]
 
 DESCRIPTION = """\
@@ -75,10 +63,10 @@ installations of the same add-on can reach different things.
 
 
 def _dependency_names(route: APIRoute) -> Set[str]:
-    """Every dependency in a route's tree, by the name it was registered under.
+    """Names of every dependency in a route's tree.
 
-    The capability factory renames its closure to `require_<capability>`, which is what makes a
-    required capability legible here rather than showing up as a generic closure.
+    The capability factory names its closures `require_<capability>`, which is how capabilities are
+    read back here.
     """
     names: Set[str] = set()
     stack = list(getattr(route.dependant, "dependencies", []))
@@ -92,7 +80,7 @@ def _dependency_names(route: APIRoute) -> Set[str]:
 
 
 def operation_id_for(method: str, path: str, api_prefix: str) -> str:
-    """Stable across a handler rename, because it is a function of the route, not the code."""
+    """Operation id built from method and path, so it survives a handler rename."""
     trimmed = path[len(api_prefix):] if path.startswith(api_prefix) else path
     parts: List[str] = []
     for segment in trimmed.strip("/").split("/"):
@@ -108,19 +96,14 @@ def operation_id_for(method: str, path: str, api_prefix: str) -> str:
 def _walk_route_paths(
     container: Any, prefix: str = "", _depth: int = 0
 ) -> List[Tuple[str, APIRoute]]:
-    """(served path, route) for every APIRoute reachable from an app or a router.
+    """(served path, route) for every APIRoute under an app or router, in declaration order.
 
-    Used by tests and diagnostics rather than by selection. `app.routes` is not a flat list of
-    APIRoute across the FastAPI versions this project supports: up to 0.128 `include_router`
-    copied routes onto the parent with the prefix already applied, and from 0.141 it stores a
-    nested router instead, whose routes still carry only their own router's prefix. The
-    include's `include_context.prefix` holds the rest, so the served path is the two joined.
-    Without that join a walk over the deployed image reports `/extensions/self` for a route the
-    daemon serves at `/api/v1/extensions/self`, and a test matching the served path finds
-    nothing. Declaration order is kept, which is what makes a literal route win over a slug.
+    For tests and diagnostics only. Up to FastAPI 0.128 `include_router` copies routes onto the
+    parent with the prefix applied; from 0.141 it nests the router, and the served path is
+    `include_context.prefix` joined with the route's own path.
     """
     found: List[Tuple[str, APIRoute]] = []
-    if _depth > 8:  # a cycle would otherwise hang rather than fail
+    if _depth > 8:  # guards against a cycle
         return found
     for route in getattr(container, "routes", []):
         if isinstance(route, APIRoute):
@@ -128,9 +111,8 @@ def _walk_route_paths(
         elif hasattr(route, "routes"):
             found.extend(_walk_route_paths(route, prefix, _depth + 1))
         elif hasattr(route, "original_router"):
-            # FastAPI 0.141's nested include. The dependants below it have not had the
-            # parent's dependencies merged, so this is only followed for diagnostics, never
-            # for selection.
+            # FastAPI 0.141 nested include. Its dependants lack the parent's dependencies, so
+            # this path is never used for selection.
             context = getattr(route, "include_context", None)
             nested = prefix + str(getattr(context, "prefix", "") or "")
             found.extend(_walk_route_paths(route.original_router, nested, _depth + 1))
@@ -138,30 +120,22 @@ def _walk_route_paths(
 
 
 def _walk_routes(container: Any) -> List[APIRoute]:
-    """Every APIRoute reachable from an app or a router, however it is nested.
+    """Every APIRoute under an app or router.
 
-    note: on FastAPI 0.141 a route below a nested include reports a `.path` without the
-    parent's prefix. Callers that need the served path use `_walk_route_paths`.
+    On FastAPI 0.141 a nested route's `.path` lacks the parent prefix; use `_walk_route_paths` for
+    served paths.
     """
     return [route for _path, route in _walk_route_paths(container)]
 
 
 def _api_key_routers() -> List[Tuple[str, Any]]:
-    """The routers whose handlers authenticate with an integration API key.
+    """Routers whose handlers authenticate with an integration API key.
 
-    important: selection is by router object, not by walking the application's route tree.
-    Walking looked cleaner and was wrong in a way that only the deployed image showed. From
-    FastAPI 0.141 an included router is stored nested, and the route objects inside it have not
-    had the parent's prefix applied or the parent's dependencies merged. Descending into them
-    therefore produces paths that are missing their prefix and dependants that are missing the
-    router-level `require_partner()` and `org_scope_dependency`, which would put the dashboard's
-    own JWT surface into a document served to anybody who asks.
-
-    A router object's own `routes` list is a plain list of APIRoute on every version in
-    requirements.txt, and each route's path already carries that router's prefix. So this reads
-    the same on 0.109 and on 0.141.
-
-    This is the same list the capability ratchet already maintains by filename, not a second one.
+    important: select by router object, never by walking the app's route tree. From FastAPI 0.141
+    nested routes lack the parent's prefix and router-level dependencies (`require_partner()`,
+    `org_scope_dependency`), so a walk could publish JWT-only routes. A router's own `routes` list
+    is flat with its prefix applied on every supported version. Same list as the capability
+    ratchet uses.
     """
     from app.routers import extensions_external, image_uploads, integrations, iso_uploads
 
@@ -179,11 +153,7 @@ def _api_key_routers() -> List[Tuple[str, Any]]:
 
 
 def public_routes(app: Optional[FastAPI] = None) -> List[Tuple[str, APIRoute]]:
-    """(method, route) for everything an add-on may call.
-
-    `app` is accepted and unused, so callers read naturally and a future change that does need it
-    does not have to move every call site.
-    """
+    """(method, route) for everything an add-on may call. `app` is currently unused."""
     selected: List[Tuple[str, APIRoute]] = []
     for _filename, router in _api_key_routers():
         for route in router.routes:
@@ -191,24 +161,22 @@ def public_routes(app: Optional[FastAPI] = None) -> List[Tuple[str, APIRoute]]:
                 continue
             methods = route.methods - EXCLUDED_METHODS
             if not methods:
-                # OPTIONS only. tus CORS discovery, which OpenAPI models badly and which
-                # generators emit noise for. Skipped before the dependency check so a
-                # deliberate exclusion does not log as a surprise.
+                # OPTIONS-only route (tus CORS discovery). Skipped before the dependency check
+                # so it does not log a warning.
                 continue
 
             names = _dependency_names(route)
             handler = getattr(route.endpoint, "__name__", "")
             if API_KEY_DEPENDENCY not in names and handler not in EXTRA_PUBLIC_HANDLERS:
-                # On an API-key router this means a handler that authenticates some other way.
-                # The capability ratchet already refuses one that authenticates no way at all.
+                # Authenticates some other way. Routes with no auth at all are refused by the
+                # capability ratchet.
                 logger.warning(
                     "Route %s is on an API-key router but does not depend on %s; excluded",
                     route.path, API_KEY_DEPENDENCY,
                 )
                 continue
             if names & NEVER_PUBLIC_DEPENDENCIES:
-                # The safety assertion the selection no longer provides on its own. A route
-                # reachable both ways must never reach a public document.
+                # A route reachable with a session must never appear in the public document.
                 logger.error(
                     "Route %s carries a session dependency and was excluded from the public "
                     "document", route.path,
@@ -220,7 +188,7 @@ def public_routes(app: Optional[FastAPI] = None) -> List[Tuple[str, APIRoute]]:
 
 
 def required_capabilities(route: APIRoute) -> List[str]:
-    """The capabilities a route's dependants declare, read from the renamed closures."""
+    """Capabilities a route requires, read from its `require_<capability>` dependencies."""
     found = []
     for name in _dependency_names(route):
         if name.startswith("require_") and name not in ("require_partner", "require_tenant"):
@@ -229,7 +197,7 @@ def required_capabilities(route: APIRoute) -> List[str]:
 
 
 def build_public_openapi(app: FastAPI, *, api_prefix: str, base_url: str, version: str) -> Dict[str, Any]:
-    """The curated document. A pure function of the route table, so it is safe to memoise."""
+    """Build the public document. Depends only on the route table, so callers may cache it."""
     selected = public_routes(app)
     routes = list({id(route): route for _method, route in selected}.values())
 
@@ -254,8 +222,7 @@ def build_public_openapi(app: FastAPI, *, api_prefix: str, base_url: str, versio
             )
             handler = getattr(route.endpoint, "__name__", "") if route else ""
             if handler in EXTRA_PUBLIC_HANDLERS:
-                # It reads credentials from the body, so documenting headers it never reads
-                # would be a lie a generated client would then send.
+                # Reads credentials from the body, so the headers are not documented.
                 operation["security"] = []
                 continue
 

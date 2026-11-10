@@ -1,9 +1,9 @@
 """Cluster-id checks and caller-facing error text for the integration (API key) routes.
 
-A key grant names clusters by the id it was given, and a cluster registered again under a new id
-leaves the old one behind in grants. These helpers keep that honest and quiet on every door: the
-key routes report such an id as unregistered instead of looking it up, the proxies answer 404
-`cluster_not_registered` instead of an outage, and a grant write refuses to add one.
+A key grant names clusters by the id it was given, and a cluster registered again under a new
+id leaves the earlier id behind in grants. The key routes report such an id as unregistered
+instead of looking it up, the proxies answer 404 `cluster_not_registered` instead of an outage,
+and a grant write refuses to add one.
 """
 
 from __future__ import annotations
@@ -23,12 +23,12 @@ logger = logging.getLogger(__name__)
 
 
 async def unregistered_cluster_ids(cluster_ids: Any) -> FrozenSet[str]:
-    """The ids in a key's grant that no cluster is registered under any more.
+    """The ids in a key's grant that no cluster is registered under.
 
-    note: empty when the registry cannot be read, so an outage changes nothing a caller sees. A
-    grant can name such an id because grants are stored as typed (a cluster registered again
-    under a new id leaves the old one behind); the entry stays in what the key reports, since
-    the published v1 contract says /validate and /whoami describe what the key holds.
+    Empty when the registry cannot be read, so an outage changes nothing a caller sees. Grants
+    are stored as typed, so a cluster registered again under a new id leaves the earlier id
+    behind. The entry stays in what the key reports: the published v1 contract says /validate
+    and /whoami describe what the key holds.
     """
     registered = await cluster_registry.registered_cluster_ids()
     if registered is None:
@@ -41,9 +41,9 @@ async def refuse_new_grants_to_unregistered_clusters(
 ) -> None:
     """A grant write may add only ids a cluster is registered under; ids it already holds stay.
 
-    important: hygiene, not the authorization boundary (the caller's allowed set is checked
-    first). A grant naming an id no cluster holds authorises nothing, but it is reported as held
-    and polled forever. Ids already stored stay editable so a key is never frozen until repaired
+    Hygiene only: the caller's allowed set, checked first, is the authorization boundary. A
+    grant naming an id no cluster holds authorises nothing, but it is reported as held and
+    polled forever. Ids already stored stay editable so a key is never frozen until repaired
     (backend/scripts/repair_key_grant_cluster_ids.py). An unreadable registry refuses nothing.
     """
     new_ids = {c for c in requested if c} - set(already_held)
@@ -67,10 +67,9 @@ async def refuse_new_grants_to_unregistered_clusters(
 async def refuse_a_cluster_not_registered(cluster_id: str) -> None:
     """404 `cluster_not_registered` for an id the key's grant names but no cluster holds.
 
-    note: called after the key's own grant check, so it tells a caller nothing about an id its
-    grant does not already name. Non-retryable on purpose: the 503 "Could not connect" it
-    replaces read as an outage, and a polling integration retried such ids every few minutes.
-    When the registry cannot be read nothing is refused here and the call proceeds as before.
+    Called after the key's own grant check, so it tells a caller nothing about an id its grant
+    does not already name. Non-retryable, so a polling integration does not treat the id as an
+    outage and retry it. When the registry cannot be read nothing is refused here.
     """
     if cluster_id in await unregistered_cluster_ids([cluster_id]):
         raise HTTPException(
@@ -113,10 +112,10 @@ def reported_grant(grant: Dict[str, Any], unregistered: FrozenSet[str]) -> Dict[
 def proxy_error_text(error: Exception, error_code: str, operation: str, cluster_id: str) -> str:
     """The caller-facing sentence for a failed proxy operation.
 
-    important: never the text of a transport exception. A requests or urllib3 error names the
-    LXD host's address and port (`HTTPSConnectionPool(host='10.x.x.x', port=8443)`), which is
-    infrastructure an integration has no business learning. The daemon's own refusal (an
-    LXDAPIException, or the service layer's errors built from one) is safe and useful.
+    important: never the text of a transport exception. A requests or urllib3 error names the LXD
+    host's address and port (`HTTPSConnectionPool(host='10.x.x.x', port=8443)`), infrastructure an
+    integration must not learn. The daemon's own refusal (an LXDAPIException, or the service
+    layer's errors built from one) is safe and useful.
     """
     if isinstance(error, (requests_exceptions.RequestException, urllib3_exceptions.HTTPError)):
         if error_code == "timeout":

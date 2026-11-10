@@ -1,15 +1,12 @@
 """Discovering what a guest can do, without changing it.
 
-Read-only inside the guest: `command -v`, reads of /proc and /etc, and at most one capture to prove
-the chosen chain works end to end. No installs, no writes, no `xrandr --output`.
+Read-only inside the guest: `command -v`, loginctl, reads of /proc and /etc, and display geometry
+queries. No installs, no writes, no `xrandr --output`.
 
-important: the platform never installs packages into a guest, and the reason that matters most is
-not politeness. The audit record stores argv, so `["apt-get","install","-y","xdotool"]` records the
-INTENT and not the fourteen packages that actually landed. An audit record that cannot describe its
-own effect is worse than none, and this codebase has already decided audit fidelity is not
-negotiable. It also needs egress to a mirror an air-gapped tenant will not have, and it would move
-the trust boundary so that compromising the control plane becomes supply-chain reach into every
-guest in the fleet. The probe prints the command instead. Printing is not running.
+important: the platform never installs packages into a guest. The audit record stores argv, so
+`["apt-get","install","-y","xdotool"]` would record the intent and not the packages that landed.
+An install also needs egress an air-gapped tenant will not have, and it would turn a compromised
+control plane into supply-chain reach into every guest. The probe prints the command instead.
 """
 
 import logging
@@ -24,13 +21,11 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["PROBE_SCRIPT", "build_report", "install_hint"]
 
-# Emits key=value lines, not JSON. A shell producing valid JSON is a quoting hazard, and inventing
-# a quoting rule at a boundary is the thing `guest_exec._argv` refuses to do.
+# Emits key=value lines instead of JSON: producing valid JSON from a shell is a quoting hazard.
 #
-# Session discovery has two paths and the SECOND is not a fallback in practice. A container running
-# Xvfb from a systemd unit has no logind graphical session at all, so `loginctl` reports nothing
-# and only the socket scan finds the display. That is the reference test target, so the scan is
-# first-class.
+# Session discovery has two paths and both matter. A container running Xvfb from a systemd unit
+# has no logind graphical session, so `loginctl` reports nothing and only the socket scan finds
+# the display.
 PROBE_SCRIPT = r"""
 echo "ORCA_BEGIN"
 . /etc/os-release 2>/dev/null && echo "os=$ID" && echo "os_version=$VERSION_ID"
@@ -248,17 +243,15 @@ def build_report(stdout: str, *, agent: bool) -> ProbeReport:
             environment["XDG_RUNTIME_DIR"] = runtime_dir
             environment["WAYLAND_DISPLAY"] = wayland_display
 
-    # important: the display is established HERE, not on the first capture. A coordinate is
-    # measured against the screenshot, and the screenshot is downscaled whenever the guest runs
-    # larger than the target, so a click issued before any screenshot would otherwise be sent at
-    # scale 1.0 and land at the wrong pixel. On a 1920x1080 desktop that is two thirds of the way
-    # to where the caller meant, silently, with the action reporting success.
+    # important: the display is established here, before the first capture. A coordinate is
+    # measured against the screenshot, which is downscaled whenever the guest runs larger than the
+    # target, so a click sent before any screenshot would otherwise use scale 1.0 and land at the
+    # wrong pixel while the action reports success.
     geometry: Optional[Display] = None
     raw_geometry = (fields.get("geom") or [None])[0]
     if raw_geometry is None and session_type.startswith("wayland"):
-        # wlr-randr is the generic wlroots equivalent of `xdotool getdisplaygeometry`. Absent, the
-        # scale is established from the first capture instead, which is the pre-existing
-        # behaviour rather than a new hole.
+        # wlr-randr is the generic wlroots equivalent of `xdotool getdisplaygeometry`. Without it
+        # the scale is established from the first capture instead.
         raw_geometry = (fields.get("wlgeom") or [None])[0]
     if raw_geometry and "x" in raw_geometry:
         try:

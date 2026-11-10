@@ -1,14 +1,11 @@
 """Which organization a buyer takes its branding from: the partner organization that sold to it.
 
-Provisioning used to copy the seller's branding into a new buyer once, so a later change never
-reached it. It now records a link instead, filled only when nothing has decided it yet: an
-Administrator's choice (provider_link_source 'admin', with or without a provider) is never
-overwritten, and neither is an earlier link.
-
-The seller is read from the fact the proof of sale reads (services/cluster_parties.py): the
-organization holding the binding on the sold cluster whose registrant is one of its members. When
-the cluster says nothing (an Administrator registered it), the key's minter decides, but only
-when it runs exactly one organization. Anything ambiguous is left unlinked and logged.
+Provisioning records a link, not a copy, so later branding changes reach the buyer. It is filled
+only while `provider_link_source` is unset, so an Administrator's choice (with or without a
+provider) and an earlier link both stand. The seller is the organization bound to the sold
+cluster whose registrant is one of its members, the fact the proof of sale reads
+(services/cluster_parties.py). If an Administrator registered the cluster, the key's minter
+decides when it runs exactly one organization. Anything ambiguous is left unlinked and logged.
 
 important: the link decides branding and nothing else. No access check reads it
 (tests/test_the_provider_link_decides_branding_only.py).

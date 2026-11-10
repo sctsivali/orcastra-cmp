@@ -1,9 +1,8 @@
 """How an instance is presented to a key-authenticated caller.
 
-Separated from the operation dispatcher because it is presentation, not authorization or
-dispatch, and because three call sites share it: the REST list, the REST detail read, and the
-proxy's own ``get_instance``. Keeping one serialiser is what makes those three agree on field
-names, which a client reading two of them depends on.
+Kept apart from the operation dispatcher because it is presentation only. The REST list, the
+REST detail read and the proxy's ``get_instance`` share this one serialiser, so all three agree
+on field names.
 """
 
 from typing import Any, Dict, List, Optional
@@ -17,11 +16,8 @@ __all__ = [
 
 
 # LXD's own status codes, which are lossless where the dashboard's VMStatus enum is not.
-#
-# important: `parse_vm_status` (services/lxd/utils.py) maps four names and collapses everything
-# else to UNKNOWN, which is right for a dashboard badge and wrong for a caller polling a
-# transition. An agent that starts an instance and waits for it to leave "Starting" would see
-# "Unknown" and could not tell it from a real fault. The code survives the enum, so read it.
+# `parse_vm_status` (services/lxd/utils.py) maps four names and collapses the rest to UNKNOWN,
+# so a caller waiting for an instance to leave "Starting" could not tell it from a fault.
 LXD_STATUS_NAMES: Dict[int, str] = {
     100: "Operation created", 101: "Started", 102: "Stopped", 103: "Running",
     104: "Cancelling", 105: "Pending", 106: "Starting", 107: "Stopping",
@@ -45,9 +41,8 @@ def _resources_from(
 ) -> Dict[str, Optional[str]]:
     """CPU, memory and root disk as LXD records them.
 
-    important: the effective root disk lives in ``expanded_devices``, not ``devices``. An
-    instance that overrides nothing still has a root disk, inherited from its profile, and
-    reading ``devices`` alone reports None for the common case.
+    The effective root disk lives in ``expanded_devices``: an instance that overrides nothing
+    inherits its root disk from a profile, so ``devices`` alone reports None.
     """
     config = config or {}
     root = (expanded_devices or {}).get("root") or {}

@@ -1,18 +1,15 @@
 """What of an LXD operation a caller is shown.
 
-An LXD operation carries the credentials for its own sockets in its metadata. An exec or console
-operation holds `fds`, whose values open the operation websocket with no further authentication. A
-token operation holds `secret`, and a migration source holds `control`, `fs` and `criu`. Anyone who
-reads one can attach to the session or take the data it serves. A running exec also echoes its
-request: `command`, and `environment`, which is where callers put credentials.
+An LXD operation carries the credentials for its own sockets in its metadata: an exec or console
+operation holds `fds`, whose values open the operation websocket with no further authentication, a
+token operation holds `secret`, and a migration source holds `control`, `fs` and `criu`. A running
+exec also echoes its request: `command`, and `environment`, which is where callers put credentials.
 
-Two readings, one per kind of surface:
-- `sanitize_operation_metadata` is the allowlist. The dashboard's /operations routes apply it, and
-  so do the key surfaces that serialize an operation: the `get_operation` proxy operation,
+- `sanitize_operation_metadata` is the allowlist, for the dashboard's /operations routes and the
+  key surfaces that serialize an operation: the `get_operation` proxy operation,
   GET /integrations/operations/{id} and MCP `orcastra_get_operation`.
-- `redact_operation_response` is the raw proxy's filter. The raw proxy passes LXD's own JSON through,
-  and its callers read LXD's fields (an exec's `return`, an image's `fingerprint`), so there the
-  withheld fields are removed and the rest of LXD's answer is left as LXD wrote it.
+- `redact_operation_response` is the raw proxy's filter. Raw proxy callers read LXD's own fields
+  (an exec's `return`, an image's `fingerprint`), so only the withheld fields are removed.
 """
 
 from collections.abc import Mapping
@@ -55,8 +52,9 @@ OPERATION_SECRET_KEYS = frozenset(
 )
 
 # important: a migration source's secrets stream the instance or volume to anyone who presents them,
-# and a key's own write starts one (POST {"migration": true}), so every answer to a key's write loses
-# them too. The other secrets are the caller's own session (an exec's fds, an image secret) there.
+# and a key's own write starts one (POST {"migration": true}), so they are removed from every answer
+# to a key's write too. The other secrets there are the caller's own (an exec's fds, an image
+# secret).
 MIGRATION_SECRET_KEYS = frozenset({"control", "fs", "criu"})
 
 # important: what a running exec echoes of its request. `environment` is never returned to a key,
@@ -100,9 +98,9 @@ def strip_operation_secrets(
 def _scrub(value: Any, withheld: AbstractSet[str]) -> Any:
     """Every `metadata` map in an LXD body, at any depth, without the withheld fields.
 
-    note: shape-agnostic on purpose. The envelope, a listing bucket and one operation all nest an
-    operation's own metadata under `metadata`, so walking the body covers the listing in every
-    recursion and all-projects form, one operation and its /wait without trusting LXD's layout.
+    Shape-agnostic: the envelope, a listing bucket and one operation all nest an operation's own
+    metadata under `metadata`, so walking the body covers the listing in every recursion and
+    all-projects form, one operation and its /wait without trusting LXD's layout.
     """
     if isinstance(value, list):
         return [_scrub(item, withheld) for item in value]

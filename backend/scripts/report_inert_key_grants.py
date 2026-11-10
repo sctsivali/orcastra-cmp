@@ -1,17 +1,14 @@
 """Read only: which API key grants reach nothing once grants are bound to registration generations.
 
-Deployment data, not schema. The backend image does not ship ``scripts/``, so feed the file to the
-running backend's interpreter:
+The backend image does not ship ``scripts/``; feed the file to the running backend's interpreter:
 
     docker exec -i <backend> python - < backend/scripts/report_inert_key_grants.py
 
-Run it before enabling generations (services/cluster_generations.py) to see what they will pause,
-and after, to see what they paused. Before the backfill has run, the registrations it would adopt
-(every id the registry lists that has no registration row) are assumed, so the answer is the same
-on either side of the deploy. A grant is reported when the registration it was given for is not
-active: its id is not registered, or it was registered again after the grant was written.
-
-Nothing is written. Key ids are printed truncated.
+A grant is reported when its registration is not active: the id is not registered, or was
+registered again after the grant was written. Before the generations backfill
+(services/cluster_generations.py) has run, the registrations it would adopt (registry ids with no
+registration row) are assumed, so the report reads the same before and after the deploy. Nothing is
+written; key ids are printed truncated.
 """
 
 from __future__ import annotations

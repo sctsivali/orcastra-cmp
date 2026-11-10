@@ -71,7 +71,7 @@ _availability_executor = ThreadPoolExecutor(
     max_workers=4, thread_name_prefix="nodes_availability"
 )
 # One connect budget (3s) plus one read budget (8s) plus margin. The probes run in parallel,
-# so this bounds the whole sweep, not one cluster.
+# so this bounds the whole sweep.
 NODES_AVAILABILITY_PROBE_TIMEOUT = 20.0
 # The Vault LIST budget (3s connect, 10s read, see core/vault_client.VAULT_LIST_TIMEOUT) plus
 # margin. Past it the request is answered from the last known registry, never left waiting.
@@ -81,11 +81,9 @@ REGISTRY_READ_TIMEOUT = 12.0
 async def _read_registry(lxd_service: LXDService) -> RegistryRead:
     """The registered cluster ids for this request, read off the event loop.
 
-    important: the Vault LIST used to run synchronously inside this async route, so a slow
-    Vault held every request on the worker for the length of its timeout, and a lost LIST
-    came back as an empty fleet. It now runs on the availability pool with its own budget;
-    on expiry or a full pool the last known registry answers. The org-scope filter is applied
-    here, on the loop, because the ContextVar it reads does not travel into the thread.
+    The Vault LIST runs on the availability pool with its own budget, so a slow Vault cannot
+    hold the worker; on expiry or a full pool the last known registry answers. The org-scope
+    filter runs after either path, so the last known registry is scoped too.
     """
     try:
         read = await run_blocking(
@@ -196,25 +194,21 @@ async def get_nodes_status(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Get the status of every registered Cluster."""
-    # note: the 180 s soft TTL is the client's poll interval too. Keep the two in step. Past it
-    # the body is still served for SWR_MAX_STALE_SECONDS while one background read replaces it.
+    # The 180 s soft TTL is the client's poll interval too; keep the two in step. Past it the
+    # body is still served for SWR_MAX_STALE_SECONDS while one background read replaces it.
     cache = get_cache_manager()
 
     async def build() -> Built:
         statuses = await lxd_service.check_nodes_status_async()
-        # important: before anything is cached. An unreadable registry with nothing known used to
-        # be cached here for 180 s as an empty fleet with all_connected=True (issue #15).
+        # important: check before anything is cached, or an unreadable registry with nothing
+        # known is cached for 180 s as an empty fleet with all_connected=True.
         require_known_registry([status.name for status in statuses])
 
-        # note: a second Vault sweep used to live here, adding any cluster the fan-out had not
-        # already returned. It was unreachable: check_nodes_status_async iterates the same
-        # apply_cluster_filter(cert_manager.list_clusters()) set, so the difference it computed
-        # was always empty and its failure logs never appeared once in seven days of production
-        # logs. Removed rather than left as dead weight on the hottest read in the app.
+        # No second Vault sweep is needed: check_nodes_status_async already iterates the same
+        # apply_cluster_filter(cert_manager.list_clusters()) set.
 
-        # important: stamped here, where the fan-out finished, and then carried through the cache
-        # verbatim. Restamping on a cached read would report a three-minute-old body as current,
-        # which is the whole failure this field exists to expose.
+        # important: stamped here, where the fan-out finished, and carried through the cache
+        # verbatim. Restamping on a cached read would report a three-minute-old body as current.
         response = NodesStatusResponse(
             nodes=statuses,
             all_connected=all(node.connected for node in statuses),
@@ -231,8 +225,8 @@ async def get_nodes_status(
         label="cluster status",
     )
     response = _nodes_for_project_scope(served.as_model(NodesStatusResponse))
-    # note: after the cache, not inside build(): the verdict follows the release feed, which
-    # changes on its own clock, so a 180 s old body still gets today's answer.
+    # Attached after the cache rather than inside build(): the verdict follows the release feed,
+    # which changes on its own clock, so a cached body still gets the current answer.
     await hypervisor_releases.attach(response.nodes)
     return response
 
@@ -255,9 +249,9 @@ async def get_node_names(
 ):
     """Get configured Cluster identifiers.
 
-    The body stays a bare list for the API-key clients of this deprecated route. What changed
-    is what a lost registry looks like: the last known fleet with the degraded header, or 503
-    when nothing is known, never an empty list dressed as an answer.
+    The body is a bare list for the API-key clients of this deprecated route. When the registry
+    cannot be read, the last known fleet is returned with `X-Orcastra-Registry-Readable: false`,
+    or 503 when nothing is known.
     """
     read = await _read_registry(lxd_service)
     if read.readable:
@@ -290,8 +284,9 @@ async def get_nodes_availability(
 ):
     """Availability of every cluster in the caller's org scope.
 
-    important: never raises for a cluster that is down. "That cluster is offline" is this
-    endpoint's payload, not its failure, and a picker that 503s tells an operator nothing.
+    A cluster that is down is reported in the payload, never as an error. The endpoint answers
+    503 only when the registry cannot be read and nothing is known, or when the probe itself is
+    unavailable.
     """
     try:
         response = await lxd_status.resolve_availability(lxd_service, fresh=fresh)
@@ -301,8 +296,8 @@ async def get_nodes_availability(
         # it as "no clusters". While the last known registry is served the probe runs over it.
         raise vault_unavailable_error()
     except (BlockingTimeout, BlockingPoolFull) as exc:
-        # Degrade to "we could not tell", never to "everything is offline". A picker that
-        # marks a healthy fleet dead because a probe was slow is worse than one with no marks.
+        # Answer 503 rather than marking every cluster offline: a slow probe must not paint a
+        # healthy fleet as dead.
         logger.warning("Availability probe unavailable: %s", exc)
         raise HTTPException(
             status_code=503, detail="Cluster reachability is temporarily unavailable"
@@ -347,9 +342,9 @@ async def get_node_gpus(
     try:
         # get_node_gpus makes blocking LXD calls; keep them off the event loop.
         inventory = await asyncio.to_thread(lxd_service.get_node_gpus, node_name)
-        # note: every detected card is returned, display controllers included. Each carries
-        # its class and an `attachable` flag so the picker can rank and mark them rather than
-        # hide hardware the operator can see in LXD.
+        # Every detected card is returned, display controllers included. Each carries its class
+        # and an `attachable` flag so the picker can rank and mark them instead of hiding
+        # hardware the operator can see in LXD.
         cards = _gpu_cards_for_project_scope(node_name, inventory.cards)
         return GpuCardListResponse(
             host=node_name,
@@ -384,16 +379,15 @@ async def update_node(
 ):
     """Update Cluster metadata such as its display name."""
     verify_cluster_access(node_name)
-    # important: the display name is the cluster's, shown to every holder and to admins.
+    # important: the display name belongs to the whole cluster and is shown to every holder and
+    # to admins, so renaming it needs whole-cluster access.
     await verify_whole_cluster_access(node_name, db, _rbac)
     from fastapi import HTTPException
     from app.core.node_metadata import get_node_metadata_store
-    
-    # Check if node exists in config or Vault
+
     node_exists = False
     in_vault = False
-    
-    # Check in config - get_node_names() queries Vault-registered clusters
+
     if node_name in lxd_service.get_node_names():
         node_exists = True
         in_vault = True  # get_node_names() sources from Vault via cert_manager.list_clusters()
@@ -423,11 +417,9 @@ async def update_node(
         )
     
     try:
-        # Update display name in metadata store
         metadata_store = get_node_metadata_store()
         metadata_store.set_node_display_name(node_name, request.display_name)
-        
-        # Also update Vault if this is a Vault cluster
+
         if in_vault:
             settings = get_settings()
             if settings.vault_enabled and settings.vault_token:
@@ -438,12 +430,10 @@ async def update_node(
                         vault_client=vault_client,
                         clusters_path=settings.vault_clusters_path
                     )
-                    # Read existing metadata
                     cluster_info = cert_manager.get_cluster_info(node_name)
                     metadata = cluster_info.get("metadata", {})
-                    # Only update Vault if we got valid existing metadata
+                    # Write back only over a complete record, keeping every stored field.
                     if metadata.get("endpoint"):
-                        # Save back to Vault with updated display name (preserve all fields)
                         cert_manager.save_cluster_metadata(
                             cluster_id=node_name,
                             display_name=request.display_name,
@@ -452,7 +442,7 @@ async def update_node(
                             # Preserve, never invent: an absent type means not determined yet.
                             cluster_type=metadata.get("type"),
                             merchant_id=metadata.get("merchant_id", ""),
-                            # note: a location no reader can use is not written back; a
+                            # A location no reader can use is not written back; a
                             # complete one is re-saved with the keys it had.
                             location=stored_location_fields(node_name, metadata),
                         )

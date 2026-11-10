@@ -377,7 +377,7 @@ async def discard_plan(
     user: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    """Discard a draft the caller wrote and never started (owner decision: the author only)."""
+    """Discard a draft plan that was never started. Only its author may discard it."""
     authority = await _current_authority(user)
     service = MigrationService(db)
     row = await _service_call(service.get_plan(plan_id))

@@ -1,21 +1,15 @@
 """Issuing, rotating and retiring the credential that belongs to one installation.
 
-Every Vault operation here reuses the integration key machinery rather than reimplementing it, so
-an installation credential authenticates through exactly the same path as any other key and
-inherits its cache, its cross-worker revocation and its per-key rate limit for free.
+Vault operations reuse the integration key machinery, so an installation credential authenticates
+through the same path as any other key and shares its cache, cross-worker revocation and per-key
+rate limit.
 
-Two differences from an ordinary key, and both are the point.
-
-First, hash-only. `save_api_key_to_vault` is called with `raw_secret=None`, so no recoverable copy
-of the secret is ever written. That claim is only true because the backfill in
-`_validate_api_key_blocking` is now guarded on `app_url`, which an installation credential never
-has; without that guard the add-on's first request would have quietly undone it.
-
-Second, a separate signing secret. The existing OrcaHub emitter signs deliveries with the API
-key's own secret, which means anyone who can merely VERIFY a signature is holding a live
-control-plane credential. With one partner that is one receiver. With an open platform it is every
-author, so the two are split: one authenticates the add-on to us, the other proves a delivery came
-from us, and rotating either leaves the other alone.
+It differs from an ordinary key in two ways. It is hash-only: `save_api_key_to_vault` is called
+with `raw_secret=None`, and the backfill in `_validate_api_key_blocking` runs only for keys with
+`app_url`, which an installation credential never has. And deliveries are signed with a separate
+secret. The OrcaHub emitter signs with the API key's own secret, so anyone able to verify a
+signature holds a live credential; here one secret authenticates the add-on, the other signs
+deliveries, and rotating either leaves the other alone.
 """
 
 import logging
@@ -81,11 +75,10 @@ def build_install_metadata(
 ) -> Dict[str, Any]:
     """The one place an installation's key metadata is constructed.
 
-    important: `capabilities` is written as a concrete sorted list, always, and this function
-    never merges a caller-supplied dict that could omit it. `granted_capabilities` returns None
-    for a key whose field is absent and `has_capability` reads None as unrestricted, so a single
-    path that forgets the key mints a credential that can do everything. One writer means there
-    is one place to check, and a ratchet checks it.
+    important: `capabilities` is always written as a concrete sorted list, and no caller-supplied
+    dict is merged in. `granted_capabilities` returns None for a key without the field and
+    `has_capability` reads None as unrestricted, so a missing field mints a credential that can do
+    everything. A ratchet test checks this single writer.
     """
     issued = now_utc()
     metadata: Dict[str, Any] = {
@@ -131,8 +124,8 @@ def issue_install_credential(
     are never readable afterwards.
     """
     if not capabilities:
-        # Belt to the database's braces. The table constraint is the real guarantee; this makes
-        # the failure legible at the call site rather than as an integrity error.
+        # The table constraint is the guarantee; this reports the failure at the call site
+        # instead of as an integrity error.
         raise ValueError("an installation credential must name at least one capability")
 
     key_id, key_secret, secret_hash = generate_api_key_pair()
@@ -149,8 +142,8 @@ def issue_install_credential(
         expire_days=expire_days,
     )
 
-    # important: raw_secret is not passed. An installation never carries `app_url`, so nothing
-    # reads a recoverable copy and nothing writes one.
+    # important: keep raw_secret None. An installation never carries `app_url`, so nothing reads
+    # a recoverable copy and none may be stored.
     save_api_key_to_vault(vault_client, key_id, metadata, secret_hash, raw_secret=None)
 
     signing_secret = generate_signing_secret()
@@ -173,13 +166,9 @@ def read_signing_secret(vault_client, install_id: int) -> Optional[str]:
 def read_signing_secrets(vault_client, install_id: int, *, now: Optional[float] = None) -> List[str]:
     """Every secret a delivery should currently be signed with, newest first.
 
-    important: this exists because rotation had no overlap at all. `signature_header` takes a LIST
-    precisely so both signatures ride during a rotation, and the subscription row has carried
-    `previous_secret_expires_at` since it was created, with a comment saying a receiver switches
-    at its own pace. But only one secret was ever stored and rotation overwrote it in place, so
-    every receiver that had not already been handed the new value started rejecting on the very
-    next delivery and walked toward AUTO_SUSPEND_AFTER. The mechanism was built and never
-    connected to anything.
+    After a rotation the previous secret stays in the list until its expiry, so `signature_header`
+    sends both signatures and a receiver can switch at its own pace instead of rejecting
+    deliveries until the subscription reaches AUTO_SUSPEND_AFTER.
     """
     try:
         payload = vault_client.vault_read(_signing_secret_path(install_id)) or {}
@@ -204,9 +193,8 @@ def rotate_signing_secret(
 ) -> str:
     """Issue a new secret and keep the old one live for a bounded window.
 
-    The window is what makes a rotation something a receiver survives rather than something it
-    has to be redeployed for. It is bounded because an old secret that never expires is not a
-    rotation, and the expiry is stored beside the secret so nothing has to remember to clean up.
+    The window lets a receiver survive a rotation without a redeploy. The expiry is stored beside
+    the secret, so no cleanup job is needed.
     """
     previous = read_signing_secret(vault_client, install_id)
     signing_secret = generate_signing_secret()
@@ -236,14 +224,10 @@ def rotate_install_credential(
 ) -> Tuple[str, str, Dict[str, Any]]:
     """Mint a new key and retire the old one, optionally leaving it alive for a grace window.
 
-    important: the old key is retired by SHORTENING ITS EXPIRY, not by adding a new mechanism.
-    `validate_api_key` already refuses an expired key with 401, so an overlap window costs zero
-    new enforcement code and cannot be got wrong in a way the existing auth path would miss. A
-    grace of zero revokes outright instead, because an expiry in the past is a stranger shape
-    than the flag that already means this.
-
-    Never overwrites in place. An in-place rewrite has no overlap at all and breaks the add-on at
-    the instant the operator clicks the button.
+    The old key is retired by shortening its expiry: `validate_api_key` already refuses an expired
+    key with 401, so the overlap needs no new enforcement. A grace of zero sets the revoked flag
+    instead. The key is never rewritten in place, which would break the add-on the moment the
+    operator rotates.
     """
     key_id, key_secret, secret_hash = generate_api_key_pair()
     metadata = build_install_metadata(
@@ -272,16 +256,12 @@ def rotate_install_credential(
 
 def _retire_key(vault_client, key_id: str, *, grace_seconds: int) -> None:
     """Shorten a key's life, or revoke it outright when no grace was asked for."""
-    # important: this must not be skipped. Rotation saves the new key first and retires the old
-    # one here, so swallowing a Vault error completed the rotation while leaving the superseded
-    # credential live to its original expiry, a year by default. Rotation is what an operator does
-    # when a credential may have leaked, so reporting success there is the worst possible answer.
-    #
-    # Raising is safe: the caller commits the row after this returns, so a failure leaves
-    # `api_key_id` pointing at the old key, which still works, and the newly written key is
-    # claimed by nothing and reclaimed by the reconcile sweep's orphan pass.
+    # important: a Vault error must raise. Rotation saves the new key first and retires the old one
+    # here, so swallowing it would report success while a possibly leaked credential stays live to
+    # its original expiry. The caller commits the row only after this returns: on failure
+    # `api_key_id` still names the old key, and the reconcile sweep's orphan pass reclaims the new.
     try:
-        # note: uncached: rotation holds this key's lock, and the write below is the whole document
+        # Uncached: rotation holds this key's lock, and the write below replaces the whole document.
         metadata, _ = get_api_key_from_vault(vault_client, key_id, use_cache=False)
     except Exception as exc:
         logger.warning("Could not read %s to retire it: %s", key_id, exc)
@@ -303,8 +283,8 @@ def _retire_key(vault_client, key_id: str, *, grace_seconds: int) -> None:
     vault_client.vault_kv_put(
         f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata", metadata
     )
-    # Every worker holds its own validation cache, so the tombstone is what makes this immediate
-    # rather than eventual on a per-process TTL.
+    # Each worker holds its own validation cache; the eviction tombstone applies this at once
+    # instead of after a per-process TTL.
     evict_api_key_cache(key_id)
 
 
@@ -316,7 +296,7 @@ def revoke_install_credential(vault_client, key_id: str) -> None:
 def destroy_install_credential(vault_client, key_id: str) -> bool:
     """Remove the key entirely. Uninstall only, where nothing should be left to read.
 
-    True only when Vault holds nothing of it any more, so the teardown records what it removed.
+    True only when Vault holds nothing of it, so the teardown records only what it removed.
     """
     removed = delete_api_key_from_vault(vault_client, key_id)
     evict_api_key_cache(key_id)
@@ -326,10 +306,8 @@ def destroy_install_credential(vault_client, key_id: str) -> bool:
 def destroy_signing_secret(vault_client, install_id: int) -> bool:
     """True when nothing is left behind. Already gone counts, an unknown failure does not.
 
-    important: it returns an answer now because the teardown records what it removed into the
-    uninstall audit record, and it used to record this one unconditionally. Secret material left
-    in Vault while the operator is told it was destroyed is the worst entry on that list to have
-    wrong.
+    The teardown writes what it removed into the uninstall audit record, so a secret still in
+    Vault must not be reported as destroyed.
     """
     from app.core.vault_client import VaultClientError
 

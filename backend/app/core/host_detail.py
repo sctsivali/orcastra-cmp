@@ -1,17 +1,15 @@
 """Host-level detail is for Partners and Admins; a Tenant gets the same body without it.
 
-A Tenant reaches an instance, not the hypervisor under it. The LXD endpoint, the cluster member an
-instance runs on, the instance's process id on the host, the paths behind a storage pool and the
-host side of an instance's or a profile's config and devices (a disk's host path, a NIC's host
-bridge, raw.* and idmap settings) all describe that hypervisor, and /nodes already withholds the
-endpoint from Tenants (routers/nodes.py `_availability_for_user`).
+A Tenant reaches its instances, never the hypervisor: the LXD endpoint, the cluster member, the
+host process id, storage pool paths and the host side of config and devices (host paths and
+bridges, raw.*, idmap). /nodes withholds the endpoint the same way (routers/nodes.py
+`_availability_for_user`).
 
-important: every function returns a copy and never mutates its input. With Redis down the cache
-manager hands back the stored object itself, so redacting in place would strip the field from the
-next Partner's response too.
+important: never mutate the input; a Tenant gets a copy. With Redis down the cache manager hands
+back the stored object itself, so redacting in place would strip the next Partner's response too.
 
-note: the tier comes from `caller_tier()`, which reads the org-scope context. A route has to run
-under `org_scope_dependency`, or an unset scope reads as Admin; a ratchet test pins that.
+The tier comes from `caller_tier()`, which reads the org-scope context. A route must run under
+`org_scope_dependency`, or an unset scope reads as Admin; a ratchet test pins that.
 """
 
 import re
@@ -28,10 +26,10 @@ from app.core.tenant_visibility import (
 
 HOST_DETAIL_TIERS = frozenset({"admin", "partner"})
 # Instance and profile config a Tenant may read: limits, the image's identity, boot and snapshot
-# settings, the base image and the instance's own MAC addresses. Everything else is dropped: raw.*,
-# idmap and other volatile host state describe the host, and cloud-init, user.* and environment can
-# carry another party's secrets. note: image.* is free-form like user.*, so only the properties an
-# image itself carries pass, never a prefix; limits., boot. and snapshots. are keys LXD validates.
+# settings, the base image and the instance's own MAC addresses. raw.*, idmap and other volatile
+# state describe the host; cloud-init, user.* and environment can carry another party's secrets.
+# image.* is free-form like user.*, so only the properties an image carries pass, never the prefix;
+# limits., boot. and snapshots. are keys LXD validates.
 TENANT_CONFIG_PREFIXES = ("limits.", "boot.", "snapshots.")
 TENANT_CONFIG_KEYS = frozenset({
     "security.secureboot", "volatile.base_image",
@@ -70,8 +68,8 @@ def tenant_config(config: Mapping[str, Any]) -> dict:
 def tenant_device(device: Mapping[str, Any]) -> dict:
     kind = device.get("type")
     kept = {key: value for key, value in device.items() if key in TENANT_DEVICE_FIELDS.get(kind, _TYPE_ONLY)}
-    # note: a disk's source names a volume when the disk sits on a pool, and a host path otherwise;
-    # an absolute source is dropped even beside a pool, whatever LXD would make of it.
+    # A disk's source names a volume when the disk sits on a pool, and a host path otherwise; an
+    # absolute source is dropped even beside a pool, whatever LXD would make of it.
     source = device.get("source")
     if kind == "disk" and device.get("pool") and isinstance(source, str) and not source.startswith("/"):
         kept["source"] = source
@@ -136,9 +134,9 @@ def cluster_list_for_tier(response: Model, tier: Tier) -> Model:
 
 
 def _tenant_used_by(model: Model) -> list:
-    # note: references to an instance or its root volume only, which the route already narrowed
-    # to the Tenant's ACL. Any other reference passes on any rule in its project, so it named
-    # other parties' custom volumes and images (owner decision 2026-10-26).
+    # Only references to an instance or its root volume, which the route already narrowed to the
+    # Tenant's ACL. Any other reference passes on any rule in its project, so it would name other
+    # parties' custom volumes and images.
     return [
         without_member_target(reference)
         for reference in (str(ref) for ref in getattr(model, "used_by", None) or [])
@@ -150,12 +148,12 @@ def pool_for_tier(pool: Model, tier: Tier) -> Model:
     """A storage pool as a Tenant may read it: its name and what uses it.
 
     A pool is shared by every party on the cluster, so its config (size, source, remote names),
-    driver and state describe the provider's storage, not the Tenant's (owner decision
-    2026-10-26). The capacity routes refuse a Tenant for the same reason.
+    driver and state describe the provider's storage. The capacity routes refuse a Tenant for the
+    same reason.
     """
     if sees_host_detail(tier):
         return pool
-    # note: the description is the operator's note about the pool and often names its backend.
+    # The description is the operator's note about the pool and often names its backend.
     return pool.model_copy(update={
         "config": {}, "driver": None, "status": None, "description": "",
         "used_by": _tenant_used_by(pool),
@@ -169,7 +167,7 @@ TENANT_VOLUME_CONFIG_PREFIXES = ("snapshots.",)
 
 
 def volume_for_tier(volume: Model, tier: Tier) -> Model:
-    """A storage volume as a Tenant may read it (owner decision 2026-10-26).
+    """A storage volume as a Tenant may read it.
 
     Its size and snapshot settings stay; `location` is the cluster member that holds it, which
     `vm_for_tier` already withholds for an instance.
@@ -183,7 +181,7 @@ def volume_for_tier(volume: Model, tier: Tier) -> Model:
             if key in TENANT_VOLUME_CONFIG_KEYS or key.startswith(TENANT_VOLUME_CONFIG_PREFIXES)
         },
         "location": None,
-        # note: a volume is created by a Partner, so its description is the operator's note.
+        # A Partner creates volumes, so the description is the operator's note.
         "description": "",
         "used_by": _tenant_used_by(volume),
     })
@@ -221,13 +219,12 @@ def profile_list_for_tier(response: Model, tier: Tier) -> Model:
 
 
 def project_for_tier(project: Model, host: str, tier: Tier) -> Model:
-    """A project as a Tenant may read it: its limits and its own instances (backlog A1).
+    """A project as a Tenant may read it: its limits and its own instances.
 
     A project's used_by is LXD's whole inventory of it (every party's instances, profiles, images
-    and volumes) and its config carries features.*, user.* and restricted.* settings that are the
-    provider's. The project card reads limits.* only (`components/dashboard/project-card.tsx`).
-    note: used_by goes through the request's tenant filter, so this runs on the request path,
-    never inside a cache build shared across callers.
+    and volumes), and its features.*, user.* and restricted.* config is the provider's. The project
+    card reads limits.* only (`components/dashboard/project-card.tsx`). used_by goes through the
+    request's tenant filter, so this runs on the request path, never inside a shared cache build.
     """
     if sees_host_detail(tier):
         return project
@@ -235,8 +232,8 @@ def project_for_tier(project: Model, host: str, tier: Tier) -> Model:
     return project.model_copy(update={
         "config": {key: value for key, value in config.items() if key.startswith("limits.")},
         "used_by": filter_visible_lxd_references(host, list(getattr(project, "used_by") or [])),
-        # note: the provider's note and its user.tags (services/lxd/projects.py) describe the project
-        # from the provider's side, as a pool's or a volume's description does.
+        # The provider's note and its user.tags (services/lxd/projects.py) describe the project from
+        # the provider's side, as a pool's or a volume's description does.
         "description": "",
         "tags": [],
     })
@@ -255,13 +252,13 @@ TENANT_NETWORK_STATE_KEYS = ("addresses", "counters", "mtu", "state", "type")
 
 
 def network_for_tier(network: Model, tier: Tier) -> Model:
-    """A network as a Tenant may read it (backlog A3)."""
+    """A network as a Tenant may read it."""
     if sees_host_detail(tier):
         return network
     config = getattr(network, "config") or {}
     return network.model_copy(update={
         "config": {key: value for key, value in config.items() if key in TENANT_NETWORK_CONFIG_KEYS},
-        # note: the description is the operator's note about the network and often names its uplink.
+        # The description is the operator's note about the network and often names its uplink.
         "description": "",
     })
 
@@ -273,9 +270,8 @@ def network_state_for_tier(state: Mapping[str, Any], tier: Tier) -> Mapping[str,
 
 
 # What a Tenant keeps of one cluster on the monitoring dashboard: whether it answers and how many
-# of the Tenant's own instances run there. Owner decision 2026-10-26: a Tenant monitors its
-# instances and the clusters' status, not the hosts, whose load counts every other party's
-# instances too.
+# of the Tenant's own instances run there. Host load counts every other party's instances too, so
+# a Tenant monitors its instances and the clusters' status only.
 TENANT_CLUSTER_MONITORING_FIELDS = frozenset({
     "node_name", "is_online", "cluster_status", "collection_timed_out", "cpu_reporting_instances",
     "instance_count", "running_instances", "container_count", "vm_count",
@@ -292,7 +288,7 @@ FLEET_HOST_FIGURES = (
 
 
 def cluster_monitoring_for_tenant(node: Model) -> Model:
-    """One cluster's monitoring row with every host figure null, not zero."""
+    """One cluster's monitoring row for a Tenant, with every host figure set to null."""
     update: dict = {
         field: None for field in type(node).model_fields if field not in TENANT_CLUSTER_MONITORING_FIELDS
     }

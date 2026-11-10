@@ -1,28 +1,15 @@
-"""One cluster, one client, obtained without punishing the caller for a dead peer.
+"""A cluster's client, connected from Vault when this worker holds none.
 
-`connection_manager.get_client` is memory-only. It answers from `_clients`, or rebuilds from
-`_connection_info`, and returns None for a worker that has never connected to this cluster.
-With WEB_CONCURRENCY=4 that is the ordinary state after a registration: the worker that served
-the POST holds a client and the other three do not, so the same read answered 200 or 503
-depending on which worker happened to take it, until the background sweep caught up.
+`connection_manager.get_client` is memory-only and returns None on a worker that never
+connected to the cluster, the normal state right after a registration, so one read would
+answer 200 or 503 depending on the worker. The order is fixed: the pooled client (one
+revalidation), then the breaker inside `LXDService.ensure_connection` (dead clusters cost
+nothing), then the certificate from Vault, only for a registered, in-scope cluster. A new
+connect entry point belongs in this module so none skips the breaker.
 
-`LXDService.ensure_connection` is the repair, and `connection.py` names it as such in the
-comment above the branch that returns None. It reads the certificate out of Vault and connects,
-and it consults the breaker before doing any of that.
-
-Order matters and is not negotiable:
-
-  1. the pooled client, which costs one revalidation;
-  2. the breaker, inside ensure_connection, so a fleet of dead clusters costs nothing;
-  3. Vault, only for a cluster that is registered, in scope, and not known to be down.
-
-`documentation/reliability/cluster-connection-breaker.md` records what happens when a new
-connect door skips step 2: gating one and not the other took /health from 10.3s to 20.1s. Any
-future entry point belongs here rather than beside here.
-
-important: this is deliberately NOT wired into `require_client`. That helper takes a client
-someone else fetched, which is what keeps `tests/test_no_inline_get_client.py` able to see the
-call, and a wrapper that fetched its own would hide a blocking revalidation back onto the loop.
+important: this is not wired into `require_client`. That helper takes a client the caller
+fetched, which keeps the call visible to `tests/test_no_inline_get_client.py`; a wrapper that
+fetched its own would hide a blocking revalidation on the event loop.
 """
 
 import logging
@@ -37,8 +24,8 @@ logger = logging.getLogger(__name__)
 # routers each pin their own threads against the same dead cluster.
 _CONNECT_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="lazy_connect")
 
-# Wall clock the caller waits. The socket timeout inside pylxd is what actually frees the
-# thread; this only bounds the wait, which is why core/blocking.py insists on both.
+# Wall clock the caller waits. The socket timeout inside pylxd frees the thread; this only
+# bounds the wait, so core/blocking.py requires both.
 CONNECT_TIMEOUT: float = 30.0
 
 # Match the worker count: queueing behind a saturated pool only moves the wait.
@@ -55,10 +42,9 @@ def connect_or_get_client(
     Safe to call from a worker thread and from a fan-out helper that already runs in one.
     Async callers want `client_for`, which puts this on a bounded pool.
 
-    note: the cold path calls get_client twice, once here and once inside ensure_connection.
-    The second is a repeat of a None answer, so it costs another `_auto_reconnect` attempt at
-    worst, and only until the breaker trips. Threading the client out of ensure_connection to
-    save it would put a second meaning on a function eight other callers rely on.
+    The cold path calls get_client twice, here and inside ensure_connection. The second call
+    costs at most another `_auto_reconnect` attempt, and only until the breaker trips; returning
+    the client from ensure_connection instead would change a function many callers rely on.
     """
     client = (
         lxd_service.connection_manager.get_client(cluster_id)
@@ -101,9 +87,8 @@ async def client_for(
 ) -> Optional[Any]:
     """`connect_or_get_client` off the event loop. None on timeout or a saturated pool.
 
-    Returning None rather than raising keeps the caller's shape: `require_client` turns it into
-    the one 503 with the breaker's recorded reason, so a slow connect and a refused one read
-    the same way to an operator and there is no second error path to get wrong.
+    Returning None keeps one error path: `require_client` turns it into a 503 with the breaker's
+    recorded reason, so a slow connect and a refused one read the same to an operator.
     """
     try:
         connect_args = (

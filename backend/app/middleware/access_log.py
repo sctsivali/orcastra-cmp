@@ -1,7 +1,4 @@
-"""
-Access Log Middleware
-Logs all HTTP requests with structured fields for OpenSearch ingestion.
-"""
+"""Access log middleware: one structured record per HTTP request, sent to OpenSearch."""
 
 import time
 import logging
@@ -18,7 +15,7 @@ from app.core.logging_config import get_access_logger
 from app.core.error_sanitizer import is_sensitive_param as _is_sensitive_param, sanitize_error
 
 
-# Paths to exclude from access logging (health checks, metrics, etc.)
+# Probes and the favicon are left out of the access log.
 EXCLUDED_PATHS = {
     "/health",
     "/metrics",
@@ -28,17 +25,8 @@ EXCLUDED_PATHS = {
 
 
 class AccessLogMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware to log HTTP access in structured JSON format.
-    
-    Logs include:
-    - Request ID (for correlation)
-    - HTTP method, path, query params
-    - Response status code
-    - Request/response latency
-    - User info (if authenticated)
-    - Client IP, user agent, origin
-    """
+    """Logs each request as structured JSON: request ID, method, path, redacted query params,
+    status, latency, sizes, the verified user and the client."""
     
     def __init__(self, app, service_name: str = "orcastra-backend", version: str = "0.0.0"):
         super().__init__(app)
@@ -49,14 +37,11 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
-        # Skip excluded paths
         if request.url.path in EXCLUDED_PATHS:
             return await call_next(request)
         
-        # Record start time
         start_time = time.perf_counter()
         
-        # Get request size
         request_size = 0
         content_length = request.headers.get("content-length")
         if content_length:
@@ -65,22 +50,18 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
             except ValueError:
                 pass
         
-        # Process request
         response = None
         error_message = None
         try:
             response = await call_next(request)
         except Exception as e:
-            # note: sanitised on the way into the log, not just on the way to the client. This
-            # value lands in OpenSearch, and an unhandled exception's text carries the same
-            # control-plane URLs and paths the response handler redacts.
+            # Sanitised for the log as well: this lands in OpenSearch, and an unhandled exception's
+            # text carries the same control-plane URLs and paths the response handler redacts.
             error_message = sanitize_error(str(e))
             raise
         finally:
-            # Calculate latency
             latency_ms = (time.perf_counter() - start_time) * 1000
             
-            # Get response info
             status_code = response.status_code if response else 500
             response_size = 0
             if response:
@@ -91,10 +72,8 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
                     except ValueError:
                         pass
             
-            # Get request context
             ctx = get_request_context()
             
-            # Build access log entry
             access_log = self._build_access_log(
                 request=request,
                 status_code=status_code,
@@ -105,7 +84,6 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
                 ctx=ctx,
             )
             
-            # Log the access entry
             self._log_access(access_log, status_code)
         
         return response
@@ -120,21 +98,15 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
         error_message: str | None,
         ctx,
     ) -> dict:
-        """Build structured access log entry."""
-        # Extract query params (sanitized)
-        #
-        # important: substring match on a lowercased name, not `name in dict`. The exact-match
-        # version missed `access_token`, `refresh_token`, `id_token`, `client_secret`, `apikey`,
-        # `api-key`, `code`, `signature` and every capitalisation, while the WebSocket token
-        # parameter happened to be spelled `token` and so looked covered. This is the shape
-        # `activity_logger._sanitize_details` already uses; two divergent redaction policies in
-        # one application is the durable defect, so they now agree.
+        """Build the structured access log entry."""
+        # important: match substrings of the lowercased name, the shape
+        # `activity_logger._sanitize_details` uses, so `access_token`, `client_secret`, `api-key`,
+        # `code`, `signature` and any capitalisation are redacted. An exact match misses them.
         query_params = {
             name: ("[REDACTED]" if _is_sensitive_param(name) else value)
             for name, value in request.query_params.items()
         }
         
-        # Build user info
         user_info = None
         if ctx and ctx.user_id:
             user_info = {
@@ -147,7 +119,6 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
         
         client_ip = ctx.client_ip if ctx else self._get_client_ip(request)
 
-        # Build client info
         client_info = {
             "ip": client_ip,
             "user_agent": request.headers.get("user-agent"),
@@ -181,7 +152,6 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
     
     def _log_access(self, access_log: dict, status_code: int) -> None:
         """Log the access entry with appropriate level."""
-        # Create log record with custom attribute
         record = logging.LogRecord(
             name="orcastra.access",
             level=logging.INFO,
@@ -193,7 +163,7 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
         )
         record.access_log_data = access_log
         
-        # Log with appropriate level based on status code
+        # 5xx logs as error, 4xx as warning, the rest as info.
         if status_code >= 500:
             self.logger.error(
                 f"{access_log['method']} {access_log['path']} - {status_code}",
@@ -211,7 +181,7 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
             )
     
     def _get_client_ip(self, request: Request) -> str:
-        """Extract client IP, considering proxies."""
+        """The client IP, honouring forwarded headers only from trusted proxies."""
         if hasattr(request.state, "client_ip") and request.state.client_ip:
             return request.state.client_ip
         settings = get_settings()

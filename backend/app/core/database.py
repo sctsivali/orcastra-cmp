@@ -1,7 +1,4 @@
-"""
-Database Configuration for Orcastra CMP.
-Uses SQLAlchemy async with PostgreSQL.
-"""
+"""Async SQLAlchemy engine and sessions for PostgreSQL."""
 
 import os
 import logging
@@ -12,7 +9,7 @@ from sqlalchemy.pool import AsyncAdaptedQueuePool
 
 logger = logging.getLogger(__name__)
 
-# Database URL from environment (REQUIRED - no hardcoded fallback for security)
+# Required, with no hardcoded fallback.
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError(
@@ -26,7 +23,7 @@ _MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "30"))
 _POOL_TIMEOUT = int(os.getenv("DB_POOL_TIMEOUT", "30"))
 _POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "1800"))  # 30 min
 
-# Create async engine with proper connection pooling
+# Async engine with a bounded connection pool.
 engine = create_async_engine(
     DATABASE_URL,
     echo=(os.getenv("DEBUG", "false").lower() == "true"
@@ -39,7 +36,6 @@ engine = create_async_engine(
     pool_pre_ping=True,  # verify connection health before checkout
 )
 
-# Create async session factory
 async_session_maker = async_sessionmaker(
     engine,
     class_=AsyncSession,
@@ -55,9 +51,7 @@ class Base(DeclarativeBase):
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """
-    Dependency to get database session.
-    """
+    """FastAPI dependency that yields a database session."""
     async with async_session_maker() as session:
         try:
             yield session
@@ -66,19 +60,15 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """
-    Verify the database is reachable and under Alembic control.
+    """Verify the database is reachable and under Alembic control.
 
-    This deliberately does NOT create tables. Releases up to v1.0.0-RC2 built their
-    schema here with `Base.metadata.create_all`, which silently diverged from the
-    migrations (the `user_preferences` table, the `uq_org_source_external_id`
-    uniqueness backstop and two NOT NULL columns all went missing on real
-    deployments) and left databases with no Alembic stamp, so `alembic upgrade head`
-    could not run at all. Alembic is now the single source of truth; the entrypoint
-    runs migrations once per container before this ever executes.
+    It never creates tables: `Base.metadata.create_all` diverges from the migrations and
+    leaves no Alembic stamp, so `alembic upgrade head` cannot run afterwards. Alembic is
+    the single source of truth; the entrypoint runs migrations once per container before
+    this executes.
 
-    note: this reports rather than raises. `lifespan()` already downgrades failures
-    here to a warning, and refusing to boot is the entrypoint's job, not ours.
+    It reports rather than raises. `lifespan()` downgrades failures here to a warning,
+    and refusing to boot is the entrypoint's job.
     """
     from sqlalchemy import text
 
@@ -132,9 +122,6 @@ def _alembic_heads() -> list[str]:
 
 
 async def close_db() -> None:
-    """
-    Close database connection.
-    Called on application shutdown.
-    """
+    """Dispose of the engine on application shutdown."""
     await engine.dispose()
     logger.info("Database connection closed")

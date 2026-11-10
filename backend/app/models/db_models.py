@@ -1,7 +1,4 @@
-"""
-Database Models for Orcastra CMP.
-SQLAlchemy ORM models for PostgreSQL.
-"""
+"""SQLAlchemy ORM models for the Orcastra PostgreSQL database."""
 
 from datetime import datetime, timezone
 from sqlalchemy import CheckConstraint, Column, String, Text, DateTime, Index, Integer, BigInteger, Boolean, ForeignKey, UniqueConstraint, event, func, select, text
@@ -16,18 +13,11 @@ from app.core.database import Base
 # ============================================
 
 class TagCategory(Base):
-    """
-    Tag category/prefix definitions.
-    
-    Predefined categories:
-    - loc_  : Location-based (ex; loc_jakarta, loc_surabaya)
-    - reg_  : Region-based (ex; reg_jawa-timur, reg_kalimantan)
-    - vend_ : Vendor (ex; vend_canonical, vend_acme)
-    - own_  : Ownership (ex; own_sivali, own_partner)
-    - env_  : Environment (ex; env_production, env_staging)
-    - app_  : Application type (ex; app_banking, app_hci)
-    - sla_  : SLA level (ex; sla_critical, sla_standard)
-    - cost_ : Cost center (ex; cost_dept-it, cost_project-a)
+    """A tag category, identified by its prefix.
+
+    Predefined: loc_ (location), reg_ (region), vend_ (vendor), own_ (ownership),
+    env_ (environment), app_ (application type), sla_ (SLA level), cost_ (cost center).
+    ex; loc_jakarta, vend_canonical, env_production.
     """
     __tablename__ = "tag_categories"
 
@@ -37,7 +27,7 @@ class TagCategory(Base):
     description = Column(Text, nullable=True)
     color = Column(String(7), nullable=True, default="#6b7280")  # Hex color for UI
     icon = Column(String(50), nullable=True, default="tag")  # Lucide icon name
-    sort_order = Column(Integer, default=0)  # For ordering in UI
+    sort_order = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
     is_system = Column(Boolean, default=True)  # System categories cannot be deleted
     created_at = Column(
@@ -52,7 +42,6 @@ class TagCategory(Base):
         nullable=False
     )
 
-    # Relationships
     tags = relationship("Tag", back_populates="category", lazy="selectin")
 
     def __repr__(self) -> str:
@@ -60,14 +49,7 @@ class TagCategory(Base):
 
 
 class Tag(Base):
-    """
-    Master tag definitions.
-    
-    Tags follow the format: {prefix}{value}
-    Example: loc_jakarta, vend_canonical, production
-    
-    Tags without recognized prefix are categorized as "other".
-    """
+    """A tag, named {prefix}{value} (ex; loc_jakarta). A name without a known prefix is "other"."""
     __tablename__ = "tags"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -91,7 +73,6 @@ class Tag(Base):
         nullable=False
     )
 
-    # Relationships
     category = relationship("TagCategory", back_populates="tags", lazy="joined")
     assignments = relationship("TagAssignment", back_populates="tag", lazy="selectin", cascade="all, delete-orphan")
 
@@ -105,11 +86,9 @@ class Tag(Base):
 
 
 class TagAssignment(Base):
-    """
-    Tag assignments to resources (nodes, projects, instances).
-    
-    This table links tags to LXD resources and tracks who assigned them.
-    Also syncs to LXD's user.tags config for backward compatibility.
+    """A tag on a node, project or instance, and who assigned it.
+
+    Also synced to the resource's LXD `user.tags` config (tag_service).
     """
     __tablename__ = "tag_assignments"
 
@@ -130,11 +109,9 @@ class TagAssignment(Base):
         nullable=False
     )
 
-    # Relationships
     tag = relationship("Tag", back_populates="assignments", lazy="joined")
 
     __table_args__ = (
-        # Ensure unique tag per resource
         UniqueConstraint(
             "tag_id", "resource_type", "resource_id", "resource_host", "resource_project",
             name="uq_tag_assignment_resource"
@@ -149,15 +126,10 @@ class TagAssignment(Base):
 
 
 class UserTagVisibility(Base):
-    """
-    Per-user tag visibility settings.
-    
-    Controls which tags a user can see/filter in the dashboard.
-    This enables personalized views where users only see relevant tags.
-    
-    By default, users can see all tags. This table stores exceptions:
-    - If visibility_mode = 'whitelist': only see tags in visible_tags
-    - If visibility_mode = 'blacklist': see all except tags in hidden_tags
+    """Which tags a user sees and filters by in the dashboard.
+
+    Every tag is visible by default. visibility_mode 'whitelist' shows only the visible_* entries;
+    'blacklist' shows everything except the hidden_* entries.
     """
     __tablename__ = "user_tag_visibility"
 
@@ -203,10 +175,7 @@ class UserTagVisibility(Base):
 # ============================================
 
 class UserPreferences(Base):
-    """
-    User preferences/personalization settings.
-    Stores per-user customization data including branding, colors, logos, etc.
-    """
+    """Per-user personalization settings (branding, colors, logos)."""
     __tablename__ = "user_preferences"
 
     # Primary key: user ID from Authentik (OIDC sub claim)
@@ -215,11 +184,9 @@ class UserPreferences(Base):
     # User email for reference (not used for lookup)
     user_email = Column(String(255), nullable=True)
     
-    # JSONB column to store all personalization settings flexibly
-    # This allows schema-less storage of the PersonalizationSettings object
+    # The PersonalizationSettings object, stored schema-less.
     settings = Column(JSONB, nullable=False, default={})
     
-    # Timestamps
     created_at = Column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -232,7 +199,6 @@ class UserPreferences(Base):
         nullable=False
     )
 
-    # Index for faster lookups
     __table_args__ = (
         Index("ix_user_preferences_email", "user_email"),
     )
@@ -246,16 +212,11 @@ class UserPreferences(Base):
 # ============================================
 
 class Organization(Base):
-    """
-    Organization / workspace scoping entity.
+    """The scope that clusters, members and access policies belong to.
 
-    Partners create organizations and register clusters into them.
-    Tenants are assigned to organizations to access those clusters.
-    Admin has visibility into all organizations.
-
-    source values:
-      - 'local': created directly in Orcastra CMP
-      - 'orcahub': synced from OrcaHub via API key integration
+    Partners create organizations and register clusters into them, Tenants are assigned to them to
+    reach those clusters, and Admins see all of them. `source` is 'local' (created here) or
+    'orcahub' (synced through an API key integration).
     """
     __tablename__ = "organizations"
 
@@ -307,10 +268,9 @@ class Organization(Base):
         ),
     )
 
-    # Relationships
     members = relationship("OrganizationMember", back_populates="organization", lazy="selectin", cascade="all, delete-orphan")
     clusters = relationship("OrganizationCluster", back_populates="organization", lazy="selectin", cascade="all, delete-orphan")
-    # note: never loaded through the ORM (app.services.organization_owners reads the table with queries).
+    # Never loaded through the ORM (app.services.organization_owners reads the table with queries).
     # It exists for the delete cascade and so a new organization's first owner row follows its insert.
     owner_keys = relationship(
         "OrganizationOwnerKey", back_populates="organization", lazy="raise",
@@ -331,7 +291,8 @@ class OrganizationOwnerKey(Base):
 
     `organizations.api_key_id` is the primary owner (the key OrcaHub callbacks use) and always has a
     row here; any key with a row may sync the organization, write its members and policies and
-    provision tenant access for it. Only app.services.organization_owners writes this table.
+    provision tenant access for it. Only app.services.organization_owners and the before_flush
+    listener at the end of this module write this table.
     """
     __tablename__ = "organization_owner_keys"
 
@@ -385,7 +346,6 @@ class OrganizationMember(Base):
         nullable=False,
     )
 
-    # Relationships
     organization = relationship("Organization", back_populates="members")
 
     __table_args__ = (
@@ -421,12 +381,11 @@ class OrganizationCluster(Base):
         nullable=False,
     )
 
-    # Relationships
     organization = relationship("Organization", back_populates="clusters")
 
     __table_args__ = (
         UniqueConstraint("organization_id", "cluster_id", name="uq_org_cluster"),
-        # important: Postgres treats NULLs as distinct, so uq_org_cluster does NOT
+        # important: Postgres treats NULLs as distinct, so uq_org_cluster does not
         # guard org-less rows. This partial unique index keeps at most one unbound
         # (organization_id IS NULL) ownership row per cluster.
         Index(
@@ -444,12 +403,10 @@ class OrganizationCluster(Base):
 
 
 class OrganizationPreferences(Base):
-    """
-    Per-organization personalization (branding, logo, colors, background).
+    """An organization's own branding (logo, colors, background).
 
-    Partners manage this for their org.
-    Tenants in the org auto-inherit these settings.
-    Structure mirrors UserPreferences.settings JSONB but is org-scoped.
+    Partners manage it and the organization's Tenants inherit it. Same shape as
+    UserPreferences.settings.
     """
     __tablename__ = "organization_preferences"
 
@@ -461,9 +418,9 @@ class OrganizationPreferences(Base):
         unique=True,
         index=True,
     )
-    # The organization's own branding, validated on write (services/branding/validation.py).
-    # note: migration 045 adds CHECK settings <> '{}' in Postgres: an organization with nothing of
-    # its own has no row, and inherits. Not declared here because SQLite cannot render the cast.
+    # Validated on write (services/branding/validation.py). Migration 045 adds
+    # CHECK settings <> '{}' in Postgres, so an organization with nothing of its own has no row and
+    # inherits. Not declared here because SQLite cannot render the cast.
     settings = Column(JSONB, nullable=False)
     updated_by = Column(String(255), nullable=True)
 
@@ -479,7 +436,6 @@ class OrganizationPreferences(Base):
         nullable=False,
     )
 
-    # Relationships
     # important: passive_deletes on every backref to a NOT NULL organization_id whose foreign key
     # cascades. Without it, deleting the organization makes the ORM null the column first, the
     # database refuses, and the delete answers 409 (tests/test_an_organization_with_branding_or_
@@ -495,17 +451,11 @@ class OrganizationPreferences(Base):
 # ============================================
 
 class TenantAccessPolicy(Base):
-    """
-    Reusable access policy for tenant users.
+    """A named, reusable access policy for Tenant users.
 
-    Follows the AWS IAM / Azure RBAC pattern:
-    1. Admin/Partner creates named policies with rules.
-    2. Policies are assigned to organization members (tenants).
-    3. Tenants inherit cluster/project/instance permissions from assigned policies.
-
-    source values:
-      - 'local': created in Orcastra CMP
-      - 'orcahub': synced from OrcaHub via API integration
+    Admins and Partners create policies with rules and assign them to organization members; a
+    Tenant's cluster, project and instance permissions come from its assigned policies. `source` is
+    'local' or 'orcahub' (synced through the API integration).
     """
     __tablename__ = "tenant_access_policies"
 
@@ -541,7 +491,6 @@ class TenantAccessPolicy(Base):
     # The last phase the term sweeper audited, so each boundary is recorded once.
     term_phase_recorded = Column(String(16), nullable=True)
 
-    # Relationships
     organization = relationship("Organization", backref=backref("access_policies", passive_deletes=True))
     rules = relationship(
         "TenantPolicyRule",
@@ -567,18 +516,10 @@ class TenantAccessPolicy(Base):
 
 
 class TenantPolicyRule(Base):
-    """
-    A single access rule within a policy.
+    """One rule in a policy: the cluster, project and instance it covers and what it permits.
 
-    Defines what resources (cluster/project/instance) the policy grants access to
-    and what permissions are allowed.
-
-    Supports wildcards:
-      - project_name='*' -> all projects in the cluster
-      - instance_name='*' -> all instances in the project
-      - Both can be specific names for granular control
-
-    Permissions: ['view', 'operate', 'console', 'snapshot', 'file_transfer']
+    `project_name='*'` covers every project in the cluster and `instance_name='*'` every instance
+    in the project. Permissions: view, operate, console, snapshot, file_transfer.
     """
     __tablename__ = "tenant_policy_rules"
 
@@ -598,7 +539,6 @@ class TenantPolicyRule(Base):
         nullable=False,
     )
 
-    # Relationships
     policy = relationship("TenantAccessPolicy", back_populates="rules")
 
     __table_args__ = (
@@ -615,15 +555,10 @@ class TenantPolicyRule(Base):
 
 
 class TenantPolicyAssignment(Base):
-    """
-    Links a policy to an organization member (tenant user).
+    """Links a policy to an organization member (a Tenant user).
 
-    A tenant can have multiple policies assigned (permissions are merged/unioned).
-    Supports expiration for temporary access grants.
-
-    source values:
-      - 'local': assigned via Orcastra CMP
-      - 'orcahub': synced from OrcaHub
+    A Tenant may hold several policies; their permissions are unioned. `expires_at` makes the
+    access temporary. `source` is 'local' or 'orcahub'.
     """
     __tablename__ = "tenant_policy_assignments"
 
@@ -648,7 +583,6 @@ class TenantPolicyAssignment(Base):
     source = Column(String(50), nullable=False, default="local")
     external_id = Column(String(255), nullable=True)
 
-    # Relationships
     policy = relationship("TenantAccessPolicy", back_populates="assignments")
     member = relationship("OrganizationMember", backref="policy_assignments")
 
@@ -668,14 +602,10 @@ class TenantPolicyAssignment(Base):
 # ============================================
 
 class SessionAuditLog(Base):
-    """
-    Persistent audit log for console/terminal session events.
-    
-    Records session lifecycle events for compliance and audit:
-    - connect: User started a console/terminal session
-    - disconnect: Session ended (includes duration & bandwidth totals)
-    
-    Data is immutable once written - append-only for audit integrity.
+    """Append-only audit log of console and terminal sessions.
+
+    One row per `connect` and per `disconnect`; the disconnect row carries the duration and byte
+    totals.
     """
     __tablename__ = "session_audit_logs"
 
@@ -689,12 +619,10 @@ class SessionAuditLog(Base):
     project = Column(String(100), nullable=False, default="default")
     protocol = Column(String(50), nullable=False, comment="websocket-terminal | spice-graphics | mcp-desktop")
     
-    # User context
-    # Nullable because an agent driving a desktop through an API key has no human to name.
-    # Writing one anyway would fabricate an identity into the table a tenant reads to see who
-    # reached their instances, and a fabricated actor is indistinguishable from a real one
-    # afterwards. The protocol says what kind of session it was; the activity index carries which
-    # key it was.
+    # User context. Nullable because an agent driving a desktop through an API key has no human to
+    # name, and a made-up actor in the table a tenant reads to see who reached their instances
+    # cannot be told from a real one. The protocol says what kind of session it was; the activity
+    # index says which key.
     user_id = Column(String(200), nullable=True, index=True, comment="User ID from auth provider")
     user_email = Column(String(200), nullable=True, index=True)
     user_role = Column(String(100), nullable=False, default="unknown")
@@ -709,15 +637,13 @@ class SessionAuditLog(Base):
         Integer, ForeignKey("break_glass_grants.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
-    # Session metrics (populated on disconnect events).
-    # important: 64-bit. A console session past 2 GiB overflowed a 32-bit column, and
-    # because the disconnect row is written fire-and-forget the failure was silent -
-    # the session lost its duration and totals entirely. See migration 015.
+    # Session metrics, filled on disconnect.
+    # important: 64-bit. A console session past 2 GiB overflows a 32-bit column, and the
+    # disconnect row is written fire-and-forget, so the session would silently lose its totals.
     duration_seconds = Column(BigInteger, nullable=True, comment="Total session duration in seconds")
     download_bytes = Column(BigInteger, nullable=True, comment="Total bytes downloaded by user")
     upload_bytes = Column(BigInteger, nullable=True, comment="Total bytes uploaded by user")
     
-    # Timestamps
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
     __table_args__ = (
@@ -734,29 +660,22 @@ class SessionAuditLog(Base):
 # ============================================
 
 class BreakGlassGrant(Base):
-    """
-    Time-boxed, justified elevation that lets a platform admin access a tenant's
-    sensitive resources (console / terminal into a VM) that they otherwise cannot
-    reach without standing god-view.
+    """Time-boxed, justified elevation that lets a platform admin reach a tenant's console or
+    terminal without standing access.
 
-    Enforced at console/terminal session creation: an admin acting outside their
-    owned cluster set must hold an active grant for the target cluster. Scope is
-    per-cluster (cluster_id == the LXD host key) to keep the blast radius minimal
-    (data minimization / purpose limitation under UU PDP + GDPR).
+    Enforced at console and terminal session creation: an admin acting outside the clusters it
+    owns must hold an active grant for the target cluster. Scope is one cluster (cluster_id is the
+    LXD host key) for data minimization and purpose limitation under UU PDP and GDPR.
 
-    Authoritative "is this grant live?" check is
-    ``revoked_at IS NULL AND expires_at > now()`` - status is advisory (lazy-expired
-    on read) so a clock/cron lag never widens access.
+    A grant is live when ``revoked_at IS NULL AND expires_at > now()``. `status` is advisory
+    (expired lazily on read), so clock or cron lag never widens access.
     """
     __tablename__ = "break_glass_grants"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     # Exactly one principal per grant, enforced by ck_bgg_one_principal below.
-    #
-    # important: admin_email became nullable when API keys became grantable. A key has no human
-    # behind it, so it cannot be squeezed into an email column, and encoding one as `key:<id>`
-    # would make every existing query silently match the wrong kind of principal. Widening the
-    # column and adding the check keeps both shapes explicit.
+    # important: an API key grantee goes in api_key_id, never into admin_email as `key:<id>`;
+    # every query on admin_email would then silently match the wrong kind of principal.
     admin_email = Column(String(255), nullable=True, index=True, comment="grantee who may use it")
     api_key_id = Column(
         String(255), nullable=True, index=True,
@@ -764,12 +683,10 @@ class BreakGlassGrant(Base):
     )
     cluster_id = Column(String(255), nullable=False, index=True, comment="enforced scope == LXD host key")
     # The cluster's pinned server-certificate fingerprint when the grant was issued.
-    #
-    # important: cluster_id is a free-text Vault key with no foreign key anywhere, so a cluster
-    # that is deleted and re-registered under a different owner matches an old grant by string.
-    # For a console session that is a disclosure; for desktop control it is hands on a stranger's
-    # keyboard. Comparing the fingerprint at enforcement time is what makes the grant die with the
-    # registration it was issued against, since a re-registration cannot reproduce the key pair.
+    # important: cluster_id is a free-text Vault key with no foreign key, so a cluster deleted and
+    # re-registered under another owner matches an old grant by string. Comparing the fingerprint
+    # at enforcement ends the grant with its registration: a re-registration cannot reproduce the
+    # key pair.
     cluster_fingerprint = Column(
         String(128), nullable=True,
         comment="pinned server cert fingerprint at issue; refuses a re-registered cluster",
@@ -798,8 +715,8 @@ class BreakGlassGrant(Base):
         Index("ix_bgg_key_lookup", "api_key_id", "cluster_id", "status", "expires_at"),
         Index("ix_bgg_org", "target_organization_id"),
         Index("ix_bgg_created", "created_at"),
-        # A grant with neither principal authorizes nobody and would be dead data; one with both
-        # would be ambiguous about who it covers, and the enforcement query would match on either.
+        # With no principal a grant is dead data; with both, the enforcement query would match on
+        # either.
         CheckConstraint(
             "(admin_email IS NOT NULL AND api_key_id IS NULL) "
             "OR (admin_email IS NULL AND api_key_id IS NOT NULL)",
@@ -815,24 +732,20 @@ class BreakGlassGrant(Base):
 class DesktopControlPolicy(Base):
     """Whether an organization permits an AI agent to see and drive its guests' desktops.
 
-    A capability on a key says what the INTEGRATION may attempt. This says whether the
-    organization that owns the cluster consents to it at all, and the two are different consents
-    given by different people: a partner issues the key, the organization owns the screen. Screen
-    contents leave the deployment for a third-party model, which is a disclosure to a
-    sub-processor rather than an ordinary API call, so it is not something an integrator can
-    decide alone.
+    A key capability says what the integration may attempt; this row says whether the organization
+    that owns the cluster consents at all. A partner issues the key, but the organization owns the
+    screen, and screen contents leave the deployment for a third-party model (a disclosure to a
+    sub-processor), so an integrator cannot decide it alone.
 
-    important: its own table, NOT a field in OrganizationPreferences.settings. That column is a
-    personalization JSONB blob written by the branding editor, and this repository has already
-    shipped bugs where one code path overwrote another's keys in it. A security consent silently
-    cleared by somebody saving a logo is a defect class this project has paid for once already.
+    important: keep this in its own table, never in OrganizationPreferences.settings. That JSONB
+    blob is written by the branding editor, where one code path can overwrite another's keys and
+    a saved logo could silently clear a security consent.
     """
     __tablename__ = "desktop_control_policy"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    # A real foreign key with a cascade, unlike cluster_id elsewhere in this file: an organization
-    # that is deleted takes its consent with it rather than leaving a row that a later
-    # organization reusing the id would inherit.
+    # A real foreign key with a cascade: a deleted organization takes its consent with it, so a
+    # later organization reusing the id cannot inherit it.
     organization_id = Column(
         Integer,
         ForeignKey("organizations.id", ondelete="CASCADE"),
@@ -840,17 +753,15 @@ class DesktopControlPolicy(Base):
         unique=True,
         index=True,
     )
-    # Default off. Consent is given, never assumed, and an absent row means the same as false so
-    # an organization that has never been asked is not treated as having agreed.
+    # Off by default, and an absent row also means false: an organization never asked has not
+    # agreed.
     enabled = Column(Boolean, nullable=False, default=False, server_default="false")
-    # Whether input may be injected, as opposed to only capturing the screen. Separate because
-    # watching and touching are different consents: a support desk that may look at a stuck screen
-    # has not thereby been allowed to type into it.
+    # Whether input may be injected, beyond capturing the screen. Consent to view a screen is not
+    # consent to type into it.
     allow_input = Column(Boolean, nullable=False, default=False, server_default="false")
-    # Separate switches, because they are separate disclosures. The clipboard used to ride on
-    # view consent while the code calls it the highest-yield exfiltration primitive here, and
-    # guest access rode on it too, so enabling screenshots silently authorized an add-on to take
-    # root inside a container. Both default to refusing, so nothing is granted by this migration.
+    # Separate consents, both off by default, and neither follows from view consent: the clipboard
+    # is the highest-yield exfiltration path here, and guest access lets an add-on act as root
+    # inside a container.
     allow_clipboard = Column(Boolean, nullable=False, server_default="false")
     allow_guest_access = Column(Boolean, nullable=False, server_default="false")
 
@@ -879,15 +790,10 @@ class DesktopControlPolicy(Base):
 # ============================================
 
 class MetricsSnapshot(Base):
-    """
-    Persistent time-series storage for resource metrics.
+    """Time-series resource metrics, one row per collection cycle (about 30 s).
 
-    One row per collection cycle (~30 s). The background MetricsCollector
-    inserts snapshots continuously so historical charts survive backend
-    restarts and have no gaps when users are not viewing the dashboard.
-
-    Retention is managed by a periodic cleanup job (default 7 days).
-    Per-node breakdown is stored as JSONB for flexible schema evolution.
+    The background MetricsCollector writes continuously, so historical charts survive restarts and
+    have no gaps while the dashboard is closed. A periodic cleanup job keeps 7 days by default.
     """
     __tablename__ = "metrics_snapshots"
 
@@ -949,7 +855,7 @@ class MetricsSnapshot(Base):
 class ImageUploadSession(Base):
     """Resumable upload + LXD import session for an OrcaHub partner custom image.
 
-    Source of truth across the 4 uvicorn workers and restarts. Bytes stage on a host-mounted dir
+    Source of truth across uvicorn workers and restarts. Bytes stage on a host-mounted dir
     (staging_path); the row tracks the resumable offset and the import result. Status flow:
     pending -> uploading -> uploaded -> importing -> ready | failed.
     """
@@ -985,9 +891,8 @@ class ImageUploadSession(Base):
 class IsoUploadSession(Base):
     """Resumable upload + LXD import session for an OrcaHub partner custom ISO.
 
-    Mirrors ImageUploadSession, but the file is imported as an LXD custom storage volume of
-    content-type 'iso' into a chosen pool (not the image store). Identity is (pool, volume_name)
-    rather than an image fingerprint/alias. Status flow:
+    Like ImageUploadSession, but the file becomes an LXD custom storage volume of content type
+    'iso' in a chosen pool, identified by (pool, volume_name). Status flow:
     pending -> uploading -> uploaded -> importing -> ready | failed.
     """
     __tablename__ = "iso_upload_sessions"
@@ -1023,13 +928,11 @@ class IsoUploadSession(Base):
 # ============================================
 
 class RebuildJob(Base):
-    """A record of an instance 'rebuild' (LXD `POST /1.0/instances/{name}/rebuild`).
+    """A dashboard-initiated instance rebuild (LXD `POST /1.0/instances/{name}/rebuild`).
 
-    Rebuild reinstalls the root disk from a fresh source while preserving the
-    instance's identity, config, and attached custom volumes. This table is the
-    durable, pollable record of one such job (dashboard-initiated), capturing what
-    was requested, a snapshot of the pre-rebuild config, and its progress so the
-    UI can show status/history. Status flow:
+    Rebuild reinstalls the root disk from a fresh source and keeps the instance's identity,
+    config and attached custom volumes. The row holds the request, the pre-rebuild config and
+    the progress the UI polls. Status flow:
     pending -> stopping -> rebuilding -> starting -> provisioning -> ready | failed.
     """
     __tablename__ = "rebuild_jobs"
@@ -1068,10 +971,10 @@ class RebuildJob(Base):
 class InstanceOperationJob(Base):
     """Durable orchestration record for an instance create or specification change.
 
-    The row deliberately stores only the small, typed resource projection needed to resume and
-    verify an operation. Raw instance configuration and cloud-init never belong here. A worker
-    may disappear after stopping a guest or submitting an LXD operation; the phase, lease and
-    readback fields let another worker reconcile actual daemon state before doing anything else.
+    important: store only the small, typed resource projection needed to resume and verify an
+    operation; raw instance configuration and cloud-init never belong here. A worker may disappear
+    after stopping a guest or submitting an LXD operation, so the phase, lease and readback fields
+    let another worker reconcile the daemon's state before doing anything else.
     """
 
     __tablename__ = "instance_operation_jobs"
@@ -1207,12 +1110,10 @@ class InstanceOperationAuditOutbox(Base):
 def _keep_the_primary_in_the_owner_set(session: Session, _flush_context: object, _instances: object) -> None:
     """Whenever an organization's primary owner key is set, make sure that key has an owner row.
 
-    The primary is always in the owner set (enforced in PostgreSQL by a deferred foreign key, see
-    migration 015a), so the paths that claim or move an organization keep writing api_key_id and this
-    writes the matching row in the same flush. It never removes a row: taking a key out of the set is
-    an explicit decision in app.services.organization_owners.
-
-    `_owner_added_via` and `_owner_added_by` on the organization, set by organization_owners before
+    The primary is always in the owner set (a deferred foreign key in PostgreSQL), so the paths that
+    claim or move an organization write only api_key_id and this adds the matching row in the same
+    flush. It never removes a row; that is an explicit step in app.services.organization_owners.
+    `_owner_added_via` and `_owner_added_by`, set on the organization by organization_owners before
     the flush, record how the key came in; a plain claim path leaves them unset.
     """
     for obj in list(session.new) + list(session.dirty):
@@ -1224,7 +1125,7 @@ def _keep_the_primary_in_the_owner_set(session: Session, _flush_context: object,
         if any(
             isinstance(row, OrganizationOwnerKey)
             and row.api_key_id == obj.api_key_id
-            # note: __dict__, never the attribute, which could lazy-load inside the flush
+            # __dict__, never the attribute, which could lazy-load inside the flush
             and (row.__dict__.get("organization") is obj or (obj.id is not None and row.organization_id == obj.id))
             for row in session.new
         ):

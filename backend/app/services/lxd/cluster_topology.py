@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 def is_clustered(client) -> bool:
     """True when the LXD host is a multi-member cluster.
 
-    Unknown or unsupported reads as standalone, which is the previous behaviour.
+    Unknown or unsupported reads as standalone.
     """
     try:
         meta = client.api.cluster.get().json().get("metadata", {}) or {}

@@ -86,7 +86,6 @@ router = APIRouter(
     dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
 )
 
-# Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
 _PROFILE_MAX_IN_FLIGHT = 5
 _PROFILE_MAX_IN_FLIGHT_PER_CLUSTER = 1
@@ -106,7 +105,7 @@ DEFAULT_PROFILE_DETAIL = "The default profile cannot be deleted. LXD keeps one i
 
 
 class ProfileInfo(BaseModel):
-    """Profile information."""
+    """An LXD profile on one cluster."""
     name: str = Field(..., description="Profile name")
     description: str = Field("", description="Profile description")
     config: Dict[str, str] = Field(default_factory=dict, description="Profile configuration")
@@ -273,8 +272,8 @@ async def _run_profile_blocking(
             **kwargs,
         )
     except (BlockingTimeout, asyncio.CancelledError):
-        # important: timeout/cancellation cannot stop the worker thread. The caller holds the
-        # cluster-configuration lock, so retain it until this admitted worker can no longer
+        # important: a timeout or cancellation cannot stop the worker thread. The caller holds
+        # the cluster-configuration lock, so retain it until this admitted worker can no longer
         # submit a write under the policy decision that preceded it.
         while in_flight_for_key(_executor, host):
             try:
@@ -320,7 +319,7 @@ def _refusal(exc: Exception, profile_name: str) -> HTTPException:
         )
     if status in (400, 404, 409):
         return HTTPException(status_code=status, detail=text)
-    # a 200 with an err body is a failed operation (utils.wait_for_lxd_operation raises it)
+    # A 200 with an err body is a failed operation (utils.wait_for_lxd_operation raises it).
     return HTTPException(status_code=400, detail=f"The cluster refused the change: {text}")
 
 
@@ -352,10 +351,10 @@ class ProfileListResponse(BaseModel):
 def _fetch_profiles_for_node(
     lxd_service: LXDService, node_name: str, project: Optional[str] = None
 ) -> tuple[List[ProfileInfo], bool]:
-    """Fetch profiles for a single node - runs in thread pool.
+    """One cluster's profiles. Runs in the thread pool.
 
     Returns (profiles, complete). With no project asked for, this reads every project on the
-    node; naming one reads the project that actually holds its profiles, which is the project
+    node; naming one reads the project that holds its profiles, which is the project
     itself only when it sets features.profiles.
     """
     profiles_list: List[ProfileInfo] = []
@@ -363,8 +362,8 @@ def _fetch_profiles_for_node(
     try:
         client = lxd_service.get_client_with_reconnect(node_name)
         if client is None:
-            # important: unreachable is not empty. Returning a bare list here
-            # made a dead node indistinguishable from one with nothing.
+            # important: unreachable is not empty. Raise so the caller names the node; a bare
+            # list would read as a node with no profiles.
             raise LXDConnectionError(f"Could not connect to {node_name}")
         if project:
             owner = effective_project("profiles", project, list_project_configs(client))
@@ -382,11 +381,11 @@ def _fetch_profiles_for_node(
                 project=row.get("project") or DEFAULT_PROJECT,
             ))
     except LXDConnectionError:
-        # a missing client IS unreachability: let it through
+        # A missing client is unreachability: let it through.
         raise
     except Exception as e:
-        # important: not unreachability. See networks.py: an item
-        # vanishing mid-listing must not condemn the whole node.
+        # important: anything else is not unreachability. An item vanishing mid-listing
+        # must not mark the whole node unreachable (see networks.py).
         logger.warning(f"Error listing profiles on {node_name}: {e}")
         complete = False
     return profiles_list, complete
@@ -414,7 +413,7 @@ async def list_profiles(
     """List all profiles."""
     if host:
         verify_cluster_access(host)
-    # Try cache first (60 second cache)
+    # Try the cache first.
     cache = get_cache_manager()
     # important: the project belongs in the key. get_scope_cache_key mixes in the cluster
     # scope and the ACL digest but not the query, so without it a project-scoped read and a
@@ -442,11 +441,10 @@ async def list_profiles(
         
         # Flatten results
         all_profiles = []
-        # important: two different things make a node absent, and both must be named.
-        # A node can fail during the fan-out, or never be asked at all, because
-        # connection_manager.get_node_names() returns only nodes with a live client while
-        # the fleet is whatever Vault has registered. Reporting only the first kind left a
-        # dead cluster silently missing rather than merely empty.
+        # important: two things make a node absent, and both must be named. A node can fail
+        # during the fan-out, or never be asked at all, because
+        # connection_manager.get_node_names() returns only nodes with a live client while the
+        # fleet is whatever Vault has registered. Naming only the first hides a dead cluster.
         unreachable_nodes: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
@@ -463,29 +461,28 @@ async def list_profiles(
                 logger.warning(f"Error fetching profiles: {result}")
                 unreachable_nodes.append(node_name)
 
-        # important: a Partner is scoped by cluster, not by project, and the used_by filter
-        # below never runs for them. On a cluster shared with another organization this is the
-        # only thing standing between them and that organization's profile devices.
+        # important: a Partner is scoped by cluster rather than project, and the tenant filter
+        # below does not run for it. On a cluster shared with another organization this is the
+        # only filter keeping that organization's profile devices out of the Partner's list.
         all_profiles = [
             p for p in all_profiles if project_is_visible(p.node, p.project)
         ]
-        # the rows' used_by is held to the same bound as the single read: on a shared cluster
+        # The rows' used_by is held to the same bound as the single read: on a shared cluster
         # the other organization's projects inherit `default` profiles too, and the row feeds
-        # the delete confirm and the "in use by N" reason on the page
+        # the delete confirmation and the "in use by N" reason on the page.
         for p in all_profiles:
             p.used_by = filter_visible_lxd_references(p.node, p.used_by)
 
         if tenant_acl_active():
             visible_profiles = []
             for profile in all_profiles:
-                # ownership as well as usage: see tenant_may_see_project
+                # Ownership as well as usage: see tenant_may_see_project.
                 if not tenant_may_see_project(profile.node, profile.project):
                     continue
                 if profile.used_by:
                     visible_profiles.append(profile)
             all_profiles = visible_profiles
         
-        # Store in variable first
         response = ProfileListResponse(
             total=len(all_profiles),
             profiles=all_profiles,
@@ -495,7 +492,8 @@ async def list_profiles(
             node_errors=complete_reasons(unreachable_nodes, {}, partial=partial_nodes),
         )
         
-        # important: an outage must not be remembered as the answer. See instances.py.
+        # important: cache only when a node answered, so an outage is never remembered as the
+        # answer.
         if answered:
             if get_resource_list_generation(cache, "profiles") == list_generation:
                 cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
@@ -550,10 +548,9 @@ async def get_profile(
             http_response.headers["ETag"] = etag
         return profile_for_tier(_detail_of(profile_name, data, host, owner, etag), caller_tier())
     except HTTPException:
-        # important: let a deliberate status through. This try raises HTTPException
-        # itself, and the broad handler below rewrote it, so an unreachable cluster
-        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
-        # instead of 403.
+        # important: let an HTTPException through unchanged. This try raises its own, and the
+        # broad handler below would turn a 503 (unreachable cluster) or a 403 (tenant ACL
+        # denial) into a 500 or 404.
         raise
     except Exception as e:
         logger.error(f"Error getting profile {profile_name}: {e}")
@@ -623,7 +620,6 @@ async def create_profile(
                 timeout=_PROFILE_WRITE_WALL_SECONDS,
             )
         
-        # Log activity: profile creation success
         activity_logger.log_activity(
             action="profile.create",
             target_type="profile",
@@ -642,10 +638,9 @@ async def create_profile(
             "profile": _detail_of(request.name, created, host, owner, etag),
         }
     except HTTPException:
-        # important: let a deliberate status through. This try raises HTTPException
-        # itself, and the broad handler below rewrote it, so an unreachable cluster
-        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
-        # instead of 403.
+        # important: let an HTTPException through unchanged. This try raises its own, and the
+        # broad handler below would turn a 503 (unreachable cluster) or a 403 (tenant ACL
+        # denial) into a 500 or 404.
         raise
     except InstanceSecurityPolicyViolation as exc:
         raise _policy_refusal(exc) from exc
@@ -653,7 +648,6 @@ async def create_profile(
         raise _profile_blocking_refusal(exc) from exc
     except Exception as e:
         logger.error(f"Error creating profile: {e}")
-        # Log activity: profile creation failure
         activity_logger.log_activity(
             action="profile.create",
             target_type="profile",
@@ -778,7 +772,6 @@ async def update_profile(
                 timeout=_PROFILE_WRITE_WALL_SECONDS,
             )
         
-        # Log activity: profile update success
         activity_logger.log_activity(
             action="profile.update",
             target_type="profile",
@@ -797,10 +790,9 @@ async def update_profile(
             "profile": _detail_of(profile_name, written, host, owner, etag),
         }
     except HTTPException:
-        # important: let a deliberate status through. This try raises HTTPException
-        # itself, and the broad handler below rewrote it, so an unreachable cluster
-        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
-        # instead of 403.
+        # important: let an HTTPException through unchanged. This try raises its own, and the
+        # broad handler below would turn a 503 (unreachable cluster) or a 403 (tenant ACL
+        # denial) into a 500 or 404.
         raise
     except InstanceSecurityPolicyViolation as exc:
         raise _policy_refusal(exc) from exc
@@ -808,7 +800,6 @@ async def update_profile(
         raise _profile_blocking_refusal(exc) from exc
     except Exception as e:
         logger.error(f"Error updating profile {profile_name}: {e}")
-        # Log activity: profile update failure
         activity_logger.log_activity(
             action="profile.update",
             target_type="profile",
@@ -892,7 +883,6 @@ async def delete_profile(
                 timeout=_PROFILE_WRITE_WALL_SECONDS,
             )
         
-        # Log activity: profile deletion success
         activity_logger.log_activity(
             action="profile.delete",
             target_type="profile",
@@ -909,14 +899,12 @@ async def delete_profile(
             "message": f"Profile {profile_name} deleted successfully"
         }
     except HTTPException:
-        # important: let a deliberate status through. This try raises HTTPException
-        # itself, and the broad handler below rewrote it, so an unreachable cluster
-        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
-        # instead of 403.
+        # important: let an HTTPException through unchanged. This try raises its own, and the
+        # broad handler below would turn a 503 (unreachable cluster) or a 403 (tenant ACL
+        # denial) into a 500 or 404.
         raise
     except Exception as e:
         logger.error(f"Error deleting profile {profile_name}: {e}")
-        # Log activity: profile deletion failure
         activity_logger.log_activity(
             action="profile.delete",
             target_type="profile",
@@ -939,7 +927,7 @@ def _write_failure(exc: Exception, profile_name: str, host: str) -> HTTPExceptio
     if isinstance(exc, LXDAPIException):
         return _refusal(exc, profile_name)
     if isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)):
-        # see instances.py: with Retry mounted a read timeout surfaces as ConnectionError
+        # With Retry mounted a read timeout surfaces as ConnectionError (see instances.py).
         return HTTPException(
             status_code=504,
             detail=(

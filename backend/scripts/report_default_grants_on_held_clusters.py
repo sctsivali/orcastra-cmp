@@ -1,23 +1,18 @@
 """Read only: what the view-only `default` rule refuses for keys, schedules and tenant rules.
 
-Deployment data, not schema. The backend image does not ship ``scripts/``, so feed the file to the
-running backend's interpreter:
+The backend image does not ship ``scripts/``, so feed the file to the running backend's interpreter:
 
     docker exec -i <backend> python - < backend/scripts/report_default_grants_on_held_clusters.py
     docker exec -i <backend> python - --no-idp < backend/scripts/report_default_grants_on_held_clusters.py
 
-`default` on a cluster another party also holds is view only for a Partner, and since the RC5
-follow-up round for a key or a snapshot schedule a Partner created (services/key_default_view_only.py,
-schedule_authority.default_view_only_refusal). This lists the live keys and active schedules that
-hold `default` (or `*`) on such a cluster, with the creator, the creator's role and the verdict:
-refused, admin-exempt, or unknown when Authentik did not answer or --no-idp was given. It also
-lists the tenant rules naming `default` or `*` on a cluster several organizations hold, which a
-Partner can no longer write; existing ones are left in place and reported here.
-
-It also lists the grants a key's creator's bound narrows (services/key_party_bound.py): a `*`
-grant becomes the creator's own projects, and a named project another party holds is dropped.
-
-Nothing is written. Key ids are printed truncated.
+`default` on a cluster another party also holds is view only for a Partner and for the keys and
+schedules a Partner created (services/key_default_view_only.py, snapshots/schedule_authority.py).
+This lists the live keys and active schedules holding `default` (or `*`) on such a cluster, with
+the creator, the creator's role and the verdict: refused, admin-exempt, or unknown (no Authentik
+answer, or --no-idp). It also lists the tenant rules naming `default` or `*` on a cluster several
+organizations hold, which a Partner cannot write and which are left in place, and the grants a
+creator's bound narrows (services/key_party_bound.py): `*` becomes the creator's own projects and a
+named project another party holds is dropped. Nothing is written; key ids are printed truncated.
 """
 
 from __future__ import annotations

@@ -1,20 +1,14 @@
 """Which daemon builds may take part in a migration.
 
-LXD builds are admitted by a minimum patched version per release series. GHSA-5g5r-wh97-qcq2
-(cross-project instance move ignored target project restrictions) is fixed in 5.0.8, 5.21.6 and
-6.10, so anything older in those series is refused. Feature releases outside the LTS lines
-(5.1 to 5.20) are refused because they never received the fix. A series newer than this policy
-knows about is refused too, until an operator reviews it and lists its token in
-MIGRATION_BUILD_ALLOW.
+The minimum builds live in core/engine_baseline.py ("migration"). LXD needs the patched build of
+its release series for GHSA-5g5r-wh97-qcq2 (cross-project instance move ignored target project
+restrictions); feature releases 5.1 to 5.20 never received the fix and are refused. Incus needs
+the baseline for its advisories on migration websocket secrets exposed to event listeners and path
+traversal through dependent volumes. A series newer than the policy knows is refused until an
+operator reviews it and lists its token in MIGRATION_BUILD_ALLOW.
 
-Incus builds are admitted by the patched baseline of the 2026-10-29 advisory batch (migration
-websocket secrets exposed to event listeners, path traversal through dependent volumes): 7.6.0 on
-the feature track, 7.0.3 and 6.0.8 on the LTS lines. A series newer than 7 is refused until
-reviewed, as for LXD. Both tables live in core/engine_baseline.py ("migration").
-
-Any other engine is admitted only when an operator lists its exact token in MIGRATION_BUILD_ALLOW.
-A token in MIGRATION_BUILD_DENY always wins. MIGRATION_APPROVED_BUILDS is read as an alias of the
-allow list.
+Any other engine needs its exact token in MIGRATION_BUILD_ALLOW (alias MIGRATION_APPROVED_BUILDS).
+A token in MIGRATION_BUILD_DENY always wins.
 """
 
 from __future__ import annotations

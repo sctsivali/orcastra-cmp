@@ -1,11 +1,11 @@
-"""What the signed-in caller may do here, for the dashboard's access notice (issue #17).
+"""What the signed-in caller may do here, for the dashboard's access notice.
 
-A user Authentik signs in but Orcastra has not assigned anything used to land on an empty
-dashboard that read as a broken deployment. The frontend asks this before rendering the shell and
-shows a notice instead when the answer is a known denial.
+A user Authentik signs in but Orcastra has not assigned anything would otherwise land on an
+empty dashboard that reads as a broken deployment. The frontend asks this before rendering the
+shell and shows a notice instead when the answer is a known denial.
 
-important: mounted without a require_* dependency on purpose. Every other session route refuses a
-caller with no role (rbac.refuse_unmapped), and this is the one place that caller can learn why.
+important: mounted without a require_* dependency. Every other session route refuses a caller
+with no role (rbac.refuse_unmapped), and this is the one place that caller can learn why.
 It answers about the caller only and reads nothing the caller could not already see.
 """
 
@@ -45,8 +45,8 @@ class TermItem(BaseModel):
 class TenantAccessSummary(BaseModel):
     total_clusters: int
     total_rules: int
-    # The paid term behind the caller's own grants (core/tenant_term.py); optional so a client
-    # that predates it reads the verdict unchanged.
+    # The paid term behind the caller's own grants (core/tenant_term.py); optional, so an older
+    # client reads the verdict unchanged.
     phase: Literal["active", "ending", "read_only", "ended"] = "active"
     items: List[TermItem] = []
     ended_at: Optional[datetime] = None
@@ -66,7 +66,7 @@ async def get_my_access_verdict(
     user: Optional[AuthenticatedUser] = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> MyAccessVerdict:
-    # note: a role can be granted or a policy expire at any moment, so nothing here is cached.
+    # A role can be granted or a policy expire at any moment, so nothing here is cached.
     response.headers["Cache-Control"] = "no-store"
     if user is None:
         # Auth disabled: every RBAC dependency treats the caller as an Administrator.
@@ -83,7 +83,7 @@ async def get_my_access_verdict(
         return MyAccessVerdict(email=user.email, role=highest.value, has_role=True, blocked_reason=None)
 
     # important: the same three steps org_scope_dependency takes for every scoped route, so this
-    # verdict and what the Tenant can actually reach cannot disagree.
+    # verdict cannot disagree with what the Tenant can reach.
     allowed = await org_scope.get_user_allowed_clusters(user, db)
     acl, grants, _visible_projects = await org_scope.get_tenant_scope(user, db)
     scope = org_scope._narrow_by_tenant_acl(allowed, acl)

@@ -1,8 +1,7 @@
 """Installing an add-on into one organization, and everything that follows from it.
 
-The consent preview is computed here, on the server, and echoed back to the browser. That is
-deliberate: a browser-computed intersection that disagrees with the server is a lie told to an
-operator at the exact moment they are being asked to approve something.
+The consent preview is computed on the server and echoed back to the browser, so the
+intersection an operator approves is the one the server applies.
 """
 
 import logging
@@ -71,10 +70,8 @@ def to_response(
 ) -> InstallResponse:
     """What an installation is, as its operator should see it.
 
-    important: `extension_version` is the version THIS installation consented to, not whatever the
-    add-on has published since. Reporting the current one made an install that agreed to 1.0.0
-    display 2.0.0, which is the opposite of what a consent record is for. The newer version is
-    reported separately as something available, so the difference is visible rather than hidden.
+    `extension_version` is the version this installation consented to, not the add-on's latest.
+    A newer published version is reported separately as `available_version`.
     """
     consented = install.consent_version or extension.version
     return InstallResponse(
@@ -99,9 +96,9 @@ def to_response(
         suspended_at=install.suspended_at,
         suspended_by=install.suspended_by,
         suspend_reason=install.suspend_reason,
-        # An operator asking "is this add-on working" needs a signal, and the only honest one we
-        # hold is when its credential last authenticated. Absent when the key could not be read,
-        # which is itself worth showing rather than rendering as "never used".
+        # When the credential last authenticated, the one signal of whether the add-on works.
+        # Absent when the key could not be read (`credential_readable`), so an unreadable key is
+        # not shown as "never used".
         credential_last_used_at=(credential or {}).get("last_used_at"),
         credential_expires_at=(credential or {}).get("expires_at"),
         credential_readable=credential is not None,
@@ -117,9 +114,8 @@ async def build_install_preview(
 ) -> Dict[str, Any]:
     """What the operator is being asked to approve, with the intersection already applied.
 
-    The `granted` column of the consent screen is this, not something the browser worked out.
-    Rows the add-on asked for and will not get are returned explicitly so the screen can say so
-    rather than quietly showing a shorter list.
+    The consent screen's `granted` column comes from here. Bound clusters outside the caller's
+    reach are returned as `refused_cluster_ids` so the screen can list them.
     """
     organization = await _organization(db, organization_id)
     allowed = get_current_allowed_clusters()
@@ -153,10 +149,8 @@ async def build_install_preview(
 async def _clusters_bound_to(db: AsyncSession, organization_id: int) -> List[str]:
     """The cluster ids this organization is bound to.
 
-    note: ids only. `OrganizationCluster` carries no display name; the cluster id IS the Vault
-    key and the name a cluster is known by everywhere else in this codebase. An earlier version
-    of this selected a `cluster_name` column that does not exist, which is a 500 no unit test
-    could see because they fake the session.
+    Ids only: `OrganizationCluster` has no display-name column, and the cluster id is the Vault
+    key and the name a cluster goes by everywhere else.
     """
     from app.models.db_models import OrganizationCluster
 
@@ -192,9 +186,9 @@ async def install_extension(
             status_code=409, detail=f"This add-on is {extension.status} and cannot be installed"
         )
 
-    # important: the digest the operator was shown, recomputed from what is stored now. Without
-    # this the attack is publish something benign, wait for the consent screen to render, change
-    # the manifest to ask for more, and let the install request land against the new one.
+    # important: compare the digest the operator was shown with one recomputed from what is stored
+    # now. Otherwise a publisher could widen the manifest after the consent screen rendered and the
+    # install would land against the new one.
     if not extension_service.manifest_matches(extension, consent_digest):
         raise HTTPException(
             status_code=409,
@@ -233,8 +227,8 @@ async def install_extension(
         )
     )
     if (already := existing.scalar_one_or_none()) is not None:
-        # Deliberately not an upsert. Re-issuing silently would be an unrequested credential
-        # rotation, and the add-on holding the old one would stop working with no explanation.
+        # Not an upsert: re-issuing would be an unrequested credential rotation, and the add-on
+        # holding the old key would stop working with no explanation.
         raise HTTPException(
             status_code=409,
             detail=f"Already installed in this organization (installation {already.id})",
@@ -278,8 +272,8 @@ async def install_extension(
         api_key_id=f"pending-{extension.slug}-{organization_id}",
         consent_version=consent_version,
         consent_manifest_digest=consent_digest,
-        # The document, not only its hash. A later version replaces the manifest on the extension
-        # row, so this is the only surviving record of what this organization actually approved.
+        # The full document as well as its hash. A later version replaces the manifest on the
+        # extension row, so this is the only record of what this organization approved.
         consented_manifest=dict(extension.manifest or {}),
         installed_by=getattr(user, "email", "unknown"),
     )
@@ -326,7 +320,7 @@ async def rescope_install(
     consent_digest: str,
     capabilities: Sequence[str],
     grants: Sequence[Any],
-    # note: filled with what the credential write changed, for the caller's audit record
+    # Filled with what the credential write changed, for the caller's audit record.
     audit_fields: Optional[Dict[str, Any]] = None,
 ) -> ExtensionInstallation:
     """Declarative: the request states the whole grant, so a repeat converges."""
@@ -354,9 +348,9 @@ async def rescope_install(
     grant_dicts = await cluster_generations.stamped(
         [g.model_dump() if hasattr(g, "model_dump") else dict(g) for g in grants]
     )
-    # important: decided and written on the locked row, under the lock of every credential it rewrites
-    # (lock_installation). From a copy read before a rotation, this rewrote the retired key and the new
-    # one kept the old scope, which the sweep never notices because it compares the row with itself.
+    # important: decide and write on the locked row, under the lock of every credential it rewrites
+    # (lock_installation). A copy read before a concurrent rotation would rewrite the retired key and
+    # leave the new one on the old scope, which the sweep cannot detect: it compares the row with itself.
     install = await lock_installation(db, install)
     keys = live_credentials(install)
     async with AsyncExitStack() as held:
@@ -366,8 +360,8 @@ async def rescope_install(
         install.granted_scope = grant_dicts
         install.consent_version = consent_version
         install.consent_manifest_digest = consent_digest
-        # Rescoping is a fresh consent, so the snapshot moves with it. Leaving the old one would make
-        # the record claim agreement to a document this operator never saw.
+        # A rescope is a fresh consent, so the consented snapshot becomes the manifest this operator
+        # was shown.
         install.consented_manifest = dict(extension.manifest or {})
         install.last_scope_change_at = now_utc()
 
@@ -392,9 +386,9 @@ def _rewrite_key_grant(vault_client, install: ExtensionInstallation) -> Dict[str
     """Write the row's grant onto every credential that still authenticates. Returns the current key's
     capability change for the caller's audit record.
 
-    note: the caller holds the installation row and the keys' locks (lock_installation,
+    The caller holds the installation row and the keys' locks (lock_installation,
     serialize_key_ownership), so each key is read uncached and written whole without overwriting a
-    revoke or another edit; only `capabilities` and `cluster_permissions` change, so `is_revoked` and
+    revoke or another edit. Only `capabilities` and `cluster_permissions` change, so `is_revoked` and
     an expiry a rotation shortened survive.
     """
     from app.routers.integrations import (
@@ -410,19 +404,17 @@ def _rewrite_key_grant(vault_client, install: ExtensionInstallation) -> Dict[str
             "Nothing was altered. Try again once it is reachable."
         ),
     )
-    # important: this must fail the whole rescope rather than be skipped. The request path reads
-    # capabilities and clusters from the Vault key, not from the row, so swallowing a Vault error
-    # here committed the narrower grant to the database while the credential kept the wider one.
-    # A narrowing is a security control, and it reported success while doing nothing: the operator
-    # saw the reduced scope and the add-on kept the old reach. Raising leaves the row uncommitted,
-    # since the caller commits immediately after this returns.
+    # important: a Vault failure must fail the whole rescope. The request path reads capabilities
+    # and clusters from the Vault key, not from the row, so skipping the key would commit a narrower
+    # grant to the database while the credential keeps the wider one. Raising leaves the row
+    # uncommitted, since the caller commits right after this returns.
     documents: List[Tuple[str, Dict[str, Any]]] = []
     for key_id in live_credentials(install):
         try:
             metadata, _ = get_api_key_from_vault(vault_client, key_id, use_cache=False)
         except Exception as exc:
             if key_id != install.api_key_id:
-                # note: the previous key may already have been deleted; the current one carries the grant
+                # The previous key may already be deleted; the current one carries the grant.
                 logger.warning("Could not read the previous credential %s to rewrite its grant: %s", key_id, exc)
                 continue
             logger.warning("Could not read %s to rewrite its grant: %s", key_id, exc)
@@ -431,8 +423,8 @@ def _rewrite_key_grant(vault_client, install: ExtensionInstallation) -> Dict[str
 
     change: Dict[str, Any] = {}
     for key_id, metadata in documents:
-        # important: the key's own set before the write, not the row's. A key edited through the
-        # integration capabilities route differs from its row, and this rewrite then withdraws that.
+        # The audit diff starts from the key's own set, not the row's: a key edited through the
+        # integration capabilities route can differ from its row, and this rewrite withdraws that.
         previous = dict(metadata)
         metadata["capabilities"] = list(install.granted_capabilities or [])
         metadata["cluster_permissions"] = list(install.granted_scope or [])
@@ -468,10 +460,9 @@ async def set_install_status(
         install.suspended_by = None
         install.suspend_reason = None
 
-    # important: enqueued BEFORE the commit, so the event and the status move together. An add-on
-    # is never told it was suspended by a suspension that then rolled back, and a suspension never
-    # lands silently. Both catalogued events are sourced here because this is the one function
-    # that changes an installation's status.
+    # important: enqueue before the commit, so the event and the status commit together. An add-on
+    # is never told of a suspension that rolled back, and no suspension lands silently. This is the
+    # one function that changes an installation's status, so both events are emitted here.
     from app.services.webhooks.emitter import emit_installation_event
 
     await emit_installation_event(
@@ -484,8 +475,8 @@ async def set_install_status(
     )
     await db.commit()
     await db.refresh(install)
-    # The row moved without the Vault key moving, so the key cache's own tombstone would not
-    # notice. This is what makes a suspension immediate on all four workers.
+    # Only the row changed, so the key cache's own tombstone does not fire. This eviction makes a
+    # suspension immediate on every worker.
     evict_install_cache(install.api_key_id)
     return install
 
@@ -505,7 +496,7 @@ async def rotate_credential(
 
     important: decided and written under every lock (the installation row, the old key, the owner sets),
     so a second rotation or an uninstall waits for this one and then sees its new key.
-    note: a sync by an add-on credential decides each organization under the key's lock too, so its first
+    A sync by an add-on credential decides each organization under the key's lock too, so its first
     claim lands before this carry (and is carried) or after it (and is refused: only an installation's
     current credential may claim, routers/integrations._upsert_synced_organizations).
     """
@@ -514,7 +505,7 @@ async def rotate_credential(
     old_key_id = install.api_key_id
     async with serialize_key_ownership(db, old_key_id):
         org_ids = await owned_org_ids_or_503(db, old_key_id)
-        # note: and their owner sets, as every other change to a set is made (organization_owners)
+        # Their owner sets are locked too, as for every other change to a set (organization_owners).
         async with serialize_org_owners(db, org_ids):
             # important: the new secret owns every organization below (inactive ones too: a sync
             # reactivates them), so only those who run the installation may take it, as only an
@@ -561,9 +552,8 @@ async def rotate_credential(
             install.api_key_id = new_key_id
             install.credential_generation += 1
             # important: the organizations the old credential owns move to the new one in the same
-            # commit as the row. Only the owner key may sync an organization, so leaving them on a
-            # credential this rotation retires would freeze them, and the add-on's next sync with its
-            # new key would be refused for every one of them.
+            # commit as the row. Only the owner key may sync an organization, so left on the retired
+            # credential they would freeze, and the add-on's next sync would be refused for each.
             carried = await carry_owned_organizations(db, from_key_id=old_key_id, to_key_id=new_key_id)
             await db.commit()
     await db.refresh(install)
@@ -580,9 +570,9 @@ async def uninstall(
     """Remove an installation and everything it created.
 
     important: refused (409 key_owns_organizations) while either of its credentials owns an active
-    OrcaHub organization. Destroying the owner key freezes those organizations, and suspending the
-    add-on stops it at once without that, so the refusal names suspension as the stop and a
-    transfer or a delete of the organizations as the way forward.
+    OrcaHub organization, since destroying the owner key freezes those organizations. The refusal
+    names suspension as the way to stop the add-on at once, and a transfer or a delete of the
+    organizations as the way forward.
     """
     from app.routers.integrations import _owner_metadata_reader
     from app.services.integration_key_ownership import (
@@ -591,13 +581,13 @@ async def uninstall(
         record_owner_handoffs,
     )
 
-    # note: the keys come from the locked row, so a rotation that committed first is seen (lock_installation)
+    # The keys come from the locked row, so a rotation that committed first is seen (lock_installation).
     install = await lock_installation(db, install)
     keys = sorted(filter(None, {install.api_key_id, install.previous_api_key_id}))
     handed_off: Dict[str, List[Any]] = {}
     async with AsyncExitStack() as held:
-        # note: sorted, so two requests that lock the same pair always take them in one order; the
-        # organization locks after every key lock (organization_owners)
+        # important: sorted, so two requests that lock the same pair always take them in one order;
+        # the organization locks come after every key lock (organization_owners).
         for key_id in keys:
             await held.enter_async_context(serialize_key_ownership(db, key_id))
         org_ids = sorted({org_id for key_id in keys for org_id in await owned_org_ids_to_lock(db, key_id)})
@@ -646,12 +636,12 @@ async def update_settings(
 async def get_install_or_404(
     db: AsyncSession, install_id: int, *, allowed_org_ids: Optional[List[int]]
 ) -> ExtensionInstallation:
-    """Subset semantics, deliberately.
+    """Subset semantics: the installation's organization must be one the caller may manage.
 
     `_authorize_api_key` starts from overlap: a key is manageable if its clusters intersect the
     caller's, narrowed by party only where another party also holds one of them
-    (services/cluster_parties.py). This surface does not inherit that, because overlap would let
-    a partner sharing one cluster enumerate and delete another partner's installations.
+    (services/cluster_parties.py). Overlap here would let a partner sharing one cluster enumerate
+    and delete another partner's installations.
     """
     result = await db.execute(
         select(ExtensionInstallation).where(ExtensionInstallation.id == install_id)

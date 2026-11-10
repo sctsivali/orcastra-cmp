@@ -1,8 +1,7 @@
 """Strict public contracts for migration planning and durable execution.
 
-The wire shapes intentionally expose only a sanitized resource projection. Migration secrets,
-certificates, cloud-init, raw daemon configuration, and arbitrary operation metadata are not
-valid fields in this module.
+The wire shapes carry only a sanitized resource projection. Migration secrets, certificates,
+cloud-init, raw daemon configuration and arbitrary operation metadata are not valid fields here.
 """
 
 from datetime import datetime
@@ -155,7 +154,7 @@ class MigrationPlanCreateRequest(BaseModel):
     checkpoint_requested: bool = False
     external_cutover_required: bool = False
     mappings: MigrationMappings = Field(default_factory=MigrationMappings)
-    # note: only an Admin may send it, and only for a source whose owner the bindings cannot
+    # Only an Admin may send it, and only for a source whose owner the bindings cannot
     # name: `default` on a cluster several organizations hold (services/migrations/planning.py).
     source_organization_id: Optional[int] = Field(
         None,

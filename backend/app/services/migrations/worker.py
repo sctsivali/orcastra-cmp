@@ -448,7 +448,7 @@ async def run_migration_job(job_id: str, *, allow_mutation: bool = False) -> Non
         await _back_off_unknown(job, worker_id, exc)
     except _UNANSWERED as exc:
         # A read or connection that did not complete decides nothing, unlike an error a daemon
-        # sent back. It used to reach the catch-all below after one blip.
+        # sent back, so one blip must not reach the catch-all below.
         unavailable = MigrationClusterUnavailable(sanitize_error(exc))
         if await _changed_nothing(job):
             await _retry_queued_later(job, worker_id, unavailable)
@@ -479,9 +479,9 @@ async def run_migration_job(job_id: str, *, allow_mutation: bool = False) -> Non
         _worker_fence.reset(fence_token)
         heartbeat.cancel()
         await asyncio.gather(heartbeat, return_exceptions=True)
-    # Deliver this step's outbox rows (audit, webhooks, the cache clearance) now rather than on
-    # the next recovery sweep, every 15 s: until then a moved instance stayed on its old cluster
-    # in every list. Rows are claimed with SKIP LOCKED leases, so the sweep running alongside is
+    # Deliver this step's outbox rows (audit, webhooks, the cache clearance) now instead of on
+    # the next recovery sweep (every 15 s), so a moved instance leaves its old cluster in every
+    # list at once. Rows are claimed with SKIP LOCKED leases, so the sweep running alongside is
     # safe, and it stays the guarantee if this fails.
     try:
         await drain_migration_audits()
@@ -511,10 +511,10 @@ async def _back_off_unknown(job: MigrationJob, worker_id: str, exc: BaseExceptio
 async def _changed_nothing(job: MigrationJob) -> bool:
     """Claimed in queued and no resource recorded a submission since.
 
-    important: the journal decides, not `job.phase`. The instance runner writes its phases to the
-    database only, so the claimed object still says queued after the source stopped and the
+    important: the journal decides; `job.phase` cannot. The instance runner writes its phases to
+    the database only, so the claimed object still says queued after the source stopped and the
     transfer started; a fault there must reconcile, never retry from the start or fail as if
-    nothing had happened (security review F1).
+    nothing had happened.
     """
     if job.phase != "queued":
         return False
@@ -528,7 +528,7 @@ async def _retry_queued_later(
     job: MigrationJob, worker_id: str, exc: MigrationClusterUnavailable
 ) -> None:
     """A queued job changed nothing: wait a minute and claim it again, or give up cleanly."""
-    # note: the persisted state, which the run may have extended (billing_override_audited) since
+    # Reads the persisted state, which the run may have extended (billing_override_audited) since
     # the claim; writing the claim-time copy back would emit those events a second time.
     async with async_session_maker() as db:
         current = await repository.get_job(db, job.job_id)
@@ -630,7 +630,7 @@ async def drain_migration_audits() -> int:
     for index, row in enumerate(rows):
         if _monotonic() - started > _DRAIN_BUDGET_SECONDS:
             # important: a slow receiver must not hold the recovery tick, and rows kept past
-            # their 90 s lease were claimed and sent a second time.
+            # their 90 s lease would be claimed and sent a second time.
             async with async_session_maker() as db:
                 await repository.release_outbox(
                     db, [left.event_id for left in rows[index:]], worker_id=worker_id

@@ -1,7 +1,6 @@
 """Reading a client certificate: what it says about itself, and how close it is to expiry.
 
-Moved out of routers/cert_manager.py, which had grown past 800 lines; the warnings router reads the
-same helpers.
+Shared by the certificate, warnings and permissions routers and by certificate rotation.
 """
 
 import logging
@@ -33,7 +32,7 @@ def _common_name(name: x509.Name) -> Optional[str]:
 
 
 def _utc(cert: x509.Certificate, field: str) -> datetime:
-    # note: the *_utc accessors arrived in cryptography 42 and requirements still admit 41.
+    # The *_utc accessors exist from cryptography 42; requirements still admit 41.
     aware = getattr(cert, f"{field}_utc", None)
     if aware is not None:
         return aware

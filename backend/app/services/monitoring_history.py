@@ -1,17 +1,14 @@
 """The monitoring chart's history: one point per dashboard collection, kept for 24 hours.
 
-important: windows are time, not point counts. The chart's range buttons assumed one point every
-5 s while the collector writes one every 30 s or so, so "5m" showed about half an hour. A window
-now selects the points whose timestamps fall inside it, whatever the cadence was.
+A window is a time span: it selects the points whose timestamps fall inside it, whatever the
+collection cadence (about one point every 30 s), so it never counts points.
 
-note: network is a rate. A point used to carry the sum of every sampled instance's lifetime
-counters, and an instance entering the sample added its whole history to that sum, which the
-chart drew as a spike. Points now carry the fleet's bytes per second, and their per-Cluster
-entries carry the same so a Postgres reload can rebuild the fleet figure.
+Network is a rate: points carry the fleet's bytes per second, and their per-Cluster entries carry
+the same so a Postgres reload can rebuild the fleet figure. A sum of lifetime counters would
+spike every time an instance entered the sample.
 
-note: memory is the hosts' memory in use, the figure the gauge and each Cluster card show. A
-point used to sum the running instances' memory, page cache included, over the hosts' total,
-so the chart under the gauge disagreed with it by the size of the cache.
+Memory is the hosts' memory in use, the figure the gauge and each Cluster card show, so the chart
+under the gauge agrees with it. Instance memory would include page cache.
 
 The points themselves are stored and read by services/monitoring_history_store.py.
 """
@@ -46,10 +43,8 @@ def history_key(scope_key: str) -> str:
 def claim_history_slot(cache: Any, key: str, *, now: float, local: Dict[str, float]) -> bool:
     """Whether this computation may append the scope's next point. One winner per slot.
 
-    important: shared through Redis, not per process. Each of the four workers kept its own
-    "last stored" time, so when several of them built the same dashboard within a few seconds
-    every one of them appended it: over a day about 70% of the points were copies, and the
-    read-modify-write of the history value let concurrent appends overwrite each other. `local`
+    important: the slot is claimed through Redis, so several workers that build the same
+    dashboard within a few seconds append one point between them instead of a copy each. `local`
     is the per-process fallback for when Redis is unavailable.
     """
     client = getattr(cache, "redis_client", None)
@@ -95,7 +90,7 @@ def build_point(
             "network_rx_bytes_per_sec": _sum_rates([u.rx_bps for u in items]),
             "network_tx_bytes_per_sec": _sum_rates([u.tx_bps for u in items]),
             "running_instances": len(items),
-            # note: readers must use .get(), older points lack the keys.
+            # Readers must use .get(); older points lack these keys.
             "gpu_total": node.gpu_total,
             "gpu_used": node.gpu_used,
         }

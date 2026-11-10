@@ -4,9 +4,10 @@ A migration can outlive the JWT-backed request that authorized it. Persisting th
 a short-lived bearer credential into a durable secret, while trusting a copied role would let a
 revoked operator keep mutating infrastructure. This module pins stable identity attributes and
 asks Authentik for the actor's current state before a durable worker may continue.
-The Admin API token is configuration, never part of a returned value. Upstream bodies and
-transport exception text are excluded because both can contain
-credentials or user attributes outside the migration authorization contract.
+
+important: the Admin API token is configuration, never part of a returned value. Upstream bodies
+and transport exception text are excluded because both can contain credentials or user attributes
+outside the migration authorization contract.
 """
 
 from __future__ import annotations
@@ -487,9 +488,9 @@ class AuthentikAuthorityVerifier:
     async def _query_users(self, params: dict[str, str | int]) -> _UserPage:
         """One lookup, retried once when Authentik did not answer in time.
 
-        note: only a timeout is retried, never a refusal or a malformed answer, and only once, so
-        the worst case is two deadlines (8 s) and the result is still Authentik's own answer. The
-        dev identity provider answers in 0.4 to 2 s but spikes past the 4 s deadline under load.
+        Only a timeout is retried, never a refusal or a malformed answer, and only once, so the
+        worst case is two deadlines (8 s) and the result is still Authentik's own answer. An
+        identity provider under load can answer past the 4 s deadline.
         """
         try:
             return await self._query_users_once(params)

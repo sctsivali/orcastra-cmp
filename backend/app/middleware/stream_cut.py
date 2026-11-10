@@ -1,13 +1,13 @@
 """Keeps a cut download from looking like a finished one.
 
-important: this has to be outermost, and it has to exist. `BaseHTTPMiddleware` sends the terminal
-chunk when the inner app stops and re-raises only afterwards, so with four of them in this stack a
-chunked archive whose guest died ended as a normal response. The bytes were a truncated gzip, and a
-browser reported a successful download of a corrupt file.
+important: this must be the outermost middleware. `BaseHTTPMiddleware` sends the terminal chunk
+when the inner app stops and re-raises only afterwards, so without this layer a chunked archive cut
+mid-stream (ex; its guest died) ends as a normal response and the browser saves a truncated file as
+a successful download.
 
 A stream that knows it was cut marks its scope, this layer swallows the clean end, and the exception
-that follows makes uvicorn close the connection with no terminal chunk, which is what every HTTP
-client reads as a failed transfer. A sized response is protected by its Content-Length already.
+that follows makes uvicorn close the connection with no terminal chunk, which every HTTP client
+reads as a failed transfer. A sized response is already protected by its Content-Length.
 """
 
 from typing import Any, MutableMapping
@@ -37,7 +37,7 @@ class StreamCutMiddleware:
             await send(message)
 
         await self.app(scope, receive, guarded_send)
-        # note: a marked stream that somehow returned must still not end cleanly, or the server
-        # would be told nothing and hold the connection open for its keep-alive.
+        # A marked stream that returned must still not end cleanly, or the server is told nothing
+        # and holds the connection open for keep-alive.
         if scope.get(_CUT):
             raise ConnectionAbortedError("a marked stream was cut")

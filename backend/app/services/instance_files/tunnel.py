@@ -1,12 +1,12 @@
 """One authenticated stream into one guest's filesystem, opened per request.
 
-The shape is one connection per request and no pool: uploads, downloads and listings arrive on any
-of the workers, the upgrade costs about 16 ms, and a pool would have to answer who may reuse a
-connection into whose guest.
+One connection per request and no pool: uploads, downloads and listings arrive on any worker, the
+upgrade costs about 16 ms, and a pool would have to decide who may reuse a connection into whose
+guest.
 
-important: Running is checked here and nowhere else stands in for it. LXD answers 101 for a stopped
-container too, mounting its rootfs and reading it from the host (probed on 5.21.8), which is the
-path behind Incus CVE-2026-48749, and for a frozen one. So the record is read first and only status
+important: Running is checked here and nothing else stands in for it. LXD answers 101 for a
+stopped container too, mounting its rootfs and reading it from the host (LXD 5.21.8; the path
+behind Incus CVE-2026-48749), and for a frozen one. So the record is read first and only status
 code 103 proceeds.
 """
 
@@ -63,7 +63,7 @@ async def _running_record(host: str, project: str, instance_name: str) -> Dict[s
         raise busy() from exc
     except BlockingTimeout as exc:
         raise cluster_unreachable() from exc
-    except Exception as exc:  # noqa: BLE001 - LXD's own failure, whatever it was, is not ours to show
+    except Exception as exc:  # noqa: BLE001 - LXD's failure text is not shown to the caller
         logger.warning("Reading instance %s on %s failed: %s", instance_name, host, type(exc).__name__)
         raise cluster_unreachable() from exc
     if record.get("status_code") != STATUS_RUNNING:
@@ -75,8 +75,8 @@ def server_verdict(server: str, version: str) -> FloorVerdict:
     """Whether this daemon carries the fixes for files reached through a symlink in an image.
 
     Stopped instances are refused, but a stop can race the upgrade, so a daemon that follows such a
-    link from the host must not be reachable through here at all. Anything that does not say Incus
-    is judged by the LXD lines, as before.
+    link from the host must not be reachable through here at all. Any server other than Incus is
+    judged by the LXD release lines.
     """
     return floor_verdict("instance_files", "incus" if server == "incus" else "lxd", version)
 
@@ -103,7 +103,7 @@ async def _require_supported_server(host: str) -> None:
             verdict = await session_io(read, label="file_server_version", host=host)
         except BlockingPoolFull as exc:
             raise busy() from exc
-        except Exception as exc:  # noqa: BLE001 - not knowing is not a yes
+        except Exception as exc:  # noqa: BLE001 - an unknown version is refused
             raise cluster_unreachable() from exc
         cached = (now, verdict)
         _server_checks[host] = cached
@@ -126,8 +126,8 @@ async def _material(host: str) -> Tuple[str, ssl.SSLContext, str]:
     except (BlockingTimeout, ValueError) as exc:
         raise cluster_unreachable() from exc
     if not pin:
-        # note: REST carries on unpinned through a Vault outage (lxd/pin_enforcement.py). A guest's
-        # files are not worth that risk, so this path refuses until a pin is held.
+        # REST continues unpinned through a Vault outage (lxd/pin_enforcement.py). A guest's files
+        # are not worth that risk, so this path refuses until a pin is held.
         raise cluster_not_pinned()
     return base, context, pin
 
@@ -219,14 +219,15 @@ async def open_guest(
         logger.info("File tunnel to %s did not connect: %s", host, type(exc).__name__)
         raise cluster_unreachable() from exc
     try:
-        # important: before a byte of HTTP on this socket. The client certificate has been shown by
-        # now, which is public, and nothing that opens a guest leaves until the peer is proved.
+        # important: check the pin before any HTTP on this socket. Only the (public) client
+        # certificate has been sent so far; nothing that opens a guest goes out until the peer
+        # is proved.
         if not _matches_pin(writer, pin):
             logger.warning("File tunnel to %s refused: certificate does not match the pin", host)
             raise cluster_not_pinned()
         await _upgrade(reader, writer, target.netloc, project, instance_name, record)
-        # note: LXD has started its side by now, so this narrows a stop racing the upgrade rather
-        # than closing it, and the supported-version floor is what makes that race harmless.
+        # LXD has started its side by now, so this only narrows a stop racing the upgrade; the
+        # supported-version floor makes that race harmless.
         await _running_record(host, project, instance_name)
         async with SftpClient(reader, writer, op_timeout=op_timeout) as client:
             yield client

@@ -1,9 +1,8 @@
 """
-Data model for a single console/terminal session.
+Data model for a single console/terminal session and how it is serialized.
 
-Split out of session_tracker so the tracker file stays about lifecycle and the
-cross-worker share, while this one stays about what a session IS and how it is
-serialized. See session_registry.py for why sessions leave the process at all.
+session_tracker owns the lifecycle and the cross-worker share; session_registry.py
+explains why sessions leave the process at all.
 """
 
 import time
@@ -21,8 +20,8 @@ class SessionProtocol(str, Enum):
     # The instance's serial console (LXD console type "console"), for a VM or a container.
     SERIAL = "serial-console"
     # An agent driving a guest's graphical session through the MCP surface. Distinct from
-    # GRAPHICS because the actor is a key rather than a person, and a tenant reading the session
-    # list needs to be able to tell those apart at a glance.
+    # GRAPHICS because the actor is a key, and a tenant reading the session list must be able
+    # to tell that apart from a person.
     MCP_DESKTOP = "mcp-desktop"
 
 
@@ -70,7 +69,7 @@ class SessionInfo:
     # Rates as published by the worker that owns this session. Only set when the
     # object was rebuilt from a registry snapshot: the samples above are local to the
     # owning process, so a remote reader has the number but not the window it came
-    # from. None means "this is our own session, compute it".
+    # from. None means a local session whose rate is computed here.
     _remote_dl_rate: Optional[float] = None
     _remote_ul_rate: Optional[float] = None
 
@@ -132,7 +131,7 @@ class SessionInfo:
         if window <= 0:
             return 0.0
         total = sum(s.bytes_count for s in samples)
-        return total / max(window, 0.1)  # avoid division by zero
+        return total / max(window, 0.1)  # floor a tiny window so one burst is not a huge rate
 
     @property
     def duration_seconds(self) -> float:
@@ -162,9 +161,9 @@ class SessionInfo:
                 "upload_rate_bps": round(self.upload_rate_bps, 1),
             },
             "connection_status": self.status.value,
-            # scope=org shows a tenant who is on their clusters right now. Without
-            # these an admin's break-glass session is indistinguishable from an
-            # ordinary one, which is weaker than the audit trail already exposes.
+            # scope=org shows a tenant who is on their clusters right now. These tell
+            # an admin's break-glass session apart from an ordinary one, as the audit
+            # trail does.
             "target_org_slug": self.target_org_slug,
             "is_break_glass": self.break_glass_grant_id is not None,
         }
@@ -173,14 +172,11 @@ class SessionInfo:
         """
         Flat, JSON-safe form for the cross-worker registry.
 
-        Deliberately hand-built rather than dataclasses.asdict: the sample deques are
-        not serializable, and RATE_WINDOW is a real field so it would be included too.
-
-        Carries started_at, never duration_seconds. The reader recomputes duration from
-        its own clock, so it advances smoothly on every poll instead of standing still
-        between heartbeats and then jumping. Rates are the exception and must be
-        snapshotted, because the sliding-window samples are local and cannot be
-        reconstructed anywhere else.
+        Hand-built rather than dataclasses.asdict: the sample deques are not
+        serializable, and RATE_WINDOW is a real field so asdict would include it.
+        Carries started_at, never duration_seconds, so the reader's duration advances
+        on every poll instead of jumping between heartbeats. Rates are snapshotted
+        because the sliding-window samples exist only in this process.
         """
         return {
             "session_id": self.session_id,
@@ -212,8 +208,7 @@ class SessionInfo:
 
         Rates are injected rather than recomputed: the samples they came from live in
         the publishing process. Everything else round-trips, so a remote session and a
-        local one serialize through the same to_dict() and cannot drift into different
-        field sets.
+        local one serialize through the same to_dict().
         """
         session = cls(
             session_id=snap.get("session_id", ""),
@@ -242,18 +237,13 @@ class SessionInfo:
 
 def new_session_id(operation_id: Optional[str], prefix: str) -> str:
     """
-    Our identifier for a session, derived from LXD's operation id.
+    The session id: LXD's operation uuid (metadata.id), or a random one when it is empty.
 
-    LXD returns the operation uuid in metadata.id and that is what we key on, so ids
-    match what the cluster reports. It is the EMPTY case that matters: the id is now a
-    field in a registry shared by every worker, so a blank one would collapse unrelated
-    sessions onto a single entry and ending any one of them would delete the others.
-
-    important: the previous console fallback keyed on id(self), a CPython address. That
-    is process-local and reused after garbage collection, so it can collide both across
-    workers and with a disconnected session still sitting in the dict awaiting cleanup.
-    It was also unreachable, because operation_id is always present - just sometimes
-    empty - so the guard has to be on falsiness, not on absence.
+    important: the id is a field in a registry shared by every worker, so a blank one
+    would collapse unrelated sessions onto one entry and ending any of them would delete
+    the others. operation_id is always present but sometimes empty, so the guard is on
+    falsiness. Never fall back to id(self): a CPython address is process-local and reused
+    after garbage collection.
     """
     cleaned = (operation_id or "").strip()
     return cleaned or f"{prefix}-{uuid.uuid4().hex}"

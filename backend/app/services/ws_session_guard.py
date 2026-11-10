@@ -1,22 +1,14 @@
 """How long an open WebSocket keeps the authority it was opened with.
 
-important: authorization used to run once, at connect, and a socket then stayed open for as
-long as the browser kept it, whatever happened to the session behind it. Two rules now:
+important: a socket stays open as long as the browser keeps it, so authorizing once at connect is
+not enough. A feed (monitoring, events, tasks) closes with 4401 when its access token expires and
+the page reconnects with a fresh ticket. An interactive socket (terminal, console) outlives its
+token, so a running command is not killed; every minute it re-checks the account and roles, the
+org scope and its own access rule, and closes with 4403 when any says no or the highest role
+changed (the ticket's groups are frozen and scope is resolved from them).
 
-  * a feed (monitoring, events, tasks) closes with 4401 when the access token it was opened
-    under expires; the page mints a fresh ticket and reconnects, so the feed is never older
-    than the session that is reading it;
-  * an interactive socket (terminal, console) is not cut when its token expires, because that
-    would kill a running command. Every minute it re-checks the account and its roles, the
-    caller's organization scope and its own access rule, and closes with 4403 when any of them
-    says no. A caller whose highest role changed is closed too, since the ticket's groups are
-    frozen and each round resolves scope from them.
-
-note: an Authentik outage never closes a session (see ws_identity); five checks in a row that
-fail for any other reason close it with 1011, since a guard that cannot check is not guarding.
-
-The reasons are the tokens of core/ws_close.py: access_revoked:account_ended, :role_changed or
-:access_ended with 4403, reauthorize_failed with 1011, so the page can say which it was.
+An Authentik outage never closes a session (see ws_identity); five failed checks in a row for any
+other reason close it with 1011. Close reasons are the tokens of core/ws_close.py.
 """
 
 import asyncio
@@ -59,7 +51,7 @@ async def _close(websocket: WebSocket, code: int, reason: str) -> None:
 async def close_when_session_ends(websocket: WebSocket, user: Optional[AuthenticatedUser]) -> None:
     """For a feed: close with 4401 at the session's end, so the page reconnects under a new one.
 
-    note: with no session to end (auth disabled) it waits until cancelled, because feeds race it
+    With no session to end (auth disabled) it waits until cancelled, because feeds race it
     against their own loops and a guard that returned at once would end the feed.
     """
     expires = getattr(user, "session_exp", None)

@@ -104,8 +104,8 @@ class MigrationActionsMixin:
         requester_role: str,
     ) -> MigrationJob:
         # important: every external call (identity provider, certificate store, both daemons)
-        # runs before the row lock. Holding FOR UPDATE across them stalled the worker's heartbeat
-        # behind a slow answer, and repeated requests could pile up on the lock.
+        # runs before the row lock. Holding FOR UPDATE across them would stall the worker's
+        # heartbeat behind a slow answer, and repeated requests could pile up on the lock.
         row = await repository.get_job(self.db, job_id)
         if row is None:
             raise MigrationNotFound("Migration job not found.")
@@ -142,7 +142,7 @@ class MigrationActionsMixin:
         if action == "cancel":
             if row.phase not in {"queued", "cutover_pending"}:
                 raise MigrationConflict("This phase can no longer be cancelled safely.")
-            # note: a retry delay is a lease nobody holds (locked_by is None), not a worker.
+            # A retry delay leaves a lease with locked_by None; only a held lease means a worker.
             if row.status == "running" or (
                 row.locked_by is not None
                 and row.lease_expires_at is not None

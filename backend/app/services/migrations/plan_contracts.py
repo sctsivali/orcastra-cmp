@@ -31,8 +31,8 @@ def _preflight_payload(
         resource_key = f"{resource_type}:{source_name or ordinal}"
         planned: dict[str, Any] = {}
         if resource.get("source_status"):
-            # Outside ``source`` on purpose: the worker's graph signature hashes ``source`` and
-            # a running source is stopped by the job itself.
+            # Kept outside ``source``: the worker's graph signature hashes ``source``, and a
+            # running source is stopped by the job itself.
             planned["source_status"] = resource["source_status"]
         resources.append(
             {

@@ -1,12 +1,12 @@
 """Finish the project deletes their requests could not: settle, revoke the captured rules, announce.
 
 Every worker runs this loop. Rows are leased with FOR UPDATE SKIP LOCKED, at most one per cluster
-per pass, so workers share the queue instead of racing for it and one silent cluster cannot hold
-every probe (services/project_delete_store.claim_due).
+per pass, so workers share the queue and one silent cluster cannot hold every probe
+(services/project_delete_store.claim_due).
 
-important: a project is called gone only by an exact 404, read twice: once outside the cluster lock
-to avoid taking it for nothing, then again under it, because a same-name create may have landed in
-between. A project still there under the lock means the rules now belong to it; nothing is revoked.
+important: a project is gone only on an exact 404, read twice: once outside the cluster lock to
+avoid taking it for nothing, then under it, because a same-name create may have landed in between.
+A project still there under the lock owns the rules now; nothing is revoked.
 """
 
 from __future__ import annotations
@@ -80,13 +80,13 @@ async def finish(lxd_service: Any, followup: store.Followup, session_maker: Call
     except ClusterConfigurationBusy:
         await store.retry_later(followup.id, RECHECK)
         return "waiting"
-    # note: after the revoke committed. A crash before this leaves the row open, and the next pass
-    # reads the 404 again and revokes the same ids again, which removes nothing more.
+    # Only once the revoke committed: a crash before mark_settled leaves the row open, and the next
+    # pass reads the 404 and revokes the same ids again, which removes nothing more.
     await store.mark_settled(followup.id)
     announcer.clear_caches(followup.origin)
     logger.info("Project %s on %s finished deleting after its request answered", name, host)
-    # note: attempts restart here, as mark_settled restarts them in the row. The claim counted every
-    # probe pass, and carried into the announcement a first failure would have been its last.
+    # Attempts restart here, as mark_settled restarts them in the row: the claim counted every probe
+    # pass, so carried over, the announcement's first failure would be its last.
     await announcer.announce_and_finish(
         replace(followup, state="settled", attempts=0), settled_later=True, reached_organizations=held_by
     )
@@ -108,7 +108,7 @@ async def sweep_once(lxd_service: Any, session_maker: Callable[[], Any]) -> int:
 
 
 async def _loop(get_lxd_service: Callable[[], Any], session_maker: Callable[[], Any], interval: float) -> None:
-    # Jittered so four workers started together do not claim in lockstep.
+    # Jittered so workers started together do not claim in lockstep.
     await asyncio.sleep(random.uniform(0, interval))
     ticks = 0
     while True:

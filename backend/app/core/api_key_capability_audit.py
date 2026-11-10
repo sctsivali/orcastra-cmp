@@ -39,7 +39,7 @@ def capability_audit_fields(
 ) -> Dict[str, Any]:
     """Audit fields for a key's capabilities, and for an edit, what it granted and withdrew.
 
-    A None list means the key predates capabilities (legacy, unrestricted but guest access).
+    A None list means the key predates capabilities (legacy: everything except guest access).
     """
     after = granted_capabilities(dict(metadata))
     fields: Dict[str, Any] = {
@@ -59,5 +59,5 @@ def capability_audit_fields(
 
 
 def issued_credential_audit_fields(metadata: Mapping[str, Any]) -> Dict[str, Any]:
-    """Audit fields for a credential minted holding this set. It held nothing before, so all of it is a grant."""
+    """Audit fields for a newly minted credential. It held nothing before, so all of it is a grant."""
     return capability_audit_fields(metadata, {"capabilities": []})

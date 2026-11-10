@@ -1,7 +1,6 @@
 """Whose branding an account sees: one organization, or the deployment default.
 
-An account can belong to several organizations, and the old rule (the earliest membership,
-compared case-sensitively) picked one the account did not think of as its own. The order now:
+An account can belong to several organizations. The one shown is, in order:
 
   1. an organization the account runs: a partner row, or one it created in this dashboard;
   2. one where it holds access that has not ended (a tenant's live assignment);

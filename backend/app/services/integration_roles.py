@@ -1,24 +1,15 @@
-"""What an integration key may do to a pushed member's global Authentik role.
+"""What an integration key may do to a pushed member's global Authentik role: grant, never demote.
 
-A member sync used to call sync_user_role, which removes the user from every other role group,
-role_admin included, and a membership removal stripped every role group once the user had no
-membership left. Any Partner could mint a key, sync a fresh organization and push any email into
-it, so any Partner could demote an Admin or promote a tenant of another organization.
-
-The rule here: an integration may grant, never demote.
+Any Partner can mint a key, sync a fresh organization and push any email into it, so a member sync
+that rewrote role groups (sync_user_role removes every other role group, role_admin included) could
+demote an Admin or promote another organization's tenant.
   * role_admin is never added or removed, and a user holding it is never touched.
-  * role_partner is never removed. It is granted only when every organization the user belongs
-    to or created is owned by the calling key, because a global partner is unfiltered on each of
-    them.
-  * role_tenant is the baseline for an active account. An integration may add it to a user
-    holding no role group, but neither a Partner promotion nor organization offboarding removes it.
+  * role_partner is never removed. It is granted only when the calling key owns every organization
+    the user belongs to or created, because a global partner is unfiltered on each of them.
+  * role_tenant (the active-account baseline) may go to a user with no role group; never removed.
 
-The decisions are pure functions over the user's current groups and the owners of their
-organizations. Authentik reads and writes happen in the apply helpers.
-
-note: known limit. role_partner should be granted only through the key's home organization, and
-nothing records a key's home yet. Until it does, a buyer founder whose organizations all sit under
-the seller's key is still promoted.
+Known limit: the role_partner grant does not check cluster_parties.home_partner_keys, so a buyer
+founder whose organizations all sit under the seller's key is still promoted.
 """
 
 import logging
@@ -35,10 +26,10 @@ logger = logging.getLogger(__name__)
 
 ROLE_ADMIN, ROLE_PARTNER, ROLE_TENANT = "role_admin", "role_partner", "role_tenant"
 
-# note: reasons that are an ordinary no-op on every scheduled sync, logged below WARNING.
+# Reasons that are an ordinary no-op on every scheduled sync, logged below WARNING.
 _ROUTINE = frozenset({"already_partner", "already_tenant"})
 
-# note: OrcaHub's organization role, pushed per member, to the member role the member sync stores.
+# OrcaHub's organization role, pushed per member, to the member role the member sync stores.
 _ORCAHUB_ROLE_MAP = {
     "PARTNER": "partner",
     "TENANT": "tenant",
@@ -109,15 +100,15 @@ def decide_upsert(
         return _keep("no_demotion")
     if ROLE_TENANT in current:
         return _keep("already_tenant")
-    # note: baseline group grants application entry, while membership still scopes resources.
+    # The baseline group grants application entry; membership still scopes resources.
     return RoleChange(ROLE_TENANT, frozenset(), "grant_tenant")
 
 
 def may_reconcile(org_slug: str, org_owner: Union[None, str, AbstractSet[str]], api_key_id: str) -> bool:
     """Whether a key's offboarding reconcile may prune this organization's roster.
 
-    important: same ownership rule as the member upsert, and stricter, because a prune deletes
-    rows. An organization with no owning key is refused too. Without this a key could name another
+    important: same ownership rule as the member upsert, and stricter because a prune deletes
+    rows: an organization with no owning key is refused too. Otherwise a key could name another
     integration's organization in its push and purge that roster.
     """
     if _holds(org_owner, api_key_id):
@@ -133,7 +124,7 @@ async def membership_owners(db: AsyncSession, email: str) -> List[FrozenSet[str]
     """The owner set of every organization the email belongs to or created.
 
     Dashboard organizations have no owner, so they come back as an empty set and count as foreign.
-    note: created organizations are included because the Partner scope includes them too.
+    Created organizations are included because the Partner scope includes them too.
     """
     lowered = email.lower()
     rows = (await db.execute(

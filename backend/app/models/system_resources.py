@@ -1,11 +1,10 @@
 """
 Response models for GET /system/resource-usage.
 
-The top-level cpu/memory/disks/process/os blocks predate the two-scope panel and mix the host
-and the container view (a cgroup memory limit is reported as memory.total, a cpu quota as
-cpu.count_logical). Every key is kept with its old meaning for older clients; the only
-change is that `timestamp` now carries its UTC offset. New consumers read `host`
-(the kernel's view of the machine) and `container` (this deployment's cgroup scope).
+The top-level cpu/memory/disks/process/os blocks mix the host and the container view (a cgroup
+memory limit is reported as memory.total, a cpu quota as cpu.count_logical) and keep their
+meaning for older clients. New consumers read `host` (the kernel's view of the machine) and
+`container` (this deployment's cgroup scope). `timestamp` carries its UTC offset.
 """
 
 from typing import List, Literal, Optional
@@ -183,7 +182,7 @@ class HostInfo(BaseModel):
 
 
 class SystemResourceUsage(BaseModel):
-    """Comprehensive system resource usage response.
+    """System resource usage of the backend host and its container.
 
     The top-level cpu/memory/disks/process/os blocks are kept for older clients and mix
     scopes; new consumers read `host` and `container`.

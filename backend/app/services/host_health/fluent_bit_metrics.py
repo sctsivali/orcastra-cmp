@@ -1,10 +1,10 @@
 """Read Fluent Bit's own counters, the only place the logging pipeline says whether it delivers.
 
 important: Fluent Bit's `/api/v1/health` is not that signal. With `Retry_Limit no_limits` a retry
-never fails, and a connection timeout counts as a retry, not an error, so on 2026-10-27 dev's
-health said `ok` while OpenSearch had been unreachable for six weeks and the tail input had been
-paused (emitter buffer full) for seven. What does show it: `ingestion_paused` and
-`storage_overlimit` per input, and `proc_records` flat while `retries` climbs per output.
+never fails, and a connection timeout counts as a retry, not an error, so health can say `ok` while
+OpenSearch has been unreachable for weeks and the tail input is paused (emitter buffer full). What
+does show it: `ingestion_paused` and `storage_overlimit` per input, and `proc_records` flat while
+`retries` climbs per output.
 
 Prometheus text from `/api/v2/metrics/prometheus` (4.x) first; the v1 JSON for older builds, which
 carries the output counters but not the paused and overlimit gauges.

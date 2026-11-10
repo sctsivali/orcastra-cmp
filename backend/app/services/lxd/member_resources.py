@@ -1,32 +1,14 @@
 """One cluster member's resources, read as a shallow concurrent fan-out.
 
-This used to live inline in `routers/cluster_members.py` and cost, per uncached open:
+At most four hops deep regardless of instance count: the resources read, then the pool list and
+instance list together, then per pool a detail read (only for a list without recursion), then a
+space read. Leaves run through `run_blocking` so they overlap; each wall-clock cap is larger
+than the socket timeout it wraps, or a request still inside its budget would report a timeout.
 
-    1  GET /1.0/resources?target=<member>
-    1  GET /1.0/storage-pools?target=<member>          (paths only, no recursion)
-    2N GET /1.0/storage-pools/<p>[?/resources]         (sequential, per pool)
-    1  GET /1.0/instances                              (recursion=0, so URL strings only)
-    M  GET /1.0/instances/<name>                       (one per instance in the CLUSTER)
-
-all sequential, all on the event loop, each bounded by the pooled socket timeout of (3, 8).
-
-The M term is the one nobody wrote. `client.instances.all()` defaults to recursion=0, which
-returns a list of URLs, and pylxd fills those into `Instance` objects carrying only a name
-(pylxd/models/instance.py:305-334). `location` is a declared model attribute
-(instance.py:62), so the first `getattr(instance, 'location', ...)` falls into
-`Model.__getattribute__` (_model.py:151-158), which calls `sync()` (_model.py:203), which is
-a GET. On a three-member MicroCloud carrying a couple of dozen instances that is the dominant
-cost, it scales with the whole cluster rather than with the member being read, and it is
-invisible at the call site. Asking for recursion=1 populates every attribute up front and the
-term disappears.
-
-What is left is four hops deep regardless of instance count: the resources read, then the pool
-list and the instance list together, then the per-pool space reads together.
-
-note: every leaf here is a plain blocking function reached through `run_blocking`, which is
-what lets the orchestrator overlap them. The wall-clock cap on each is deliberately larger than
-the socket timeout it wraps: the socket is what actually bounds the call, and a cap below it
-would report a timeout for a request still inside its own budget.
+The instance list asks for recursion: at recursion=0 `client.instances.all()` yields name-only
+`Instance` objects (pylxd/models/instance.py:305-334), and the first read of `location`
+(instance.py:62) goes through `Model.__getattribute__` (_model.py:151-158) into `sync()`
+(_model.py:203), one hidden GET per instance in the cluster.
 """
 
 import asyncio
@@ -46,11 +28,10 @@ from app.services.lxd.cpu_allocation import parse_cpu_limit as _parse_cpu_limit
 
 logger = logging.getLogger(__name__)
 
-# important: the worker count matches the in-flight cap on purpose. `run_blocking` starts its
-# wall-clock timer when the call is submitted, not when a thread picks it up, so a pool with
-# fewer threads than permitted in-flight calls lets a request sit in the executor's queue while
-# its own timeout runs down. That surfaces as a 504 blaming a cluster that was never asked
-# anything. With the two equal, a call either runs immediately or is shed at the door.
+# important: the worker count matches the in-flight cap. `run_blocking` starts its wall-clock
+# timer at submission, before a thread picks the call up, so with fewer threads than permitted
+# calls a request can time out in the executor's queue, as a 504 blaming a cluster that was
+# never asked. With the two equal, a call either runs at once or is shed at the door.
 _LEAF_CONCURRENCY: int = 16
 _leaf_executor = ThreadPoolExecutor(
     max_workers=_LEAF_CONCURRENCY, thread_name_prefix="member_res"
@@ -123,9 +104,8 @@ def read_member_resources(
 ) -> Tuple[Dict[str, Any], datetime]:
     """The member's own /1.0/resources body, and the moment it came off the cluster.
 
-    important: `collected_at` is minted at the same statement as the read, so it is collection
-    time rather than the time some later consumer looked at it. The 60s response cache carries
-    it untouched, which is the whole point of the field.
+    `collected_at` is taken right after the read, so it is collection time; the 60s response
+    cache carries it untouched.
     """
     response = client.api.resources.get(params={"target": member_name})
     collected_at = datetime.now(timezone.utc)
@@ -135,10 +115,9 @@ def read_member_resources(
 def list_member_pools(client: pylxd.Client, member_name: str) -> List[Dict[str, Any]]:
     """Storage pools on this member, with their driver, in one request.
 
-    recursion=1 is what removes the per-pool detail call. A daemon that ignores it answers with
-    path strings instead of objects; that case is handled by the caller rather than assumed
-    away, because reporting driver "unknown" for every pool would look like data rather than a
-    failed negotiation.
+    recursion=1 removes the per-pool detail call. A daemon that ignores it answers with path
+    strings; `_collect_pools` then reads each pool's record, since "unknown" for every driver
+    would look like data.
     """
     response = client.api["storage-pools"].get(
         params={"target": member_name, "recursion": 1}
@@ -175,16 +154,15 @@ def list_cluster_instances(client: pylxd.Client) -> Tuple[List[Any], bool]:
 
     Returns (records, complete).
 
-    important: EVERY project, not just default. `client.instances.all()` reads through the
-    pooled client, which pylxd binds to `default`, so a member was measured by whatever share
-    of its work happened to live there. A field report recorded 1 of 1 on a member holding
-    44, and the same list feeds `build_gpu_inventory`, so `gpu_used` was wrong by the same
-    margin, which reads as spare capacity.
+    important: read every project. `client.instances.all()` reads through the pooled client,
+    which pylxd binds to `default`, so a member would be measured by whatever share of its work
+    lives there, and `build_gpu_inventory`, fed by the same list, would under-report `gpu_used`,
+    which reads as spare capacity.
 
-    important: recursion=2, never the default. At recursion=0 each later attribute read is its
-    own HTTP request, and `build_gpu_inventory` duck-types `location`, `expanded_config` and
-    `expanded_devices`, which only a recursion=2 body carries. `InstanceRecord` exposes exactly
-    those, because a raw dict would make every getattr miss and silently report zero.
+    important: recursion=1, never the default of 0. At recursion=0 each later attribute read is
+    its own HTTP request. `build_gpu_inventory` duck-types `location`, `expanded_config` and
+    `expanded_devices`, which `InstanceRecord` exposes; a raw dict would make every getattr miss
+    and silently report zero.
     """
     return list_instance_records(client)
 
@@ -193,8 +171,7 @@ def parse_cpu_limit(limits_cpu: Any) -> int:
     """How many cores a `limits.cpu` value claims.
 
     LXD accepts a count ("4"), a pinned set ("0,1,2") and a pinned range ("0-3"). An instance
-    with no limit is counted as one, which is what the surface has always reported. One
-    grammar for every read: services/lxd/cpu_allocation.
+    with no limit counts as one. The grammar lives in services/lxd/cpu_allocation.
     """
     return _parse_cpu_limit(limits_cpu, default=1)
 
@@ -202,10 +179,10 @@ def parse_cpu_limit(limits_cpu: Any) -> int:
 def count_member_instances(instances: Iterable[Any], member_name: str) -> InstanceUsage:
     """Instance totals for one member, scoped by `instance.location`.
 
-    note: "CPU used" is allocation, the sum of the expanded `limits.cpu` of the running
-    instances placed on this member (a limit inherited from a profile counts; one core for an
-    instance with no limit). LXD's resources API has no host utilisation figure, so the UI
-    labels it as allocated. One counter for every read: cpu_allocation.
+    "CPU used" is allocation: the sum of the expanded `limits.cpu` of the running instances
+    placed on this member (a limit inherited from a profile counts; one core for an instance
+    with no limit). LXD's resources API has no host utilisation figure, so the UI labels it as
+    allocated. Counted by services/lxd/cpu_allocation.
     """
     got = allocated_cpu(instances, member=member_name)
     return InstanceUsage(count=got.instances, running=got.running, cpu_used=got.cores)
@@ -316,7 +293,7 @@ async def _collect_instances(
 async def collect_member_fanout(
     client: pylxd.Client, node: str, member_name: str
 ) -> MemberFanout:
-    """Read everything one member's panel needs, overlapping what does not depend on itself.
+    """Read everything one member's panel needs, overlapping the independent reads.
 
     The primary resources read is awaited alone and its failure propagates: without it there is
     no answer to give, and the router maps the transport error onto a status the operator can
@@ -330,8 +307,8 @@ async def collect_member_fanout(
     )
     fanout = MemberFanout(resources_body=body, collected_at=collected_at)
 
-    # Independent of each other, so they overlap. return_exceptions is not needed here because
-    # each helper owns its own failure, but a bug in one must not lose the other's result.
+    # Independent of each other, so they overlap. Each helper records its own failure, so only a
+    # bug propagates out of the gather.
     await asyncio.gather(
         _collect_pools(client, node, member_name, fanout),
         _collect_instances(client, node, member_name, fanout),

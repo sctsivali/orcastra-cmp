@@ -22,10 +22,9 @@ Cluster = Annotated[str, Field(description="Target cluster id.")]
 Project = Annotated[str, Field(default="default", description="Project on the cluster (LXD and Incus alike).")]
 InstanceName = Annotated[str, Field(description="Instance name.")]
 
-# networks, storage pools and profiles share one code path and one price on the proxy, so they are
-# one tool with a discriminator. Collapsing them erases no permission distinction. start, stop and
-# restart also share a branch and are deliberately NOT collapsed: three verbs with three blast
-# radii, and a host allow-rule can only address a tool.
+# Networks, storage pools and profiles share one code path and one price on the proxy, so they are
+# one tool with a discriminator. start, stop and restart also share a branch but stay separate
+# tools (tools_write.py), because a host allow-rule can only address a tool.
 _RESOURCE_OPERATIONS = {
     "networks": "list_networks",
     "storage_pools": "list_storage_pools",

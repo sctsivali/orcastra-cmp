@@ -1,28 +1,22 @@
 """One place that decides what an error message may tell a client.
 
-169 handlers answered with `detail=str(e)`, and `lib/api.ts` surfaces the backend's `detail`
-verbatim as `error.message`. The exception text they pass through is written by pylxd, requests,
-asyncpg and hvac, and it routinely carries a cluster's control-plane URL and port, a TLS
-verification failure naming the certificate, a backend filesystem path, a Vault path, or a SQL
-fragment. Most of those routers are `require_tenant()`, so the audience is any tenant.
+`lib/api.ts` surfaces the backend's `detail` verbatim as `error.message`, and many handlers answer
+with `detail=str(e)`. That exception text comes from pylxd, requests, asyncpg and hvac, and it can
+carry a cluster's control-plane URL and port, a TLS failure naming the certificate, a filesystem or
+Vault path, or a SQL fragment. Most of those routes serve tenants. This is the single choke point,
+applied to server faults only.
 
-Editing 169 call sites was the alternative. It is worse: it leaves the next one to be written the
-old way, and it breaks whichever tests assert on a particular detail string. This is the single
-choke point instead, applied to server faults only.
-
-The split matters. A 4xx is usually the caller's own input described back to them and is the
-message an integrator needs to fix their request, so it is left alone. A 5xx is the server
-failing, and the caller can act on none of its internals; they get a stable reference that ties
-their report to the full text in the server log.
+A 4xx is usually the caller's own input described back to them, the message an integrator needs to
+fix the request, so it is left alone. A 5xx is the server failing; the caller gets a stable
+reference that ties their report to the full text in the server log.
 """
 
 import re
 import uuid
 from typing import Any, Dict, Tuple
 
-# URLs, and any path-looking run of two or more segments. Deliberately blunt: this runs on text
-# nobody controls the shape of, so it favours removing something harmless over keeping something
-# that turns out to be an endpoint.
+# URLs, and any path-looking run of two or more segments. The text has no known shape, so this
+# prefers removing something harmless over keeping an endpoint.
 _SENSITIVE = re.compile(r"(https?://\S+|(?:/[\w.\-]+){2,})")
 _SECRET_LABEL = (
     r"password|token|secret|authorization|cookie|certificate|credential|"
@@ -41,8 +35,8 @@ _BARE_TOKEN_PATTERNS = (
     re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])"),
 )
 
-# note: "ticket" covers the single-use WebSocket tickets. They are worthless once redeemed, but a
-# line written before the socket connects would still hold a live one.
+# "ticket" covers the single-use WebSocket tickets. They are worthless once redeemed, but a line
+# written before the socket connects still holds a live one.
 SENSITIVE_PARAM_STEMS = (
     "token", "password", "secret", "api_key", "apikey", "api-key",
     "authorization", "auth", "credential", "signature", "code", "key", "ticket",
@@ -146,8 +140,8 @@ _STRUCTURED_5XX: Dict[int, Dict[str, str]] = {
     },
     504: {
         "guest_timeout": "The guest did not answer in time. It may be busy or still starting.",
-        # Sent, not confirmed: the panel tells this apart from a refusal so nobody assumes the old
-        # password still works.
+        # Sent but unconfirmed: the panel tells this apart from a refusal, so the previous password
+        # is not assumed to still work.
         "credential_outcome_unknown": (
             "The change was sent but the guest did not confirm it. Check the account before relying on it."
         ),
@@ -162,13 +156,10 @@ def public_server_detail(status_code: int, detail: Any, reference: str) -> Any:
     """What a client is shown for a 5xx, decided in one place for REST and MCP alike.
 
     A 500 is an unexpected fault whose text is a driver or database exception, so it becomes a
-    reference. A 502/503/504 is an answer this application wrote ("cluster X recently
+    reference. A 502/503/504/507 is an answer this application wrote ("cluster X recently
     unreachable"), so its message stays with URLs and paths stripped. An allowlisted structured
-    code keeps its shape so the client can act on it.
-
-    important: the 503 codes were flattened to a string here before, so Migration Center's
-    `authority_unavailable` reached the browser as a Python dict repr and the client's mapping for
-    it never matched.
+    code keeps its shape so the client can act on it; flattened to a string it would reach the
+    browser as a dict repr the client's mapping cannot match.
     """
     if status_code not in (502, 503, 504, 507):
         return client_detail(reference)
@@ -184,12 +175,12 @@ def public_server_detail(status_code: int, detail: Any, reference: str) -> Any:
                 "message": sanitize_error(message if isinstance(message, str) else codes[code]),
             }
     # important: never str() a dict. The operator reads this text, and a repr hides the code from
-    # the client that branches on it: `project_write_unknown` was lost this way.
+    # the client that branches on it.
     return sanitize_error(message) if isinstance(message, str) else client_detail(reference)
 
 
 def is_sensitive_param(name: str) -> bool:
-    """Use the same credential-name policy for structured and Uvicorn access logs."""
+    """Whether a parameter name looks like a credential (structured and Uvicorn access logs)."""
     from urllib.parse import unquote_plus
 
     lowered = unquote_plus(name or "").lower()

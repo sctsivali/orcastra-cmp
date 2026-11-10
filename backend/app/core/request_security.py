@@ -238,10 +238,10 @@ def _parse_ip(value: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Addres
 
 
 def _trusted_networks(cidr_text: str | None) -> Iterable[ipaddress._BaseNetwork]:
-    # important: a configured list replaces the default rather than adding to it. Added, the
-    # default's private ranges stayed trusted whatever was set, so a caller on a private network
-    # reaching the backend port directly could name any client address (RC5 acceptance FU-6).
-    # Loopback is always trusted: it can only be this host.
+    # important: a configured list replaces the default instead of adding to it. Merged, the
+    # default's private ranges would stay trusted whatever was set, and a caller on a private
+    # network reaching the backend port directly could name any client address. Loopback is
+    # always trusted: it can only be this host.
     cidr_sources = [LOOPBACK_PROXY_CIDRS, cidr_text or DEFAULT_TRUSTED_PROXY_CIDRS]
 
     seen_cidrs: set[str] = set()
@@ -274,9 +274,9 @@ def own_address() -> str | None:
 def untrusted_own_network_warning(cidr_text: str | None, *, own_ip: str | None) -> str | None:
     """A startup warning when this backend's own address is outside the trusted proxy list.
 
-    note: the frontend proxy normally shares the backend's container network. A list that leaves
-    that network out (one written when the default was still added to it) stops trusting the
-    frontend, and every browser request is then counted against the frontend's one address.
+    The frontend proxy normally shares the backend's container network. A list that leaves that
+    network out stops trusting the frontend, and every browser request is then counted against
+    the frontend's one address.
     """
     if not own_ip or _is_trusted_proxy(own_ip, cidr_text):
         return None

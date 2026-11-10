@@ -1,45 +1,24 @@
 """Which /integrations/api-keys edits an add-on credential refuses.
 
-An add-on installation's credential is an ordinary integration key in Vault, so every
-/integrations/api-keys route reaches it once the caller's clusters overlap its grant. The
-installation owns that grant: install writes it under the operator's consent, rescope rewrites it,
-rotation copies it onto the new key and the reconcile sweep narrows it. An edit through the key
-routes changed what a third party holds outside that consent, and the next rescope withdrew it
-again without anyone deciding so.
-
-Per route, for a key carrying extension_install_id:
+An add-on credential is an ordinary integration key in Vault, so every key route reaches it once
+the caller's clusters overlap its grant. The installation owns that grant, so an edit through the
+key routes would change what a third party holds without the operator's consent. For a key with
+extension_install_id:
   PUT    /api-keys/{id}/capabilities    refused, 409. Rescope the installation.
   PUT    /api-keys/{id}/permissions     refused, 409. Rescope the installation.
-  DELETE /api-keys/{id}                 refused, 409, while an installation claims the key as its
-                                        api_key_id or previous_api_key_id. Rotation and rescope read
-                                        the current key before they write, so deleting it broke both
-                                        with a 503 that says the store is down, and the previous key
-                                        is the add-on's working credential until its rotation grace
-                                        ends. Revoke stops either now, and uninstall removes both
-                                        with the signing secret and settings. A key no installation
-                                        claims (superseded by a rotation without grace, rotated out
-                                        twice, or reclaimed by the reconcile sweep) is deletable.
-  POST   /api-keys/{id}/rotate-secret   refused, 409. The installation rotates its own credential
-                                        (POST /extensions/installations/{id}/credential/rotate),
-                                        which issues a new key with the same grant and retires this
-                                        one, at once or after the grace window the operator chose.
-  POST   /api-keys/{id}/revoke          allowed. The kill switch, for whoever may revoke today.
-                                        Rescope keeps the revocation (it rewrites two fields) and
-                                        rotation issues a working key again. Like any key's, it is
-                                        refused while the key owns an active OrcaHub organization
-                                        (services/integration_key_ownership.py), and the refusal
-                                        names suspending the add-on as the way to stop it now.
-  GET    /api-keys, /api-keys/{id}      allowed, reads.
-  POST   /api-keys/{id}/users           allowed. A user mapping is only listed and counted, and
-                                        nothing that authorizes a request reads it.
-  GET    /api-keys/{id}/users           allowed, a read.
-  DELETE /api-keys/{id}/users/{user}    allowed. Admin only, and it removes a mapping.
-  POST   /api-keys                      not keyed. It cannot write extension_install_id.
+  POST   /api-keys/{id}/rotate-secret   refused, 409. Rotate from the installation.
+  DELETE /api-keys/{id}                 refused, 409, while it is an installation's current key
+                                        (rotation and rescope read it) or previous key (live
+                                        until its grace ends). Revoke or uninstall instead.
+  POST   /api-keys/{id}/revoke          allowed: the kill switch. Rescope keeps it revoked; a
+                                        rotation issues a working key again.
+  GET and /api-keys/{id}/users routes   allowed; no request authorization reads a user mapping,
+                                        and the mapping DELETE is Admin only.
 
-important: each check runs after _authorize_api_key, so a key outside the caller's clusters still
-answers 404 and the 409 never tells anyone an id they cannot see exists. On DELETE the ownership
-check runs before the installation claim, so an add-on credential that owns organizations is told
-how to move them first.
+important: checks run after _authorize_api_key, so an unseen key answers 404, never a 409 that
+confirms its id. Revoke and DELETE, as for any key, refuse a key owning an active OrcaHub
+organization (services/integration_key_ownership.py); on DELETE that check runs first, so a
+credential that owns organizations is told to move them.
 """
 
 import logging

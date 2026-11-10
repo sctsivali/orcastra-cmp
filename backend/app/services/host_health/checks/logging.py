@@ -1,7 +1,7 @@
 """Logging: whether container logs are read, buffered and delivered to OpenSearch.
 
 Judged from Fluent Bit's counters (fluent_bit_metrics.py says why its health endpoint cannot be):
-- an input paused or over its buffer limit means new logs are no longer read at all, and Docker's
+- an input paused or over its buffer limit means new logs are not read at all, and Docker's
   log rotation deletes what was never read;
 - an output whose retries climb while its delivered count stays flat for the stall window is not
   reaching OpenSearch;
@@ -61,9 +61,9 @@ def _same_run(old: FluentBitSample, new: FluentBitSample) -> bool:
     """False across a Fluent Bit restart, when every counter starts again from zero.
 
     important: comparing counters is not enough. A restarted Fluent Bit can deliver more than the old
-    one had by the time it is sampled again, and then a delta across two processes read as one run
-    (found live, 2026-10-27: "48 delivered in 13 min" from a process up for 2 min). A process whose
-    uptime is shorter than the time since the old sample started after that sample was taken.
+    process had by the time it is sampled again, and a delta across two processes would read as one
+    run. A process whose uptime is shorter than the time since the old sample started after that
+    sample was taken.
     """
     if old.uptime is not None and new.uptime is not None:
         if old.uptime > new.uptime or new.uptime + _RESTART_SLACK_SECONDS < new.at - old.at:
@@ -186,10 +186,10 @@ def _opensearch(settings, result: Assessment) -> None:
                               timeout=_OPENSEARCH_TIMEOUT, allow_redirects=False)
     except requests.RequestException as exc:
         result.facts.append(fact("OpenSearch", f"not answering at {host_of(url)} ({type(exc).__name__})"))
-        # note: degraded, not down. The backend reaches OpenSearch on its own path (OPENSEARCH_URL),
-        # Fluent Bit on another (OPENSEARCH_HOST). Whether logs are stored is Fluent Bit's evidence
-        # above, which already says down when nothing is delivered; this only means the dashboard
-        # itself cannot read OpenSearch (the archive pages).
+        # Degraded, not down. The backend reaches OpenSearch on its own path (OPENSEARCH_URL),
+        # Fluent Bit on another (OPENSEARCH_HOST). Fluent Bit's counters above already report down
+        # when nothing is delivered; this only means the dashboard itself cannot read OpenSearch
+        # (the archive pages).
         result.worsen("degraded", "warning",
                       "The dashboard cannot reach OpenSearch directly, so archive pages will fail.",
                       "Check OPENSEARCH_URL and that OpenSearch is reachable from the backend container.")

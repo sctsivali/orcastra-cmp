@@ -1,19 +1,16 @@
 """LXD /1.0/metrics, read once per member (or per member and project) and shared by every worker.
 
-A scrape without `project` carries every instance of every project on that member, so the
-dashboard's sweep and every open instance dialog on that member share one read. A project's own
-scrape is the fallback for a member whose whole read is refused or too large. Readings are cached
-for 10 seconds through the shared cache manager.
+A scrape without `project` covers every project on the member, so the dashboard's sweep and every
+open instance dialog there share one read; a project's own scrape is the fallback when the
+member-wide read is refused or too large. Readings are cached 10 seconds in the shared cache.
 
-important: LXD itself caches /1.0/metrics for 8 seconds. Keeping our cache longer than that
-means every scrape we make lands after LXD's cache has expired, so the counters in it were
-collected during our request and the scrape time can stand in for the sample time of the disk
-I/O counters. With a shorter cache two of our reads could straddle one LXD refresh, and a
-counter that moved over 8 seconds would be divided by a fraction of a second.
+important: LXD caches /1.0/metrics for 8 seconds; this cache must stay longer, so every scrape
+lands after LXD's cache expired, its counters are collected during the request, and its time can
+stand in for the disk I/O sample time. A shorter one could straddle an LXD refresh and divide 8
+seconds of counter movement by a fraction of a second.
 
-note: a cached body holds the series of every instance on that member (or in the project on
-that member), across every tenant there. It never leaves the backend; callers take only the
-instances they were authorized for.
+important: a cached body holds every tenant's instances on that member. It never leaves the
+backend; callers take only the instances they are authorized for.
 """
 
 import logging
@@ -55,9 +52,8 @@ _flight_guard = threading.Lock()
 
 # A member-wide read refused for these reasons may still be allowed one project at a time.
 PROJECT_FALLBACK = frozenset({"refused", "too_large"})
-# note: a member whose metrics take longer than the read cap does so for any filter (one lab
-# member answers in 5.3 s whole or per project), so its timeout is remembered across two sweeps
-# rather than paid again on each.
+# A member whose metrics take longer than the read cap does so for any filter, so its timeout is
+# remembered across two sweeps rather than paid again on each.
 MEMBER_NEGATIVE_TTL_SECONDS = {**NEGATIVE_TTL_SECONDS, "timeout": 120}
 
 
@@ -185,7 +181,7 @@ def _fetch_text(
     read_timeout = max(1.0, min(4.0, deadline - time.monotonic() - 1.5))
     started = time.time()
     try:
-        # note: identity, so the byte cap below counts what gets parsed rather than what a
+        # Identity encoding, so the byte cap below counts what gets parsed rather than what a
         # compressed body could expand to.
         response = client.api.metrics.get(
             params=params,
@@ -204,9 +200,9 @@ def _fetch_text(
         if callable(close):
             close()
         return _fail(cache, namespace, key, "refused", f"HTTP {status}")
-    # important: streamed against a byte cap and a wall-clock budget. Reading the whole body
-    # first held any size an endpoint chose to send, and a slow drip kept the thread as long
-    # as it liked, one read timeout at a time.
+    # important: stream against a byte cap and a wall-clock budget. Reading the whole body would
+    # hold any size an endpoint sends, and a slow drip would keep the thread one read timeout at
+    # a time.
     try:
         declared = int(response.headers.get("Content-Length") or 0)
     except (TypeError, ValueError):
@@ -222,9 +218,9 @@ def _fetch_text(
     received = 0
     stop_at = deadline - 1.0
     try:
-        # important: read1, not iter_content. iter_content waits for a full chunk, so a body
-        # dripping one byte inside each socket timeout held the thread for hours between
-        # deadline checks; read1 returns whatever arrived and the clock is checked every time.
+        # important: read1 rather than iter_content, which waits for a full chunk: a body
+        # dripping one byte inside each socket timeout could hold the thread for hours between
+        # deadline checks. read1 returns whatever arrived, so the clock is checked on every read.
         while True:
             chunk = response.raw.read1(_CHUNK_BYTES)
             if not chunk:

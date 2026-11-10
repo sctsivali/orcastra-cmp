@@ -1,23 +1,16 @@
 """Caching what a probe discovered, without letting the cache become an authority.
 
-important: a session id NEVER carries permission. Every action re-passes every gate against the
-API key on that request. If the id granted anything, a leaked or guessed one would be a
-guest-control credential and the whole capability model would be bypassed, which is precisely the
-failure `/console` already documents: a POST hands back the operation's fd secrets, so a holder
-attaches to the guest outside the proxy and outside every session control.
+important: a session id never carries permission; every action re-passes every gate against the
+API key on that request. An id that granted anything would make a leaked or guessed one a
+guest-control credential that bypasses the capability model. The id is derived (a hash of the
+target), so it is not secret and two callers naming the same guest share one entry.
 
-The id is therefore DERIVED rather than random - a hash of the target - so it is not secret, two
-callers naming the same guest share one entry, and there is nothing worth stealing.
+important: entries live in Redis. With several workers and no sticky routing, an in-process cache
+would let a probe on one worker and a click on another disagree.
 
-important: Redis, not a module-level dict. WEB_CONCURRENCY is 4 with no sticky routing, so an
-in-process cache means a probe on one worker and a click on another disagree about three requests
-in four. Per-worker module state is a documented recurring defect class in this codebase, and this
-would be the next instance of it.
-
-note: ONE hash with a field per session, not one key per session. Redis here runs
-`--maxmemory-policy allkeys-lru`, which evicts any key regardless of TTL, so N per-session keys
-would be N independent eviction candidates. The same reasoning is written out in
-`services/session_registry.py`.
+One hash with a field per session instead of one key per session: Redis here runs
+`--maxmemory-policy allkeys-lru`, which evicts any key regardless of TTL, so per-session keys would
+each be an independent eviction candidate (see `services/session_registry.py`).
 """
 
 import hashlib
@@ -52,14 +45,11 @@ _warned_local_only = False
 
 
 def _redis() -> Optional[Any]:
-    """The shared client, or None once, loudly.
+    """The shared client, or None with a one-time warning.
 
-    important: the attribute is `redis_client`. An earlier spelling of this read `redis`, and
-    because `getattr` was given a default it returned None on every call, silently and forever.
-    The feature kept working in testing because a single worker answered both the probe and the
-    action, and it would have failed in production roughly three times in four with nothing in any
-    log to say why. A silent degrade to per-worker state is the exact defect this module was
-    written to avoid, so the fallback now announces itself.
+    important: the attribute is `redis_client`. A wrong name with a `getattr` default returns None
+    on every call and silently degrades to per-worker state, which only breaks with more than one
+    worker; the fallback therefore logs a warning.
     """
     global _warned_local_only
     try:

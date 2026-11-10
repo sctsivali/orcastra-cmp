@@ -1,6 +1,4 @@
-"""
-Application-level security middleware for request hardening.
-"""
+"""Request hardening: security headers, scanner-probe blocking and rate limits."""
 
 from __future__ import annotations
 
@@ -43,15 +41,12 @@ def apply_security_headers(response: Response) -> Response:
 
 
 def _shared_allow(key: str, limit: int, window_seconds: int) -> Optional[bool]:
-    """
-    Count one hit against a counter shared by every worker.
+    """Count one hit against a counter shared by every worker.
 
-    Returns True to allow, False to reject, and None when Redis cannot answer, which
-    tells the caller to fall back rather than guess.
+    True allows, False rejects, and None means Redis could not answer and the caller falls back.
 
-    important: fail open, never closed. A limiter that rejects when its store is
-    unreachable turns a Redis outage into a total product outage, which is a far worse
-    failure than briefly allowing more forced refreshes than intended.
+    important: fail open. A limiter that rejects when its store is unreachable turns a Redis
+    outage into a full product outage.
     """
     if limit <= 0:
         return True
@@ -67,10 +62,9 @@ def _shared_allow(key: str, limit: int, window_seconds: int) -> Optional[bool]:
             client.expire(bucket, window_seconds)
         allowed = int(count) <= limit
         if not allowed:
-            # note: an expire lost after its incr (a timeout between the two, or the Redis guard
-            # opening) left the counter with none, and a counter past its limit with no expiry
-            # refuses its subject for good. Checked only on a refusal, so it costs nothing on the
-            # common path, and in its own try so it never changes the answer.
+            # An expire lost after its incr (ex; a timeout between the two, or the Redis guard
+            # opening) leaves a counter with no expiry, which refuses its subject for good once
+            # past the limit. Repaired only on a refusal, in its own try so the answer stands.
             try:
                 if client.ttl(bucket) == -1:
                     client.expire(bucket, window_seconds)
@@ -85,12 +79,8 @@ def _shared_allow(key: str, limit: int, window_seconds: int) -> Optional[bool]:
 def _shared_consume(key: str, limit: int, window_seconds: int) -> Optional[Tuple[int, int]]:
     """Spend one hit and report the count and the seconds left in the window.
 
-    The same operation `_shared_allow` performs, keeping the number it throws away. A caller that
-    wants to tell the client where it stands needs the count; a caller that only wants a yes or no
-    keeps using `_shared_allow`, whose contract is unchanged.
-
-    None means the store could not answer, which is the fail-open case: a caller must not invent a
-    remaining budget it does not know.
+    The same operation as `_shared_allow`, for callers that tell the client where it stands. None
+    means the store could not answer (fail open); the caller must not invent a remaining budget.
     """
     if limit <= 0:
         return None
@@ -106,8 +96,8 @@ def _shared_consume(key: str, limit: int, window_seconds: int) -> Optional[Tuple
             client.expire(bucket, window_seconds)
         ttl = client.ttl(bucket)
         if ttl is not None and ttl == -1:
-            # note: an expire lost after its incr (a blip between the two calls) left the counter with
-            # none, which would hold its budget spent for good. Give it its window again.
+            # An expire lost after its incr leaves the counter with no expiry, which would hold its
+            # budget spent for good. Give it its window again.
             client.expire(bucket, window_seconds)
         # Redis answers -1 for a key with no expiry and -2 for one that just vanished. Neither is
         # a window this caller can report, so both fall back to the configured length.
@@ -131,15 +121,11 @@ def _shared_retry_after(key: str, window_seconds: int) -> int:
 
 
 def _per_worker_share(limit: int) -> int:
-    """
-    Split a deployment-wide budget across the worker processes that will enforce it.
+    """Split a deployment-wide budget across the worker processes that enforce it.
 
-    important: the limiter holds its counters in memory, so each uvicorn worker enforces
-    the configured number independently and the real ceiling is limit x WEB_CONCURRENCY.
-    Measured on this deployment: a configured 12 let 44 of 70 requests through with four
-    workers. Dividing here makes the configured number mean what it says. It is an
-    approximation, since a client is not guaranteed an even spread across workers, and the
-    honest fix is a shared counter in Redis.
+    important: the in-memory limiter counts per uvicorn worker, so without the split the real
+    ceiling is limit x WEB_CONCURRENCY. The split is approximate because a client's requests are
+    not spread evenly across workers; the shared Redis counter is the exact path.
     """
     if limit <= 0:
         return limit
@@ -152,11 +138,9 @@ _FRESH_FLAG = TypeAdapter(bool)
 def _wants_fresh(request: Request) -> bool:
     """True when the request asks to bypass the response cache.
 
-    important: this asks the same parser FastAPI will use on `fresh: bool = False`,
-    rather than a list of spellings. A hand-written set said {1, true, yes, on} while
-    pydantic also coerces t, T, y and Y, so `?fresh=t` bypassed the cache and yielded no
-    `fresh:` bucket at all, escaping the per-operator budget and leaving only the general
-    limit. Any divergence between the two is a hole of exactly that shape.
+    important: use the same pydantic coercion FastAPI applies to `fresh: bool = False`. A
+    hand-written list of spellings misses values pydantic accepts (ex; `t`, `Y`), and such a
+    request would bypass the cache without being charged to the per-operator `fresh:` budget.
     """
     value = request.query_params.get("fresh")
     if value is None:
@@ -168,23 +152,15 @@ def _wants_fresh(request: Request) -> bool:
 
 
 def _rate_limit_subject(request: Request, client_ip: str) -> str:
-    """
-    Bucket identity for the bypass budget.
+    """Bucket identity for the bypass budget.
 
-    The budget must be per operator rather than per address: the dashboard proxies every browser
-    through one container, so an IP-keyed budget would let one person's refreshes throttle the
-    whole tenancy.
+    The budget is per operator: the dashboard proxies every browser through one container, so an
+    IP-keyed budget would let one person's refreshes throttle the whole tenancy.
 
-    important: keyed on a digest of the PRESENTED TOKEN, not on the `sub` claim inside it. This
-    middleware runs before authentication, so any claim it reads is unverified, attacker-supplied
-    text, and the counter is spent here whether or not the request later authenticates. Keying on
-    the claim therefore let anyone who knew a victim's email exhaust that operator's forced-
-    refresh budget from unauthenticated requests. Reaching a victim's bucket now requires the
-    victim's token, and holding that already means being them.
-
-    The trade is deliberate and small: a token rotation starts a fresh counter, which loosens the
-    budget briefly. The budget exists to bound cluster fan-out cost, and that stays bounded per
-    token; what it must not do is let a stranger spend someone else's.
+    important: key on a digest of the presented token, never on a claim inside it. This middleware
+    runs before authentication, so a claim is unverified text, and keying on `sub` would let anyone
+    who knows a victim's email spend that operator's budget from unauthenticated requests. A token
+    rotation starts a fresh counter; the fan-out cost stays bounded per token.
     """
     header = request.headers.get("authorization", "")
     if header[:7].lower() == "bearer ":
@@ -197,18 +173,12 @@ def _rate_limit_subject(request: Request, client_ip: str) -> str:
 def consume_api_key_budget(key_id: str) -> bool:
     """Spend one request against an API key's own budget. True when it may proceed.
 
-    important: this is called from `validate_api_key` AFTER the secret verifies, deliberately
-    not from the middleware. An API key id is a public identifier, not a credential: it is
-    returned to any partner listing organizations (`IntegrationOrgResponse.api_key_id`), it is
-    written to logs, and it travels in the header of every outbound callback. Counting in the
-    middleware would count unauthenticated requests too, so anyone holding a victim's id could
-    present it with a garbage secret and burn that integration's whole minute. That is a
-    targeted denial of service against a named integration, which is worse than the shared-budget
-    problem this bucket exists to solve. Unauthenticated traffic stays on the per-IP bucket,
-    which is where it belongs.
+    important: spend it only after the key's secret verifies, never in the middleware. The key id
+    is public (`IntegrationOrgResponse.api_key_id`, logs, outbound callback headers), so counting
+    unauthenticated requests would let anyone holding an id exhaust that integration's budget with
+    a wrong secret. Unauthenticated traffic stays on the per-IP bucket.
 
-    Fails open when the shared store cannot answer, like every other limiter here: the per-IP
-    bucket still applies, and a Redis outage must not throttle every integration at once.
+    Fails open when the shared store cannot answer; the per-IP bucket still applies.
     """
     from app.core.config import get_settings
 
@@ -226,13 +196,8 @@ def consume_api_key_budget_state(key_id: str) -> Tuple[bool, Optional[Dict[str, 
     """Spend one request and report where the caller now stands.
 
     Returns `(allowed, state)`. `state` carries `limit`, `remaining` and `reset`, or is None when
-    the limiter is off or its store could not answer. A caller emitting headers must omit them
-    rather than guess: an integration told it has budget it does not have is worse served than one
-    told nothing.
-
-    This exists because a caller had no way to learn its limit. The refusal carried a hardcoded
-    `Retry-After: 30` and no ceiling, while the documentation says deployments retune the number,
-    so an integrator was asked to guess something the server knew.
+    the limiter is off or its store could not answer; a caller emitting rate-limit headers then
+    omits them instead of guessing.
     """
     from app.core.config import get_settings
 
@@ -290,9 +255,8 @@ class WindowedRateLimiter:
     def retry_after(self, key: str, window_seconds: int, now: float | None = None) -> int:
         """Seconds until the oldest hit in the window ages out, never below one.
 
-        The window is sliding, so the client is admitted again the moment its oldest hit is
-        older than the window, which is what this reports. A constant here told a client
-        throttled one second before its window cleared to wait half a minute.
+        The window slides, so the client is admitted again as soon as its oldest hit is older than
+        the window.
         """
         current_time = now if now is not None else time.time()
         bucket = self.storage.get(key, [])
@@ -376,11 +340,10 @@ class RequestSecurityMiddleware(BaseHTTPMiddleware):
     def _rate_limit_exceeded(self, request: Request, client_ip: str) -> Optional[RateLimitHit]:
         """The budget this request exhausted, or None when it is admitted.
 
-        note: the ip and subnet buckets are enforced per worker at the full configured value.
-        A counter shared across workers would turn a deployment that sized RATE_LIMIT_REQUESTS
-        for one browser into that same number for the whole VM. The documented ceiling is
-        therefore the configured value per pinned client, up to WEB_CONCURRENCY times it in
-        aggregate; only the fresh bucket is deployment-wide.
+        The ip and subnet buckets are enforced per worker at the full configured value: the
+        ceiling is that value per pinned client, up to WEB_CONCURRENCY times it in aggregate. A
+        shared counter would turn a RATE_LIMIT_REQUESTS sized for one browser into the limit for
+        the whole host. Only the fresh bucket is deployment-wide.
         """
         if not self.settings.rate_limit_enabled or request.method == "OPTIONS":
             return None
@@ -390,12 +353,9 @@ class RequestSecurityMiddleware(BaseHTTPMiddleware):
         window = self.settings.rate_limit_window_seconds
         for key, limit in limit_keys:
             scope = key.split(":", 1)[0]
-            # important: the bypass budget is meant to be a deployment-wide figure, and
-            # the in-memory limiter cannot be one because each worker keeps its own
-            # counters. Redis is already a hard dependency, so the shared counter lives
-            # there and the configured number means what it says. The per-key budget uses
-            # the same store through consume_api_key_budget, but is spent after
-            # authentication rather than here.
+            # The bypass budget is deployment-wide, which the per-worker in-memory limiter
+            # cannot enforce, so it uses the shared Redis counter. The per-key budget uses the
+            # same store through consume_api_key_budget, spent after authentication.
             if key.startswith("fresh:"):
                 shared = _shared_allow(key, limit, window)
                 if shared is not None:
@@ -422,10 +382,8 @@ class RequestSecurityMiddleware(BaseHTTPMiddleware):
             yield f"subnet:{subnet}", self.settings.rate_limit_subnet_requests
 
         # important: a forced cache bypass costs a full fan-out to every cluster in
-        # scope, so it gets its own much smaller budget. Keyed on the token subject
-        # rather than the IP: the dashboard proxies every browser through one
-        # container, so every operator shares a client IP and an IP-keyed budget
-        # would let one person's refreshes throttle the whole tenancy.
+        # scope, so it gets its own much smaller budget, keyed per operator token
+        # (see _rate_limit_subject).
         if _wants_fresh(request):
             yield f"fresh:{_rate_limit_subject(request, client_ip)}", self.settings.rate_limit_fresh_requests
 
@@ -486,26 +444,21 @@ _INTERACTIVE_SOCKET_PATH = re.compile(r"/(?:terminal/ws/[^/]+|console/[^/]+/ws)$
 class InteractiveSocketLimitMiddleware:
     """A per-client-IP budget for terminal and console WebSocket upgrades.
 
-    important: RequestSecurityMiddleware is HTTP only, so nothing bounded upgrades. A terminal or
-    console refusal now accepts and then closes (core/ws_close.py) so the page can read why, and
-    uvicorn holds such a socket until the client answers the close, up to its close timeout, inside
-    the worker's --limit-concurrency. One client could hold those slots with sockets that never
-    authenticate. This counts upgrades per client IP (resolved like the HTTP limiter, so through a
-    trusted proxy) before routing and before any ticket is looked up.
+    important: RequestSecurityMiddleware covers HTTP only. uvicorn holds a refused terminal or
+    console socket (accepted, then closed by core/ws_close.py) until the client answers the close,
+    inside --limit-concurrency, so one client could fill those slots with sockets that never
+    authenticate. Upgrades are counted per client IP before routing and any ticket lookup.
 
     Over budget the upgrade is refused without accepting: HTTP 429 with Retry-After where the
-    server offers the denial-response extension (uvicorn does), a close before accept (HTTP 403)
-    otherwise. Either way nothing is held, and the page backs off as for any socket that never
-    opened. Legitimate use stays far below it: a console opens four sockets and a page reconnects
-    at most five times a minute. The figure is deployment-wide and enforced per worker as its share
-    (configured_worker_count), since upgrades are new connections spread across the workers.
+    server offers the denial-response extension (uvicorn does), otherwise a close before accept
+    (HTTP 403). Each worker enforces its share of the deployment-wide figure.
     """
 
     def __init__(self, app: ASGIApp, settings, limiter: WindowedRateLimiter | None = None) -> None:
         self.app = app
         self.settings = settings
         self.limiter = limiter or WindowedRateLimiter()
-        # One warning per client per window, not one per refused upgrade.
+        # At most one warning per client per window.
         self._warned = WindowedRateLimiter()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:

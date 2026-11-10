@@ -1,7 +1,4 @@
-"""
-Middleware Package
-Contains HTTP middleware for logging, request tracking, and security.
-"""
+"""HTTP middleware: request IDs, access logging, security headers and rate limits."""
 
 from app.middleware.request_id import RequestIdMiddleware
 from app.middleware.access_log import AccessLogMiddleware

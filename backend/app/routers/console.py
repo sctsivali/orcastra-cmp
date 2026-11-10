@@ -1,19 +1,7 @@
-"""
-Console Router - VGA/Graphics Console API.
-Provides endpoints for graphics console access, startup order, and ISO management.
+"""Console endpoints: graphics and serial consoles, startup order, ISO attachment and console sessions.
 
-LXD/Incus uses SPICE protocol for VM graphics console access.
-The console data is streamed as SPICE protocol via WebSocket.
-
-Endpoints:
-- GET  /console/{instance}/capabilities - Get console capabilities
-- WS   /console/{instance}/ws - WebSocket for graphics console (SPICE)
-- GET  /console/startup-order - Get startup order for instances
-- PUT  /console/startup-order - Update startup order
-- GET  /console/{instance}/iso - Get attached ISO
-- POST /console/{instance}/iso/attach - Attach ISO
-- POST /console/{instance}/iso/eject - Eject ISO
-- GET  /console/isos - List available ISOs
+LXD/Incus serves a VM's graphics console as SPICE over a WebSocket; `console_websocket` proxies it
+to the browser.
 """
 
 import asyncio
@@ -83,10 +71,9 @@ async def _console_io(call: Callable[[], _ConsoleResult], *, label: str) -> _Con
 async def _console_call(call: Callable[[], _ConsoleResult], *, label: str, write: bool = False) -> _ConsoleResult:
     """``_console_io`` for a request handler: a saturated pool or a slow cluster is a 503/504.
 
-    note: these service calls used to be awaited inline although nothing in them awaits, so each
-    one parked the whole event loop for its LXD round trips (every console, terminal and feed on
-    the worker froze with it). A write that outlives its budget keeps running; the 504 says so,
-    and the instance caches are cleared when it really finishes.
+    The service calls are synchronous, so awaiting them inline would block the event loop for every
+    LXD round trip. A write that outlives its budget keeps running; the 504 says so, and the
+    instance caches are cleared when it finishes.
     """
     try:
         return await _console_io(call, label=label)
@@ -155,8 +142,8 @@ def _is_console_operation(operation: object) -> bool:
     """Whether a websocket operation is a console (VGA or serial) rather than an exec shell.
 
     LXD describes a console operation as "Showing console" and an exec as "Executing command".
-    The conflict check and kill-all are about consoles: QEMU's SPICE server takes one client at a
-    time, while any number of shells coexist, and killing those ended other people's terminals.
+    The conflict check and kill-all only concern consoles: QEMU's SPICE server takes one client at
+    a time, while any number of exec shells coexist and killing one ends someone's terminal.
     """
     if not isinstance(operation, dict):
         return False
@@ -239,23 +226,15 @@ def _verify_instance_access(
     instance_name: str,
     permission: str = "view",
 ) -> str:
-    """Authorize a console action on ONE instance, not merely on its cluster.
+    """Authorize a console action on one instance rather than on its whole cluster.
 
-    important: `verify_cluster_access` answers "may this caller reach this cluster", which for a
-    tenant scoped to a single instance is true of every instance their neighbours run on it. The
-    per-instance console reads were gated on that alone, so a tenant could ask whether another
-    tenant's instance exists, whether it supports VGA, what ISO is attached and where it came
-    from, and who is connected to it. None of that is theirs.
+    important: `verify_cluster_access` only says the caller may reach the cluster. A tenant scoped
+    to one instance must not learn whether a neighbour's instance exists, whether it supports VGA,
+    which ISO is attached or who is connected to it.
 
-    Behind the same flag as the rest of the tenant ACL, because the grants it reads were pushed by
-    an upstream sync long before anything enforced them and turning them all on at once is a
-    deliberate act, not a side effect of a bug fix.
-
-    important: `project` is used AS GIVEN. The helper used to normalise it with `or "default"`,
-    which reintroduced the very split it exists to close: an empty `?project=` authorized
-    `default` here while the service saw a falsy value and searched every project. The caller
-    normalises once and passes the same value to the action, so there is exactly one project in
-    play per request.
+    important: `project` is used as given. Normalising it here (`or "default"`) would authorize
+    `default` while the service sees a falsy value and searches every project. The caller
+    normalises once and passes the same value to the action.
     """
     scoped_project = verify_project_access(host, project)
     # Viewing the instance is the invariant beneath every console action. Operation-specific
@@ -263,7 +242,7 @@ def _verify_instance_access(
     # observable or addressable.
     verify_tenant_permission(host, scoped_project, instance_name, "view")
     if permission != "view":
-        # Same door as core/instance_access.verify_instance_access: whatever the rollout flag.
+        # Same check as core/instance_access.verify_instance_access, whatever the rollout flag.
         refuse_default_operation(host, scoped_project)
     if permission != "view" and get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(host, scoped_project, instance_name, permission)
@@ -430,14 +409,13 @@ async def get_session_stats(
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """Get real-time session stats - scoped to the authenticated user's own session."""
-    # important: a caller we cannot identify cannot be scoped, so refuse rather than
-    # guess. The email claim is not required by validate_jwt, so this is reachable.
+    # important: a caller without an email cannot be scoped to its own session, so refuse.
+    # validate_jwt does not require the email claim, so this is reachable.
     if not _rbac.email:
         raise HTTPException(status_code=403, detail="Token carries no email claim")
 
     tracker = get_session_tracker()
-    # across all workers, not just whichever one answered this request: the socket is
-    # pinned to one process and this poll is not, which is why it used to 404 at random.
+    # Resolved across all workers: the socket is pinned to one process and this poll is not.
     session, degraded = await tracker.resolve(session_id)
     if degraded:
         response.headers[SESSION_REGISTRY_DEGRADED_HEADER] = "1"
@@ -445,7 +423,7 @@ async def get_session_stats(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found or expired")
 
-    # enforce user-scoped access (users can only view their own sessions)
+    # A session is visible only to its own user.
     if session.user_email and session.user_email != _rbac.email:
         raise HTTPException(status_code=404, detail="Session not found or expired")
 
@@ -484,13 +462,11 @@ async def list_active_tracked_sessions(
 
     scope=self (default): the caller's own sessions only (data minimization).
     scope=org: every live session on clusters in the caller's scope, including a
-    platform admin's break-glass access. Isolation is the caller's own
-    get_user_allowed_clusters set, mirroring /sessions/audit exactly so there is one
-    authorization model here rather than two that can drift apart.
+    platform admin's break-glass access. The request's enforced cluster set and the
+    project and instance gates apply, as on /sessions/audit.
     """
-    # important: a caller with no email cannot be scoped to "their own" sessions. This
-    # used to pass None straight into a filter that read None as "no filter" and handed
-    # back every session on the worker, across tenants. Refuse instead.
+    # important: a caller with no email cannot be scoped to its own sessions, and the
+    # tracker reads a None email as "no filter", which returns every tenant's sessions.
     if not _rbac.email:
         raise HTTPException(status_code=403, detail="Token carries no email claim")
 
@@ -500,17 +476,13 @@ async def list_active_tracked_sessions(
     allowed_clusters = None
     user_email = _rbac.email
     if scope == "org":
-        # important: the REQUEST-scoped set, not a fresh get_user_allowed_clusters(). That
-        # function returns only the org-derived clusters; org_scope_dependency then narrows
-        # it by the tenant ACL and stores the result in the context var, which is the set
-        # verify_cluster_access actually enforces. Calling the function directly skips the
-        # ACL layer, and a live QA run caught exactly that: qa-tenant is a member of the org
-        # owning nuc2 but is narrowed off it by ACL, and saw an admin's break-glass session
-        # on a cluster it cannot reach. Read the enforced set, never recompute a second one.
+        # important: read the request-scoped set that org_scope_dependency narrowed by the
+        # tenant ACL, which is what verify_cluster_access enforces. get_user_allowed_clusters()
+        # returns only the org-derived clusters, so a tenant narrowed off a cluster by its ACL
+        # would see the sessions there, an admin's break-glass session included.
         from app.core.org_scope import get_current_allowed_clusters
         allowed = get_current_allowed_clusters()
-        # admin -> None -> unrestricted. An empty set means the caller owns nothing, which
-        # must match nothing rather than falling open to everything.
+        # None means unrestricted (admin). An empty set must match nothing, never fall open.
         allowed_clusters = None if allowed is None else (allowed or {"__none__"})
         user_email = None
 
@@ -522,8 +494,8 @@ async def list_active_tracked_sessions(
         allowed_clusters=allowed_clusters,
     )
     if degraded:
-        # the shared view is unavailable, so this is one worker's slice of the truth.
-        # Say so rather than let the UI present a short list as the whole picture.
+        # The shared view is unavailable, so this is one worker's slice; the header tells the
+        # UI the list may be incomplete.
         response.headers[SESSION_REGISTRY_DEGRADED_HEADER] = "1"
     if scope == "org":
         # Cluster membership alone is too broad on a cluster shared by organizations. The
@@ -562,15 +534,11 @@ async def query_session_audit_logs(
 
     scope=self (default): the caller's own sessions only (data minimization).
     scope=org: every session on clusters in the caller's organization scope, including
-    a platform admin's break-glass console/terminal access - the tenant-visible
-    accountability trail. Cluster, Partner project, and Tenant instance boundaries are
-    applied to both the count and page query, so no other organization's sessions leak.
+    a platform admin's break-glass console/terminal access. Cluster, Partner project and
+    Tenant instance boundaries apply to both the count and the page query.
 
-    important: `limit` used to truncate with no way past it. The trail held 660 rows while the
-    page asked for 500, so the oldest 160 were unreachable and the pager in the UI was paging a
-    set it had already lost the tail of. An audit trail that silently drops its oldest entries
-    is the one kind of list where truncation is not a display choice. `total` is counted over
-    the same filters as the page, so a caller can tell a short last page from a lost one.
+    `total` is counted over the same filters as the page, so a caller can page to the
+    oldest entry and tell a short last page from a truncated one.
     """
     from sqlalchemy import select, desc, func
 
@@ -585,7 +553,7 @@ async def query_session_audit_logs(
         if scope == "org":
             conditions.extend(_session_audit_org_conditions())
         else:
-            # default: own sessions only (data minimization / GDPR)
+            # Default: own sessions only (data minimization).
             conditions.append(SessionAuditLog.user_email == _rbac.email)
 
         if instance_name:
@@ -675,11 +643,9 @@ async def get_capabilities(
     return ConsoleCapabilitiesResponse(**caps.to_dict())
 
 
-# note: `GET /console/{name}/session` used to live here. It created a real VGA operation and, since
-# its secrets could not be handed out, returned only the operation id, so nothing could ever
-# connect to what it made: every call left an orphaned operation on the cluster. No caller existed
-# (frontend, MCP or integrations). The console runs on the WebSocket below, which creates its
-# own operation and never discloses it. Removed for the same reason as its terminal twin.
+# There is no REST route that opens a console session. Its operation secrets cannot be handed out,
+# so nothing could connect to it and every call would leave an orphaned operation on the cluster.
+# The WebSocket below creates its own operation and never discloses it.
 
 
 @router.get(
@@ -710,16 +676,10 @@ async def get_startup_order(
     if error:
         return StartupOrderResponse(success=False, error=error)
 
-    # important: this is a PROJECT-wide listing, and the cluster check above says nothing about
-    # which instances in it are the caller's. On a cluster where several tenants share a project
-    # it returned the full roster: every neighbour's instance name, its boot order and its delay.
-    # Admin and Partner carry no ACL, so this is a no-op for an operator.
-    # important: narrowed by the permission the caller actually holds, not by "has any rule here".
-    # The helper this replaces ignores the permissions on a rule entirely, so a tenant holding only
-    # `console` on one instance was still shown every instance they hold any rule for. Asking the
-    # same question the per-instance routes ask is what makes the two agree. Admin and Partner
-    # carry no ACL and check_tenant_permission answers True for them, so an operator read is
-    # unfiltered.
+    # important: this is a project-wide listing, and the cluster check above says nothing about
+    # which instances in it the caller may see. Each row is filtered by the `view` permission, the
+    # same check the per-instance routes make. check_tenant_permission answers True for Admin and
+    # Partner, so an operator read is unfiltered.
     scoped = project
     rows = [StartupOrderEntry(**e.to_dict()) for e in entries]
     seen: Dict[str, bool] = {}
@@ -900,8 +860,8 @@ async def attach_iso(
     if not success:
         return ActionResponse(success=False, error=message)
     
-    # the ISO volume's used_by and the instance's devices both changed; the ISO page reads the
-    # former before letting an operator delete the image
+    # The ISO volume's used_by and the instance's devices both changed; the ISO page reads
+    # used_by before it lets an operator delete the image.
     get_cache_manager().invalidate_instance_cache()
     return ActionResponse(success=True, message=message)
 
@@ -967,12 +927,7 @@ async def check_active_sessions(
     project: str = Query("default", description="LXD project name"),
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
-    """
-    Check for active console operations for an instance.
-    
-    Returns list of active console sessions that might conflict.
-    Useful for warning users before opening a new console.
-    """
+    """List an instance's running console operations, so the UI can warn before opening another."""
     project = _verify_instance_access(host, project, instance_name, "view")
     from app.services.lxd_service import get_lxd_service
     
@@ -987,7 +942,6 @@ async def check_active_sessions(
         if not client:
             raise HTTPException(status_code=503, detail="The cluster did not answer")
         
-        # Get running operations
         response = await _console_io(
             partial(
                 client.api.operations.get,
@@ -1064,7 +1018,6 @@ async def kill_all_sessions(
                 error=f"Cannot connect to cluster '{host}'",
             )
         
-        # Get running operations
         response = await _console_io(
             partial(
                 client.api.operations.get,
@@ -1088,7 +1041,6 @@ async def kill_all_sessions(
                     if not op_id:
                         continue
                     try:
-                        # Try to delete/cancel the operation
                         deleted = await _console_io(
                             partial(
                                 client.api.operations[safe_segment(op_id)].delete,
@@ -1211,7 +1163,7 @@ async def kill_active_session(
         except Exception as del_err:
             logger.debug(f"DELETE request returned: {del_err}")
         
-        # Check if the operation still exists
+        # Cancellation can fail and still end the operation; check whether it is gone.
         await asyncio.sleep(0.3)  # Small delay for operation cleanup
         try:
             remaining = await _console_io(
@@ -1272,15 +1224,13 @@ async def console_websocket(
     frames carry the protocol; a serial console also takes JSON text frames for resize and ACKs.
     Re-authorized every minute while open.
     """
-    # Validate auth when enabled
     from app.core.config import get_settings as _gs
     _settings = _gs()
-    # important: gated on auth_enabled ALONE. This used to also require
-    # `_settings.authentik_issuer`, which is the variable whose absence produces the
-    # unauthenticated `user`, so the guard switched itself off in exactly the situation it
-    # existed to catch. ws_user now refuses a misconfigured server itself.
+    # important: gated on auth_enabled alone. A missing `authentik_issuer` is what produces an
+    # unauthenticated `user`, so also requiring it would switch the guard off in the case it
+    # exists for. ws_user refuses a misconfigured server itself.
     if _settings.auth_enabled and user is None:
-        # note: every refusal below accepts first (core/ws_close.py). A close before accept is an
+        # Every refusal below accepts first (core/ws_close.py). A close before accept is an
         # HTTP 403 to the browser, which reports 1006 with no reason and never recovers.
         await ws_close.refuse(websocket, *refusal_of(websocket))
         return
@@ -1290,12 +1240,12 @@ async def console_websocket(
         await ws_close.refuse(websocket, ws_close.POLICY, "unknown_console_type")
         return
 
-    # set org scope for WebSocket (context variable)
+    # Set the org scope context for the WebSocket.
     await set_org_scope_for_ws(user, interactive=True)
 
-    # important: the REST console path checks this and the WebSocket did not, so the same
-    # session opened over a socket skipped the organisation boundary entirely. Refusing rather
-    # than raising, since HTTPException is meaningless once the socket is being negotiated.
+    # important: the socket needs the same instance check as the REST console routes, or it
+    # skips the organization boundary. Refuse rather than raise: an HTTPException means nothing
+    # once the socket is being negotiated.
     try:
         project = _verify_instance_access(host, project, instance_name, "console")
     except HTTPException as exc:
@@ -1341,10 +1291,9 @@ async def console_websocket(
     offered = websocket.scope.get("subprotocols") or []
     await websocket.accept(subprotocol="binary" if "binary" in offered else None)
 
-    # Extract user details for session tracking
     user_id = user.user_id if user else "anonymous"
     user_email = user.email if user else ""
-    # resolve via RBAC to get canonical role name (admin/partner/tenant)
+    # Canonical role name (admin, partner or tenant) through RBAC.
     if user:
         from app.core.rbac import resolve_roles, get_highest_role
         _roles = resolve_roles(user)

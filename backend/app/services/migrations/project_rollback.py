@@ -128,7 +128,7 @@ async def delete_job_project(
     if record is None:
         return
     # important: without its own profiles, a profile call for this project reaches the default
-    # project's profiles, which every project on the cluster may share (security review).
+    # project's profiles, which every project on the cluster may share.
     if features_enabled(record, "profiles"):
         for resource in reversed(_of_type(resources, "profile")):
             name, _target = _names(resource)
@@ -157,8 +157,8 @@ async def delete_job_project(
     try:
         await _blocking(executor.delete_project, client, project=project, label="migration.delete_project")
     except Exception as exc:  # noqa: BLE001 - settled by the readback below
-        # note: LXD can finish a slow project delete after the request timed out (1184e4bc).
-        # The readback decides; only a project that is still there is a failure.
+        # LXD can finish a slow project delete after the request timed out. The readback
+        # decides; only a project that is still there is a failure.
         logger.warning("Project delete of %s answered %s; reading it back.", project, type(exc).__name__)
     if await _blocking(executor.read_project, client, project=project, label="migration.project_deleted") is not None:
         raise MigrationUnknown(f"Project '{project}' still exists after its delete.")
@@ -203,8 +203,8 @@ async def _finish(
     for resource in resources:
         if resource.resource_type != "instance":
             await _resource_update(resource.resource_id, state="completed" if rollback else "failed")
-    # note: the retained sources' uuids, or the snapshot schedules moved back carried a NULL
-    # instance_uuid and no longer matched their instance.
+    # The retained sources' uuids are required: without them the snapshot schedules moved back
+    # carry a NULL instance_uuid and match no instance.
     pairs = instance_pairs(job, resources, source_uuids=source_uuids)
     state = job.safe_result or {}
     try:
@@ -369,7 +369,7 @@ async def run_project_rollback(
             target = await _read(target_client, job.target_project, target_name, f"migration.rollback_target[{target_name}]")
             if target is None:
                 continue
-            # Proven again right before the stop and delete, not only in the first pass.
+            # Proven again right before the stop and delete, on top of the first pass.
             if executor.instance_identity_fingerprint(target) != state.get("target_identity_hash"):
                 await _manual_recovery(
                     job,

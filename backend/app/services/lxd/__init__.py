@@ -1,6 +1,4 @@
-"""
-LXD Service Package.
-"""
+"""LXD service layer and its public helpers."""
 
 from .lxd_service import LXDService, get_lxd_service
 from .exceptions import (

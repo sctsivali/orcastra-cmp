@@ -1,7 +1,4 @@
-"""
-Project management operations.
-Handles create, update, delete, and list operations for LXD projects.
-"""
+"""LXD project create, update, delete and list, run on a bounded worker pool."""
 
 import asyncio
 import logging
@@ -43,8 +40,8 @@ _PROJECT_WRITE_WAIT_SECONDS = 60
 _PROJECT_WRITE_WALL_SECONDS = 240.0
 _PROJECT_WRITE_MAX_IN_FLIGHT_PER_CLUSTER = 1
 _PROJECT_READ_TIMEOUT = (5, 25)
-# note: above project_delete's own socket budgets, so they end the worker first; the wall
-# fires only on a stuck reconnect.
+# Above project_delete's own socket budgets, so those end the worker first; the wall fires
+# only on a stuck reconnect.
 _PROJECT_DELETE_WALL_SECONDS = 30.0
 _PROJECT_PROBE_WALL_SECONDS = 10.0
 _projects_executor = ThreadPoolExecutor(
@@ -156,7 +153,7 @@ def _update_readback_matches(
 
 
 async def _drain_project_worker(host: str) -> None:
-    """Keep the ownership lock held until a timed-out/cancelled worker really exits."""
+    """Hold the ownership lock until a timed-out or cancelled worker has exited."""
     while in_flight_for_key(_projects_executor, host):
         try:
             await asyncio.shield(asyncio.sleep(0.05))
@@ -191,9 +188,6 @@ async def _run_project_blocking(
 
 
 class ProjectManager:
-    """
-    Manages LXD project operations.
-    """
     
     def __init__(self, connection_manager: LXDConnectionManager, cert_manager=None):
         self.connection_manager = connection_manager
@@ -205,7 +199,6 @@ class ProjectManager:
         if client is None and self.cert_manager:
             logger.info(f"Connection to {node_name} is stale, attempting reconnect...")
             try:
-                # Pass connection_manager for proper pooling
                 client = self.cert_manager.connect_with_vault_cert(
                     node_name,
                     connection_manager=self.connection_manager
@@ -235,20 +228,17 @@ class ProjectManager:
             ) from exc
     
     def _list_projects_sync(self, host: str) -> List[Dict[str, Any]]:
-        """Synchronous implementation of list_projects."""
         try:
-            # The collection request below is the liveness proof. A preliminary get_client()
-            # validation/reconnect chain plus the collection read could outlive this worker's
-            # 30-second wall cap and retain its admission slot after the caller left.
-            # A genuinely cold worker is repaired by the background healer; callers receive a
-            # typed local-unavailable result that fleet routes must never cache as a dead cluster.
+            # The collection request below is the liveness proof. A get_client() validate and
+            # reconnect first could outlive the 30 s wall and keep the admission slot after the
+            # caller left. A cold worker is repaired by the background healer; callers get a typed
+            # local-unavailable error, which fleet routes must never cache as a dead cluster.
             client = self.connection_manager.get_cached_client(host)
             
             if client is None:
-                # get_cached_client() also returns None for a known remote outage. Preserve
-                # that distinction: fleet reads may safely render a host this worker last saw
-                # fail as partial, while a genuinely cold local worker must fail the whole response
-                # so it cannot cache a false remote outage.
+                # get_cached_client() also returns None for a known remote outage. Fleet reads
+                # may render a host this worker last saw fail as partial; a cold local worker
+                # must fail the whole response so no false remote outage is cached.
                 if health.known_unreachable(host):
                     raise LXDConnectionError(
                         f"Connection to {host} is temporarily unavailable"
@@ -519,7 +509,8 @@ class ProjectManager:
             logger.error(f"Error creating project '{name}' on {host}: {e}")
             if phase in {"submitting", "waiting", "verifying"}:
                 raise LXDOperationUnknownError("create", name) from e
-            # note: not str(e): before submit this is client or certificate plumbing, not LXD.
+            # The message leaves out the exception text, which before submit describes client
+            # or certificate setup.
             raise LXDOperationError("Could not create project") from e
     
     @audit_operation(
@@ -722,15 +713,16 @@ class ProjectManager:
             logger.error(f"Error updating project '{project_name}' on {host}: {e}")
             if phase in {"submitting", "waiting", "verifying"}:
                 raise LXDOperationUnknownError("update", project_name) from e
-            # note: not str(e): before submit this is client or certificate plumbing, not LXD.
+            # The message leaves out the exception text, which before submit describes client
+            # or certificate setup.
             raise LXDOperationError("Could not update project") from e
     
     @audit_operation("lxd.project.delete", "project", target_id_param="name")
     async def delete_project(self, host: str, name: str) -> None:
-        """Delete a project off the event loop; a delete LXD may still be doing is never guessed.
+        """Delete a project off the event loop, never guessing the outcome of an unsettled delete.
 
         important: a timeout or a dropped connection after the DELETE was sent says nothing about
-        the outcome. The exact read decides: absent is deleted, present is
+        the outcome, so an exact read decides: absent is deleted, present raises
         LXDOperationUnknownError, and the caller must not revoke anything on it.
         """
         try:
@@ -771,8 +763,8 @@ class ProjectManager:
                 executor=_projects_executor,
                 max_in_flight=_PROJECT_LIST_WORKERS,
                 # important: one probe thread per cluster. A cluster that drips its answer holds
-                # the thread past the wall; uncapped, a few slow probes took every project thread
-                # and every organization's project reads with them.
+                # the thread past the wall; uncapped, a few slow probes would take every project
+                # thread, and every organization's project reads with them.
                 concurrency_key=f"{host}:probe",
                 max_in_flight_per_key=1,
             )

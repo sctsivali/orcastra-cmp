@@ -1,24 +1,16 @@
 """The argv a desktop action becomes inside the guest, per session type and available tooling.
 
-Everything here is a LIST of arguments, never a shell string with values interpolated into it. The
-one exception is a `/bin/sh -c` pipeline whose script is a fixed constant with no caller-supplied
-value in it, which `guest_exec._argv` explicitly blesses as the honest way to ask for a shell.
-Typed text and key names are always separate argv elements, so `"; rm -rf /"` lands in the guest
-as literal characters to type.
+Everything here is an argument list; caller text is never interpolated into a shell string. The
+`/bin/sh -c` pipelines (the explicit shell form `guest_exec._argv` accepts) are built from fixed
+text, numbers and, for hold_key, key names `guest.keys` has narrowed to letters, digits and
+underscore. Typed text is always its own argv element or stdin, so `"; rm -rf /"` is typed as
+literal characters.
 
-The matrix, which is a property of the compositors rather than a choice made here:
-
-  X11, any WM          capture: import / maim / scrot      input: xdotool
-  Wayland, wlroots     capture: grim                       input: wtype + wlrctl, or ydotool
-  Wayland, KDE         capture: spectacle                  input: ydotool
-  Wayland, GNOME       capture: NOT POSSIBLE               input: ydotool
-
-GNOME is the one that matters, because it is what a stock Ubuntu desktop runs. Mutter implements
+CAPTURE_TOOLS and INPUT_TOOLS list the tools per compositor; on wlroots, wtype types and wlrctl
+moves the pointer. Wayland GNOME, the stock Ubuntu desktop, has no capture path: Mutter implements
 neither `wlr-screencopy-unstable-v1` nor `virtual-keyboard-unstable-v1`, `gnome-screenshot` is gone
-from GNOME core and its private D-Bus interface was locked down specifically to stop scripts
-calling it, and the XDG Screenshot portal opens a confirmation dialog a human has to click. That
-is a security control working as designed, not a gap to route around, so the probe reports it and
-names the remedy instead.
+and its private D-Bus interface is locked against scripts, and the XDG Screenshot portal asks a
+human to confirm. That is a security control, so the probe reports it and names the remedy.
 """
 
 from typing import Dict, List, Optional, Sequence
@@ -38,9 +30,8 @@ __all__ = [
     "type_chain",
 ]
 
-# Ordered by preference. `import` leads on X11 because it is the only one of the three that can
-# resize natively, which is what keeps a 1920x1080 desktop within a model's limits without the
-# backend ever decoding a pixel.
+# Ordered by preference. `import` leads on X11 because its chain resizes in the guest, which keeps
+# a 1920x1080 desktop within a model's limits without the backend ever decoding a pixel.
 CAPTURE_TOOLS: Dict[str, Sequence[str]] = {
     "x11": ("import", "magick", "maim", "scrot", "ffmpeg"),
     "wayland-wlroots": ("grim",),
@@ -72,28 +63,24 @@ def capture_chain(
 ) -> List[str]:
     """Capture the root window, resized, base64 on stdout and the geometry on stderr.
 
-    The geometry travels on stderr behind a marker rather than in a second exec, so it is always
-    exactly as fresh as the pixels. A separate call could report a resolution that changed between
-    the two.
+    The geometry travels on stderr behind a marker instead of in a second exec, so it always
+    matches the pixels even when the resolution changes.
 
-    important: a pipeline, with nothing written to the guest's filesystem. The alternative, writing
-    a temp file and pulling it, creates a cleanup obligation that cannot be discharged when the
-    connection drops, and "a screenshot of the user's desktop is never left in their filesystem"
-    then becomes a promise broken exactly when it matters. Here there is nothing to clean up.
+    important: a pipeline, so no capture is left in the guest's filesystem when the connection
+    drops. spectacle can only write a file; its branch uses a mktemp file that an EXIT trap removes.
     """
     if session_type == "x11":
         geometry = 'xdotool getdisplaygeometry 2>/dev/null | sed "s/^/ORCA_GEOM /" >&2;'
         if tool in ("import", "magick"):
             binary = "import" if tool == "import" else "magick import"
-            # important: the resize is a SEPARATE stage, piped, rather than an option on `import`.
-            # `import -resize WxH` is accepted and silently ignored by ImageMagick 6 (measured on
-            # 6.9.12-98: a 1920x1080 root window came back 1920x1080), which does not fail, it just
-            # hands back an image too large for the model to accept. Piping through the converter
-            # resizes correctly on both 6 and 7.
+            # important: the resize is a separate piped stage. ImageMagick 6 accepts
+            # `import -resize WxH` and ignores it (6.9.12-98 returns a 1920x1080 root window at
+            # 1920x1080), handing back an image too large for the model. Piping through the
+            # converter resizes on both 6 and 7.
             #
-            # `magick` on 7, `convert` on 6, chosen in the guest because that is where the answer
-            # is. PNG first: a desktop is text and flat colour, where PNG wins and JPEG artifacts
-            # hurt readability most. JPEG only when the PNG turns out too large to ship.
+            # `magick` on 7, `convert` on 6, chosen in the guest. PNG first, since a desktop is text
+            # and flat colour where JPEG artifacts hurt readability; JPEG only when the PNG is too
+            # large to ship.
             resizer = (
                 'if command -v magick >/dev/null 2>&1; then RS=magick; else RS=convert; fi;'
             )
@@ -117,7 +104,7 @@ def capture_chain(
                 f'-vf scale={width}:-1 -f image2 -c:v png - | base64 -w 0; echo "ORCA_FMT png" >&2'
             )
     if session_type == "wayland-wlroots" and tool == "grim":
-        # grim is the best tool in this matrix: stdout, native scaling, native JPEG, one binary.
+        # grim writes straight to stdout and needs no helper binary.
         geometry = 'wlr-randr 2>/dev/null | sed -n "s/.*current \\([0-9]*\\)x\\([0-9]*\\).*/ORCA_GEOM \\1 \\2/p" >&2;'
         return _shell(f'{geometry} grim -t png - | base64 -w 0; echo "ORCA_FMT png" >&2')
     if session_type == "wayland-kde" and tool == "spectacle":
@@ -133,15 +120,13 @@ def capture_chain(
 def _sync_move(x: int, y: int) -> List[str]:
     """xdotool arguments that put the pointer on (x, y) and return only once it is there.
 
-    --sync is not optional. Without it xdotool returns before the pointer has actually moved, so a
-    click issued immediately after lands at the previous position.
+    --sync is required: without it xdotool returns before the pointer moves, and a click issued
+    right after lands at the previous position.
 
-    important: but `mousemove --sync` to the spot the pointer is ALREADY on never returns: it
-    waits for a motion event that cannot come. Measured on xdotool 3.20211022.1 under Xvfb: rc 143
-    after `timeout 8`, while the same move to a new spot returned at once. A click at the current
-    position, the commonest thing an agent does after a mouse_move, therefore burned the whole
-    exec budget, came back as a timeout, and held a desktop worker for it. So the pointer is first
-    stepped one pixel aside, which makes the synced move a real one; both requests travel on one
+    important: `mousemove --sync` to the spot the pointer is already on never returns, because it
+    waits for a motion event that cannot come (xdotool 3.20211022.1 under Xvfb). A click at the
+    current position, common right after a mouse_move, would burn the exec budget and hold a
+    desktop worker. So the pointer is first stepped one pixel aside; both requests travel on one
     connection, so the server applies them in order.
     """
     neighbour = x - 1 if x > 0 else x + 1
@@ -186,9 +171,8 @@ def click_chain(
 def drag_chain(session_type: str, tool: str, start: tuple, end: tuple) -> List[str]:
     if tool != "xdotool":
         raise ValueError(f"no drag chain for {tool!r}")
-    # One invocation, so a dropped connection cannot leave the button held down. Split across
-    # three calls, a failure between them leaves the guest with a stuck mouse button, which looks
-    # to the user like a broken desktop rather than a failed agent.
+    # One invocation, so a dropped connection between calls cannot leave the guest with the mouse
+    # button held down.
     return [
         "xdotool",
         *_sync_move(start[0], start[1]),
@@ -242,8 +226,7 @@ def clipboard_read_chain(session_type: str) -> List[str]:
 
 
 def cursor_position_chain(session_type: str, tool: str) -> List[str]:
-    """X11 only. Wayland has no unprivileged way to ask where the pointer is, and inventing a
-    plausible answer would be worse than reporting that it is unsupported."""
+    """X11 only. Wayland has no unprivileged way to ask where the pointer is."""
     if tool != "xdotool":
         raise ValueError(f"no cursor position chain for {tool!r}")
     return ["xdotool", "getmouselocation", "--shell"]
@@ -254,28 +237,22 @@ def cursor_position_chain(session_type: str, tool: str) -> List[str]:
 def type_chain(session_type: str, tool: str, *, use_stdin: bool, text: str) -> List[str]:
     """Type literal text.
 
-    `use_stdin` is decided by the probe, which tests `xdotool type --file` once rather than
-    assuming: the Ubuntu manpage does not document it although Debian's does. When it works the
-    text never touches argv, so it is not visible in the guest's process table to every other user
-    on that machine.
+    `use_stdin` is decided by the probe, which tests `xdotool type --file` once: the Ubuntu
+    manpage does not document it although Debian's does. On stdin the text never touches argv, so
+    other users on the guest cannot read it from the process table.
     """
     if tool == "xdotool":
         if use_stdin:
             return ["xdotool", "type", "--clearmodifiers", "--delay", "12", "--file", "-"]
         return ["xdotool", "type", "--clearmodifiers", "--delay", "12", "--", text]
     if tool == "wtype":
-        # important: -s before anything is typed, or the FIRST characters are lost. wtype binds a
-        # virtual keyboard through the Wayland protocol and starts typing immediately, and a
-        # compositor that has not finished processing the keymap drops what arrives first.
-        # Measured on sway: "echo ..." reached the shell as "cho ...", the action reported
-        # success, and the guest ran a different command from the one that was asked for. That is
-        # the worst shape a defect can take on this surface, because a caller cannot see it.
+        # important: -s before anything is typed, or the first characters are lost. wtype binds a
+        # virtual keyboard and starts typing at once, and a compositor that has not finished
+        # processing the keymap drops what arrives first: on sway "echo ..." reached the shell as
+        # "cho ..." while the action reported success.
         #
-        # important: a trailing "-" reads the text from stdin. The module docstring claimed argv
-        # was avoided, and it was only avoided for xdotool: every Wayland guest had whatever an
-        # agent typed sitting in its process table, readable by any local user, which is exactly
-        # the exposure the xdotool branch exists to prevent. wtype accepts stdin, verified against
-        # the installed build on a sway guest.
+        # important: a trailing "-" reads the text from stdin, which keeps it out of the guest's
+        # process table as in the xdotool branch (verified on a sway guest).
         if use_stdin:
             return ["wtype", "-s", str(WTYPE_SETTLE_MS), "-d", "12", "-"]
         return ["wtype", "-s", str(WTYPE_SETTLE_MS), "-d", "12", "--", text]
@@ -303,11 +280,10 @@ def key_chain(session_type: str, tool: str, key: str, modifiers: List[str], repe
 
 
 def hold_key_chain(session_type: str, tool: str, key: str, modifiers: List[str], seconds: float) -> List[str]:
-    """Hold a key down for a bounded time, releasing it even if the call is cut short.
+    """Hold a key down for `seconds`, releasing it even if the call is cut short.
 
-    important: the trap is not optional. A modifier left down after a failed call silently breaks
-    every later action in that session and is maddening to diagnose from the outside, because
-    nothing reports an error and every subsequent keystroke is simply wrong.
+    important: keep the trap. A modifier left down after a failed call breaks every later
+    keystroke in that session, and nothing reports an error.
     """
     if tool != "xdotool":
         raise ValueError(f"no hold chain for {tool!r}")

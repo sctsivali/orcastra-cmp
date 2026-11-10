@@ -1,23 +1,17 @@
 """Moving a workload between projects, cluster members and clusters.
 
-Three transports, chosen by a preflight rather than by the caller, because the caller cannot
-know which one a given pair of endpoints supports:
+`choose_transport` picks the transport from the cluster pair:
 
 * ``copy``      same cluster, LXD copies internally. No data leaves the host.
 * ``migration`` different clusters, LXD's own pull migration. The target opens a connection to
                 the source and pulls, so the bytes never touch the control plane.
-* ``stream``    different clusters that cannot reach each other. Orcastra exports a backup on
-                the source and feeds it to the target's import in bounded chunks.
 
-`migration` is preferred over `stream` wherever it works, and the reason is not only speed. A
-pull migration is rsync-based and reports progress natively; the stream is one unresumable HTTP
-body through a control plane with 24 GB of free disk, so a failure at 90% has nothing to resume
-from. `stream` exists because a topology where the two hypervisors cannot see each other is
-real, not because it is a reasonable default.
+No caller selects ``stream`` (the backup export and import helpers at the end): it would be one
+unresumable HTTP body through the control plane's disk, while a pull migration reports progress.
 
-important: the migration secrets LXD mints are per-operation and short lived. This is why the
-feature does not require the two clusters to trust each other's certificates permanently, which
-would be a standing security relationship between two customers' infrastructure.
+important: LXD's migration secrets are per operation and short lived, so the two clusters never
+trust each other's certificates permanently, which would be a standing security relationship
+between two customers' infrastructure.
 """
 
 import logging
@@ -37,13 +31,12 @@ TRANSPORT_STREAM = "stream"
 # small enough that a handful of concurrent transfers cannot exhaust the container's memory.
 STREAM_CHUNK_BYTES = 4 * 1024 * 1024
 
-# The streaming fallback holds a worker for the whole transfer and buffers in the control plane,
-# so it is capped. A workload above this is told to fix the network path between the clusters and
-# use the migration transport rather than being quietly pushed down the worse route.
+# Size cap for the streaming fallback, which holds a worker for the whole transfer and buffers
+# in the control plane.
 STREAM_MAX_BYTES = 20 * 1024 * 1024 * 1024
 
-# A transfer is not a request. These bound the socket, not the operation, and are deliberately
-# far above the pooled client's (3, 8) because a multi-gigabyte read legitimately takes minutes.
+# Socket bounds for a transfer; they do not bound the whole operation. Far above the pooled
+# client's (3, 8) because a multi-gigabyte read takes minutes.
 TRANSFER_CONNECT_TIMEOUT = 15
 TRANSFER_READ_TIMEOUT = 3600
 
@@ -72,10 +65,10 @@ def _effective_port(parsed: SplitResult) -> Optional[int]:
 def validated_operation_url(client, operation_url: str) -> str:
     """Bind a daemon-provided operation URL to the registered source endpoint.
 
-    The destination hypervisor dereferences this URL from its own network. Trusting an absolute
-    URL returned by a compromised or confused daemon would therefore turn migration into a
-    hypervisor-side SSRF primitive. Only the connected source origin and the exact LXD operation
-    path are accepted; query strings, fragments and user info have no valid migration meaning.
+    important: the destination hypervisor dereferences this URL from its own network, so an
+    absolute URL from a compromised or confused daemon would make migration a hypervisor-side
+    SSRF primitive. Only the connected source origin and the exact LXD operation path are
+    accepted; query strings, fragments and user info have no valid migration meaning.
     """
     endpoint = urlsplit(api_base(client))
     raw = (operation_url or "").strip()
@@ -126,19 +119,19 @@ def _operation_url(response: Any) -> Optional[str]:
 
 
 def instance_footprint(client, instance_name: str, project: str) -> Optional[int]:
-    """Bytes the instance's root disk currently uses, when the driver reports it.
+    """Bytes the instance's disks currently use, when the driver reports it.
 
-    Used to refuse an oversized streaming transfer up front and to show the operator what the
-    move will actually cost, rather than discovering it when the pool fills.
+    Lets the preflight size a move against the target pool before it starts, rather than
+    discovering the cost when the pool fills.
     """
     try:
         state = _metadata(
             client.api.instances[safe_segment(instance_name)].state.get(params=_project_params(project))
         ) or {}
         disks = state.get("disk") or {}
-        # important: a reported 0 is a measurement, not a missing one. A volume that was never
-        # written past its image (an instance created and never started) holds no bytes of its
-        # own, and reading 0 as unknown refused to move it with "size reporting" blamed.
+        # important: a reported 0 is a measurement. A volume never written past its image (an
+        # instance created and never started) holds no bytes of its own, and the preflight tells
+        # that case apart from no report at all (None).
         reported = [
             d.get("usage") for d in disks.values() if isinstance(d, dict) and d.get("usage") is not None
         ]
@@ -165,12 +158,10 @@ def pool_headroom(client, pool: str) -> Optional[Dict[str, int]]:
 
 
 def host_architectures(client) -> List[str]:
-    """Architectures the host can actually run.
+    """Architectures the host can run.
 
-    An instance cannot be copied to a host that cannot execute its binaries, and LXD refuses the
-    attempt rather than translating anything. This fleet makes the case concrete: nuc2 is x86_64
-    and pandora is aarch64, so offering one as a destination for the other would be an invitation
-    to a failure the operator could not have predicted.
+    LXD refuses to copy an instance to a host that cannot execute its binaries and translates
+    nothing, so a mismatch is reported before the move.
     """
     env = (client.host_info or {}).get("environment") or {}
     arches = env.get("architectures") or []
@@ -202,11 +193,10 @@ def instance_architecture(client, instance_name: str, project: str) -> Optional[
 
 
 def choose_transport(source_cluster: str, target_cluster: str) -> str:
-    """The transport to attempt first for a pair of clusters.
+    """The transport for a pair of clusters: copy within one cluster, pull migration across two.
 
-    Cross-cluster always attempts migration first. Whether the target can actually reach the
-    source is not knowable in advance, so it is discovered by attempting and falling back, not
-    by a probe that would only pretend to answer.
+    Whether the target can reach the source cannot be probed in advance, so a cross-cluster move
+    learns it from the attempt.
     """
     return TRANSPORT_COPY if source_cluster == target_cluster else TRANSPORT_MIGRATION
 
@@ -214,12 +204,9 @@ def choose_transport(source_cluster: str, target_cluster: str) -> str:
 def is_unreachable_error(exc: Exception) -> bool:
     """Whether a failed migration means the target could not open the source.
 
-    There is no LXD call that answers "can you reach this host", so reachability is not probed:
-    it is learned from the attempt.
-
-    note: this used to select a streaming fallback. That transport is no longer reachable, so the
-    classification now only shapes the message: a failure on this link is the one an operator
-    cannot diagnose from the raw text, because it is the link the control plane never uses itself.
+    No LXD call answers "can you reach this host", so reachability is learned from the attempt.
+    A failure on this link is hard to diagnose from the raw text, because the control plane
+    never uses the link itself.
     """
     text = str(exc).lower()
     return any(
@@ -244,15 +231,12 @@ def is_unreachable_error(exc: Exception) -> bool:
 def read_instance_definition(client, instance_name: str, project: str) -> Dict[str, Any]:
     """The source instance's config, devices and profiles, ready to be reproduced elsewhere.
 
-    important: a copy must carry these explicitly rather than leaving LXD to infer them. A
-    destination project with `limits.cpu` or `limits.disk` set, which is what every customer
-    project here has, refuses an instance that does not declare its own, and does so during the
-    pre-flight quota check before it has resolved anything from the source. The refusal reads as
-    "instance has no limits.cpu config", which points at the copy rather than at the project.
+    important: a copy carries these explicitly. A destination project with `limits.cpu` or
+    `limits.disk` set refuses an instance that does not declare its own, during the quota check
+    that runs before anything is resolved from the source ("instance has no limits.cpu config").
 
-    `volatile.*` is dropped deliberately: it holds per-instance identity such as generated MAC
-    addresses, and reproducing it would put two instances with the same hardware identity on the
-    same network.
+    `volatile.*` is dropped: it holds per-instance identity such as generated MAC addresses, and
+    reproducing it would put two instances with the same hardware identity on one network.
     """
     meta = _metadata(client.api.instances[safe_segment(instance_name)].get(params=_project_params(project))) or {}
     instance_type = meta.get("type")
@@ -307,13 +291,10 @@ def copy_within_cluster(
 ) -> Optional[str]:
     """Copy an instance inside one cluster.
 
-    Copy, never move: the source survives, so a botched destination is recoverable and the
-    operator decides when to remove the original. A move is a different LXD call shape and is
-    deliberately not offered rather than guessed at.
-
-    LXD does this internally, so nothing crosses the network twice and no tarball exists. The
-    destination project is a query parameter and the source project travels inside `source`,
-    which is what the `container_copy_project` extension added.
+    The source survives, so a failed destination is recoverable and the operator decides when to
+    remove the original. LXD copies internally, so nothing crosses the network twice and no
+    tarball exists. The destination project is a query parameter and the source project travels
+    inside `source` (the `container_copy_project` extension).
     """
     if definition is None:
         definition = read_instance_definition(client, source_name, source_project)
@@ -373,15 +354,13 @@ def begin_source_migration(
             "or the instance may be in a state that cannot be migrated."
         )
 
-    # important: LXD answers with a RELATIVE path, and this URL is consumed by the TARGET host,
-    # not by us. Handed over as-is the target has no host to resolve it against, accepts the
-    # request, and the migration then quietly never happens: the operation is created, no bytes
-    # move, and the instance simply never appears. Proven between nuc2 and nuc1, where the copy
-    # was accepted with a 202 and seven minutes later the destination was still empty.
+    # important: LXD answers with a relative path, and the target host consumes this URL. Passed
+    # as-is, the target has no host to resolve it against: it accepts the request with a 202, no
+    # bytes move, and the instance never appears. validated_operation_url makes it absolute
+    # against the registered source endpoint.
     #
-    # note: this is the address the dashboard reaches the source on. A topology where the target
-    # must use a different address than the control plane does would need that second address
-    # recorded in the registry, which nothing does today.
+    # That is the address the dashboard reaches the source on. A topology where the target needs
+    # a different address would have to record that address in the registry.
     operation_url = validated_operation_url(source_client, operation_url)
     return operation_url, secrets
 
@@ -460,8 +439,8 @@ def create_backup(
 ) -> Optional[str]:
     """Create a backup object on the source.
 
-    This is a real artifact occupying real pool space on someone's cluster. Whoever calls it owns
-    deleting it on every path out, including the one where this process dies.
+    The backup occupies pool space on the source cluster. The caller must delete it on every path
+    out, including a crash of this process.
     """
     response = source_client.api.instances[safe_segment(instance_name)].backups.post(
         json={
@@ -491,9 +470,9 @@ def open_backup_stream(source_client, *, instance_name: str, project: str, backu
     """A streaming response for the backup tarball.
 
     `stream=True` keeps the body off the heap, and the explicit timeout overrides the pooled
-    adapter's 8 second read, which a multi-gigabyte download would otherwise trip immediately.
-    The adapter only fills in a default when the caller supplies none, so this widens one call
-    rather than weakening every LXD read in the process.
+    adapter's 8 second read, which a multi-gigabyte download would trip. The adapter fills in a
+    default only when the caller supplies none, so this widens one call without weakening every
+    LXD read in the process.
     """
     return source_client.api.instances[safe_segment(instance_name)].backups[safe_segment(backup_name)].export.get(
         params=_project_params(project),
@@ -506,9 +485,9 @@ def non_retrying_session(client):
     """A session for the import POST that will not repeat it.
 
     important: the pooled LXD session mounts a Retry that includes POST with a 5xx
-    status_forcelist. Retrying an instance import means creating the instance twice, which for a
-    multi-gigabyte transfer leaves two half-built instances and a filled pool. This borrows the
-    pooled session's TLS material and connection pool but strips the retry policy.
+    status_forcelist. Retrying an instance import creates the instance twice, which for a
+    multi-gigabyte transfer leaves two half-built instances and a filled pool. This session
+    borrows the pooled session's TLS material and response hooks but has no retry policy.
     """
     import requests
     from .connection import FingerprintHTTPAdapter

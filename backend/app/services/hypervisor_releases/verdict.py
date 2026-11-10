@@ -1,8 +1,7 @@
 """What the release feeds say about one Cluster's hypervisor version.
 
 The comparison is per track, because that is how both projects ship. A Cluster on LXD 5.21 LTS
-gets 5.21.Z point releases from the 5.21/stable channel and never moves to 6.x on its own;
-calling it out of date because 6.10 exists would push a major upgrade nobody asked for. So the
+gets 5.21.Z point releases from the 5.21/stable channel and never moves to 6.x on its own, so the
 verdict compares against the newest release on the Cluster's own track and names a newer track,
 when there is one, separately.
 
@@ -140,8 +139,8 @@ def evaluate(
     if engine is None or version is None:
         out["reason"] = "unknown_version"
         return out
-    # note: before the feed checks on purpose. The baseline is a fact about the build, so a feed
-    # outage must not hide a known advisory.
+    # Before the feed checks: the baseline is a fact about the build, so a feed outage must not
+    # hide a known advisory.
     security = floor_verdict("security_baseline", engine, ".".join(str(part) for part in version))
     if security.code != "no_floor":
         out["security_update"] = not security.allowed

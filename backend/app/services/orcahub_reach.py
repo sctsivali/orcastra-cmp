@@ -1,11 +1,10 @@
 """Which OrcaHub organizations hear about a project on a cluster.
 
-note: OrcaHub events fanned out to every OrcaHub organization bound to the event's cluster, so on a
-cluster two parties hold, each one's OrcaHub heard, and could bill, the other's projects (pre-1.0.0
-review, 2026-11-06). An organization now hears an event when no other party holds the cluster for
-it, or when the event's project is in its bound there: `default` and the projects its party's
-policies name, the bound its key and its add-ons are held to. A delete names
-the organizations that held what it removed, and they hear it although it has left every bound.
+important: on a cluster two parties hold, one party's OrcaHub must never hear, and so bill, the
+other's projects. An organization hears an event when no other party holds the cluster for it,
+or when the event's project is in its bound there: `default` and the projects its party's
+policies name, the bound its key and its add-ons are held to. A delete names the organizations
+that held what it removed, and they hear it although it has left every bound.
 
 OrcaHub organizations are created by the system rather than a person, so the party is organization
 level: the organizations sharing an owner key that lends party (organization_owners.PARTY_ADDED_VIA),
@@ -77,7 +76,7 @@ async def organizations_reaching(
         select(OrganizationCluster.organization_id).where(OrganizationCluster.cluster_id == cluster_id)
     )).scalars().all()
     holders = {org_id for org_id in rows if org_id is not None}
-    # note: a row not yet bound to an organization was registered by someone outside every party
+    # A row not yet bound to an organization was registered by someone outside every party
     # this can name, so it counts as another holder (cluster_parties.clusters_held_by_another_party).
     unbound = any(org_id is None for org_id in rows)
     held = set(held_by)

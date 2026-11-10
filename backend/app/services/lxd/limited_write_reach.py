@@ -5,10 +5,10 @@ gets implicitly, a copy's source, a restored snapshot, an image. This module mak
 names the first thing that reaches the host.
 
 important: fails closed. A source, snapshot or image that cannot be read refuses the write, because
-what it would apply cannot be judged. A name the plan would read that is empty, `.` or `..` is refused
-with 400 before any read (assert_plan_segments), since requests folds a dot segment out of the path. A named profile that does not exist is left to LXD, which
-refuses the write itself. A read that does not finish in time, or that the cluster answers with an
-error, sends nothing (ChecksNotFinished), and the cluster's breaker is left alone for it.
+what it would apply cannot be judged. A name the plan would read that is empty, `.` or `..` is
+refused with 400 before any read (assert_plan_segments), since requests folds a dot segment out of
+the path. A named profile that does not exist is left to LXD, which refuses the write itself. A read
+that times out or gets an error sends nothing (ChecksNotFinished) and leaves the breaker alone.
 """
 
 import logging
@@ -95,7 +95,7 @@ def _alias_path(alias: Any) -> str:
 def assert_plan_segments(plan: Iterable[PlanStep]) -> None:
     """Raise 400 for a name the plan's reads would put in a path that is empty, `.` or `..`.
 
-    note: run before the cluster is asked anything, with the same path builders the reads use.
+    Runs before the cluster is asked anything, with the same path builders the reads use.
     """
     for step in plan:
         if isinstance(step, NamedProfiles):
@@ -113,10 +113,10 @@ def assert_plan_segments(plan: Iterable[PlanStep]) -> None:
 def _cached_fingerprints(get: Callable[..., Any], step: ImageApplied) -> Optional[List[str]]:
     """Every fingerprint of the create's type cached from that server and alias, in any project.
 
-    important: LXD looks the cached copy up in every project (no project filter, filtered on type)
-    and then applies the target project's own record of it, so every candidate is judged. A daemon
-    that ignores all-projects lists one project with no project field, and that answer (or no
-    list at all) is None: the copy LXD would pick cannot be known.
+    important: LXD looks the cached copy up in every project (filtered on type only) and then
+    applies the target project's own record of it, so every candidate is judged. A daemon that
+    ignores all-projects lists records without a project field; that answer, or no list at all,
+    is None because the copy LXD would pick cannot be known.
     """
     cached = get("/images", _DEFAULT_PROJECT, **{"all-projects": "true", "recursion": "1"})
     if not isinstance(cached, list):
@@ -145,13 +145,13 @@ def _image_reach(get: Callable[..., Any], profiles_in: Callable[[str], Callable[
             return (f"an image cached from {step.server} that this proxy could not list, "
                     "so name the profiles in the request")
         held = [get(_image_path(fingerprint), step.project) for fingerprint in found]
-        # note: a fresh download gets the default profile, so default is judged whatever is cached
+        # A fresh download gets the default profile, so default is judged whatever is cached.
         names = ["default"] + [
             str(name) for image in held if isinstance(image, dict) for name in image.get("profiles") or []
         ]
         return profile_reach(profiles_in(step.project), list(dict.fromkeys(names)))
-    # note: an image a project does not hold fails the create in LXD versions that look there, so the
-    # union of the records that exist is what any version can apply
+    # An image a project does not hold fails the create in LXD versions that look there, so the
+    # union of the records that exist is what any version can apply.
     held = [image for image in (_local_image(get, step, in_project) for in_project in step.lookup_projects)
             if isinstance(image, dict)]
     if not held:
@@ -176,7 +176,7 @@ def _carried_reach(get: Callable[..., Any], profiles_in: Callable[[str], Callabl
         what = f"snapshot {step.snapshot} of instance" if step.snapshot else "instance"
         return f"{what} {step.instance}, which could not be read"
     if step.with_config:
-        # note: LXD skips the source's config keys and devices the body sets itself (judged as the body)
+        # LXD skips the source's config keys and devices the body sets itself (judged as the body).
         config = {k: v for k, v in (held.get("config") or {}).items() if k not in step.set_config}
         devices = {k: v for k, v in (held.get("devices") or {}).items() if k not in step.set_devices}
         reach = host_reach({"config": config, "devices": devices})
@@ -240,7 +240,7 @@ async def run_checks(
     except ReadRefused as refused:
         raise ChecksNotFinished(502, "cluster_unavailable", f"The write was not sent: {refused}") from refused
     except requests.exceptions.Timeout as read_timeout:
-        # note: the requests message names the LXD host's address, which the caller has no use for
+        # The requests message names the LXD host's address, which the caller has no use for.
         raise ChecksNotFinished(
             504, "timeout", "The write was not sent: a read it depends on timed out"
         ) from read_timeout

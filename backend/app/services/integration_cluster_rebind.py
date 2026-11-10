@@ -1,55 +1,19 @@
 """Which personal clusters an integration push may rebind, where they go, and the record each leaves.
 
-A member sync ran reconcile_personal_clusters for every pushed email. A key that pushed another
-partner's email into its own organization moved that partner's unbound clusters into it, where the
-key's own partner is a member. The share audit on that path checks a cluster's configuration, not
-anyone's consent.
+Stops a key from pushing another partner's email into its own organization to move that partner's
+unbound clusters (the share audit on that path checks only cluster configuration). Each move is
+audited, a partial rebind rolls back, and `registered_by` must equal the creator's login exactly.
 
-The rule: a push rebinds personal clusters only for the key's creator, the `created_by` that
-create_api_key writes into the key's metadata when a partner mints it. Any other pushed email
-triggers no rebind, and neither does a key without a creator or an add-on credential. Every
-rebind is recorded with the cluster, the organization it left, the one it joined and the key id.
-Nothing else of the key reaches the record.
-
-The push's `organizations` list must name exactly one organization, and after the push the key
-must claim exactly that one: organizations.api_key_id is the key, active or not, for it and for
-no other. A key claims an organization through the three claim paths (the sync upsert,
-provisioning and the dashboard's refresh) or through an Administrator's owner transfer
-(services/integration_key_ownership.py), which moves an organization between keys and never
-releases one. A seller's key also claims every buyer organization it syncs or provisions, and the
-pushed role cannot tell the seller's organization from a buyer's. In OrcaHub a buyer
-organization's partner can add the seller's creator as PARTNER, and the seller's push carries
-every member of every buyer organization. The one organization a key claims can itself be a
-buyer's: a new key or a second connection is refused the seller organization another key holds,
-and a seller slug a local organization holds is skipped by every push. So a push naming more than
-one organization, or a key claiming more than one, rebinds nothing and logs the key id and the
-count, and the partner binds those clusters from the dashboard.
-
-A buyer organization is then the destination only when a push names it alone and the key claims
-nothing else. OrcaHub v1.32.0 lists the connection's own organization first in every push while
-that organization exists (orcastra.service.js syncOrcastraClustersUnlocked), so a one-org push from
-it names the seller's own organization, and what a buyer organization's roster says never changes
-where or whether the creator's clusters move.
-
-The destination is that one organization, if it is active and this push names the creator a
-partner there: the pushed role maps to partner the way the member sync maps it, and the
-membership row read back holds partner. It is not the creator's primary organization from
-org_scope: that ordering puts any organization where the creator is a partner first, so another
-key could push the creator into its own older organization and choose where the creator's next
-rebind lands.
-
-A creator the dashboard resolves to Admin never rebinds: role_admin, or any other group rbac.py
-maps to Admin. Their key may be held by an integration they do not run, and an Admin's personal
-clusters are not a partner's. The role is read from Authentik at the time of the push, because
-nothing else holds it: the key's metadata records who minted it, not their role, and there is no
-users table. A role Authentik cannot answer for rebinds nothing: a user search or detail read that
-fails, times out or answers anything but 200, an email no account carries and one that two
-accounts carry (authentik_role_reading).
-
-A rebind that fails partway is rolled back, so no move is committed without its record.
-
-note: the match is exact. `registered_by` holds the registrant's login email and the creator is
-that same login, so another spelling would find no row to move anyway.
+- Only the key's creator (`created_by`) is rebound. Other pushed emails, a key without a creator and
+  an add-on credential rebind nothing.
+- The push names exactly one organization and the key claims exactly that one (api_key_id, active
+  or not). A seller's key also claims its buyers' and the pushed role cannot tell them apart, so
+  anything wider rebinds nothing; the partner binds those clusters from the dashboard.
+- The destination is active, the push names the creator a partner there, and the membership row
+  reads back partner. org_scope's primary organization is not used: another key could push the
+  creator into an older one and steer the next rebind.
+- A creator that resolves to Admin, or whose role Authentik cannot answer for
+  (authentik_role_reading), never rebinds. The role is read at push time.
 """
 
 import logging
@@ -87,8 +51,7 @@ def creator_of(api_key: Mapping[str, Any]) -> Optional[str]:
 
     important: None for an add-on credential. Its created_by is whoever installed or rotated it,
     an Admin included, while a third party holds it. A push through it naming that login could
-    make an organization the add-on controls that person's primary one and move their clusters
-    there, which is the move this module exists to prevent.
+    move that person's clusters into an organization the add-on controls.
     """
     if is_add_on_credential(api_key):
         return None
@@ -113,13 +76,13 @@ async def _has_unbound_clusters(db: AsyncSession, email: str) -> bool:
 async def claimed_organization_count(db: AsyncSession, api_key_id: str) -> int:
     """How many organizations this key claimed, active or not.
 
-    note: an inactive organization counts. It keeps its api_key_id, this key's next push naming it
-    makes it active again, and no dashboard path switches one off, so it is still a party the key
-    serves. Leaving it out would make a buyer organization the key's only one whenever the seller's
-    own organization is inactive, and the buyer could then name the creator into it.
+    An inactive organization counts: it keeps its api_key_id, this key's next push naming it makes
+    it active again, and no dashboard path switches one off. Leaving it out would make a buyer
+    organization the key's only one whenever the seller's own organization is inactive, and the
+    buyer could then name the creator into it.
 
-    note: deliberately wider than integration_key_ownership.owned_organizations, which counts only
-    the active OrcaHub organizations a key's end would freeze.
+    Wider than integration_key_ownership.owned_organizations, which counts only the active OrcaHub
+    organizations a key's end would freeze.
     """
     if not api_key_id:
         return 0
@@ -148,8 +111,8 @@ async def claimed_destinations(
 ) -> List[int]:
     """Active organizations this key claimed that this push names `email` a partner of.
 
-    note: the membership row is read back too, so an upsert that failed, a later remove in the same
-    push or a row holding another role leaves the organization out.
+    The membership row is read back too, so an upsert that failed, a later remove in the same push
+    or a row holding another role leaves the organization out.
     """
     named = {
         m.organization_id for m in members
@@ -269,12 +232,12 @@ async def rebind_creator_clusters(
             organization_id=destinations[0],
         )
     except Exception:
-        # important: each move is flushed before the one commit at the end, so a later cluster the
-        # share audit refused left the earlier moves in the session, and the next commit of this
-        # request wrote them without a record. Nothing of a failed rebind may survive it.
+        # important: each move is flushed before the one commit at the end. When the share audit
+        # refuses a later cluster, the earlier moves stay in the session and the request's next
+        # commit would write them without a record. Nothing of a failed rebind may survive.
         await db.rollback()
         raise
-    # note: recorded after reconcile_personal_clusters committed, so a rolled-back move leaves no record
+    # Recorded after reconcile_personal_clusters committed, so a rolled-back move leaves no record.
     for cluster_id, from_org, to_org in moved:
         _record(cluster_id, from_org, to_org, email, api_key_id)
     return rebound

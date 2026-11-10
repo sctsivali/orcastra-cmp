@@ -1,22 +1,14 @@
-"""
-External resumable-image-upload endpoints for OrcaHub.
+"""External resumable-image-upload endpoints for OrcaHub (API-key auth, the same as the raw proxy).
 
-A partner uploads an LXD unified image file (Windows, Mikrotik, vendor appliances) that cannot be
-published from a running instance. OrcaHub creates a session here (server-to-server, API-key auth),
-the browser then streams the file in resumable chunks through OrcaHub's proxy to the tus PATCH/HEAD
-endpoints below, and on finalize the file is imported into the cluster's LXD image store with a
-private alias - exactly where publish-from-instance images land, so provisioning needs no change.
+A partner uploads an LXD unified image (ex; Windows, vendor appliances) that cannot be published from
+a running instance: OrcaHub creates a session, the browser streams resumable chunks through OrcaHub's
+proxy to the tus PATCH/HEAD endpoints below, and finalize imports the file under a private alias.
+Sessions live in Postgres (image_upload_sessions), so they survive restarts and span workers; bytes
+are staged on a host-mounted dir, optionally checked against a SHA-256, and removed after the import.
 
-Session state lives in Postgres (image_upload_sessions) so it survives across the 4 uvicorn workers
-and restarts. Bytes are staged on a writable host-mounted dir, verified (SHA-256, optional) before
-import, and the staging file is removed afterwards. No new public surface: these ride the same
-API-key auth as the raw-proxy and are only reached via OrcaHub.
-
-Durability: the import runs as a detached in-process task, so a worker restart/crash would otherwise
-strand a session at 'importing' forever (the killed task never reaches its own timeout). A heartbeat
-marks a live import; a recovery sweep (startup + periodic) re-drives or fails any 'importing' row whose
-heartbeat has gone stale. The import is idempotent - it short-circuits if the image is already in the
-store - so re-driving is safe and skips the multi-GB re-stream.
+The import is a detached in-process task that a worker crash would strand at 'importing'. A heartbeat
+marks a live import; a recovery sweep (startup and periodic) re-drives or fails a row whose heartbeat
+went stale. A re-drive is safe: the import short-circuits when the image is already in the store.
 """
 
 import asyncio
@@ -65,18 +57,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/integrations", tags=["Integrations - Image Upload"])
 
-# important: bytes are staged on a host-mounted writable dir (see docker-compose), NOT the image
-# store. The store lives on the cluster; staging only holds one in-flight upload at a time.
+# Bytes are staged on a host-mounted writable dir (see docker-compose), not in the image store,
+# which lives on the cluster. Staging holds only in-flight uploads.
 UPLOAD_DIR = os.getenv("IMAGE_UPLOAD_DIR", "/app/uploads")
 SESSION_TTL_HOURS = int(os.getenv("IMAGE_UPLOAD_TTL_HOURS", "6"))
 # Refuse a new upload unless this much free space remains after reserving the declared size.
 DISK_HEADROOM_BYTES = int(os.getenv("IMAGE_UPLOAD_DISK_HEADROOM", str(2 * 1024 * 1024 * 1024)))
-# Serialize to bound staging disk (each session can stage up to its max_bytes).
+# Active sessions per API key; each session can stage up to its max_bytes.
 MAX_ACTIVE_SESSIONS = int(os.getenv("IMAGE_UPLOAD_MAX_ACTIVE", "2"))
-# Server-side ceiling for one upload. important: this is advertised as Tus-Max-Size AND
-# enforced at create. Both matter -- max_bytes/total_bytes arrive from the client, so
-# without this the only ceiling is free disk, and staging shares a filesystem with the rest
-# of the box.
+# Server-side ceiling for one upload, advertised as Tus-Max-Size and enforced at create.
+# important: max_bytes and total_bytes come from the client, so without it the only ceiling is
+# free disk, and staging shares a filesystem with the rest of the host.
 MAX_UPLOAD_BYTES = int(os.getenv("IMAGE_UPLOAD_MAX_BYTES", str(4 * 1024 * 1024 * 1024)))
 TUS_VERSION = "1.0.0"
 
@@ -135,14 +126,11 @@ def _staging_path(session_id: str) -> str:
 
 
 def _assert_session_owner(api_key: Dict[str, Any], row: Any) -> None:
-    """A session belongs to the key that opened it, not to everyone on its cluster.
+    """A session belongs only to the key that opened it.
 
-    important: every handler here resolved the row and then checked only
-    `_assert_project_permission(api_key, row.cluster_id, ...)`. The row records `api_key_id` and
-    nothing compared it, so any key with `write` on the same cluster could HEAD, PATCH, finalize
-    or read another integration's in-flight upload, including corrupting its bytes. Reported as
-    404 rather than 403: the id is the only thing an attacker needs, so a distinguishable refusal
-    would confirm the session exists.
+    important: the project permission check alone would let any key with `write` on the same
+    cluster HEAD, PATCH, finalize or read another integration's upload, and corrupt its bytes. A
+    mismatch answers 404 rather than 403 so a guessed id does not confirm the session exists.
     """
     owner = getattr(row, "api_key_id", None)
     if owner and owner != api_key.get("id"):
@@ -154,15 +142,12 @@ def _assert_project_permission(
 ) -> None:
     """Refuse a project this key was not granted, and a project name that is not one.
 
-    important: this router checked the cluster and nothing else. `assert_cluster_permission`
-    returns the matched grant precisely so the caller can read its `projects`, and its docstring
-    says so, but the return value was discarded here. A key granted `projects: ["tenant-a"]` with
-    `storage.upload` could therefore import an image into `tenant-b` on the same cluster, which
-    is the one boundary the proxy, the raw proxy and every key-authenticated read do enforce.
-    `iso_uploads.py` refuses a non-default project outright; this router had no equivalent.
+    important: `assert_cluster_permission` returns the matched grant so its `projects` can be
+    checked here. Without that, a key granted `projects: ["tenant-a"]` with `storage.upload` could
+    import an image into `tenant-b` on the same cluster.
 
-    The charset half matters separately: `project` is interpolated into the LXD query string
-    below, so an unconstrained value could reshape the request rather than merely name a project.
+    The name check matters separately: `project` goes into the LXD query string below, so an
+    unconstrained value could reshape the request.
     """
     grant = assert_cluster_permission(api_key, cluster_id, required)
     name = project or "default"
@@ -254,11 +239,9 @@ async def create_upload(
 
     # Bound concurrency so staging disk cannot be exhausted by parallel uploads.
     #
-    # important: counted PER KEY. The count used to be platform-wide, so any key with
-    # storage.upload on any single cluster could open the two allowed sessions, never send a
-    # byte, and every other tenant's uploads answered 503 until the expiry sweep hours later.
-    # The disk-watermark check below is the global bound, and it is the one that actually
-    # protects staging space; this one is about fairness between integrations.
+    # important: counted per key, so one key holding idle sessions cannot refuse every other
+    # integration's uploads. The disk-watermark check below is the global bound that protects
+    # staging space; this one keeps integrations from starving each other.
     active = await db.execute(
         select(func.count()).select_from(ImageUploadSession).where(
             ImageUploadSession.status.in_(_ACTIVE),
@@ -275,11 +258,9 @@ async def create_upload(
 
     session_id = secrets.token_hex(16)
     path = _staging_path(session_id)
-    # note: deliberately NOT pre-created. Creating the file before the row is committed leaks
-    # it on any failure between the two, and nothing sweeps staging files that have no row
-    # (the recovery loop only re-drives stuck imports). Two such leaks were found on the dev
-    # box. append_request_body creates the file on the first PATCH, so there is nothing to
-    # leak and one fewer thing to keep consistent.
+    # Not pre-created: a file created before the row commits leaks on any failure in between,
+    # and nothing sweeps staging files that have no row (the recovery loop only re-drives stuck
+    # imports). append_request_body creates the file on the first PATCH.
 
     row = ImageUploadSession(
         session_id=session_id,
@@ -383,11 +364,10 @@ async def patch_upload(
             label=f"image_upload[{session_id}]",
         )
     except UploadStagingUnavailable:
-        # important: retire the row rather than leaving it resumable. The staging volume is
-        # refusing writes, so this session can never make progress however long the client
-        # retries, and every attempt keeps holding one of only MAX_ACTIVE_SESSIONS slots. Two
-        # of these used to lock the key out for the full six-hour TTL. Failing it frees the
-        # slot now, and the client can start a fresh upload once an operator fixes the volume.
+        # important: retire the row rather than leaving it resumable. The staging volume refuses
+        # writes, so the session can never progress, yet while active it holds one of the key's
+        # MAX_ACTIVE_SESSIONS slots until the TTL. Failing it frees the slot now, and the client
+        # can start a fresh upload once an operator fixes the volume.
         row.status = "failed"
         row.error = "upload staging not writable on the server"
         await db.commit()
@@ -486,9 +466,9 @@ def _sha256_file(path: str) -> str:
 # important: explicit timeouts so a slow/flaky cluster cannot block the import indefinitely.
 _IMPORT_UPLOAD_TIMEOUT = int(os.getenv("IMAGE_IMPORT_UPLOAD_TIMEOUT", "600"))  # stream the file in
 _IMPORT_WAIT_TIMEOUT = int(os.getenv("IMAGE_IMPORT_WAIT_TIMEOUT", "900"))      # wait for LXD to import (slow ARM ok)
-# important: pass (connect, read), never a scalar. requests applies a scalar to BOTH legs, so
-# `timeout=900` also grants a 900s *connect* budget against a peer that accepts TCP and then
-# goes silent. The read leg has to be long here; the connect leg never does.
+# important: pass (connect, read), never a scalar. requests applies a scalar to both legs, so
+# `timeout=900` also allows 900 s to connect to a peer that accepts TCP and then goes silent.
+# Only the read leg needs to be long here.
 _CONNECT_TIMEOUT = int(os.getenv("IMAGE_IMPORT_CONNECT_TIMEOUT", "5"))
 
 # Durability knobs: a live import bumps updated_at every _HEARTBEAT_INTERVAL_SECONDS; the recovery sweep
@@ -533,7 +513,7 @@ async def _image_store_project(cluster_id: str, project: str) -> List[str]:
     """The project whose image store an upload lands in.
 
     important: a project without features.images keeps its images in `default`, so an upload "into"
-    it writes, and repoints aliases, in `default` (security review of the RC5 follow-up round).
+    it writes, and repoints aliases, in `default`.
     """
     if not project or project == "default":
         return ["default"]
@@ -641,7 +621,7 @@ def _lxd_import_sync(cluster_id: str, path: str, alias: str, project: str, descr
                 fingerprint = (wdata.get("metadata") or {}).get("fingerprint")
             except Exception:
                 # important: cancel the operation so a timed-out/failed import does not leave a half-created,
-                # alias-less image orphaned in the store (the alias is a separate step we never reach on failure).
+                # alias-less image orphaned in the store (the alias step is never reached on failure).
                 try:
                     session.delete(f"{endpoint}{op_path[4:]}", verify=False, timeout=60)
                 except Exception:
@@ -818,7 +798,7 @@ async def _finalize_from_existing(
 async def _recover_orphaned_imports() -> None:
     """Re-drive or fail imports stranded at 'importing' by a worker death/restart (their detached task
     did not survive). Multi-worker safe: each candidate is claimed with a conditional UPDATE so exactly
-    one of the 4 workers acts on it."""
+    one worker acts on it."""
     now = _now()
     stale_before = now - timedelta(seconds=_RECOVERY_STALE_SECONDS)
     too_old_before = now - timedelta(seconds=_RECOVERY_MAX_AGE_SECONDS)
@@ -839,7 +819,7 @@ async def _recover_orphaned_imports() -> None:
 
     for sid, cluster_id, staging_path, created_at in candidates:
         # 1) Cluster offline -> leave for a later sweep. Even beyond the recovery window, an
-        # unreachable cluster cannot tell us whether the import landed before its worker died.
+        # unreachable cluster cannot say whether the import landed before its worker died.
         # get_client does a TLS handshake and a probe request, so it must not run inline:
         # this sweep runs on every uvicorn worker and iterates every stale candidate, which
         # would park the loop once per candidate against a slow cluster.
@@ -934,11 +914,8 @@ async def _gc_expired_standalone() -> None:
 async def expiry_sweep_loop() -> None:
     """Reclaim expired image upload sessions on a timer.
 
-    important: _gc_expired used to run ONLY from inside create_upload, which made it
-    unreachable exactly when it was needed. MAX_ACTIVE_SESSIONS is per API key, so a key whose
-    two slots are held by dead rows has every create refused with 503 before it can trigger the
-    sweep that would free them, and the rows only age out after the six-hour TTL. Two failed
-    PATCHes were enough to lock an integration out for the rest of the day.
+    important: create_upload also sweeps, but only on a create that passes its checks. Without
+    this timer, expired rows and their staging files stay until such a create arrives.
 
     Runs in every worker. The sweep is idempotent: it only moves already-expired rows to
     failed, so two workers doing it concurrently reach the same state.

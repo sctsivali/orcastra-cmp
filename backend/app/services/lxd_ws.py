@@ -1,16 +1,16 @@
 """Backend-to-LXD WebSocket plumbing shared by the console and terminal proxies.
 
 important: everything an interactive session does before its first byte is synchronous (pylxd
-over requests, the Vault client), and it used to run inline in the async socket handler. Every
-other socket on that worker froze while a console or shell opened, for up to the sum of the
-timeouts, long enough for uvicorn's keepalive to drop healthy neighbours. `session_io` is the one
-door those calls go through: a bounded pool, a per-cluster bound, the caller's context carried
-into the thread (the org-scope filter in connection.get_client reads it).
+over requests, the Vault client). Run inline in the async socket handler, it would freeze every
+other socket on the worker while a console or shell opens, for up to the sum of the timeouts,
+long enough for uvicorn's keepalive to drop healthy neighbours. `session_io` is the one path
+those calls take: a bounded pool, a per-cluster bound, the caller's context carried into the
+thread (the org-scope filter in connection.get_client reads it).
 
-note: the endpoint and client certificate already sit in the connection manager's memory once a
-cluster is connected (it keeps them to reconnect without Vault). The SSL context for the LXD
-sockets is built from that copy and cached per certificate digest, so a socket no longer costs a
-Vault read and a key-pair parse, and a rotated certificate gets a fresh context on its own.
+The endpoint and client certificate sit in the connection manager's memory once a cluster is
+connected (it keeps them to reconnect without Vault). The SSL context for the LXD sockets is
+built from that copy and cached per certificate digest, so a socket costs no Vault read or
+key-pair parse, and a rotated certificate gets a fresh context on its own.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ _SESSION_IO_TIMEOUT_SECONDS = 30.0
 
 # LXD answers WebSocket pings (gorilla's default handler pongs while the daemon reads the
 # socket, which it always does on a console or exec stream). Without them a half-open
-# connection on an idle channel froze the display for good.
+# connection on an idle channel freezes the display for good.
 LXD_PING_INTERVAL_SECONDS = 30.0
 LXD_PING_TIMEOUT_SECONDS = 30.0
 
@@ -55,7 +55,7 @@ _SECRET = re.compile(r"secret=[^&\s'\"]+")
 def redact(text: object) -> str:
     """``text`` with any operation secret blanked, for log lines built from exception text.
 
-    note: websockets renders the whole URL in some errors (InvalidURI), and the URL of an LXD
+    websockets renders the whole URL in some errors (InvalidURI), and the URL of an LXD
     operation socket carries the secret that opens it.
     """
     return _SECRET.sub("secret=[redacted]", str(text))
@@ -64,7 +64,7 @@ def redact(text: object) -> str:
 class SessionSetupError(Exception):
     """An interactive session could not start. ``retryable`` says whether trying again may help.
 
-    note: the message reaches the operator (as the socket's close reason), so it names the
+    important: the message reaches the operator (as the socket's close reason), so it names the
     instance state or the cluster, never an operation URL or secret.
     """
 
@@ -95,7 +95,7 @@ async def session_io(fn: Callable[..., T], *args: Any, label: str, host: str, **
 def lxd_client(host: str):
     """A connected pylxd client for ``host``, or None. Blocking: call through session_io.
 
-    note: the pooled client first, without the validating ``GET /1.0``. The instance read that
+    The pooled client comes first, without the validating ``GET /1.0``. The instance read that
     every session does next is the liveness probe; ``client_for_retry`` rebuilds the client when
     that read finds the pooled one dead.
     """
@@ -123,8 +123,8 @@ def read_instance(host: str, project: str, instance_name: str) -> Dict[str, Any]
     client = lxd_client(host)
     if client is None:
         raise SessionSetupError(f"Cannot reach cluster {host}", retryable=True)
-    # important: pylxd raises NotFound for a 404 before a status check here could see one, and a
-    # missing instance is an answer, not a stale client worth rebuilding.
+    # pylxd raises NotFound for a 404 before a status check here could see one. A missing
+    # instance is an answer and gives no reason to rebuild the client.
     try:
         response = client.api.instances[safe_segment(instance_name)].get(params=params)
     except NotFound as missing:
@@ -200,8 +200,8 @@ def pinned_connection(pin: str, refused: Optional[list] = None) -> type:
     class PinnedConnection(ClientConnection):
         # important: asyncio calls this once TLS is up and before websockets writes the upgrade
         # request, which is the line that carries the operation secret. A stranger certificate is
-        # dropped here, so not one byte of that request reaches it. The REST adapter has always
-        # held the pin (FingerprintHTTPAdapter); these sockets were the gap.
+        # dropped here, so not one byte of that request reaches it. The REST adapter holds the
+        # same pin (FingerprintHTTPAdapter).
         def connection_made(self, transport: Any) -> None:
             super().connection_made(transport)
             ssl_object = transport.get_extra_info("ssl_object")
@@ -246,19 +246,14 @@ async def open_lxd_socket(
 ) -> Any:
     """One WebSocket to an LXD operation, held to the cluster's certificate pin.
 
-    With no pin held (Vault was down when this worker connected) the socket opens unpinned, the
-    rule the REST path follows in ``lxd/pin_enforcement.py``, so a console that works today keeps
-    working through an outage. In that state the REST response that handed out the operation
-    secret was unpinned too, so refusing here alone would protect nothing. The credentials exec,
-    whose stdin is a password, and the file explorer refuse an unpinned cluster before any REST
-    call instead.
-
-    note: compression off. SPICE images and PTY bytes either arrive compressed or are tiny, and
-    deflate on the event loop only added latency. LXD declines the offer anyway; not sending it
-    saves the negotiation.
-
-    note: proxy=None. websockets follows HTTPS_PROXY by default, and a pin is only meaningful on
-    the direct TLS connection to the daemon.
+    With no pin held (Vault was down when this worker connected) the socket opens unpinned, as
+    the REST path does (``lxd/pin_enforcement.py``), so a console keeps working through the
+    outage. The REST response that handed out the secret was unpinned too, so refusing here alone
+    would protect nothing; the credentials exec (a password on stdin) and the file explorer refuse
+    an unpinned cluster before any REST call instead.
+    Compression is off: SPICE and PTY bytes are already compressed or tiny, deflate on the event
+    loop only adds latency, and LXD declines it anyway.
+    proxy=None: websockets follows HTTPS_PROXY by default; a pin needs the direct TLS connection.
     """
     import asyncio
 

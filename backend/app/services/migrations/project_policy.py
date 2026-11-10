@@ -123,7 +123,7 @@ def disposable_images(
 
     A cached image qualifies, and so does an alias-less image an instance of the project was
     created from (``volatile.base_image``): LXD stores those in a project with its own images,
-    sometimes without the cached flag (found live). Any other image was put there on purpose.
+    sometimes without the cached flag. Any other image was added explicitly and stays.
     """
     bases = {
         str((instance.get("config") or {}).get("volatile.base_image") or "")

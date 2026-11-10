@@ -1,13 +1,11 @@
 """Removing an installation, and proving nothing is left behind.
 
-Deleting the row is the easy part. An installation writes to Vault, to Redis, to process memory
-on four workers, and to two Postgres tables that reference it only by a free-text id. Cluster
-deletion in this codebase has already shipped the shape of this bug twice, so the artefacts are
-enumerated in one table and a ratchet asserts every writer named there has a remover.
+An installation writes to Vault, to Redis, to process memory on every worker, and to two Postgres
+tables that reference it only by a free-text id. The artefacts are listed in one table, and a
+ratchet test asserts that every writer named there has a remover.
 
-important: Vault first, row last. If the Vault delete succeeds and the row delete fails, the
-add-on gets 401 and someone files a bug. The other order leaves a live credential with nothing
-describing it, which is a security failure nobody notices. Order for fail-safety, so the surviving
+important: Vault first, row last. If the row delete fails after the Vault delete, the add-on gets
+401. The other order could leave a live credential with no row describing it, so the surviving
 failure mode is denial rather than continued access.
 """
 
@@ -42,8 +40,8 @@ class Artefact:
     note: str = ""
 
 
-# The inventory. A ratchet reads this, so an entry with `remover=None` is a deliberate,
-# reviewable statement that something is kept, not an omission.
+# The inventory a ratchet test reads. An entry with `remover=None` marks an artefact that is meant
+# to stay after an uninstall.
 INSTALL_ARTEFACTS: Dict[str, Artefact] = {
     "vault:api_key_metadata": Artefact(
         "vault", "save_api_key_to_vault", "destroy_install_credential"
@@ -132,13 +130,12 @@ async def teardown_install(
 ) -> List[str]:
     """Remove everything an installation created, in fail-safe order.
 
-    Returns the artefact keys that were acted on, so a caller can log what actually happened
-    rather than asserting that it did.
+    Returns the artefact keys that were acted on, so the caller logs what happened.
     """
     done: List[str] = []
 
-    # note: off the event loop (one Vault call per record under the key), and recorded only when
-    # Vault confirms nothing of the key is left, the same rule as the two entries below.
+    # Off the event loop (one Vault call per record under the key), and recorded only when Vault
+    # confirms nothing of the key is left, as for the two entries below.
     if await asyncio.to_thread(lambda: destroy_install_credential(vault_client, api_key_id)):
         done.append("vault:api_key_metadata")
         done.append("vault:api_key_secret")
@@ -152,9 +149,9 @@ async def teardown_install(
     if all(forgotten):
         done.append("postgres:api_key_usage")
 
-    # important: these two swallow their own failures, so calling them proves nothing. They are
-    # the entries that matter most, because a Vault-side failure leaves real secret material
-    # behind while the audit record says it was destroyed.
+    # important: these two swallow their own failures, so they are recorded only on a True result.
+    # Otherwise a Vault failure would leave secret material behind while the audit record says it
+    # was destroyed.
     if destroy_signing_secret(vault_client, install_id):
         done.append("vault:webhook_signing_secret")
     if destroy_settings(vault_client, install_id):
@@ -184,8 +181,8 @@ async def teardown_install(
         evict_install_cache(previous_api_key_id)
     done.append("process:install_snapshot_cache")
 
-    # Hand the staged bytes to the sweep that already knows how to remove them. Expiring the row
-    # rather than deleting it means this module never has to know what a staging path is.
+    # Expire the sessions so the existing upload GC removes the staged bytes; this module never
+    # needs to know what a staging path is.
     for table in ("image_upload_sessions", "iso_upload_sessions"):
         try:
             await db.execute(
@@ -199,8 +196,8 @@ async def teardown_install(
         except Exception:
             logger.warning("Could not expire %s rows for %s", table, api_key_id, exc_info=True)
 
-    # A grant naming a key that no longer exists is worse than useless: cluster_id is free text
-    # with no foreign key, so the same id registered again by a different owner matches it.
+    # Revoke grants naming this key: cluster_id is free text with no foreign key, so a leftover
+    # grant would match the same id registered again by a different owner.
     try:
         await db.execute(
             text(
@@ -223,5 +220,5 @@ async def teardown_install(
 
 
 def artefacts_without_a_remover() -> Dict[str, Artefact]:
-    """The entries deliberately kept, for a test to assert against a written expectation."""
+    """The entries meant to stay, for a test to compare with a written expectation."""
     return {name: a for name, a in INSTALL_ARTEFACTS.items() if a.remover is None}

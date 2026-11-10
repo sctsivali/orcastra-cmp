@@ -1,21 +1,13 @@
-"""Fleet view of snapshots, at /snapshots.
+"""Fleet view of snapshots, at /snapshots: what snapshots exist, where, and what they cost.
 
-Separate from the per-instance surface because it answers a different question: not "what can I
-roll this instance back to" but "what snapshots exist, where, and what are they costing me". The
-per-instance router owns the actions; this one only reads.
+The per-instance router owns the actions; this one only reads. `host` and `project` are optional
+and mean "all" when absent; LXD's `instance_all_projects` extension reads a whole cluster in one
+call (services/lxd/snapshot_fleet.py). A partial read is reported with its labels, and a read no
+cluster answered is never cached.
 
-`host` and `project` are both optional and both mean "all" when absent. This used to be scoped to
-one cluster and one project, on the reasoning that a fleet-wide sweep would fan out across every
-cluster on every page load and that a partial failure must never be cached as if it were empty.
-The first half of that objection is answered by LXD's `instance_all_projects` extension, which
-reads a whole cluster in one call rather than one per project (see services/lxd/snapshot_fleet.py).
-The second half is answered here, and it is not theoretical on this fleet: two of five registered
-clusters reject the control plane's certificate, so every single read is partial.
-
-important: every LXD read happens on a worker thread and every tenant decision happens back on the
-event loop. `check_tenant_permission` reads a context variable that defaults to "no ACL", which
-means it fails OPEN in a thread that did not inherit the caller's context (core/blocking.py:119).
-Keeping the two apart means the filter cannot be wrong even if the offload ever changes shape.
+important: every LXD read happens on a worker thread and every tenant decision back on the event
+loop. `check_tenant_permission` reads a context variable that defaults to "no ACL", so it fails
+OPEN in a thread that did not inherit the caller's context (see core/blocking.py).
 """
 import asyncio
 import logging
@@ -53,22 +45,21 @@ from app.services.lxd.fanout import complete_reasons, down_text, known_down
 
 logger = logging.getLogger(__name__)
 
-# important: NOT proxy_executor. That pool exists so OrcaHub's traffic cannot land where the
-# dashboard's own fan-outs run (services/lxd/proxy.py:40), and the isolation is symmetric: one
-# operator opening this page must not occupy the workers a paid integration is waiting on.
+# important: not proxy_executor. That pool keeps OrcaHub's traffic apart from the dashboard's own
+# fan-outs (services/lxd/proxy.py), and the isolation is symmetric: one operator opening this
+# page must not occupy the workers an integration is waiting on.
 _FLEET_WORKERS = 12
 _FLEET_MAX_IN_FLIGHT = 24
 _fleet_executor = ThreadPoolExecutor(
     max_workers=_FLEET_WORKERS, thread_name_prefix="snapshots_fleet"
 )
 
-# Wall clock per cluster. The socket timeout inside the read is what actually frees the worker;
+# Wall clock per cluster. The socket timeout inside the read is what frees the worker;
 # this only frees the caller, so the two are set together and this one is the larger.
 _CLUSTER_BUDGET = 40
 
-# An unpaginated fleet read lands in Redis. Measured today the whole fleet holds 33 snapshots, so
-# this is a guard against growth rather than a limit anyone meets, and it is reported rather than
-# applied silently.
+# An unpaginated fleet read lands in Redis. This cap guards against growth and is reported in
+# `truncated` rather than applied silently.
 _MAX_ROWS = 5000
 
 _CACHE_TTL = 30
@@ -129,8 +120,8 @@ def _read_one_cluster(
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """One cluster's rows, on a worker thread. Raises rather than returning empty on a failure.
 
-    note: connect_or_get_client rather than connection_manager.get_client, so a worker that has
-    not connected to this cluster yet reads it instead of reporting a healthy cluster as absent.
+    connect_or_get_client rather than connection_manager.get_client, so a worker that has not
+    connected to this cluster yet reads it instead of reporting a healthy cluster as absent.
     """
     client = connect_or_get_client(lxd_service, host)
     if client is None:
@@ -145,8 +136,8 @@ def _read_fleet_cluster(
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """As _read_one_cluster, for the fleet form: a cluster this worker knows is down is not dialed.
 
-    note: a request naming one host still dials it (_read_one_cluster), as every single-cluster
-    route does; the fleet form leaves that redial to the healer (see fanout.known_down).
+    A request naming one host still dials it (_read_one_cluster), as every single-cluster route
+    does; the fleet form leaves that redial to the healer (see fanout.known_down).
     """
     down = known_down(host, getattr(lxd_service, "connection_manager", None))
     if down is not None:
@@ -187,19 +178,13 @@ async def list_fleet_snapshots(
     Sizes are a second phase after the visibility filter (services/snapshots/fleet_sizes.py):
     read through a per-host cache with a ten minute life, bounded per cluster and per fleet,
     against a deadline inside the request budget. A forced refresh bypasses that cache and
-    re-measures. The response says how far the phase got rather than leaving the console to
-    infer it from the scope.
+    re-measures. The response says how far the phase got.
     """
-    # important: `is not None`, not truthiness. `?host=` is a caller who named a cluster and got
-    # it wrong, and must get the 422 verify_cluster_access already raises for a blank id. Reading
-    # it as "absent" would silently widen a narrowed request into a fleet sweep.
-    #
-    # `project` gets the same treatment through its pattern, which refuses a blank one. Without
-    # that, `?project=` read the `default` project (because _project_params substitutes it) while
-    # labelling every row with the empty string, and the resulting SnapshotProjectUnknown was
-    # caught per cluster: a healthy fleet answered 200 with every cluster reported unreachable.
-    # Validating here also keeps an arbitrary string out of the cache and single-flight keys,
-    # where each distinct value would otherwise buy a fresh fan-out that is never cached.
+    # important: `is not None` rather than truthiness. A blank `?host=` must get the 422
+    # verify_cluster_access raises instead of widening a narrowed request into a fleet sweep.
+    # `project` refuses a blank value through its pattern: `?project=` would read `default`
+    # (_project_params substitutes it) while labelling every row with an empty project. The
+    # pattern also keeps arbitrary strings out of the cache and single-flight keys.
     if host is not None:
         verify_cluster_access(host)
 
@@ -253,9 +238,9 @@ async def list_fleet_snapshots(
                 if isinstance(result, (LXDConnectionError, BlockingTimeout, BlockingPoolFull)):
                     logger.info("Snapshot read failed on %s: %s", node, result)
                 else:
-                    # important: still reported as unreachable, because from the caller's side the
-                    # cluster did contribute nothing. But logged as an error with its traceback, so a
-                    # defect in the read path cannot spend its life disguised as a flaky cluster.
+                    # Reported as unreachable, since the cluster contributed nothing, but logged
+                    # as an error with its traceback so a defect in the read path is not mistaken
+                    # for a flaky cluster.
                     logger.error(
                         "Snapshot read raised on %s, reporting it unreachable: %s",
                         node, result, exc_info=result,
@@ -268,18 +253,12 @@ async def list_fleet_snapshots(
                 partial.append(node)
             rows.extend(node_rows)
 
-        # important: keyed by (host, project, source), not by source alone. With one cluster and one
-        # project per request the short key was accidentally sufficient; across clusters it collides,
-        # and the first answer wins for every later instance sharing a name. That is one tenant's
-        # snapshots appearing in another's list.
-        #
-        # important: narrowed by BOTH VIEW and SNAPSHOT, not by "has any rule here".
-        # filter_instances_by_acl ignores the permissions on a rule entirely, so a tenant holding
-        # `view` on one instance and `snapshot` on another passed the project gate on the second and
-        # was then shown the first one's snapshots as well. Checking only `snapshot` also exposed an
-        # instance's name, state and snapshot metadata to a caller explicitly denied `view`. Admin
-        # and Partner carry no ACL and check_tenant_permission answers True for them, so an operator
-        # read is unfiltered.
+        # important: keyed by (host, project, source); keyed by source alone, the first answer
+        # would win for every later instance sharing a name across clusters, showing one tenant's
+        # snapshots in another's list. Each key needs both `view` and `snapshot`:
+        # filter_instances_by_acl ignores a rule's permissions, and `snapshot` alone would expose
+        # an instance the caller may not `view`. Admin and Partner carry no ACL, so
+        # check_tenant_permission passes every row for them.
         seen: Dict[Tuple[str, str, str], bool] = {}
         visible: List[Dict[str, Any]] = []
         for row in rows:
@@ -318,9 +297,8 @@ async def list_fleet_snapshots(
         else:
             size_measurement = "partial"
 
-        # A cluster registered and in scope that never entered the fan-out is unread, not empty. The
-        # seeding literal is what the structural ratchet scans for, and the shape is deliberate:
-        # set(lxd_service.get_node_names()) - set(nodes_to_query)
+        # A cluster registered and in scope that never entered the fan-out is reported unreachable.
+        # The structural ratchet in tests/test_fresh_bypass_is_wired.py scans for this seeding shape.
         never_queried = (
             [] if host is not None else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
@@ -339,26 +317,24 @@ async def list_fleet_snapshots(
             unmeasured_instances=unmeasured_instances,
         )
 
-        # important: do not remember an answer nobody gave. Every cluster failing still returns 200
-        # with an empty list, so caching it would pin emptiness for the whole TTL and, on a forced
-        # refresh, overwrite good data the operator could still see. The degradation labels are
-        # cached WITH the payload, so a cached partial read still renders its banner. A
-        # create/delete or instance lifecycle change during the read is fenced by swr.serve's
-        # generation check, as before.
+        # important: cache nothing when no cluster answered. That read still returns 200 with an
+        # empty list, and caching it would pin emptiness for the TTL and, on a forced refresh,
+        # overwrite good data. The degradation labels are cached with the payload, so a cached
+        # partial read still renders its banner. A write during the read is fenced by swr.serve's
+        # generation check.
         if not answered and nodes_to_query:
             logger.warning("Not caching fleet snapshots: no cluster answered")
-        # note: a scope naming no cluster is a settled answer, cheap to read again: not remembered,
-        # so a tenant whose ACL grants nothing never warns.
+        # A scope naming no cluster is cheap to read again, so it is not cached either, and the
+        # warning above stays quiet for a tenant whose ACL grants nothing.
         return Built(
             value=response,
             body=response.model_dump(),
             fresh_for=_CACHE_TTL if answered else None,
         )
 
-    # note: stale-while-revalidate since 2026-11-04. The plain 30 s TTL behind single_flight meant
-    # nearly every visit missed (nothing polls this list) and paid the whole fan-out, 9 to 15 s on
-    # dev, and a reader with a warm entry still queued behind a cold rebuild in its worker. `v4`
-    # because the stored body is now the SWR envelope; the prefix keeps every sweep matching.
+    # Stale-while-revalidate: nothing polls this list, so with a plain TTL nearly every visit would
+    # miss and pay the whole fan-out. `v4` marks the SWR envelope in the stored body; the prefix
+    # keeps every sweep matching.
     served = await swr.serve(
         cache=cache,
         base_key=f"snapshots_fleet:list:v4:host={host}:project={project}",

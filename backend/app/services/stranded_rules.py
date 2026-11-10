@@ -1,13 +1,13 @@
-"""Access rules a raw-proxy write leaves pointing at a name nothing answers to any more.
+"""Access rules a raw-proxy write leaves pointing at a name nothing answers to.
 
 A raw write can remove a project or an instance from under the name a tenant rule holds without
 deleting through the dashboard: an instance DELETE, an instance renamed or moved to another
-project, a project renamed. The rule then waits for the next object created under that name and
-hands it to the old tenant. The raw project DELETE has its own path
-(services/raw_project_delete.py); these are the rest.
+project, a project renamed. The rule would then hand the next object created under that name to
+the same tenant. The raw project DELETE has its own path (services/raw_project_delete.py); this
+module covers the rest.
 
-The rules are captured before the write goes out and forgotten only once LXD reports success,
-never on a refusal or an unknown outcome. Those leave the rules in place for the orphan report.
+Rules are captured before the write goes out and forgotten only once LXD reports success; a
+refusal or an unknown outcome leaves them in place for the orphan report.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ def raw_stranding_target(method: str, path: Optional[str], body: Any, project: s
 
     - `DELETE /1.0/<instances|containers|virtual-machines>/<n>`: the instance.
     - `POST` to the same path with a body `name` other than `<n>`, or a body `project` other than
-      the request's: a rename or a move, which leaves the old (project, name) empty.
+      the request's: a rename or a move, which leaves the original (project, name) empty.
     - `POST /1.0/projects/<n>` with a body `name` other than `<n>`: a project rename.
     """
     verb = (method or "").upper()
@@ -76,7 +76,7 @@ async def _project_rule_ids(cluster_id: str, project_name: str) -> FrozenSet[int
 
 
 async def capture(cluster_id: str, target: Optional[StrandTarget]) -> Optional[Callable[[str], Awaitable[None]]]:
-    """Capture the rules `target` would strand; returns the follow-up to run with LXD's outcome."""
+    """Capture the rules `target` would strand; returns the callback to run with LXD's outcome."""
     if target is None:
         return None
     if target.kind == "instance":

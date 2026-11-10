@@ -1,7 +1,7 @@
-"""
-Background Metrics Collector Service.
-Collects monitoring data at regular intervals, independent of frontend requests.
-This ensures historical data continuity even when no clients are connected.
+"""Background metrics collector.
+
+Collects monitoring data on a timer, independent of frontend requests, so history has no gaps
+while no client is connected.
 """
 
 import asyncio
@@ -20,21 +20,19 @@ from app.services.metrics_prewarm import CachePrewarm
 
 logger = logging.getLogger(__name__)
 
-# note: background work gets its own small pool. Using the loop's default executor would put
-# a periodic timer task in the same place FastAPI runs sync route handlers.
+# Background work gets its own small pool. The loop's default executor would put a periodic
+# timer task in the same place FastAPI runs sync route handlers.
 _metrics_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="metrics_bg")
 
-# Generous: this walks every registered cluster and may open TLS connections. The point of
-# the cap is that a stuck cluster cannot wedge the collector forever, not to be tight.
+# Generous, because this walks every registered cluster and may open TLS connections. The cap
+# only stops a stuck cluster from wedging the collector forever.
 ENSURE_CONNECTIONS_TIMEOUT = float(
     os.environ.get("ORCASTRA_ENSURE_CONNECTIONS_TIMEOUT", "60")
 )
 
 
 class MetricsCollector(CachePrewarm):
-    """
-    Background service that collects and stores metrics at regular intervals.
-    Runs independently of frontend requests to ensure continuous data collection.
+    """Collects and stores metrics on a timer, independent of frontend requests.
 
     One worker leads: it sweeps the fleet for the dashboard, then pauses for
     `collection_interval` seconds, so a cycle is the sweep plus the pause. Every other worker
@@ -42,27 +40,22 @@ class MetricsCollector(CachePrewarm):
     clients without sweeping anything itself.
     """
 
-    # important: the collector is started from the FastAPI lifespan, which runs once per worker.
-    # With WEB_CONCURRENCY=4 that is four collectors; see collector_leadership for how one of
-    # them leads and the others only relay. Over a day on the dev fleet, before that, the
-    # dashboard was built three to four times per cycle and about 70% of history points were
-    # copies.
+    # important: the collector is started from the FastAPI lifespan, which runs once per worker,
+    # so WEB_CONCURRENCY=4 means four collectors. collector_leadership makes one of them lead and
+    # the others only relay; without it the dashboard is built once per worker per cycle and most
+    # history points are copies.
     COLLECTION_LEASE_KEY = "orcastra:metrics_collector:cycle_lease"
     # important: short, and kept alive by a heartbeat rather than by the cycle. A lease long
-    # enough to outlive a cycle also outlived a dead leader: on a deploy the old container's
+    # enough to outlive a cycle also outlives a dead leader: on a deploy the outgoing container's
     # workers keep collecting while uvicorn drains connections, Docker kills them before the
-    # lifespan hands the lease back, and nothing swept until it lapsed, measured at two and a
-    # half minutes. Renewed every 5 s, a 20 s lease holds through any sweep and a dead leader
-    # is replaced within 20 s.
+    # lifespan hands the lease back, and nothing sweeps until the lease lapses. Renewed every
+    # 5 s, a 20 s lease holds through any sweep and a dead leader is replaced within 20 s.
     LEASE_SECONDS = 20
     HEARTBEAT_SECONDS = 5.0
     # How often a follower looks for a new dashboard to relay while it waits out the interval.
     RELAY_POLL_SECONDS = 5.0
 
     def __init__(self, collection_interval: int = 60):
-        """
-        Initialize the metrics collector.
-        """
         self.collection_interval = collection_interval
         self._running = False
         self._task: Optional[asyncio.Task] = None
@@ -83,14 +76,12 @@ class MetricsCollector(CachePrewarm):
         self._lxd_service = lxd_service
         self._running = True
         
-        # Create task in the current event loop
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 self._task = loop.create_task(self._collection_loop())
                 self._heartbeat_task = loop.create_task(self._heartbeat_loop())
             else:
-                # If no event loop is running, we'll start it when one is available
                 logger.info("Event loop not running, collector will start when available")
         except RuntimeError:
             logger.info("No event loop, collector will start on first request")
@@ -126,11 +117,11 @@ class MetricsCollector(CachePrewarm):
         """Main collection loop that runs in the background."""
         logger.info("Background metrics collection loop started")
         
-        # Minimal delay just to ensure server is ready
+        # Short delay so the server finishes starting.
         await asyncio.sleep(2)
 
-        # note: the first cycle runs at once and warms the cache. A separate warm-up call used to
-        # run here as well, which swept the whole fleet twice back to back on every start.
+        # The first cycle runs at once and warms the cache; a separate warm-up call here would
+        # sweep the whole fleet twice back to back on every start.
         while self._running:
             try:
                 await self._collect_metrics()
@@ -167,13 +158,11 @@ class MetricsCollector(CachePrewarm):
         return self._lease.claim()
 
     async def _collect_metrics(self):
-        """
-        Collect metrics by calling the dashboard endpoint logic.
-        This ensures consistent data collection through a single code path.
-        Also performs connection health checks to keep clusters connected.
+        """Collect metrics through the dashboard endpoint's own code path.
+
+        Every worker first checks its cluster connections; only the leader builds the dashboard.
         """
         if not self._lxd_service:
-            # Try to get the service if not set
             try:
                 from app.services.lxd_service import get_lxd_service
                 self._lxd_service = get_lxd_service()
@@ -184,13 +173,12 @@ class MetricsCollector(CachePrewarm):
         try:
             self._leading = self._claim_collection_lease()
 
-            # IMPORTANT: Perform connection health check first, in every worker: each one holds
-            # its own cluster connections. This ensures clusters stay connected even if they
-            # were disconnected due to timeout, network issues, or container restart.
+            # Connection health check first, in every worker: each one holds its own cluster
+            # connections, which drop on timeouts, network issues or container restarts.
             await self._ensure_cluster_connections()
 
             if not self._leading:
-                # important: a follower never builds the dashboard, not even on a cache miss.
+                # important: a follower never builds the dashboard, even on a cache miss.
                 # It relays what the leader stored; a miss only means nothing is relayed yet.
                 await self._dashboards.relay()
                 return
@@ -206,10 +194,9 @@ class MetricsCollector(CachePrewarm):
             self._leading = self._claim_collection_lease()
             await self._dashboards.push(result)
 
-            # PRE-WARM API CACHES on the leader only; followers sweeping these as well was the
-            # same duplicated work. In the background, one run at a time: the dashboard sweep
-            # takes about 30 s and the prewarm another 10 to 40, and run in line they stretched a
-            # cycle to 80 to 100 s, past the page's 90 s stale mark.
+            # Pre-warm API caches on the leader only, in the background, one run at a time. The
+            # dashboard sweep takes about 30 s and the prewarm another 10 to 40; run in line they
+            # would stretch a cycle past the page's 90 s stale mark.
             if self._leading and (self._prewarm_task is None or self._prewarm_task.done()):
                 self._prewarm_task = asyncio.create_task(self._prewarm_instances_cache())
 
@@ -220,10 +207,9 @@ class MetricsCollector(CachePrewarm):
         """Run the connection sweep off the event loop.
 
         important: the body below is entirely blocking (Vault reads, TLS handshakes, LXD
-        probes) and it runs on a timer. Inline it stalled the loop on every cycle. Measured
-        with py-spy on dev, 42 of 127 event-loop samples were parked in
-        connect_with_vault_cert reached from here, which is what drove /health to 11s and to
-        outright timeouts. Background work must never be the reason a request stalls.
+        probes) and it runs on a timer. Run inline, it stalls the loop on every cycle and
+        pushes /health into timeouts. Background work must never be the reason a request
+        stalls.
         """
         try:
             await run_blocking(
@@ -241,18 +227,11 @@ class MetricsCollector(CachePrewarm):
             logger.debug(f"Cluster connection health check error: {e}")
 
     def _ensure_cluster_connections_blocking(self):
-        """
-        Ensure all registered clusters are connected.
-        This is crucial for maintaining cluster status as "Online" rather than "Pending Trust".
-        
-        ARCHITECTURE (2-tier - Security Best Practice):
-        - Memory: Connection info stored during runtime
-        - Vault: Source of truth for certificates (NO Redis)
-        
-        RECONNECTION LOGIC:
-        - Only reconnect clusters that are NOT already connected
-        - NO TTL refresh (connections persist while valid)
-        - Use get_client() which validates and auto-reconnects if needed
+        """Connect every registered cluster that is not connected yet.
+
+        This keeps a cluster's status "Online" instead of "Pending Trust". Connection info lives
+        in memory and certificates come from Vault, never Redis. A valid connection is kept
+        without any TTL refresh; get_client() validates it and reconnects when needed.
         """
         try:
             from app.core.config import get_settings
@@ -270,20 +249,19 @@ class MetricsCollector(CachePrewarm):
                 clusters_path=settings.vault_clusters_path
             )
             
-            # Get all registered cluster IDs. A fresh read on purpose: this sweep runs in a
-            # thread every 30 s and is the one caller that should pay the Vault LIST budget,
-            # refreshing the list cache and the last-known memo for every request on the
-            # loop, and recording an outage before a request can meet it.
+            # A fresh read: this sweep runs in a thread every 30 s and is the one caller that
+            # should pay the Vault LIST budget, refreshing the list cache and the last-known
+            # memo for every request on the loop, and recording an outage before a request can
+            # meet it.
             cluster_ids = cert_manager.list_clusters(use_cache=False)
 
-            # important: the whitelist behind get_node_names() was synced at boot and in the
-            # one worker that served a registration. Every other worker went on omitting a
-            # cluster registered after boot, even once this sweep had connected it, so the
-            # list pages named it unreachable from that worker until a restart. This sweep
-            # runs in every worker outside any request context, so the Vault list it holds
-            # is the unfiltered fleet. Guarded on the read having answered rather than on
-            # non-empty: a lost LIST must not blank it, and a legitimately empty registry
-            # (every cluster deregistered) must still clear it.
+            # important: the whitelist behind get_node_names() is otherwise synced only at boot
+            # and in the worker that served a registration, so every other worker would name a
+            # cluster registered after boot unreachable until a restart. This sweep runs in every
+            # worker outside any request context, so the Vault list it holds is the unfiltered
+            # fleet. Guarded on the read having answered rather than on non-empty: a lost LIST
+            # must not blank it, and an empty registry (every cluster deregistered) must still
+            # clear it.
             if vault_status.registry_readable() is not False:
                 self._lxd_service.connection_manager.sync_registered_clusters(cluster_ids)
 
@@ -295,30 +273,29 @@ class MetricsCollector(CachePrewarm):
             for cluster_id in cluster_ids:
                 try:
                     # important: a cluster held down is redialed by the leader's dead-cluster probe
-                    # (breaker_sync), not by every worker's healer. The leader leaves it to that
-                    # probe; a follower adopts the fleet's down verdict while one is fresh, and
-                    # falls back to its own redial below as soon as none is (no leader probing, or
-                    # no Redis), so a recovery is never left waiting on a probe that is not run.
+                    # (breaker_sync) rather than by every worker's healer. The leader leaves it to
+                    # that probe; a follower adopts the fleet's down verdict while one is fresh,
+                    # and falls back to its own redial below as soon as none is (no leader
+                    # probing, or no Redis), so a recovery never waits on a probe that does not
+                    # run.
                     if shared and manager.get_cached_client(cluster_id) is None:
                         if leading and fanout.known_down(cluster_id, manager) is not None:
                             continue
                         if not leading and breaker_sync.adopt_shared(cluster_id):
                             continue
-                    # get_client() validates and returns existing connection if valid
-                    # or auto-reconnects using stored connection info
+                    # get_client() returns the pooled connection if it is valid, or reconnects
+                    # from the stored connection info.
                     client = manager.get_client(cluster_id)
                     
                     if client is None:
-                        # No stored connection info, need to fetch from Vault
+                        # No stored connection info: connect from Vault.
                         if not manager.has_connection_info(cluster_id):
-                            # important: the same door the read path uses, not a fourth copy of
-                            # the connect block. ensure_connection consults the breaker, reads
-                            # only <cluster>/metadata rather than get_cluster_info (which also
-                            # pulls /secrets for a flag nobody reads, uncached), and records a
-                            # refused certificate as unauthorized instead of losing it to a
-                            # debug line. It returns False rather than raising, and False
-                            # already covers the breaker refusing the attempt, which the old
-                            # None check here existed to catch.
+                            # important: the same connect path the read path uses.
+                            # ensure_connection consults the breaker, reads only
+                            # <cluster>/metadata (get_cluster_info would also pull /secrets,
+                            # uncached), and records a refused certificate as unauthorized. It
+                            # returns False instead of raising, including when the breaker
+                            # refuses the attempt.
                             if self._lxd_service.ensure_connection(cluster_id):
                                 reconnected += 1
                                 logger.info(f"Background connected cluster: {cluster_id}")
@@ -338,7 +315,6 @@ def _shared_redis() -> Any:
     return getattr(get_cache_manager(), "redis_client", None)
 
 
-# Singleton instance
 _metrics_collector: Optional[MetricsCollector] = None
 
 

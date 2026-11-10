@@ -1,8 +1,7 @@
 """Cluster member names: one rule wherever a member reaches a target, a cache key or a log line.
 
-important: fullmatch, never re.match with "$". The two copies this replaces used .match, which lets
-"node1\n" through: a member name with a trailing newline then reached a ?target= parameter, a
-Redis key and a log line as two lines.
+important: use fullmatch, never re.match with "$". `$` also matches before a trailing newline, so
+"node1\n" would reach a ?target= parameter, a Redis key and a log line as two lines.
 """
 
 import re
@@ -37,7 +36,7 @@ def is_member_name(value: Any) -> bool:
 async def member_name_path(member_name: str = Path(...)) -> str:
     """Path dependency for /{member_name} routes. The refused value is never echoed back.
 
-    note: no max_length on the Path itself. FastAPI's own 422 body repeats the input, so every
+    There is no max_length on the Path: FastAPI's own 422 body repeats the input, so every
     refusal, the length one included, goes through the check below.
     """
     if not is_member_name(member_name):

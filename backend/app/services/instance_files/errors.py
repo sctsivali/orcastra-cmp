@@ -33,7 +33,7 @@ class GuestFileError(Exception):
 
 
 def protocol_error(reason: str) -> GuestFileError:
-    # note: `reason` is written by this package and names the rule that broke, for the log line.
+    # `reason` is written by this package and names the rule that broke, for the log line.
     return GuestFileError(
         "guest_protocol_error", 502, "The guest answered in a way this service does not accept.",
         {"reason": reason},

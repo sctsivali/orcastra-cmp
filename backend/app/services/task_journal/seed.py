@@ -3,7 +3,7 @@ its warnings.
 
 The hub only reports what happens while it is connected. On every connect, after a database
 outage and every two minutes while connected, the follower reads `/1.0/operations` in every
-bucket and upserts each one, then marks open rows the daemon no longer knows as lost. Every
+bucket and upserts each one, then marks open rows the daemon does not report as lost. Every
 read goes through `client_for` and `run_blocking` on this module's own bounded pool, with the
 socket timeout inside the pylxd call and the wall clock outside it.
 """
@@ -99,7 +99,7 @@ async def read_operations(client: Any, host: str) -> Tuple[Dict[str, List[Dict[s
 
     The second value says whether the read saw every project. A partial read (a project that
     refused, projects past MAX_PROJECTS) must not feed `mark_lost`, or every live operation in
-    the part it did not see is flipped to lost.
+    the part it did not see would be marked lost.
     """
     try:
         response = await _read(

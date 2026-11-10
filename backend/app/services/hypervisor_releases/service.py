@@ -160,7 +160,7 @@ def _member_versions(cluster_ids: List[str]) -> Dict[str, Any]:
     for cluster_id in cluster_ids:
         try:
             out[cluster_id] = cached_member_versions(cache, cluster_id)
-        except Exception:  # noqa: BLE001 - no member view is the endpoint's version, as before
+        except Exception:  # noqa: BLE001 - no member view falls back to the endpoint's version
             out[cluster_id] = None
     return out
 

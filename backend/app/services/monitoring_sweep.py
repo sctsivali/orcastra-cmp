@@ -3,10 +3,10 @@
 important: the dashboard reads cluster status through this module, one bounded read per cluster
 on its own executor, instead of check_nodes_status_async. A cluster whose read runs past the wall
 is reported as not answering for this sweep only: it is never cached as offline here and never
-recorded on the breaker, and a slow cluster can no longer hold the whole sweep. The same goes for
-a cluster whose instance list runs out of time: the sweep names it and keeps the others' answer.
+recorded on the breaker, and a slow cluster cannot hold the whole sweep. The same goes for a
+cluster whose instance list runs out of time: the sweep names it and keeps the others' answer.
 
-note: the line carries the phase timings in its message, so the logging dedup filter (identical
+The log line carries the phase timings in its message, so the logging dedup filter (identical
 messages within 60 s are folded) never swallows a sweep.
 """
 

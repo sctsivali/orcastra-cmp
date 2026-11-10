@@ -1,19 +1,19 @@
 """Judge a host's reported kernel against known kernel advisories.
 
-The input is what LXD reports in `GET /1.0` environment: `kernel_version` (the `uname -r`
-string), `os_name`, `os_version` and `instance_types`. Nothing here does I/O, so a verdict is
-recomputed on every read from cached facts and an advisory data update applies on deploy.
+The input is LXD's `GET /1.0` environment (`kernel_version` from `uname -r`, `os_name`,
+`os_version`, `instance_types`). No I/O here: a verdict is recomputed from cached facts per read.
 
 important: distributions backport fixes without moving the upstream sublevel, so the version
-string alone proves "patched" only when it is at or above an upstream fix. "Exposed" is claimed
-only where no vendor could have backported the fix (an upstream build below the fix, an
-end-of-life upstream branch) or where the vendor states it has not published one.
-Everything else is "unverified" with the command that settles it on the host.
+string proves "patched" only at or above an upstream fix. "Exposed" is claimed only where no vendor
+could have backported the fix (an upstream build below it, an end-of-life upstream branch) or the
+vendor says it has not published one; everything else is "unverified", with the command that
+settles it.
 
-An Ubuntu kernel is matched against Ubuntu's own record of the CVE when one was read in the last
-three days (services/kernel_cve_feed/, passed in as an UbuntuSnapshot): the kernel flavour names
-the source package, the host's release names the series, and Ubuntu's status for that pair decides.
-Without a recent record the built-in data in kernel_advisory_data.py decides, and says so.
+An Ubuntu kernel is judged by Ubuntu's own CVE record (an UbuntuSnapshot from
+services/kernel_cve_feed/): the flavour names the source package, the release the series, and
+Ubuntu's status for that pair decides. A record older than UBUNTU_GOOD_FOR keeps its verdict and
+says how old it is. Without a decisive record the built-in data in kernel_advisory_data.py
+decides, and says so.
 """
 
 import re
@@ -155,8 +155,8 @@ def kernel_family(release: KernelRelease, os_name: Optional[str]) -> Family:
         return "proxmox"
     name = os_name.lower() if isinstance(os_name, str) else ""
     if "ubuntu" in name:
-        # note: a sublevel on an Ubuntu host is either the mainline PPA or a vendor build on
-        # Ubuntu (5.15.148-tegra on a Jetson), whose maker may have backported the fix
+        # A sublevel on an Ubuntu host is either the mainline PPA or a vendor build on Ubuntu
+        # (ex; 5.15.148-tegra on a Jetson), whose maker may have backported the fix.
         if release.sublevel and not _UBUNTU_MAINLINE_LOCAL.match(release.local):
             return "vendor"
         return "ubuntu"
@@ -177,8 +177,8 @@ def kernel_family(release: KernelRelease, os_name: Optional[str]) -> Family:
 
 def check_command(advisory: KernelAdvisory, family: Family) -> str:
     cve = advisory.id
-    # note: on Ubuntu the linux-image changelog belongs to the signed package and names no CVEs;
-    # the kernel's CVE list is in the linux-modules changelog (checked on an Ubuntu 22.04 host)
+    # On Ubuntu the linux-image changelog belongs to the signed package and names no CVEs; the
+    # kernel's CVE list is in the linux-modules changelog (Ubuntu 22.04).
     ubuntu_log = f"zgrep -m1 {cve} /usr/share/doc/linux-modules-$(uname -r)/changelog.Debian.gz"
     debian_log = f"zgrep -m1 {cve} /usr/share/doc/linux-image-$(uname -r)/changelog.Debian.gz"
     return {
@@ -310,7 +310,7 @@ def _ubuntu_status(record: UbuntuCve, release: KernelRelease, abi: int, os_versi
         return _UbuntuStatus("exposed", f"Ubuntu has not released a fix for {where} yet. {_LIVEPATCH} {_REBOOT}",
                              None, True)
     if status == "ignored":
-        # note: Ubuntu marks a package "ignored" when it is out of support, so no fix is coming.
+        # Ubuntu marks a package "ignored" when it is out of support, so no fix is coming.
         return _UbuntuStatus("exposed", (
             f"Ubuntu does not plan a fix for {where}; move to a supported kernel. {_REBOOT}"
         ), None, True)
@@ -330,13 +330,13 @@ def _ubuntu_verdict(
         if ubuntu_is_fresh(ubuntu, now):
             return feed.state, feed.reason, feed.fixed_in, "ubuntu"
         # important: an old read keeps its verdict and says how old it is. Turning it into
-        # "unverified" lowered the severity, so anyone able to block ubuntu.com for three days
-        # could quietly silence the alert.
+        # "unverified" would lower the severity, so anyone able to block ubuntu.com for three
+        # days could silence the alert.
         checked = ubuntu.checked_at.date().isoformat()
         return feed.state, f"{feed.reason} Ubuntu not checked since {checked}.", feed.fixed_in, "ubuntu"
 
-    # note: a fixed ABI in the built-in data is a known fact that does not age, so it decides
-    # whenever Ubuntu's record does not (absent, stale, or silent about this kernel).
+    # A fixed ABI in the built-in data is a known fact that does not age, so it decides whenever
+    # Ubuntu's record does not (absent, stale, or silent about this kernel).
     track = "generic" if flavour in _GENERIC_TRACKS else flavour
     branch = f"{release.major}.{release.minor}"
     fixed_abi = advisory.ubuntu_fixed_abi.get((facts.os_version or "", branch, track))

@@ -1,18 +1,16 @@
 """A non-interactive exec whose stdin crosses only sockets held to the cluster's certificate pin.
 
-important: this exists because pylxd's `Instance.execute` opens its exec sockets with ws4py and
-only a client certificate (`pylxd/client.py`, `ssl_options`), so the peer is never checked against
-the pin the REST session enforces. On those sockets the fd 0 secret travels in the upgrade request,
-and on this path what follows is root's chpasswd line. Anyone between this service and the cluster
-could read the password, or open fd 0 first and set their own. Here every socket goes through
-`lxd_ws.open_lxd_socket`, which drops a stranger certificate before the upgrade line is sent, and
-admission has already refused a cluster for which no pin is held.
+important: pylxd's `Instance.execute` opens its exec sockets with ws4py and only a client
+certificate (`pylxd/client.py`, `ssl_options`), never checking the peer against the REST pin. The
+fd 0 secret travels in the upgrade request and root's chpasswd line follows, so anyone in between
+could read the password or take fd 0 first and set their own. `lxd_ws.open_lxd_socket`, used for
+every socket here, drops a stranger certificate before the upgrade line, and admission refuses a
+cluster with no pin.
 
-The sequence: POST the exec (pinned REST), open fds 0, 1, 2 and control together (LXD starts the
-command only when all four are connected), send stdin as one binary frame then an empty text frame
-(LXD's end of input, the convention pylxd and `lxc exec` use), read stdout and stderr until LXD
-closes them, then read the exit code from the operation. Waiting for the close is what avoids the
-frame race that makes pylxd lose output.
+Sequence: POST the exec (pinned REST); open fds 0, 1, 2 and control together (LXD starts the
+command only once all four connect); send stdin as one binary frame, then an empty text frame (end
+of input, as pylxd and `lxc exec` do); read stdout and stderr until LXD closes them, which avoids
+pylxd's lost-output frame race; read the exit code from the operation.
 """
 
 from __future__ import annotations

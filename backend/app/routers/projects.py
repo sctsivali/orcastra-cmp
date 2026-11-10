@@ -185,9 +185,9 @@ def _parse_size_to_bytes(size_str: str) -> int:
 
 
 def _for_caller(response: ProjectListResponse) -> ProjectListResponse:
-    """The list as this caller may read it; a Tenant gets limits and its own instances only (A1).
+    """The list as this caller may read it; a Tenant gets limits and its own instances only.
 
-    note: applied on the way out, after the cache, so a body cached per scope stays whole.
+    Applied on the way out, after the cache, so a body cached per scope stays whole.
     """
     tier = caller_tier()
     if tier != "tenant":
@@ -211,10 +211,9 @@ def _refuse_cap_above_hardware(
 ) -> None:
     """Refuse a project limit larger than the hardware it would run on, naming both numbers.
 
-    Compared against totals on purpose: cpu_available is threads minus allocation and goes to
-    zero on an over-committed cluster, memory_available is live free memory, and neither is
-    what a cap means. On a clustered host the totals are the cluster's (see
-    LXDService.get_node_resources).
+    Compared against totals: cpu_available is threads minus allocation and goes to zero on an
+    over-committed cluster, and memory_available is live free memory; neither is what a cap
+    means. On a clustered host the totals are the cluster's (see LXDService.get_node_resources).
     """
     if max_cpu is not None and max_cpu > resources.get("cpu_total", 0):
         raise HTTPException(
@@ -262,7 +261,7 @@ async def list_all_projects(
 
     async def build() -> Built:
         node_names = lxd_service.get_node_names()
-        # An unreadable registry with nothing known is not "no projects" (issue #15).
+        # An unreadable registry with nothing known must not read as "no projects".
         require_known_registry(node_names)
         logger.info(f"Fetching projects from {len(node_names)} nodes in parallel")
         
@@ -279,9 +278,9 @@ async def list_all_projects(
             except LXDLocalUnavailableError:
                 raise
             except Exception as e:
-                # important: return the host, labelled, rather than None. Dropping it made
-                # an unreachable cluster vanish from the response entirely, so the dashboard
-                # project count silently fell with nothing to explain it.
+                # important: return the host, labelled unreachable, rather than None. Dropping
+                # it would make the cluster vanish from the response and the dashboard project
+                # count fall with nothing to explain it.
                 logger.warning(f"Could not list projects from {host}: {e}")
                 return ProjectListResponse(
                     host=host,
@@ -309,7 +308,7 @@ async def list_all_projects(
             if isinstance(result, ProjectListResponse):
                 if result.reachable:
                     answered += 1
-                # apply tenant ACL filtering per host, then the Partner project bound. The
+                # Apply tenant ACL filtering per host, then the Partner project bound. The
                 # cached body is already keyed per bound through get_scope_cache_key.
                 allowed_names = filter_projects_by_acl(result.host, [p.name for p in result.projects])
                 filtered = [
@@ -334,7 +333,8 @@ async def list_all_projects(
                     error=failure_text(host, result),
                 ))
 
-        # important: an outage must not be remembered as the answer. See instances.py.
+        # important: no fresh_for when no node answered, so an outage is never remembered as
+        # the answer.
         if not answered:
             logger.warning("Not caching projects list: no node answered")
         return Built(
@@ -344,7 +344,7 @@ async def list_all_projects(
         )
 
     try:
-        # e1: the body moved into the stale-while-revalidate envelope. The list stays a bare
+        # The `e1` key suffix marks the stale-while-revalidate envelope. The list stays a bare
         # array, so its age travels only in the X-Orcastra-Cache-Age header.
         served = await swr.serve(
             cache=cache,
@@ -394,7 +394,7 @@ async def list_projects(
         
         projects = [ProjectInfo(**proj) for proj in projects_data]
         
-        # apply tenant ACL filtering, then the Partner project bound
+        # Apply tenant ACL filtering, then the Partner project bound.
         allowed_names = filter_projects_by_acl(host, [p.name for p in projects])
         projects = [p for p in projects if p.name in allowed_names and project_is_visible(host, p.name)]
         
@@ -532,7 +532,7 @@ def project_create_refusal(message: str) -> Tuple[int, Any]:
         # A taken name is a conflict the caller resolves (another name, or reuse the project).
         return 409, message
     if "ovn is required" in lowered and "features.networks" in lowered:
-        # note: Incus gives a project its own networks only through OVN; LXD does not ask.
+        # Incus gives a project its own networks only through OVN; LXD does not ask.
         return 422, {
             "code": "project_networks_need_ovn",
             "message": (
@@ -563,7 +563,7 @@ async def create_project(
     user: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new project on a specific LXD host.
+    """Create a new project on a specific cluster.
 
     A Partner's project is recorded in their organization's managed policy right after LXD
     creates it, so on a cluster shared with another organization the project is inside their
@@ -575,10 +575,10 @@ async def create_project(
         raise HTTPException(status_code=422, detail="Invalid project name")
     grant_org: Optional[int] = None
     try:
-        # important: a project limit is a cap, not a reservation. LXD allows any limit and any
-        # over-commit, so the only figure that makes a cap nonsensical is the hardware total.
-        # Comparing against cpu_available (threads minus allocation) refused every project on
-        # an over-committed cluster with "exceeds available CPU (-227)".
+        # important: a project limit is a cap rather than a reservation. LXD allows any limit
+        # and any over-commit, so the only figure that makes a cap nonsensical is the hardware
+        # total; comparing against cpu_available would refuse every project on an over-committed
+        # cluster.
         try:
             node_resources = await _bounded_node_resources(lxd_service, request.host)
             _refuse_cap_above_hardware(
@@ -595,7 +595,7 @@ async def create_project(
             LXDConnectionError,
             LXDOperationError,
         ):
-            # if we can't get resources, just log and continue
+            # Without a resource read, skip the cap check and continue.
             logger.warning(f"Could not validate resources for {request.host}, proceeding anyway")
 
         async with serialize_cluster_configuration(db, request.host):
@@ -616,7 +616,7 @@ async def create_project(
                 grant_org = await org_to_hold_project_grant(user.email, request.host, db)
                 if grant_org is None and visible_projects_for(request.host) is not None:
                     # Refused before LXD is touched: created first, the project would be one
-                    # its creator can neither see nor delete. note: the message names the rule
+                    # its creator can neither see nor delete. The message names the rule
                     # (org_to_hold_project_grant counts only an organization the user runs), since
                     # a member of the holding organization is refused here too.
                     raise HTTPException(
@@ -668,8 +668,7 @@ async def create_project(
         _invalidate_project_caches()
         
 
-        # Announce the lifecycle change to any subscribed add-on. Nothing emitted these events
-        # until now, so the catalogue was a promise with no sender behind it.
+        # Announce the lifecycle change to any subscribed add-on.
         from app.services.webhooks.emitter import emit_resource_event
 
         await emit_resource_event(
@@ -752,10 +751,9 @@ async def create_project(
         status_code, detail = project_create_refusal(str(e))
         raise HTTPException(status_code=status_code, detail=detail)
     except HTTPException:
-        # important: let a deliberate status through. This try raises HTTPException
-        # itself, and the broad handler below rewrote it, so an unreachable cluster
-        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
-        # instead of 403.
+        # important: let an HTTPException through unchanged. This try raises its own, and the
+        # broad handler below would turn a 503 (unreachable cluster) or a 403 (tenant ACL
+        # denial) into a 500.
         raise
     except InstanceSecurityPolicyViolation as exc:
         raise _policy_refusal(exc) from exc
@@ -936,11 +934,10 @@ async def delete_project(
     _rbac: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a project from a specific LXD host.
+    """Delete a project from a specific cluster.
 
-    important: no branch answers with the text of a transport exception. It names the cluster's
-    address (`HTTPSConnectionPool(host='10.x.x.x', ...)`), and a 4xx body reaches the browser
-    untouched.
+    No error carries the text of a transport exception: it names the cluster's address, and a
+    4xx body reaches the browser untouched. The delete finishes even if the requester disconnects.
     """
     verify_cluster_access(host)
     _refuse_a_project_outside_the_bound(host, project_name)
@@ -957,8 +954,8 @@ async def delete_project(
         )
 
     try:
-        # note: the deletion service revokes and announces before it returns, so a requester that
-        # left mid-delete costs nothing it owed.
+        # The deletion service revokes and announces before it returns, so a requester that
+        # leaves mid-delete leaves nothing owed.
         outcome, request_cancelled = await _finish_critical_write(
             project_deletion.delete_project_and_forget(
                 db, lxd_service, host, project_name, origin="route", requester=_rbac.user_id

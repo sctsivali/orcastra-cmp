@@ -1,7 +1,7 @@
 """Side-effect-free migration discovery and compatibility checks.
 
 Every discovered project resource is either represented in the plan or becomes a blocker.
-There is intentionally no best-effort project migration mode.
+There is no best-effort project migration mode.
 """
 
 from __future__ import annotations
@@ -103,7 +103,7 @@ class PreflightResult:
 
 
 # The API's MigrationIssue fields hold 2000 characters. Bounding here, where an issue is made,
-# keeps the stored, hashed and shown text identical; a longer one used to fail every plan read.
+# keeps the stored, hashed and shown text identical; a longer one would fail every plan read.
 _ISSUE_TEXT_LIMIT = 2000
 
 
@@ -563,9 +563,9 @@ def _check_capacity(
         measured = sum(int(value or 0) for value in footprints)
         free = int(headroom["free"])
         if bound and measured <= free < measured + bound:
-            # The owner's choice (2026-10-29): a dir pool's bound is everything it holds, which a
-            # copy within a well-filled pool (Pandora's) never fits, so an operator may accept the
-            # unmeasured size instead of being refused. What was measured must still fit.
+            # A dir pool's bound is everything it holds, which a copy within a well-filled pool
+            # never fits, so an operator may accept the unmeasured size instead of being refused.
+            # What was measured must still fit.
             result.warnings[:] = [
                 warning for warning in result.warnings if warning.get("code") != "source_footprint_bounded_by_pool"
             ]
@@ -612,8 +612,8 @@ def _unmeasured_pool_bound(
 ) -> Optional[tuple[tuple[str, str], int]]:
     """((pool, member), used bytes) when the instance's root sits on a driver that cannot size it.
 
-    Everything the pool holds bounds what the instance and its snapshots can need, which is the
-    owner's choice (2026-10-29) for dir pools over refusing them outright.
+    Everything the pool holds bounds what the instance and its snapshots can need, so a dir pool
+    is sized this way instead of being refused outright.
     """
     instance = _instance(client, project, name)
     if not isinstance(instance, dict):
@@ -671,7 +671,7 @@ def _bound_unmeasured_footprints(
         footprints[index] = 0
         bounded.append(name)
     if bounds:
-        # note: no figures in a warning. It is part of the approved report's hash, and a pool's
+        # No figures in a warning. It is part of the approved report's hash, and a pool's
         # usage moves between plan and execute, which would ask for a new approval every time.
         pools = ", ".join(sorted({f"'{pool}'" for pool, _member in bounds}))
         result.warn(
@@ -1025,7 +1025,7 @@ def _known_project_resources(client: Any, project: str) -> dict[str, list[Any]]:
             resources[label] = []
             continue
         try:
-            # note: LXD paths use dashes. pylxd only converts a few attribute names, so
+            # LXD paths use dashes. pylxd only converts a few attribute names, so
             # ``client.api.network_acls`` would ask for /1.0/network_acls and get a 404.
             node = client.api[safe_segment(label.replace("_", "-"))]
         except (AttributeError, KeyError, TypeError) as exc:

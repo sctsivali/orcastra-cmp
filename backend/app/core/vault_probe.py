@@ -1,16 +1,15 @@
 """Whether Vault itself is sealed, uninitialized or unreachable, asked of Vault directly.
 
-Issue #15: after a reboot Vault comes back sealed, every cluster read fails, and the dashboard
-looked like a deployment with no clusters. vault_status records whether the last registry LIST
-answered; nothing asked Vault *why* it did not. `sys/seal-status` answers that, unauthenticated
-and even while sealed, so the dashboard can say "Vault is sealed" instead of "no clusters".
+After a reboot Vault comes back sealed and every cluster read fails. vault_status records whether
+the last registry LIST answered; `sys/seal-status` says why it did not, unauthenticated and even
+while sealed, so the dashboard can say "Vault is sealed" instead of showing no clusters.
 
 important: a bare requests.get, not VaultClient.session. That session retries 5xx and connect
-errors twice with backoff, so one probe of a dead Vault took about ten seconds. This one costs
-one round trip with a 2 s connect and 3 s read budget.
+errors twice with backoff, so one probe of a dead Vault would take about ten seconds. This one
+costs one round trip with a 2 s connect and 3 s read budget.
 
 Per process and lock-guarded like vault_status: the lock is held across the HTTP call, so a burst
-of callers shares one probe (single flight) and the answer is kept for PROBE_TTL_SECONDS.
+of callers shares one probe and the answer is kept for PROBE_TTL_SECONDS.
 """
 
 import logging
@@ -121,8 +120,8 @@ def seal_probe(force: bool = False) -> SealProbe:
         age = time.time() - _last.checked_at if _last is not None else None
         if age is not None and age < (FORCE_FLOOR_SECONDS if force else PROBE_TTL_SECONDS):
             return _last
-        # Stamped when the answer arrived, not when it was asked: a 3 s timeout stamped at the
-        # start already looked older than the forced floor, so a looped Check now kept the lock.
+        # Stamped when the answer arrives: a 3 s timeout stamped at the start would already be
+        # older than the forced floor, so a looped "Check now" would keep the lock.
         probe = replace(_ask(settings.vault_addr), checked_at=time.time())
         if _last is None or _last.state != probe.state:
             # One line per change, not per probe: the poll would otherwise log every 10 seconds.
@@ -138,7 +137,7 @@ def peek() -> Optional[SealProbe]:
     """The last answer, without asking. For /health, which must never wait on Vault.
 
     important: no lock. seal_probe holds _lock across the network call, and /health runs on the
-    event loop, so taking it here stalled the whole worker for the length of a probe of a dead
+    event loop, so taking it here would stall the whole worker for the length of a probe of a dead
     Vault. Reading one reference is atomic, and the value is an immutable dataclass.
     """
     return _last
@@ -161,8 +160,8 @@ def ask_now() -> SealProbe:
 def record(probe: SealProbe) -> None:
     """Keep an answer Vault gave outside seal_probe (the unseal call returns the same status).
 
-    note: per process. Another worker keeps its own answer for at most PROBE_TTL_SECONDS, which is why
-    the console re-reads the status with `fresh` after an unseal instead of trusting one poll.
+    Per process: another worker keeps its own answer for up to PROBE_TTL_SECONDS, so the console
+    re-reads the status with `fresh` after an unseal instead of trusting one poll.
     """
     global _last
     with _lock:

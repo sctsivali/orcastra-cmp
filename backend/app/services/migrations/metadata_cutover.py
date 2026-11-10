@@ -1,13 +1,13 @@
 """Move Orcastra's per-instance records to an instance's new identity, and back.
 
-Three stores are keyed by (cluster, project, instance): tag assignments, Orcastra snapshot
-schedules, and exact tenant access rules. A staged move points them at the target in the same
-database transaction that retains the source, and a rollback points them back. Both directions
-run inside the caller's transaction and never commit.
+Tag assignments, Orcastra snapshot schedules and exact tenant access rules are keyed by
+(cluster, project, instance). A staged move points them at the target in the transaction that
+retains the source, and a rollback points them back. Both run inside the caller's transaction
+and never commit.
 
-Only rows owned by the job's organization move. OrcaHub-synced policies are left alone because
-OrcaHub rewrites them on its next sync, and OrcaHub-provisioned projects cannot be moved.
-Wildcard tenant rules are not instance records and stay as they are.
+Only rows owned by the job's organization move. OrcaHub-synced policies are left alone (OrcaHub
+rewrites them on its next sync), OrcaHub-provisioned projects cannot be moved, and wildcard
+tenant rules are not instance records and stay as they are.
 """
 
 from __future__ import annotations
@@ -82,7 +82,7 @@ async def _move_schedules(
     ).scalars().all()
     if not rows:
         return 0
-    # note: one schedule per identity (unique cluster, project, name) whatever its organization.
+    # One schedule per identity (unique cluster, project, name) whatever its organization.
     # The new identity has no instance on the daemon, so a row there is an orphan of a deleted
     # instance and must go, or the update below would violate the constraint mid-cutover.
     await db.execute(

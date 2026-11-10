@@ -1,22 +1,14 @@
-"""
-Snapshot operations for instances and custom storage volumes.
+"""Instance snapshot operations against LXD.
 
-This module is the one place Orcastra performs snapshot work against LXD. Two callers reach it
-with deliberately different rules, and the difference matters:
+Two callers share the LXD calls but not the naming policy. The dashboard (operator) surface
+creates only `ops-` names with a bounded lifetime (`build_operator_snapshot_name`); the
+integrations proxy tunnels OrcaHub's snapshot product and must keep accepting its names
+(`snap-%Y%m%d-%H%M` for LXD-native schedules, `pre-restore-*` for restore safety copies), so
+the operator rules (`assert_operator_snapshot_name`) must never run on the proxy path.
 
-* The dashboard (operator) surface, which only ever creates `ops-` prefixed snapshots with a
-  bounded lifetime, and refuses names that belong to OrcaHub.
-* The integrations proxy, which tunnels OrcaHub's own paid snapshot product and must keep
-  accepting the names OrcaHub chooses (`snap-%Y%m%d-%H%M` for its LXD-native schedules, and
-  `pre-restore-*` for its restore safety copies).
-
-So the LXD calls are shared and the naming policy is not. `assert_operator_snapshot_name` is
-applied by the dashboard router only; calling it on the proxy path would break a live product.
-
-important: every request here is raw `client.api.*` with an explicit `project` parameter. pylxd's
-`instance.snapshots` collection cannot carry a project, so the model API silently answers about
-the client's bound project instead of the one the caller authorized. The same reasoning is
-recorded at instance.py:87.
+important: every request is raw `client.api.*` with an explicit `project`. pylxd's
+`instance.snapshots` cannot carry one, so the model API would answer about the client's bound
+project instead of the one the caller was authorized for.
 """
 
 import logging
@@ -37,15 +29,13 @@ logger = logging.getLogger(__name__)
 # cluster itself by anyone looking, including OrcaHub's reconcile.
 OPS_PREFIX = "ops-"
 
-# Prefixes OrcaHub owns. `pre-restore-` is not merely taken: OrcaHub's rolling safety prune
-# physically deletes snapshots matching it, so an Orcastra snapshot named that way would be
-# removed by another product without warning. `snap-` is the pattern its LXD-native schedules
-# generate, and reusing it would make an operator snapshot indistinguishable from a paid one.
+# Prefixes OrcaHub owns. Its rolling safety prune deletes snapshots matching `pre-restore-`, so an
+# Orcastra snapshot named that way would vanish without warning. `snap-` is what its LXD-native
+# schedules generate, and reusing it would make an operator snapshot look like a paid one.
 RESERVED_PREFIXES = ("pre-restore-", "snap-")
 
-# An operator rollback point is for hours or days of maintenance, not months. Expressed to LXD as
-# `expires_at` so LXD prunes it with no help from Orcastra: the cleanup survives this service
-# being down, redeployed, or removed entirely.
+# An operator rollback point is for hours or days of maintenance. Sent to LXD as `expires_at`, so
+# LXD prunes it itself and the cleanup survives this service being down, redeployed or removed.
 DEFAULT_EXPIRY_DAYS = 7
 MAX_EXPIRY_DAYS = 7
 
@@ -55,11 +45,9 @@ MAX_OPS_SNAPSHOTS_PER_INSTANCE = 5
 # LXD instance/snapshot names: letters, digits and dashes, 63 characters at most. Enforced here
 # rather than left to LXD because the name is interpolated into a request path.
 #
-# note: `\Z` rather than `$`, because Python's `$` matches before a trailing newline. Defence in
-# depth, not the operative guard: `assert_operator_snapshot_name` strips before it matches, so the
-# newline is gone by then either way. It matters if that normalisation is ever removed. The
-# request-boundary pattern in core/lxd_names.py is evaluated by a different engine whose `$` is
-# already end-of-text.
+# `\Z` rather than `$`, because Python's `$` also matches before a trailing newline. Defence in
+# depth: `assert_snapshot_name` strips before it matches. The request-boundary pattern in
+# core/lxd_names.py runs on a different engine, whose `$` is already end-of-text.
 _NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}\Z")
 
 # LXD reports "no expiry" as a zero time rather than null.
@@ -67,11 +55,8 @@ _NO_EXPIRY_PREFIX = "0001-01-01"
 
 # The instance config keys that describe an LXD-native snapshot schedule. Orcastra reads these
 # and never writes them: they are OrcaHub's retention mechanism, and a write here would leave its
-# ledger disagreeing with the cluster about a schedule a tenant is paying for.
-#
-# note: one definition, in core/lxd_names.py, so the create request models can refuse these at
-# the request boundary without importing this package. A second copy here is exactly how the
-# refusal and the reader would drift apart.
+# ledger disagreeing with the cluster about a schedule a tenant is paying for. Defined once, in
+# core/lxd_names.py, so the create request models can refuse them without importing this package.
 POLICY_KEYS = POLICY_CONFIG_KEYS
 
 
@@ -86,11 +71,10 @@ class SnapshotLimitError(RuntimeError):
 class SnapshotProjectUnknown(RuntimeError):
     """An instance listing carried a snapshot but no project to attribute it to.
 
-    important: this is a security signal, not a data-quality one. The project on a row is what
-    `check_tenant_permission` is asked about, so attributing an unlabelled row to "default" would
-    show a tenant holding a grant on `default` the snapshots of every other project on that
-    cluster. The all-projects reader catches this and re-reads the cluster project by project,
-    where the label comes from the request rather than from the response.
+    A security signal: the project on a row is what `check_tenant_permission` is asked about, so
+    attributing an unlabelled row to "default" would show a tenant holding a grant on `default`
+    the snapshots of every other project on that cluster. The all-projects reader catches this and
+    re-reads the cluster project by project, where the label comes from the request.
     """
 
 
@@ -107,17 +91,13 @@ def _compact_stamp(moment: Optional[datetime] = None) -> str:
 
 
 class SnapshotOrigin(str, Enum):
-    """Who made a snapshot, which is three answers rather than two.
+    """Who made a snapshot: this console, an operator outside it, or the upstream product.
 
-    The console recognised only "ours" and "everything else" until an operator pointed out that
-    the second bucket holds two unrelated things. `udesk-semanan` carries three snapshots taken
-    by hand over SSH (`pre-atlas-guacamole-...`, `pre-v4-xrdp-...`, `c35-cia-pre-...`) and this
-    module's own docs name them as the PROBLEM the feature exists to solve, not as anyone else's
-    property. Lumping them in with the upstream product's meant refusing an operator access to
-    their own restore point and telling them it was "managed elsewhere".
+    A snapshot taken by hand (ex; over SSH before a risky change) is the operator's own restore
+    point, not another product's property, so it gets its own class.
 
-    important: `MANUAL` is the fallback, so it is the most permissive class. Anything deciding a
-    gate from this MUST validate the name first; see `assert_snapshot_name`.
+    important: `MANUAL` is the fallback and so the most permissive class. Anything deciding a gate
+    from this must validate the name first (`assert_snapshot_name`).
     """
 
     OPERATOR = "operator"   # ops-*            this console created it
@@ -137,17 +117,17 @@ def classify_snapshot_origin(name: str) -> SnapshotOrigin:
 
 
 def is_operator_snapshot(name: str) -> bool:
-    """Whether THIS CONSOLE created it. Still the question the per-instance cap asks."""
+    """Whether this console created it, the question the per-instance cap asks."""
     return classify_snapshot_origin(name) is SnapshotOrigin.OPERATOR
 
 
 def assert_snapshot_name(name: str) -> str:
     """Refuse a name that cannot safely become a request path. Returns the validated form.
 
-    important: this is the injection guard and it applies to EVERY class. pylxd builds request
-    URLs by string concatenation and escapes nothing, so `ct-victim?` in a path segment ends the
-    path and addresses a different resource. It used to be fused with the ownership rule below,
-    which meant widening ownership would have widened this too.
+    important: the injection guard, applied to every origin class. pylxd builds request URLs by
+    string concatenation and escapes nothing, so `ct-victim?` in a path segment ends the path and
+    addresses a different resource. Kept apart from the ownership rule below, so widening
+    ownership cannot widen this.
     """
     candidate = (name or "").strip()
     if not candidate:
@@ -161,13 +141,11 @@ def assert_snapshot_name(name: str) -> str:
 
 
 def assert_operator_snapshot_name(name: str) -> str:
-    """Validate a name this console is about to CREATE.
+    """Validate a name this console is about to create.
 
-    note: this used to gate what the console could ACT on as well, which is what refused an
-    operator their own hand-taken snapshot. Acting is now decided by
-    `core/snapshot_ownership_gate.py` from the origin; creating is still ours alone, because a
-    name outside `ops-` would be indistinguishable from a paid one or collide with a namespace
-    OrcaHub's prune physically deletes.
+    Acting on a snapshot is decided by `core/snapshot_ownership_gate.py` from its origin. Creating
+    is limited to `ops-` names, because any other name would look like a paid one or collide with
+    a namespace OrcaHub's prune deletes.
     """
     candidate = assert_snapshot_name(name)
     origin = classify_snapshot_origin(candidate)
@@ -199,8 +177,8 @@ def build_operator_snapshot_name(label: str, moment: Optional[datetime] = None) 
 def build_safety_snapshot_name(instance_name: str, moment: Optional[datetime] = None) -> str:
     """Name for the automatic pre-restore copy.
 
-    Deliberately `ops-pre-...` and never `pre-restore-...`: the latter is OrcaHub's, and its
-    rolling prune deletes what it matches.
+    `ops-pre-...`, never `pre-restore-...`: the latter is OrcaHub's, and its rolling prune
+    deletes what it matches.
     """
     return build_operator_snapshot_name(f"pre-{instance_name}", moment)
 
@@ -244,14 +222,13 @@ def _normalize(entry: Any, source_name: str) -> Dict[str, Any]:
         "stateful": entry.get("stateful"),
         "size": size,
         "architecture": entry.get("architecture"),
-        # Both, deliberately. `origin` is the three-way answer the console acts on; the boolean
-        # stays because "did this console create it" is still the question the per-instance cap
-        # and several callers ask, and it is not the same question as "may I act on it".
+        # `origin` is the three-way answer the console acts on. `operator_managed` answers "did
+        # this console create it", which the per-instance cap and several callers ask; that is a
+        # different question from "may I act on it".
         "origin": classify_snapshot_origin(raw_name.rsplit("/", 1)[-1]).value,
         "operator_managed": is_operator_snapshot(raw_name.rsplit("/", 1)[-1]),
-        # Flipped by list_instance_snapshots, the one read that obtains a size. False means
-        # nobody asked LXD for one, which is not the same fact as LXD having been asked and
-        # answered nothing.
+        # Set True by list_instance_snapshots, the one read that obtains a size. False means
+        # nobody asked LXD for one; True with a null size means LXD was asked and reported none.
         "size_measured": False,
     }
 
@@ -272,22 +249,19 @@ def list_instance_snapshots(
     still answers the plain form, so the caller gets names rather than an error.
 
     `timeout` is the (connect, read) socket timeout for this one request. Left None, the pooled
-    client's own default applies, which is what the per-instance route and the schedule runner
-    want. The fleet size phase passes its own, because the socket timeout is what actually frees
-    the worker thread when a storage driver is slow to answer.
+    client's own default applies, which suits the per-instance route and the schedule runner. The
+    fleet size phase passes its own, because the socket timeout is what frees the worker thread
+    when a storage driver is slow to answer.
     """
     kwargs: Dict[str, Any] = {"params": _project_params(project, recursion=1)}
     if timeout is not None:
         kwargs["timeout"] = timeout
     response = client.api.instances[lxd_segment(instance_name, what="Instance name")].snapshots.get(**kwargs)
     rows = [_normalize(entry, instance_name) for entry in (_metadata(response) or [])]
-    # important: stamped HERE, not in `_normalize`. This read is what the fleet size phase calls
-    # to obtain a size, so a null size on this path means the driver reported nothing, not that
-    # nobody asked. `_normalize` defaults it to False because `rows_from_instance_listing` also
-    # calls it, and there the bulk recursion=2 listing genuinely answers -1 for every row.
-    #
-    # Without this the per-instance route called every row unmeasured and the console printed
-    # "Not measured" where the truth was "Not reported": two different facts, one of them wrong.
+    # important: stamped here, not in `_normalize`. The fleet size phase calls this read to obtain
+    # a size, so a null size on this path means the driver reported nothing. `_normalize` defaults
+    # to False because `rows_from_instance_listing` also calls it, and the bulk recursion=2 listing
+    # answers -1 for every row. The console tells "Not measured" from "Not reported" by this flag.
     for row in rows:
         row["size_measured"] = True
     return rows
@@ -300,11 +274,11 @@ def rows_from_instance_listing(
     """Snapshot rows out of an instance listing, plus the sources that hold any.
 
     `project` pins the label for a project-scoped read. Left None, each row takes the project LXD
-    reported on its own instance, which is what an all-projects listing returns and the only thing
+    reported on its own instance, which is what an all-projects listing returns and the only label
     that can be trusted there.
 
     important: a row with no project raises rather than defaulting. The label is what the tenant
-    ACL is asked about, so a wrong one is a cross-project leak, not a cosmetic defect.
+    ACL is asked about, so a wrong one is a cross-project leak.
     """
     rows: List[Dict[str, Any]] = []
     holders: List[str] = []
@@ -340,13 +314,12 @@ def list_project_snapshots(client, project: str) -> List[Dict[str, Any]]:
     """Every snapshot in a project, in one request.
 
     `recursion=2` folds each instance's snapshots into the instance listing, so a project of
-    forty instances costs one call rather than forty-one. LXD omits the `snapshots` key entirely
-    for an instance that has none, which is why this reads it defensively rather than expecting
-    an empty list.
+    forty instances costs one call rather than forty-one. LXD omits the `snapshots` key for an
+    instance that has none, so it is read defensively.
 
-    Sizes are not read here. The bulk listing answers -1 for every snapshot, and the per-instance
-    read that obtains a real size is a separate bounded phase owned by
-    snapshot_fleet.measure_holder_sizes, run only over the rows the caller is allowed to see.
+    Sizes are not read here: the bulk listing answers -1 for every snapshot, and the per-instance
+    size read is a separate bounded phase (snapshot_fleet.measure_holder_sizes), run only over
+    the rows the caller may see.
     """
     response = client.api.instances.get(params=_project_params(project, recursion=2))
     rows, _holders = rows_from_instance_listing(_metadata(response), project)
@@ -431,21 +404,14 @@ def delete_instance_snapshot(client, instance_name: str, project: str, snapshot_
 def wait_for_operation(client, operation_id: str, project: str, timeout: int = 20) -> Dict[str, Any]:
     """Block until an LXD operation settles, or the timeout expires.
 
-    important: without this a create returns before the snapshot exists, and the caller's very
-    next read finds nothing. That is not a cosmetic race. It makes a 201 mean "asked for" rather
-    than "there", which is the difference between a control that works and one that only appears
-    to, and it is the shape of defect this codebase keeps shipping.
+    Without this a create returns before the snapshot exists, so a 201 would mean "asked for"
+    rather than "there". A timeout is not a failure: on a `dir` pool a snapshot is a full copy of
+    the instance and can outlast any sensible request budget, so the caller is handed the
+    operation to poll.
 
-    A timeout is not a failure. On a copy-on-write pool a snapshot is instant; on a `dir` pool it
-    is a full copy of the instance and can legitimately outlast any sensible request budget. The
-    caller is handed the operation to poll rather than a lie in either direction.
-
-    important: the socket window has to outlast the wait this asks LXD for. The pooled client is
-    built with a read timeout of 8 seconds, so asking the daemon to hold the response for 20 and
-    saying nothing about the socket meant the read died first, every time, and the caller was told
-    "still running" for an operation that had in fact already failed. The 502-on-failure branch
-    could then only ever catch a failure that surfaced inside 8 seconds. Same rule, and the same
-    reason, as guest_output.py:120-122 and the proxy's own client factory.
+    The socket read window must outlast the wait asked of LXD. With the pooled client's 8-second
+    read timeout, a 20-second wait would die at the socket and report "still running" for an
+    operation that had already failed. proxy_operations._client_for follows the same rule.
     """
     endpoint = client.api.operations[safe_segment(operation_id)]
     try:
@@ -454,11 +420,11 @@ def wait_for_operation(client, operation_id: str, project: str, timeout: int = 2
             timeout=(3, int(timeout) + 10),
         )
     except LXDAPIException:
-        # important: LXD answers the wait of a FAILED operation with an error-typed body, which
+        # important: LXD answers the wait of a failed operation with an error-typed body, which
         # pylxd raises. Taken as "still running", a restore ZFS refused (a later snapshot exists,
-        # which the safety copy guarantees) was answered "Restoring ..." and audited as accepted.
-        # The operation itself still reads Failure and why, so it is read once; a read that fails
-        # too (a reaped operation's 404) propagates as before.
+        # which the safety copy guarantees) would be reported and audited as accepted. The
+        # operation still reads Failure and why, so it is read once; if that read fails too (a
+        # reaped operation's 404), the error propagates.
         response = endpoint.get(params=_project_params(project), timeout=(3, 15))
     metadata = _metadata(response) or {}
     status = metadata.get("status")
@@ -466,9 +432,9 @@ def wait_for_operation(client, operation_id: str, project: str, timeout: int = 2
         "status": status,
         "err": metadata.get("err") or None,
         "settled": status in ("Success", "Failure", "Cancelled"),
-        # important: Cancelled is a settled non-success. Handlers used to compare against
-        # "Failure" alone, so an operation the daemon cancelled (a restart mid-queue, or an
-        # operator running `lxc operation delete`) was reported to the caller as done.
+        # important: Cancelled is a settled non-success. An operation the daemon cancelled (a
+        # restart mid-queue, or an operator running `lxc operation delete`) must not be reported
+        # as done.
         "failed": status in ("Failure", "Cancelled"),
     }
 
@@ -476,11 +442,10 @@ def wait_for_operation(client, operation_id: str, project: str, timeout: int = 2
 def _operation_id(response: Any) -> Optional[str]:
     """The LXD operation id of an async (202) response, or None when synchronous.
 
-    important: `None` means "there is nothing to wait for", and the caller acts on that by
-    reporting the action complete. That is right for a synchronous 200, where the work really is
-    done, and wrong for a 202 whose body we could not read: the daemon accepted work that is still
-    running and the caller would announce success. So an accepted response that yields no id is
-    raised rather than silently flattened into the synchronous case.
+    The caller reads `None` as "nothing to wait for" and reports the action complete. That is
+    right for a synchronous 200 and wrong for a 202 whose body could not be read, where the daemon
+    accepted work that is still running. So an accepted response that yields no id raises
+    LXDOperationUnreadable.
     """
     status = getattr(response, "status_code", None)
     try:
@@ -518,12 +483,11 @@ def _operation_id(response: Any) -> Optional[str]:
 def read_instance_config_and_policy(
     client, instance_name: str, project: str
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """One GET, answering both questions a caller usually has about an instance at once.
+    """The raw config and the derived snapshot policy of an instance, from one GET.
 
-    The scheduler needs the raw config as well as the derived policy: `volatile.uuid` is how it
-    tells an instance from a different one wearing the same name, and `snapshots.schedule` is how
-    it tells whether the metered product upstream has claimed the instance since. Two reads for one
-    decision is a second chance to see two different instants.
+    The scheduler needs both: `volatile.uuid` tells an instance from a different one wearing the
+    same name, and `snapshots.schedule` tells whether the metered product upstream has claimed the
+    instance since. One read keeps both answers to the same instant.
     """
     response = client.api.instances[lxd_segment(instance_name, what="Instance name")].get(params=_project_params(project))
     config = (_metadata(response) or {}).get("config") or {}

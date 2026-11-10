@@ -1,9 +1,9 @@
-"""The HTTP side of removing trust: prove who we are, then delete exactly one fingerprint.
+"""The HTTP side of removing trust: prove the identity, then delete exactly one fingerprint.
 
 important: never the pooled client and never cert_files.materialize. The pool proves the
-certificate a worker happens to hold in memory, which after a rotation is the OLD one, so "trusted"
-from the pool says nothing about whether removing the old entry would lock the dashboard out. And
-the materialized files are shared by every pooled client of this worker, so writing the Vault
+certificate a worker holds in memory, which after a rotation is the REPLACED one, so "trusted" from
+the pool says nothing about whether removing that entry would lock the dashboard out. The
+materialized files are shared by every pooled client of this worker, so writing the Vault
 certificate there would switch a stale client's identity behind its back. Each session here is
 built from the PEM it was handed, on its own staging files, unlinked on exit.
 
@@ -69,11 +69,10 @@ def server_identity_problem(
     """Why the cluster's server cannot be authenticated for a removal, or None when it can.
 
     important: without the pin, `verify=False` means no server authentication at all, and an
-    on-path host could answer "trusted" and "removed" while the real entry stays trusted. The
-    worst it could do is that lie, never a lockout or a foreign deletion, but a record that says
-    "removed" for an entry that is still trusted is exactly the false comfort this feature exists
-    to end. So no pin, no removal: the pooled connection pins a cluster on first contact, and the
-    row waits for it.
+    on-path host could answer "trusted" and "removed" while the real entry stays trusted. That
+    cannot cause a lockout or a foreign deletion, but the record would say "removed" for an entry
+    that is still trusted. No pin, no removal: the pooled connection pins a cluster on first
+    contact, and the row waits for it.
     """
     if not normalize_endpoint(endpoint).lower().startswith("https://"):
         return IdentityProbe(True, False, None, "the cluster endpoint is not HTTPS", blocked=True)
@@ -113,8 +112,8 @@ def pinned_session(
     server_fingerprint: Optional[str],
 ) -> Iterator[requests.Session]:
     """A one-off mTLS session presenting `cert_pem`, pinned to the cluster's server certificate."""
-    # dir= is load-bearing: see cert_files.staging_dir. Without it tempfile falls through to
-    # /var/tmp when /tmp is full and the private key lands on disk.
+    # important: dir= is load-bearing (see cert_files.staging_dir). Without it tempfile falls
+    # through to /var/tmp when /tmp is full and the private key lands on disk.
     staging = cert_files.staging_dir()
     prefix = "lxd_trust_"
     cert_path = key_path = None
@@ -197,7 +196,7 @@ def remove_fingerprint(
             return RemovalOutcome.FAILED, f"lookup answered HTTP {found.status_code}"
         named = ((found.json() or {}).get("metadata") or {}).get("fingerprint")
         if named != fingerprint:
-            # LXD resolves a prefix; anything but the exact entry is not ours to delete.
+            # LXD resolves a prefix; only the exact entry may be deleted.
             return RemovalOutcome.FAILED, "the cluster resolved a different entry"
         gone = session.delete(url, timeout=REQUEST_TIMEOUT)
     except requests.exceptions.SSLError as exc:

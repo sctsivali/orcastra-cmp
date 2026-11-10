@@ -1,20 +1,14 @@
 """What the console and terminal proxies share: how a browser socket is closed, and output flow.
 
-important: a proxy that simply returned left uvicorn to drop the TCP connection with no close
-frame, so every ending (a shell's `exit`, a VM powering off, an LXD error) reached the browser as
-1006, which the clients read as "network dropped, reconnect". A shell that had just exited
-reconnected into a new one. Every ending now closes with a code that says which it was:
-
-- 1000: the session ended on the instance side; do not reconnect on your own.
-- 1011: the connection to the instance broke; reconnecting may work.
-- 1012: the instance powered down (a stop, or a restart on its way); reconnect once it runs again.
-- 4404: the session cannot start (not running, not found, not a VM); reconnecting will not help.
-- 4403: access ended mid-session (sent by ws_session_guard).
-- 4409: another viewer opened this display (QEMU serves one); taking it back is the operator's call.
-- 4423: Migration Center fenced the instance while the session was starting.
-
-Refusals for reasons of access (4401, 4403, 4428, 4423) carry a reason token instead of a sentence;
-core/ws_close.py lists them.
+A proxy that just returns lets uvicorn drop TCP with no close frame; the browser sees 1006, which
+the clients read as "network dropped, reconnect", so an exited shell would reconnect into a new
+one. Every ending closes with a code the client acts on: 1000 ended on the instance side (no
+automatic reconnect), 1011 the link to the instance broke (reconnect may work), 1012 the instance
+powered down (reconnect once it runs), 4404 the session cannot start (reconnecting will not help),
+4409 another viewer took the display, which QEMU serves to one (taking it back is the operator's
+call). ws_session_guard sends 4403 when access ends mid-session; 4423 means Migration Center
+fenced the instance while the session was starting. Access refusals (4401, 4403, 4428, 4423)
+carry a reason token instead of a sentence; core/ws_close.py lists them.
 """
 
 from __future__ import annotations
@@ -32,8 +26,8 @@ CLOSE_POWERED_DOWN = 1012
 CLOSE_TAKEN_OVER = 4409
 CLOSE_UNAVAILABLE = 4404
 
-# RFC 6455 caps a close reason at 123 bytes; a longer one makes the close frame itself fail,
-# which used to be swallowed and turned back into a 1006.
+# RFC 6455 caps a close reason at 123 bytes; a longer one makes the close frame itself fail, and
+# the browser then sees 1006.
 _MAX_REASON_BYTES = 120
 
 
@@ -44,8 +38,8 @@ _UNPRINTABLE = re.compile("[\\x00-\\x1f\\x7f-\\x9f\u061c\u200e\u200f\u2028\u2029
 def plain_text(text: str) -> str:
     """``text`` with nothing a terminal would execute.
 
-    important: a refusal echoes what the browser asked for, and the browser writes it to xterm. A
-    crafted instance name must not arrive as an escape sequence. The client strips this too.
+    important: a refusal echoes what the browser asked for, and the browser writes it to xterm, so
+    a crafted instance name must not arrive as an escape sequence. The client strips this too.
     """
     return _UNPRINTABLE.sub(" ", text or "").strip()
 
@@ -69,12 +63,12 @@ async def close_browser(websocket: Any, code: int, reason: str = "") -> None:
 class OutputWindow:
     """Bounds how much PTY output is in flight to a browser that ACKs what it has drawn.
 
-    note: TCP backpressure bounds the socket, not the browser: xterm queues every write it is
-    handed, so `yes` or a large `cat` grew the tab until it stalled. The client ACKs bytes once
-    xterm has parsed them; past HIGH_WATER unacknowledged bytes the forwarder waits until ACKs
-    bring it under LOW_WATER. Interactive output never comes near either mark.
+    TCP backpressure bounds the socket but not the browser: xterm queues every write it is handed,
+    so `yes` or a large `cat` would grow the tab until it stalls. The client ACKs bytes once xterm
+    has parsed them; past HIGH_WATER unacknowledged bytes the forwarder waits until ACKs bring it
+    under LOW_WATER. Interactive output never comes near either mark.
 
-    A client that never said it ACKs (a tab still running the previous build) is never paused.
+    A client that never said it ACKs (ex; a tab running an older build) is never paused.
     """
 
     HIGH_WATER = 2 * 1024 * 1024

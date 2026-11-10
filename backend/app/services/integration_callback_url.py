@@ -5,12 +5,12 @@ to that base carries the key's credential: the member push and removal push send
 the lifecycle webhook signs with it, and the organization refresh sends its hash. A URL stored with
 a secret that a rotation has since replaced must not receive the new one, or whoever planted it with
 a leaked secret gets the secret issued to replace it. So the URL is stored with a tag of the secret
-that set it, and is used only while that is still the key's secret. A URL stored before this binding
-existed carries no tag and is not used until the next sync with the current secret stores it again.
+that set it, and is used only while that is still the key's secret. A URL without a tag is not used
+until a sync with the current secret stores it again.
 
-important: a one-way tag of the secret's hash, never the hash. The metadata document is mirrored
-in the shared Redis cache, and the hash is itself a credential: the organization refresh presents
-it to OrcaHub.
+important: the tag is a one-way digest of the secret's hash, never the hash itself. The metadata
+document is mirrored in the shared Redis cache, and the hash is a credential: the organization
+refresh presents it to OrcaHub.
 """
 
 import hashlib

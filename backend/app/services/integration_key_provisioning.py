@@ -1,12 +1,12 @@
-"""Withdrawing tenant.provision from a key that owns organizations is asked about, not refused.
+"""Withdrawing tenant.provision from a key that owns organizations needs confirmation.
 
-Owner decision, 2026-10-08. An owner key without tenant.provision still syncs its organizations and
-their members, but provisioning buyer dashboard access for them stops: an order completed in
-OrcaHub no longer gives its buyer access here, and no other key may provision for an organization
-another key owns. An operator may choose that, unlike withdrawing org.sync or inventory.read, which
-freezes the organizations and stays refused (integration_key_ownership.SYNC_CAPABILITIES). So the
-capability edit answers 409 naming the consequence and the organizations, and the same request with
-force goes through and is recorded as forced. There is no restriction beyond who may edit the key.
+An owner key without tenant.provision still syncs its organizations and their members, but
+provisioning buyer dashboard access for them stops: an order completed in OrcaHub stops giving its
+buyer access here, and no other key may provision for an organization another key owns. An operator
+may choose that, unlike withdrawing org.sync or inventory.read, which freezes the organizations and
+stays refused (integration_key_ownership.SYNC_CAPABILITIES). So the capability edit answers 409
+naming the consequence and the organizations, and the same request with force goes through and is
+recorded as forced. Anyone who may edit the key may force it.
 """
 
 import logging
@@ -59,8 +59,8 @@ async def confirm_provisioning_withdrawal(
     An organization another owner key still provisions for (an active OrcaHub key holding
     tenant.provision, read with `read_metadata`) does not lose provisioning, so it is not counted.
 
-    note: names only the organizations the caller may see and counts the rest, in the answer and in
-    the record alike, as a refusal does: the caller can read the record.
+    Names only the organizations the caller may see and counts the rest, in the answer and in the
+    record alike, as a refusal does: the caller can read the record.
     """
     try:
         owned = await owned_organizations(db, key_id)

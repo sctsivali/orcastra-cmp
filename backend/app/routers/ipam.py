@@ -1,7 +1,4 @@
-"""
-API Router for IPAM (IP Address Management) operations.
-Provides endpoints for managing LXD network IP address allocations.
-"""
+"""IPAM (IP address management): the IP allocations on LXD networks across clusters."""
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Any, Dict, Literal, Optional, List, Tuple
@@ -42,7 +39,6 @@ from app.core.swr import Built
 
 logger = logging.getLogger(__name__)
 
-# thread pool for parallel node queries
 _ipam_executor = ThreadPoolExecutor(max_workers=10)
 
 router = APIRouter(
@@ -54,17 +50,16 @@ router = APIRouter(
 
 AllocationKind = Literal["static", "dhcp", "gateway", "forward", "load_balancer", "unknown"]
 
-# the cache key carries a version: a body cached before the join fields existed must not be
-# served as "unknown" for the rest of its TTL after a deploy
-# v3: the body moved into the stale-while-revalidate envelope and gained collected_at.
+# Bump when the cached body changes shape, so a body cached by the previous build is not served
+# for the rest of its TTL after a deploy.
 _CACHE_VERSION = "v3"
-# a known-down cluster is a correct answer, remembered briefly so recovery shows within the
-# healer's cadence (same rule as storage_pools.py)
+# A known-down cluster is a correct answer, cached briefly so recovery shows within the healer's
+# cadence (same rule as storage_pools.py).
 DEGRADED_CACHE_TTL = 60
 
 
 class IPAMAllocation(BaseModel):
-    """IPAM allocation information."""
+    """One IP address allocation on an LXD network."""
     address: str = Field(..., description="IP address")
     type: str = Field(..., description="Address type (instance, network, etc)")
     used_by: str = Field(..., description="Resource using this address")
@@ -90,7 +85,7 @@ class IPAMAllocation(BaseModel):
 
 
 class IPAMListResponse(FanoutReachability):
-    """Response for listing IPAM allocations."""
+    """IP address allocations across the requested clusters."""
     total: int = Field(..., description="Total number of allocations")
     allocations: List[IPAMAllocation] = Field(..., description="List of IP allocations")
     nodes: List[str] = Field(..., description="Clusters included in this response")
@@ -101,12 +96,11 @@ def _read_allocations(
 ) -> List[Tuple[Optional[str], Dict[str, Any]]]:
     """Every allocation on the cluster as (listing project or None, row).
 
-    important: one all-projects read where the daemon offers `network_allocations`, because the
-    per-project walk lists a shared network's leases once per project that borrows the network:
-    measured on a 19-project MicroCloud, 19 reads and 815 rows in 54 s against one read and
-    59 rows in 4 s. The all-projects rows name their owner in used_by (`?project=`), which is
-    what the caller reads; the listing project is None for them. A daemon without the
-    extension, or an all-projects read that does not answer 200, is walked as before.
+    Uses one all-projects read where the daemon offers `network_allocations`: the per-project
+    walk costs one read per project and lists a shared network's leases once per borrowing
+    project. The all-projects rows name their owner in used_by (`?project=`), so their listing
+    project is None. A daemon without the extension, or an all-projects read that does not
+    answer 200, is walked project by project.
     """
     base_url = client.api._api_endpoint
     timeout = socket_timeout_for(client)
@@ -139,8 +133,8 @@ def _read_allocations(
                 continue
             rows.extend((project_name, row) for row in (response.json().get("metadata") or []) if isinstance(row, dict))
         except Exception as e:  # noqa: BLE001 - one project's failure is named, not fatal
-            # the project is in the log for the operator of the box; the banner a Partner on a
-            # shared cluster reads must not name another organization's project
+            # The project goes to the log for the host operator; the banner a Partner on a shared
+            # cluster reads must not name another organization's project.
             logger.debug(f"Error getting allocations for project {project_name} on {node_name}: {e}")
             read.lost(f"one project's allocations: {type(e).__name__}")
     return rows
@@ -206,9 +200,8 @@ def _read_join_sources(
     A failed read is named on the NodeRead and degrades the join rather than the listing: no
     networks means empty network facts, no instances means every instance row is "unknown".
 
-    note: side by side since 2026-11-04. Read one after the other they summed on central-1
-    (networks 5.3 s, instances 1.3 s at p50 on dev); now the join costs the slowest of the three.
-    Each read keeps its own socket timeouts, so waiting on the futures cannot hang.
+    The three reads run side by side, so the join costs the slowest of them. Each keeps its own
+    socket timeouts, so waiting on the futures cannot hang.
     """
     configs = _join_executor.submit(_read_project_configs, client, read)
     networks = _join_executor.submit(_read_networks, client, read)
@@ -221,9 +214,9 @@ def _visible_allocation(allocation: IPAMAllocation) -> bool:
     """Whether the caller may see one allocation row.
 
     important: a Tenant keeps its own instances' rows only. A network, forward or load-balancer
-    row names no instance, so `check_tenant_permission(..., None)` passed it on any rule in the
-    project and handed a Tenant another party's forward listen addresses (often public IPs) and
-    OVN subnets in a project they share (backlog A6, owner decision 2026-11-05: strict).
+    row names no instance, so `check_tenant_permission(..., None)` would pass it on any rule in the
+    project and show a Tenant another party's forward listen addresses (often public IPs) and
+    OVN subnets in a project they share.
     """
     project = allocation.project or "default"
     if not project_is_visible(allocation.node, project):
@@ -242,19 +235,17 @@ def _fetch_ipam_for_node(
     read: NodeRead[IPAMAllocation] = NodeRead()
     client = lxd_service.connection_manager.get_client(node_name)
     if client is None:
-        # important: unreachable is not empty. Returning a bare collection
-        # here leaves the caller nothing to label, which is how a dead
-        # cluster read as a cluster with nothing.
+        # important: unreachable is not empty. Raise so the caller can name the node; an empty
+        # result would show a dead cluster as a cluster with nothing on it.
         raise LXDConnectionError(f"Could not connect to {node_name}")
 
     configs, networks, records, instances_ok = _read_join_sources(client, node_name, read)
     project_names = list(configs.keys()) or ["default"]
     # important: LXD lists a shared network's leases under every project that borrows the
-    # network (features.networks unset), naming the instance's own project only in used_by.
-    # The same lease therefore arrives once per borrowing project; it is one row, in the
-    # instance's project, or the pin lookup misses and a tenant of the borrowing project is
-    # shown an instance that is not theirs. The network's own rows (gateway, forwards) stay
-    # per project: each borrower does use that gateway.
+    # network (features.networks unset) and names the instance's own project only in used_by.
+    # Keep one row per lease, in the instance's project, or the pin lookup misses and a tenant of
+    # the borrowing project is shown an instance that is not theirs. The network's own rows
+    # (gateway, forwards) stay per project, since each borrower uses that gateway.
     seen_instance_rows: set = set()
 
     for listing_project, alloc in _read_allocations(client, node_name, project_names, read):
@@ -268,8 +259,8 @@ def _fetch_ipam_for_node(
         used_by = alloc.get('used_by', '')
         hwaddr = alloc.get('hwaddr', '')
 
-        # the row's project: the instance's own for an instance row, the network's owner for the
-        # network's rows when the daemon named it, else the project the row was listed under
+        # The row's project: the instance's own for an instance row, the network's owner for the
+        # network's rows when the daemon named it, else the project the row was listed under.
         row_project = listing_project
         if used_by and '/instances/' in used_by:
             resource_type = "instance"
@@ -334,7 +325,7 @@ async def list_ipam_allocations(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
 ):
-    """List all IPAM allocations. Nodes are queried in parallel with caching."""
+    """List the IP allocations the caller may see, on every cluster or on `host` alone."""
     if host:
         verify_cluster_access(host)
     # 120 s soft TTL (60 s when a cluster is down), then served for SWR_MAX_STALE_SECONDS while
@@ -344,7 +335,7 @@ async def list_ipam_allocations(
     async def build() -> Built:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
 
-        # query all nodes in parallel, CLUSTER_WALL_SECONDS each (see fanout.gather_clusters)
+        # All clusters in parallel, CLUSTER_WALL_SECONDS each (see fanout.gather_clusters).
         results = await gather_clusters(
             nodes_to_query,
             lambda node_name: _fetch_ipam_for_node(lxd_service, node_name, network),
@@ -354,11 +345,10 @@ async def list_ipam_allocations(
             generation=lambda: _generation(cache),
         )
 
-        # important: two different things make a node absent, and both must be named.
-        # A node can fail during the fan-out, or never be asked at all, because
-        # connection_manager.get_node_names() returns only nodes with a live client while
-        # the fleet is whatever Vault has registered. Reporting only the first kind left a
-        # dead cluster silently missing rather than merely empty.
+        # important: two things make a node absent, and both must be named. A node can fail
+        # during the fan-out, or never be asked at all: connection_manager.get_node_names()
+        # returns only nodes with a live client, while the fleet is whatever Vault has
+        # registered. Naming only the first kind leaves a dead cluster silently missing.
         seeded: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )

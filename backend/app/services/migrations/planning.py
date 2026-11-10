@@ -1,4 +1,4 @@
-"""Migration draft planning, preflight, and execution acceptance."""
+"""Migration draft planning, preflight, and accepting a plan for execution."""
 
 from __future__ import annotations
 
@@ -72,8 +72,8 @@ def stored_request_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """The plan request as persisted, which the worker rebuilds and executes.
 
     important: the mappings hold only infrastructure names (the schema forbids anything else), so
-    they skip the key-based secret redaction. A network named `private` or a profile named
-    `cloud-init` used to be stored as `[redacted]`, and execute then mapped onto that name.
+    they skip the key-based secret redaction. Redaction would store a network named `private` or
+    a profile named `cloud-init` as `[redacted]`, and execute would then map onto that name.
     """
     stored = sanitize_payload({key: value for key, value in payload.items() if key != "mappings"})
     if "mappings" in payload:
@@ -111,10 +111,10 @@ async def _has_active_instance_operation(
 ) -> bool:
     """Return whether durable ordinary work can still mutate either endpoint.
 
-    Admission for create, specification, and rebuild jobs is serialized on the same cluster
-    advisory lock as final migration preflight. Once this query runs under that lock, no new
-    relevant job can be committed before migration resource fences are committed. Existing
-    active rows remain hard blockers because an unknown or partially applied job may resume.
+    Create, specification and rebuild admission is serialized on the same cluster advisory lock
+    as final migration preflight, so under that lock no new relevant job can commit before the
+    migration fences do. Existing active rows stay hard blockers: an unknown or partially applied
+    job may resume.
     """
 
     scope = _enum_value(request.scope)
@@ -204,11 +204,10 @@ async def _has_active_upload_session(
 ) -> bool:
     """Return whether either project has upload work that can still reach the daemon.
 
-    Upload admission commits under the same cluster advisory lock as final migration preflight.
-    Once this query runs under that lock, an active row is authoritative and no new row can appear
-    before migration fences are committed. ``unknown`` is intentionally included even though it
-    is a recovery-only state: uncertainty after possible daemon submission is active work, never
-    evidence that the project is idle.
+    Upload admission commits under the same cluster advisory lock as final migration preflight, so
+    under that lock an active row is authoritative and no new row can appear before the migration
+    fences commit. ``unknown`` counts as active although it is a recovery-only state: after a
+    possible daemon submission, uncertainty is never evidence that the project is idle.
     """
     active_statuses = ("pending", "uploading", "uploaded", "importing", "unknown")
 
@@ -350,9 +349,9 @@ class MigrationPlanningMixin:
             )
         if not source_exact:
             # important: `default` on a cluster several organizations hold names no owner, so an
-            # Admin says which one the instance belongs to (RC5 follow-up FU-5, owner decision
-            # 2026-11-06). Never picked for them, even with one candidate: an instance attributed
-            # to the wrong organization hands that organization's partners the job.
+            # Admin says which one the instance belongs to. Never picked for them, even with one
+            # candidate: an instance attributed to the wrong organization hands that
+            # organization's partners the job.
             candidates = [
                 row for row in await bound_organizations(self.db, request.source.cluster_id)
                 # A plan's source and target belong to one organization (ck_migration_plan_org).
@@ -375,7 +374,7 @@ class MigrationPlanningMixin:
         if relocation and not await single_owner_clusters(
             self.db, request.source.cluster_id, request.target.cluster_id
         ):
-            # note: ownership of a project that does not exist yet can only be proven through
+            # Ownership of a project that does not exist yet can only be proven through
             # the cluster binding. Shared clusters wait for a staged ownership grant.
             raise MigrationConflict(
                 "A whole project can only be relocated between clusters that each belong to one "
@@ -392,10 +391,10 @@ class MigrationPlanningMixin:
     async def _pin_state(self, cluster_id: str):
         """The cluster's current pin, read again from the certificate the cluster presents now.
 
-        note: one identifying handshake per cluster per plan action. It records a pin for a
-        reachable cluster that has none, and a public-CA renewal that no connection has noticed
-        yet, so the transports below bind to what the cluster actually serves. It sends no client
-        credential, so it is safe for a cluster that has never been proven.
+        One identifying handshake per cluster per plan action. It records a pin for a reachable
+        cluster that has none, and a public-CA renewal no connection has noticed yet, so the
+        transports below bind to what the cluster serves. It sends no client credential, so it is
+        safe for a cluster that has never been proven.
         """
         try:
             recorded = await cluster_pin_state(cluster_id, strict=True)
@@ -1008,8 +1007,8 @@ class MigrationPlanningMixin:
     ) -> tuple[MigrationJob, bool]:
         """Accept a legacy Copy Instance request with retry-stable job identity.
 
-        The digest deliberately excludes a generated plan id. A retried legacy request can find
-        its existing job before another short-lived plan is created.
+        The digest excludes the generated plan id, so a retried legacy request finds its existing
+        job before another short-lived plan is created.
         """
         if _enum_value(request.scope) != "instance" or _enum_value(request.intent) != "copy":
             raise MigrationConflict("The compatibility adapter accepts instance copy only.")

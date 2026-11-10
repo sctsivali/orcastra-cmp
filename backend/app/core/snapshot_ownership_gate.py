@@ -1,17 +1,12 @@
 """Who a snapshot belongs to, and what the console must be told before acting on one.
 
-A sibling of `snapshot_billing_gate.py`, and the two are deliberately independent. This one reads
-a NAME and asks whose snapshot it is. That one reads `snapshots.schedule` on the SOURCE and asks
-whose bill the instance is on. A row can be caught by both, by either, or by neither, so they
-carry separate acknowledgements and a shared reason.
+Independent of `snapshot_billing_gate.py`: this gate reads a snapshot NAME and asks whose
+snapshot it is; that one reads `snapshots.schedule` on the SOURCE and asks whose bill the
+instance is on. A row can be caught by either, both or neither, so the gates take separate
+acknowledgements and share a reason. Refusals use the billing gate's machine-readable shape.
 
-important: the acknowledgement here is NOT `acknowledge_billing_impact`. Reusing that field would
-have turned a live QA spec from proving a refusal into performing an upstream restore on a real
-instance while still reporting green, because that spec sends the billing acknowledgement at a
-`snap-` name precisely to prove it does not open this door.
-
-The refusals are machine-readable, the same shape the billing gate publishes, so the console can
-grow the affordance a refusal names instead of dead-ending on a sentence.
+important: the acknowledgement here is `acknowledge_upstream_snapshot`. Sending
+`acknowledge_billing_impact` at a `snap-` name must not open this gate.
 """
 
 import logging
@@ -42,22 +37,17 @@ def enforce_snapshot_ownership(
 ) -> Optional[str]:
     """Authorize acting on a snapshot this console may not have created.
 
-    Returns the justification when an upstream override was accepted, so the caller can audit it,
-    and None when the class needed no override. Raises HTTPException(403) otherwise.
-
-    important: the name is re-validated here rather than trusted from the caller. The classifier
-    is total and falls back to MANUAL, which is the most permissive class, so a blank or hostile
-    name arriving at this function directly would land in the weakest gate. The regex costs
-    nothing on a 63-character string and makes that unreachable by construction rather than by a
-    comment asking the next caller to remember.
+    Returns the justification when an upstream override was accepted, for the caller to audit,
+    and None when no override was needed; raises HTTPException(403) otherwise. The name is
+    validated again here: the classifier falls back to MANUAL for any name it does not recognise,
+    so a blank or hostile name would otherwise land in the weakest gate.
     """
     try:
         validated = assert_snapshot_name(snapshot_name)
     except SnapshotNameError as exc:
-        # Raised as HTTP rather than let through, because this function is reachable from more
-        # than one router and a bare SnapshotNameError there is a 500. The router validates first
-        # and this is the second line; both answer the same way so a caller cannot tell which
-        # one refused, which is the point.
+        # Raised as HTTP because this function is reachable from more than one router and a bare
+        # SnapshotNameError there is a 500. The router validates first; both answer the same way,
+        # so a caller cannot tell which one refused.
         raise HTTPException(
             status_code=403,
             detail={
@@ -72,16 +62,10 @@ def enforce_snapshot_ownership(
         return None
 
     if origin is SnapshotOrigin.MANUAL:
-        # Taken by hand on the host. It is the operator's own, so the console acts on it. What it
-        # is not is something this console can recreate, and on a fleet listing the thing an
-        # operator gets wrong is which row they clicked, so the name has to be typed.
-        #
-        # important: `manual_already_confirmed` is for a caller that ALREADY took a typed
-        # confirmation for this action. Restore makes the operator type the instance name before
-        # it reaches here, and asking for a second typed string in one dialog is what produces
-        # copy-paste without reading. It is a named parameter rather than the caller quietly
-        # passing the snapshot name back to itself, because that reads as a bypass and would be
-        # copied as one.
+        # Taken by hand on the host: the operator's own, but the console cannot recreate it, so
+        # the name has to be typed to guard against acting on the wrong row.
+        # important: `manual_already_confirmed` is only for a caller that ALREADY took a typed
+        # confirmation for this action (restore asks for the instance name).
         if manual_already_confirmed:
             return None
         if (confirm_snapshot or "").strip() != validated:

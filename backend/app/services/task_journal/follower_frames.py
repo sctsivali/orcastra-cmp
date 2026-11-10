@@ -50,11 +50,10 @@ def operation_frame(
     """The repository frame for one hub `operation` payload; None for a blank operation id.
 
     The requestor names the actor the same way a lifecycle frame does, so an operation that
-    only ever reaches the journal through the seed (an `lxc exec` from the host's shell, an
-    operation the stream missed while the follower was down) still reads as CLI work. On the
-    scratch database the first cut stored such a row as `system` / `events`.
+    only reaches the journal through the seed (an `lxc exec` from the host's shell, an
+    operation the stream missed while the follower was down) still reads as CLI work.
 
-    note: the hub already stripped `?project=` from every resource name and never carries the
+    The hub has already stripped `?project=` from every resource name and never carries the
     inner metadata, so nothing here can see a file descriptor or an exec command line. A
     websocket-class operation keeps its action (`instance.exec` / `instance.console`) and its
     location and resources, and nothing else.

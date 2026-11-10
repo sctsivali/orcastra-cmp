@@ -1,17 +1,15 @@
 """Relocate a whole project: stage everything on the target, then activate it.
 
-1. ``preparing_target``: create the target project (it carries the job marker), then clone every
-   profile exactly as the plan approved.
-2. ``quiescing``: stop the running sources. The original status is persisted before each stop.
-3. ``final_sync``: transfer the instances one by one, stopped ones first, through the same
-   contract an instance move uses.
-4. ``target_validating`` and ``cutting_over``: validate every target, start the ones whose source
-   was running in ``boot.autostart.priority`` order, then retain every source and cut the
-   project's records over in one transaction.
+1. ``preparing_target``: create the job-marked target project, then clone profiles as planned.
+2. ``quiescing``: stop the running sources, persisting each original status first.
+3. ``final_sync``: transfer the instances one by one, stopped first (instance-move contract).
+4. ``target_validating``, ``cutting_over``: validate every target, start those whose source was
+   running in ``boot.autostart.priority`` order, then retain every source and cut the project's
+   records over in one transaction.
 
-Every step reads daemon state and the recorded operation before it writes, so the runner resumes
-after a crash without repeating a mutation that already took effect. A failure before any target
-starts aborts: the abort runner removes only what this job created.
+Every step reads daemon state and the recorded operation before it writes, so a resumed runner
+never repeats a mutation that took effect. A failure before any target starts aborts, and the
+abort runner removes only what this job created.
 """
 
 from __future__ import annotations
@@ -320,8 +318,8 @@ async def advance(
     ):
         await _resume_activation(job, worker_id, source_client, target_client, request)
         return
-    # important: also after a Recheck (phase reconciling) of a job that never changed anything.
-    # Skipping these there ran the forward path without the capacity, drift and consent checks.
+    # important: also after a Recheck (phase reconciling) of a job that never changed anything,
+    # or the forward path would run without the capacity, drift and consent checks.
     if job.phase == "queued" or untouched(journal):
         report = await _fresh_worker_preflight(job, source_client, target_client)
         if report["blockers"]:

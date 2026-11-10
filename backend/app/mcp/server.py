@@ -1,9 +1,8 @@
 """Assembling the MCP server: identity, middleware, and which tool tiers are registered.
 
 The tiers are separately switchable because registering a tool and being allowed to call it are
-different decisions. A key's own grant always decides whether a tool RUNS. These flags decide
-whether a model is ever shown it, which is the difference between an operator reasoning about a
-surface they can see and one they cannot.
+different decisions: a key's own grant always decides whether a tool runs, and these flags decide
+whether a model is ever shown it.
 """
 
 import logging
@@ -36,10 +35,10 @@ def _unregister_listen(mcp: MCPServer) -> None:
     """Remove the SDK's default `subscriptions/listen` handler.
 
     `ApiKeyMiddleware` refuses the method whatever happens (SERVED_METHODS), which is the boundary.
-    This is about what the server ADVERTISES: on the 2026-07-28 wire `server/discover` derives
-    `tools.listChanged`, `resources.subscribe` and the other change flags from whether that handler
-    is registered, so leaving it invited every modern client to open a stream nothing ever
-    publishes to. There is no public API for removing a handler, hence the guarded private read;
+    This is about what the server advertises: on protocol revision `2026-07-28`, `server/discover`
+    derives `tools.listChanged`, `resources.subscribe` and the other change flags from whether that
+    handler is registered, so leaving it would invite clients to open a stream nothing publishes
+    to. There is no public API for removing a handler, hence the guarded private read;
     `test_the_mcp_server_serves_only_what_it_answers` fails if the SDK moves it.
     """
     handlers = getattr(getattr(mcp, "_lowlevel_server", None), "_request_handlers", None)

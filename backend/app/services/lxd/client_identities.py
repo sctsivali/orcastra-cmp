@@ -1,17 +1,17 @@
 """The cluster-side half of a My Keys key, on each engine.
 
 LXD (5.21 and later) holds a client as a TLS identity plus a group carrying its entitlements,
-under /1.0/auth. Incus has no /1.0/auth at all (doc/rest-api.yaml at v6.0.7 and v7.6.0): its
-client is a trust-store certificate, restricted to a list of projects or not. So a Standard key is
-an LXD identity in a group with `operator` on one project, or an Incus certificate restricted to
-that project; an Admin key is server `admin`, or an unrestricted certificate.
+under /1.0/auth. Incus has no /1.0/auth (doc/rest-api.yaml at v6.0.7 and v7.6.0): its client is a
+trust-store certificate, restricted to a list of projects or not. A Standard key is an LXD
+identity in a group with `operator` on one project, or an Incus certificate restricted to that
+project; an Admin key is server `admin`, or an unrestricted certificate.
 
 important: a restricted Incus certificate gets full control inside its projects, exec included,
-which is what LXD's `operator` gives too. Neither reaches another project or the server config.
-The guards before this module (services/lxd_key_bounds.py) decide whether the key may exist.
+as LXD's `operator` does; neither reaches another project or the server config. The guards in
+services/lxd_key_bounds.py decide whether the key may exist.
 
-Blocking: every call here is a round trip to the cluster, so callers run it in a thread or from
-an already-blocking route.
+Every call is a blocking round trip to the cluster: run it in a thread or from an already-blocking
+route.
 """
 
 from __future__ import annotations
@@ -105,7 +105,7 @@ def issue(
 def revoke(client: Any, record: Mapping[str, Any]) -> List[str]:
     """Remove the cluster credential of one stored key. Safe to repeat; returns cleanup errors.
 
-    A record without `engine` was written before Incus keys existed, so it is LXD's.
+    A record without `engine` is an LXD key; Incus records always carry it.
     """
     if (record.get("engine") or LXD) == INCUS:
         return _revoke_incus(client, record)
@@ -120,9 +120,9 @@ def _incus_body(key_id: str, common_name: str, cert_pem: bytes, auth_level: str,
     return {
         "type": "client",
         "name": incus_trust_name(key_id),
-        # note: no key id or name; a restricted client can list every entry's description.
+        # No key id or name: a restricted client can list every entry's description.
         "description": INCUS_DESCRIPTION,
-        # note: base64 DER, which is what POST takes (CertificatesPost.certificate).
+        # Base64 DER, which is what POST takes (CertificatesPost.certificate).
         "certificate": base64.b64encode(der_from_pem(cert_pem.decode("utf-8"))).decode("ascii"),
         "restricted": restricted,
         "projects": [project] if restricted else [],
@@ -159,11 +159,10 @@ def _issue_incus(client: Any, *, key_id: str, name: str, auth_level: str, projec
 def _post_or_undo(post: Callable[[], Any], undo: Callable[[], Optional[str]]) -> Any:
     """Send one create; on any answer but a name conflict, remove what it may have written.
 
-    important: an error answer does not mean nothing was written. On the Incus lab (2026-11-08)
-    the daemon stored a trust entry cluster-wide, then answered 500 because a peer refused it
-    ("failed to notify peer"), and a timed-out POST leaves the same doubt. The fingerprint was
-    minted for this request alone, so removing it can only remove what this request made.
-    A conflict is refused before anything is stored, and the caller retries under a new name.
+    important: an error answer does not mean nothing was written. Incus can store a trust entry
+    cluster-wide and then answer 500 when a peer refuses it ("failed to notify peer"), and a
+    timed-out POST leaves the same doubt. The fingerprint is unique to this request, so the undo
+    only removes what this request made. A conflict is refused before anything is stored.
     """
     try:
         return post()
@@ -215,8 +214,8 @@ def delete_certificate(client: Any, fingerprint: str) -> Optional[str]:
 
 
 def _revoke_incus(client: Any, record: Mapping[str, Any]) -> List[str]:
-    # note: read again after each removal. A holder renewing between the read and the delete would
-    # leave an entry under a new fingerprint while the delete answered "already gone".
+    # Read again after each removal. A holder renewing between the read and the delete would leave
+    # an entry under a new fingerprint while the delete answered "already gone".
     for _ in range(3):
         entry, problem = _entry_for(client, record)
         if problem:
@@ -234,9 +233,9 @@ def _entry_for(client: Any, record: Mapping[str, Any]) -> Tuple[Optional[Mapping
 
     important: the name decides, never the stored fingerprint. A holder may replace an entry's
     certificate with any certificate it holds a key for, including another of its keys' original
-    one, so the stored fingerprint can name someone else's entry (security review, 2026-11-08).
-    Restriction and projects are not compared: a project renamed under a key changes the list,
-    not whose entry it is, and a holder cannot change either.
+    one, so the stored fingerprint can name someone else's entry. Restriction and projects are not
+    compared: a project renamed under a key changes the list, not whose entry it is, and a holder
+    cannot change either.
     """
     name = str(record.get("trust_name") or incus_trust_name(str(record.get("id") or "")))
     try:
@@ -263,7 +262,7 @@ def _issue_lxd(client: Any, *, key_id: str, name: str, auth_level: str, project:
         response = _post_or_undo(lambda: client.api.auth.identities["tls"].post(json=identity, timeout=TIMEOUT),
                                  lambda: _delete_lxd_identity(client, fingerprint))
     except lxd_exceptions.Conflict:
-        # Identity with this name already exists, generate a unique name with timestamp
+        # A name another identity already uses: one retry under a fresh name and certificate.
         common_name = f"{name}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}@orcastra"
         cert_pem, key_pem, fingerprint = mint(common_name)
         identity = {"name": common_name, "type": "tls", "certificate": cert_pem.decode("utf-8")}
@@ -332,9 +331,9 @@ def _revoke_lxd(client: Any, record: Mapping[str, Any]) -> List[str]:
     errors: List[str] = []
     identity_id = str(record.get("identity_id") or "")
     group_name = str(record.get("group_name") or "")
-    # important: an LXD identity may replace its own certificate (PATCH tls_certificate; shown on
-    # console-lab, LXD 5.21.9, 2026-11-08), which changes its id, so the stored id alone left it
-    # trusted. The group is this key's own, so every identity in it is this key's.
+    # important: an LXD identity may replace its own certificate (PATCH tls_certificate, LXD 5.21),
+    # which changes its id, so the stored id alone would leave it trusted. The group is this key's
+    # own, so every identity in it is this key's.
     members: List[str] = []
     if group_name:
         try:

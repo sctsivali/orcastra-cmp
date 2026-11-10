@@ -1,8 +1,8 @@
 """The rows behind durable project-delete follow-ups (app/models/project_delete_models.py).
 
 Every function opens its own short session, so a row written here commits independently of the
-caller's transaction. That matters because the cluster lock is transaction scoped: the intent row
-must be durable before the DELETE goes out, while the lock is still held by the caller's session.
+caller's transaction. The cluster lock is transaction scoped, so the intent row must be durable
+before the DELETE goes out while the caller's session still holds the lock.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ def _now() -> datetime:
 
 
 def _aware(value: Optional[datetime]) -> Optional[datetime]:
-    # note: SQLite hands timestamps back without a zone; every one stored here is UTC.
+    # SQLite hands timestamps back without a zone; every one stored here is UTC.
     if value is not None and value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
@@ -110,12 +110,12 @@ async def open_intent(
 ) -> Optional[Followup]:
     """Record a delete about to be sent; join the open row for this project if there is one.
 
-    important: a joining call stores none of its own captured rules here. They are merged only if
-    its delete ends unknown (mark_pending). A 404 then revokes exactly what earlier deletes
-    captured, never the rules staged since for a later project of the same name.
-
     None when the caps are reached; the caller must then not send the DELETE, because nothing
     would revoke its rules if its outcome were unknown.
+
+    important: a joining call stores none of its own captured rules here; they are merged only if
+    its delete ends unknown (mark_pending). A 404 then revokes exactly what earlier deletes
+    captured, never the rules staged since for a later project of the same name.
     """
     async with _maker()() as db:
         for _attempt in range(2):
@@ -214,8 +214,8 @@ async def mark_settled(followup_id: Optional[int]) -> None:
     """The project is gone and its rules were revoked; only the announcement is still owed.
 
     important: the caller keeps the lease while it announces. Released here, another worker's
-    sweep claimed the row in the same instant and announced it a second time (seen live: two
-    audit lines 150 ms apart). If the caller dies first, the lease runs out and a sweep announces.
+    sweep could claim the row at once and announce it a second time. If the caller dies first,
+    the lease runs out and a sweep announces.
     """
 
     def change(row: ProjectDeleteFollowup, now: datetime) -> bool:
@@ -267,9 +267,9 @@ async def retry_later(followup_id: Optional[int], delay: timedelta, error: Optio
 async def claim_due(limit: int) -> List[Followup]:
     """Lease up to `limit` rows that are due, at most one per cluster, for this worker.
 
-    A `sending` row is due only once its request's lease ran out: that request is gone (its worker
-    crashed or restarted between sending the DELETE and reading the answer), and nobody else will
-    settle it. Claimed, it becomes `pending`, so a later pass can take it again.
+    A `sending` row is due only once its request's lease ran out: its worker crashed or restarted
+    between sending the DELETE and reading the answer, and no other request will settle it.
+    Claimed, it becomes `pending`, so a later pass can take it again.
     """
     now = _now()
     unleased = or_(ProjectDeleteFollowup.lease_until.is_(None), ProjectDeleteFollowup.lease_until < now)

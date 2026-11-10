@@ -7,9 +7,8 @@ migration fence, this worker's limits, and the turning of a guest failure into a
 important: no `guard_instance_mutation` here. That guard ends in a per-cluster
 `pg_advisory_xact_lock`, so a guest stalling one reply would queue every mutation on its cluster
 behind it, and each waiter would pin a database connection. The fence is read without the lock
-instead, before a body and again before a commit. What remains is the window an open shell already
-has, which is recorded in documentation/adr/ and acceptable because the only thing racing is a
-guest's own filesystem.
+instead, before a body and again before a commit. That leaves the window an open shell already
+has, acceptable because the only thing racing is a guest's own filesystem.
 """
 
 import asyncio
@@ -46,7 +45,7 @@ async def sensitive_gate(user: Optional[AuthenticatedUser], host: str) -> Option
     """The live break-glass grant this access runs under, or None when the caller owns the cluster."""
     if user is None:
         return None
-    # note: its own session, closed at once. Handlers release the request's session before a guest
+    # Its own session, closed at once. Handlers release the request's session before a guest
     # round trip, so a stalled guest cannot hold a pooled connection.
     async with async_session_maker() as db:
         grant = await enforce_sensitive_access(user, host, db)

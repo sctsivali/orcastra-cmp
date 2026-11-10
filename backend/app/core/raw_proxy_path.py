@@ -2,9 +2,9 @@
 
 The raw proxy hands an integration's path to LXD with the cluster's own client certificate, so the
 path is an authorization input. requests (urllib3 2.x) removes `.` and `..` segments and never
-sends a fragment, and LXD decodes the path and the query once. Guards that each parsed the raw
-string their own way judged a different request from the one LXD served: `/1.0/./certificates`,
-`/1.0/certificates#x`, `/1.0/instances/c1/./exec` and a double-encoded `%2570roject` all passed.
+sends a fragment, and LXD decodes the path and the query once. A guard that parses the raw string
+its own way judges a different request from the one LXD serves (`/1.0/./certificates`,
+`/1.0/certificates#x`, `/1.0/instances/c1/./exec`, a double-encoded `%2570roject`).
 
 important: canonical_proxy_path is the only parser. Every raw-proxy guard reads its result, and
 raw_proxy builds the URL it sends from the same result, so no spelling is judged in one form and
@@ -26,14 +26,14 @@ PROJECT_QUERY_KEY = "project"
 ALL_PROJECTS_QUERY_KEY = "all-projects"
 MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
-# note: a spelling still changing after this many rounds is refused rather than judged half-decoded.
+# A spelling still changing after this many rounds is refused, never judged half-decoded.
 _MAX_DECODE_ROUNDS = 8
 
-# Server-wide state no integration may change, whatever its grant. Reads stay open: the integrator
-# reads GET /1.0/cluster/members for a node count and never writes either one.
+# Server-wide state no integration may change, whatever its grant: the bare /1.0 and /cluster.
+# Reads stay open; the integrator reads GET /1.0/cluster/members for a node count.
 #
-# important: a write to the bare /1.0 sets server configuration, which includes the OIDC issuer and,
-# before LXD 6, core.trust_password, and either one hands out trust like the trust store does.
+# important: a write to the bare /1.0 sets server configuration, including the OIDC issuer and,
+# before LXD 6, core.trust_password; either one hands out trust like the trust store does.
 # `/cluster` holds the cluster certificate, join tokens (POST /1.0/cluster/members admits a new
 # trusted member), member state and member removal.
 _SERVER_WRITE_PREFIXES = ("cluster",)
@@ -60,8 +60,8 @@ def fully_decoded(value: Optional[str]) -> str:
 def query_key_name(name: str) -> str:
     """A query name compared the strict way: fully decoded, trimmed and lowercased.
 
-    note: removes or refuses more than LXD would read under that name (a Go query key is
-    case-sensitive and decoded once), never less.
+    Stricter than LXD, which reads a query key case-sensitively and decoded once, so a guard
+    matches every spelling LXD would read under that name.
     """
     return fully_decoded(name).strip().lower()
 
@@ -95,7 +95,7 @@ class ProxyPath:
 
         important: every `project` the caller wrote, in any spelling, is replaced by the authorised
         one, and the query is re-encoded with urlencode, so a decoded `&`, `#` or `=` stays data.
-        The bare root is sent as `/`, which is what raw_proxy always sent for it.
+        The bare root is sent as `/`.
         """
         pairs = [(name, value) for name, value in self.query if query_key_name(name) != PROJECT_QUERY_KEY]
         if project and project != _DEFAULT_PROJECT:
@@ -114,9 +114,9 @@ def canonical_proxy_path(path: Optional[str]) -> ProxyPath:
       and a `..` anywhere, and a `?` or `#` the decoding produced inside the path.
     - `/1.0` is removed only as a whole leading segment, so `/1.0certificates` stays a segment
       and reaches LXD as `/1.0/1.0certificates`.
-    - Query pairs without `=` are dropped, as raw_proxy always dropped them.
+    - Query pairs without `=` are dropped.
 
-    note: a name that holds a literal `%` followed by two hex digits cannot be addressed, because
+    A name that holds a literal `%` followed by two hex digits cannot be addressed, because
     it decodes further. LXD names never need one.
     """
     raw = path or ""

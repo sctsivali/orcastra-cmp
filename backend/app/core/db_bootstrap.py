@@ -1,26 +1,16 @@
 """Reconcile a legacy ``create_all`` database with Alembic before migrating.
 
-Releases up to and including v1.0.0-RC2 materialized the schema with SQLAlchemy
-``Base.metadata.create_all`` and shipped no migrations, so the database ends up
-with all the tables but **no** ``alembic_version`` stamp. When a newer build's
-entrypoint then runs ``alembic upgrade head``, Alembic starts from base and the
-first ``CREATE TABLE`` fails with ``relation "..." already exists``.
+Releases up to and including v1.0.0-RC2 built the schema with
+``Base.metadata.create_all`` and no migrations, so such a database has every
+table but no ``alembic_version`` stamp, and ``alembic upgrade head`` fails on
+the first ``CREATE TABLE`` with ``relation "..." already exists``.
 
-This module runs *before* ``alembic upgrade head`` and repairs that state
-automatically: if it finds a populated-but-unstamped database that matches a
-known baseline, it stamps it to the matching revision(s) so the subsequent
-upgrade applies only the genuinely missing migrations.
-
-It is deliberately conservative:
-
-* An already-stamped database is left untouched (normal upgrade path).
-* A truly empty database is left untouched (Alembic builds it from base).
-* It stamps **only** when the live schema unambiguously matches a known
-  baseline. If it sees a populated, unstamped database whose schema is newer
-  than the last known baseline, it refuses to guess and exits non-zero with
-  actionable instructions, so it can never corrupt an unexpected schema.
-
-Idempotent: re-running it after a successful stamp is a no-op.
+This runs before ``alembic upgrade head``. A populated, unstamped database that
+matches the RC2 baseline exactly is stamped to the matching revisions, so the
+upgrade applies only the missing migrations. A stamped or empty database is
+left alone. A populated, unstamped database that is partial or newer than the
+baseline is refused with instructions, never guessed at. Re-running after a
+successful stamp is a no-op.
 """
 from __future__ import annotations
 
@@ -38,9 +28,9 @@ _RC2_CORE_TABLES: Tuple[str, ...] = (
     "tenant_access_policies",
 )
 
-# Tables introduced by migrations *after* the RC2 baseline (008-013). If any of
-# these already exist in an unstamped database, the schema is past RC2 and we do
-# not know exactly where it sits, so we refuse to auto-stamp.
+# Tables introduced by migrations after the RC2 baseline (008-013). If any exists
+# in an unstamped database, the schema is past RC2 at an unknown revision, so it
+# is not auto-stamped.
 _POST_RC2_TABLES: Tuple[str, ...] = (
     "image_upload_sessions",   # 008
     "break_glass_grants",      # 011
@@ -84,11 +74,10 @@ def _plan(tables: Set[str], stamped: bool) -> Union[str, Tuple[str, List[str]]]:
 
     Returns "managed" | "fresh" | "rc2" | ("unknown", found) | ("partial", missing).
 
-    important: a database only counts as RC2 when it has ALL of the core tables. A
-    partial match means somebody restored half a dump or stopped an old install
-    mid-flight; stamping that would claim migrations 001-007 had run when they had
-    not, and the upgrade would then die at 010 against a table that was never
-    created - leaving a wrong stamp behind, so every retry fails the same way.
+    important: a database counts as RC2 only with all of the core tables. Stamping
+    a partial one (half a restored dump, an interrupted install) would record
+    001-007 as applied, the upgrade would fail at 010 on a table that was never
+    created, and the wrong stamp would make every retry fail the same way.
     """
     if stamped:
         return "managed"

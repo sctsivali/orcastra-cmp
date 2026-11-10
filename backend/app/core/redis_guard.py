@@ -1,23 +1,15 @@
-"""Stop asking a Redis that does not answer, for a while, so its outage costs a second, not minutes.
+"""Skip a Redis that does not answer for SKIP_SECONDS at a time instead of waiting on every command.
 
-The shared Redis client is synchronous and most of its callers run on a worker's event loop. With
-a 5 s socket timeout and one retry, every command against a Redis that accepts connections but
-does not answer (a paused container, a full disk, a network partition) held the loop for 10 s.
-A list read makes several such calls, so during a two-minute `docker pause` of the dev Redis
-(2026-11-04) every request on every worker waited until Redis came back: `/networks` 123 s,
-`/tasks` 86 s, and the health and preference reads answered 500.
+The shared client is synchronous and most callers run on a worker's event loop, so a Redis that
+accepts connections but does not answer (a paused container, a full disk, a partition) holds the
+loop for the whole socket timeout on every command. A connection error or timeout opens the guard:
+for SKIP_SECONDS every command raises `RedisSkipped` without touching the network and callers take
+their Redis-down fallback. Then one command probes: an answer closes it, a failure reopens it.
 
-`GuardedRedis` wraps the client. A command that fails with a connection error or a timeout opens
-the guard for SKIP_SECONDS: until then every command raises `RedisSkipped` at once, without
-touching the network, and callers take the fallback they already have for a Redis that is down
-(the per-worker memory cache, the in-memory rate limiter, the local ticket store). When the window
-ends one command is let through to probe; an answer closes the guard, a failure opens it again.
-
-important: a skipped command still raises, it never pretends to succeed. RedisSkipped is a
-redis ConnectionError, so every existing `except redis.ConnectionError` and `except Exception`
-handler treats it as the outage it stands for. The response cache's writes and invalidations are
-never skipped at all (`GuardedRedis.unskipped`): they are how other workers learn an entry is
-stale, so each is sent and only bounded by the 1 s timeout.
+important: a skipped command still raises; it never pretends to succeed. RedisSkipped is a redis
+ConnectionError, so every `except redis.ConnectionError` and `except Exception` handler treats it
+as an outage. The response cache's writes and invalidations go through `GuardedRedis.unskipped` and
+are never skipped: they are how other workers learn an entry is stale.
 """
 
 from __future__ import annotations
@@ -125,7 +117,7 @@ class GuardedRedis:
 
     @property
     def raw(self) -> Any:
-        """The wrapped client, for tests and for code that must bypass the guard on purpose."""
+        """The wrapped client, for tests and for code that must bypass the guard."""
         return self._client
 
     @property
@@ -133,8 +125,8 @@ class GuardedRedis:
         """The same client for writes that must never be skipped: each is sent, and still counted.
 
         important: an invalidation is the only way another worker learns that an entry is stale.
-        Skipping one while this worker's guard is open left, for example, a revoked API key's
-        metadata in Redis for its whole TTL while every other worker read it as valid. A write is
+        Skipping one while this worker's guard is open would leave, ex; a revoked API key's
+        metadata in Redis for its whole TTL while every other worker reads it as valid. A write is
         rare next to a read and is bounded by the 1 s timeout, so it is always attempted.
         """
         return _Unskipped(self)
@@ -240,9 +232,9 @@ def answering(client: Any) -> bool:
 def connect(url: str) -> GuardedRedis:
     """The shared synchronous client: short timeouts, no retries, behind the guard.
 
-    note: redis-py retries a timed-out command once when retry_on_timeout is set, so the 5 s
-    socket timeout cost 10 s per command. A local Redis answers in well under a millisecond; a
-    second without an answer is an outage, and the guard handles outages.
+    No retries: redis-py retries a timed-out command once when retry_on_timeout is set, which
+    doubles the wait. A local Redis answers in well under a millisecond, so a second without an
+    answer is an outage, and the guard handles outages.
     """
     from redis.backoff import NoBackoff
     from redis.retry import Retry

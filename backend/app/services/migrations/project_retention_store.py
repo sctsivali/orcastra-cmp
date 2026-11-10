@@ -157,7 +157,7 @@ async def fence_project_for_recovery(db: AsyncSession, job: MigrationJob, *, sid
     """Fence the project a rollback (target) or Finalize (source) tears down. Caller commits.
 
     important: refused while any other active job holds a lock inside that project, because the
-    teardown would then delete what that job retains or works on (security review).
+    teardown would then delete what that job retains or works on.
     """
     cluster_id, project = (
         (job.target_cluster_id, job.target_project)

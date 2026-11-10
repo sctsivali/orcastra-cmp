@@ -1,16 +1,7 @@
-"""
-Tag Management API
+"""Tag API under /api/v1/tags: definitions, categories, assignments, visibility and LXD import.
 
-Provides comprehensive REST API for tag operations:
-- Tag CRUD (Create, Read, Update, Delete)
-- Tag categories management
-- Bulk tag operations
-- Resource tag assignments (nodes, projects, instances)
-- User visibility settings
-- Statistics and analytics
-- LXD sync
-
-API Prefix: /api/v1/tags
+A tag is one fleet-wide definition assigned to nodes, projects and instances. Every assignment
+target is authorized and held against running migrations before the service changes it.
 """
 
 import logging
@@ -100,11 +91,10 @@ def _authorize_resource_target(
 ) -> tuple[Optional[str], Optional[str], str]:
     """Authorize one tag target and return the exact values the service must use.
 
-    `host` and `project` may originate from query parameters or a bulk request body. Resolving
-    them before this helper and carrying these returned values into TagService prevents a body
-    target from bypassing a query-only check. Project tags use `resource_id` as their LXD
-    project; instance tags use `project` and always include it in the database lookup, so two
-    same-named instances in different projects cannot share assignments.
+    `host` and `project` may come from the query or a bulk request body. The service must use
+    the values returned here, so a body target cannot bypass a query-only check. Project tags use
+    `resource_id` as their LXD project; instance tags always include `project` in the database
+    lookup, so same-named instances in different projects cannot share assignments.
     """
     if resource_type == "node":
         # Node tags use resource_id as the cluster connection key in TagService. Authorizing an
@@ -149,7 +139,7 @@ async def _assert_tag_target_not_migration_fenced(
     host: Optional[str],
     project: Optional[str],
 ) -> None:
-    """Compatibility check for callers that only need a side-effect-free admission probe."""
+    """Raise 409 when a migration fences the tag target. Takes no lock."""
     try:
         if resource_type == "instance":
             await assert_instance_not_migration_fenced(
@@ -197,12 +187,10 @@ async def _guard_tag_target_mutation(
 async def _refuse_unless_tag_owner(tag_id: int, tag_service: TagService, user: AuthenticatedUser) -> None:
     """403 unless an Admin or the tag's creator changes or deletes its definition.
 
-    important: a tag is one fleet-wide definition and deleting it removes every assignment, on every
-    organization's instances. Any Partner could rename or delete any tag (security review of
-    v1.0.0-RC4..c5199ea1, finding 2; live 2026-11-05: 200 and 204 on a tag another user created).
-    Owner decision 2026-11-05: an Admin or the creator; anyone may still assign it. A tag with no
-    recorded creator (older rows, system tags) is an Admin's. A missing tag falls through to the
-    service, which answers it as before.
+    important: a tag is one fleet-wide definition, and deleting it removes every assignment on
+    every organization's instances. Anyone may still assign it. A tag with no recorded creator
+    (older rows, system tags) is an Admin's. A missing tag falls through to the service, which
+    reports it.
     """
     if is_admin(user):
         return
@@ -295,7 +283,7 @@ router = APIRouter(
 async def get_tag_service_dep(
     db: AsyncSession = Depends(get_db),
 ) -> TagService:
-    """Get TagService with LXD service for sync."""
+    """TagService, with the LXD service for LXD sync when one can be built."""
     try:
         lxd_service = get_lxd_service()
     except Exception:
@@ -308,9 +296,8 @@ def get_user_id(
 ) -> Optional[str]:
     """The verified caller's email, which keys created_by, assigned_by and tag visibility.
 
-    important: not a request header. This read X-User-ID, which any caller can set, so a request
-    could stamp another user as a tag's author and read or overwrite their visibility settings.
-    No client sent the header.
+    important: never take the identity from a request value. A caller could then stamp another
+    user as a tag's author and read or overwrite their visibility settings.
     """
     return getattr(user, "email", None)
 
@@ -329,7 +316,6 @@ async def list_categories(
     include_inactive: bool = Query(False, description="Include inactive categories"),
     tag_service: TagService = Depends(get_tag_service_dep),
 ):
-    """List all tag categories."""
     return await tag_service.list_categories(include_inactive=include_inactive)
 
 
@@ -346,7 +332,6 @@ async def create_category(
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Create a new tag category."""
     try:
         return await tag_service.create_category(data)
     except ValueError as e:
@@ -366,7 +351,7 @@ async def update_category(
     # A category is fleet-wide taxonomy with no recorded creator, and no screen edits one.
     _rbac: AuthenticatedUser = Depends(require_admin()),
 ):
-    """Update a tag category."""
+    """Update a tag category. Administrator only."""
     try:
         return await tag_service.update_category(category_id, data)
     except ValueError as e:
@@ -389,7 +374,6 @@ async def list_tags(
     user_id: Optional[str] = Depends(get_user_id),
     tag_service: TagService = Depends(get_tag_service_dep),
 ):
-    """List all tags."""
     return await tag_service.list_tags(
         category_id=category_id,
         search=search,
@@ -411,7 +395,6 @@ async def create_tag(
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Create a new tag."""
     try:
         return await tag_service.create_tag(data, user_id=user_id)
     except ValueError as e:
@@ -430,7 +413,11 @@ async def update_tag(
     _: None = Depends(check_read_only_mode),
     user: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Update a tag."""
+    """Update a tag's definition.
+
+    Only an Administrator or the tag's creator may; others get 403. 409 while a migration fences
+    a resource that carries the tag.
+    """
     await _refuse_unless_tag_owner(tag_id, tag_service, user)
     try:
         async with _guard_tag_definition_mutation(tag_id, tag_service):
@@ -451,7 +438,7 @@ async def delete_tag(
     _: None = Depends(check_read_only_mode),
     user: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Delete a tag."""
+    """Only an Administrator or the tag's creator may delete it."""
     await _refuse_unless_tag_owner(tag_id, tag_service, user)
     try:
         async with _guard_tag_definition_mutation(tag_id, tag_service):
@@ -473,7 +460,6 @@ async def delete_tag(
 async def get_statistics(
     tag_service: TagService = Depends(get_tag_service_dep),
 ):
-    """Get tag statistics."""
     return await tag_service.get_tag_statistics()
 
 
@@ -494,7 +480,6 @@ async def get_resource_tags(
     project: Optional[str] = Query(None, description="LXD project (for instance)"),
     tag_service: TagService = Depends(get_tag_service_dep),
 ):
-    """Get tags for a resource."""
     _validate_resource_type(resource_type)
     verify_cluster_access(_target_cluster_id(resource_type, resource_id, host))
     if resource_type == "instance":
@@ -535,7 +520,6 @@ async def set_resource_tags(
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Set (replace) all tags for a resource."""
     effective_host = host if host is not None else request.resource_host
     effective_project = project if project is not None else request.resource_project
     _validate_resource_type(resource_type)
@@ -581,7 +565,6 @@ async def add_resource_tags(
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Add tags to a resource."""
     effective_host = host if host is not None else request.resource_host
     effective_project = project if project is not None else request.resource_project
     _validate_resource_type(resource_type)
@@ -627,7 +610,7 @@ async def remove_resource_tag(
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Remove a single tag from a resource."""
+    """Remove one tag from a resource. Partner and above."""
     _validate_resource_type(resource_type)
     verify_cluster_access(_target_cluster_id(resource_type, resource_id, host))
     host, project, resource_id = _authorize_resource_target(
@@ -671,7 +654,6 @@ async def update_instance_tags_legacy(
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Update tags for an instance (legacy endpoint)."""
     project = verify_instance_view_access(host, project, instance_name)
     async with _guard_tag_target_mutation(
         "instance",
@@ -703,7 +685,7 @@ async def update_project_tags_legacy(
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Update tags for a project (legacy endpoint)."""
+    """Replace a project's tags. Partner and above."""
     project_name = verify_project_access(host, project_name)
     async with _guard_tag_target_mutation(
         "project",
@@ -733,7 +715,7 @@ async def update_node_tags_legacy(
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Update tags for a node (legacy endpoint)."""
+    """Replace a node's tags. Partner and above."""
     verify_cluster_access(node_name)
     async with _guard_tag_target_mutation(
         "node",
@@ -760,7 +742,7 @@ async def get_instance_tags_legacy(
     project: str = Query("default", description="LXD project"),
     tag_service: TagService = Depends(get_tag_service_dep),
 ):
-    """Get tags for an instance (legacy endpoint)."""
+    """Return an instance's tags."""
     project = verify_instance_view_access(host, project, instance_name)
     return await tag_service.get_resource_tags(
         resource_type="instance",
@@ -783,7 +765,7 @@ async def get_user_visibility(
     user_id: Optional[str] = Depends(get_user_id),
     tag_service: TagService = Depends(get_tag_service_dep),
 ):
-    """Get current user's tag visibility settings."""
+    """Return the caller's tag visibility settings. 401 when the caller has no verified email."""
     if not user_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -804,7 +786,7 @@ async def update_user_visibility(
     tag_service: TagService = Depends(get_tag_service_dep),
     _: None = Depends(check_read_only_mode),
 ):
-    """Update current user's tag visibility settings."""
+    """Update the caller's tag visibility settings. 401 when the caller has no verified email."""
     if not user_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -834,7 +816,6 @@ async def import_from_lxd(
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Import tags from LXD."""
     _validate_resource_type(resource_type)
     verify_cluster_access(_target_cluster_id(resource_type, resource_id, host))
     host, project, resource_id = _authorize_resource_target(
@@ -871,7 +852,6 @@ async def import_from_lxd(
 async def classify_tags(
     tags: List[str],
 ):
-    """Classify tags into groups."""
     return TagService.group_tags(tags)
 
 
@@ -882,7 +862,7 @@ async def classify_tags(
 async def validate_tags(
     tags: List[str],
 ):
-    """Validate a list of tag names."""
+    """Return, for each tag name, whether it is valid and the error when it is not."""
     results = {}
     for tag in tags:
         is_valid, error = TagService.validate_tag_name(tag)
@@ -903,7 +883,6 @@ async def init_default_categories(
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_admin()),
 ):
-    """Initialize default tag categories."""
     count = await tag_service.initialize_default_categories()
     return {
         "success": True,

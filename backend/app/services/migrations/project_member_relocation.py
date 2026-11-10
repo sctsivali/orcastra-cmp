@@ -271,7 +271,8 @@ async def relocate_members(job: MigrationJob, worker_id: str, client: Any) -> No
     if job.phase == "rolling_back" or (job.safe_result or {}).get("recovery_kind") == "revert":
         await _revert(job, worker_id, client)
         return
-    # important: also after a Recheck of a job that never moved anything (see project_relocation).
+    # important: also after a Recheck of a job that never moved anything, so the forward path
+    # never runs without a fresh preflight.
     if job.phase == "queued" or untouched(await _resources(job.job_id)):
         report = await _fresh_worker_preflight(job, client, client)
         if report["blockers"]:

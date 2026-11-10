@@ -1,13 +1,6 @@
-"""
-Tenant Access Policy Router.
+"""Tenant access policies: named rule sets that Admins and Partners assign to organization members.
 
-Provides CRUD endpoints for managing tenant access policies (ACL).
-Follows AWS IAM / Azure RBAC pattern:
-  1. Admin/Partner creates named policies with rules.
-  2. Policies are assigned to organization members (tenants).
-  3. Backend enforces cluster/project/instance access per policy rules.
-
-Permissions model:
+Each rule names a cluster, a project and an instance (or `*`) and grants permissions there:
   - view:          See resource in dashboards, read monitoring
   - operate:       Start, stop, restart, freeze/unfreeze VMs
   - console:       Open graphical console or terminal
@@ -62,11 +55,10 @@ from app.services.migration_fence import (
 logger = logging.getLogger(__name__)
 
 def _aware(value: datetime) -> datetime:
-    # note: SQLite test sessions hand back naive values for timestamptz columns; they were UTC.
+    # SQLite test sessions hand back naive values for timestamptz columns; they are UTC.
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
-# valid permission types for tenant policies
 VALID_PERMISSIONS = {"view", "operate", "console", "snapshot", "file_transfer"}
 
 
@@ -245,7 +237,7 @@ async def _verify_org_access(
     db: AsyncSession,
     require_write: bool = False,
 ) -> Organization:
-    """Verify user can access the organization. Returns the org."""
+    """Return the organization if the caller may read it (manage its policies with require_write)."""
     org = await db.get(Organization, org_id)
     if not org or not org.is_active:
         raise HTTPException(status_code=404, detail="Organization not found")
@@ -253,7 +245,6 @@ async def _verify_org_access(
     roles = resolve_roles(user)
     highest = get_highest_role(roles)
 
-    # admin can access any org
     if highest == Role.ADMIN:
         return org
 
@@ -284,7 +275,6 @@ async def _verify_org_access(
 
 
 async def _policy_to_response(policy: TenantAccessPolicy) -> PolicyResponse:
-    """Convert ORM model to response schema."""
     rule_permissions = {
         permission
         for rule in (policy.rules or [])
@@ -341,7 +331,7 @@ async def list_policies(
     user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List policies, optionally filtered by organization."""
+    """Policies in the caller's organizations, or one organization; a tenant sees only their own."""
     roles = resolve_roles(user)
     highest = get_highest_role(roles)
 
@@ -354,11 +344,9 @@ async def list_policies(
     )
 
     if organization_id:
-        # verify access to the specific org
         await _verify_org_access(user, organization_id, db)
         stmt = stmt.where(TenantAccessPolicy.organization_id == organization_id)
     elif highest != Role.ADMIN:
-        # non-admin: only policies from their orgs
         member_orgs = (
             select(OrganizationMember.organization_id)
             .where(OrganizationMember.user_email == user.email)
@@ -375,11 +363,9 @@ async def list_policies(
 
     stmt = stmt.order_by(TenantAccessPolicy.organization_id, TenantAccessPolicy.name)
     if highest == Role.TENANT:
-        # important: a TENANT sees only their own assignments here. Scoping stopped at the
-        # organisation, which handed every tenant the org's full access matrix and, on the
-        # assignments endpoint, every other member's email. `get_my_access` already exists as
-        # the tenant-facing view, which is the clue that these list endpoints were never meant
-        # for them. Partner and Admin keep the org-wide view they administer with.
+        # important: a tenant sees only the policies assigned to them. Organisation scope alone
+        # would hand every tenant the org's full access matrix; `get_my_access` is their view.
+        # Partner and Admin keep the org-wide view they administer with.
         stmt = stmt.where(
             TenantAccessPolicy.assignments.any(
                 TenantPolicyAssignment.org_member_id.in_(
@@ -404,22 +390,17 @@ def _refuse_a_project_the_caller_cannot_see(rule) -> None:
     """A policy rule may not name a project the caller is not already allowed to see.
 
     important: on a cluster carrying more than one organization, `get_visible_projects` builds
-    a Partner's project bound out of exactly these rows. Without this check the party the bound
-    constrains is the party that writes it: a Partner could add a rule naming another
-    organization's project on a cluster their own org legitimately holds, and on the next
-    request that project would be inside their bound, granting read and write on its networks,
-    ACLs, profiles and instance devices.
+    a Partner's project bound out of these rows. Without this check a Partner could add a rule
+    naming another organization's project and so widen its own bound to read and write that
+    project's networks, ACLs, profiles and instance devices.
 
-    `project_is_visible` answers True whenever no bound applies, so this is a no-op for an
-    Admin and on any cluster bound to a single organization. It only bites where the bound is
-    real, and there it refuses to let the bound widen itself.
-
-    The consequence to accept: on a shared cluster a Partner cannot introduce a project that no
-    rule of theirs names yet. An Admin can, because no bound applies to them.
+    `project_is_visible` answers True wherever no bound applies (an Admin, a cluster bound to a
+    single organization), so this refuses only where the bound is real. On a shared cluster a
+    Partner therefore cannot introduce a project no rule of theirs names yet; an Admin can.
     """
     project = (rule.project_name or "").strip()
     # A rule in a view-only `default` would hand a Partner's tenant the other party's guests there,
-    # and `*` reaches `default` too (RC5 follow-up, owner decision 2026-11-06).
+    # and `*` reaches `default` too.
     refuse_default_operation(rule.cluster_id, project if project and project != "*" else "default")
     if not project or project == "*":
         return
@@ -499,7 +480,7 @@ async def _assert_rules_not_migration_fenced(
     rules: List[object],
     db: AsyncSession,
 ) -> None:
-    """Compatibility probe; mutating callers use the serialized context above."""
+    """Raise 409 when a migration fences a rule's target. Takes no lock; writers use the guard."""
     seen: set[tuple[str, str]] = set()
     try:
         for rule in rules:
@@ -564,7 +545,11 @@ async def create_policy(
     user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new tenant access policy with rules."""
+    """Create a tenant access policy with its rules.
+
+    Admin, or a Partner who created the organization or is a partner member of it. 403 for a
+    cluster or project outside the caller's reach, 409 when the name is taken in the organization.
+    """
     org = await _verify_org_access(user, body.organization_id, db, require_write=True)
     await _refuse_rules_a_purchase_does_not_pay_for(db, user, org.id, [r.cluster_id for r in body.rules])
 
@@ -590,7 +575,7 @@ async def create_policy(
         _refuse_a_project_the_caller_cannot_see(rule)
 
     async with _guard_rules_mutation(list(body.rules), db):
-        # check name uniqueness after admission so two policy writes cannot validate against
+        # Check name uniqueness after admission so two policy writes cannot validate against
         # different migration revisions and then commit in the opposite order.
         existing = await db.execute(
             select(TenantAccessPolicy).where(
@@ -640,7 +625,7 @@ async def get_policy(
     user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get a single policy with its rules."""
+    """Return one policy with its rules. A tenant gets 404 for a policy not assigned to them."""
     stmt = (
         select(TenantAccessPolicy)
         .options(
@@ -684,7 +669,7 @@ async def update_policy(
     user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update a policy's name, description, and/or rules."""
+    """Update a policy's name, description, default flag or rules. Admin or an org Partner."""
     stmt = (
         select(TenantAccessPolicy)
         .options(selectinload(TenantAccessPolicy.rules))
@@ -779,7 +764,7 @@ async def delete_policy(
     user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a policy and all its rules/assignments (CASCADE)."""
+    """Delete a policy with its rules and assignments. Admin or an org Partner."""
     policy = await db.get(TenantAccessPolicy, policy_id)
     if not policy:
         raise HTTPException(status_code=404, detail="Policy not found")
@@ -808,7 +793,7 @@ async def list_assignments(
     user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all policy assignments for the current user's organizations."""
+    """Policy assignments in the caller's organizations; a tenant sees only their own."""
     roles = resolve_roles(user)
     highest = get_highest_role(roles)
 
@@ -841,11 +826,9 @@ async def list_assignments(
         stmt = stmt.where(OrganizationMember.user_email == user_email)
 
     if highest == Role.TENANT:
-        # important: a TENANT sees only their own assignments here. Scoping stopped at the
-        # organisation, which handed every tenant the org's full access matrix and, on the
-        # assignments endpoint, every other member's email. `get_my_access` already exists as
-        # the tenant-facing view, which is the clue that these list endpoints were never meant
-        # for them. Partner and Admin keep the org-wide view they administer with.
+        # important: a tenant sees only their own assignments. Organisation scope alone would hand
+        # every tenant every other member's email; `get_my_access` is their view. Partner and
+        # Admin keep the org-wide view they administer with.
         stmt = stmt.where(OrganizationMember.user_email == user.email)
 
     result = await db.execute(stmt)
@@ -853,7 +836,6 @@ async def list_assignments(
 
     responses = []
     for a in assignments:
-        # load related objects
         policy = await db.get(TenantAccessPolicy, a.policy_id)
         member = await db.get(OrganizationMember, a.org_member_id)
         org = await db.get(Organization, policy.organization_id) if policy else None
@@ -888,7 +870,11 @@ async def create_assignment(
     user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Assign an access policy to a tenant user."""
+    """Assign an access policy to a member of its organization.
+
+    Admin, or a Partner who created the organization or is a partner member of it. 404 when the
+    user is not a member, 409 when the policy is already assigned to them.
+    """
     # verify policy exists and belongs to the org
     policy = await db.get(TenantAccessPolicy, body.policy_id)
     if not policy:
@@ -963,7 +949,10 @@ async def delete_assignment(
     user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Revoke a policy assignment from a tenant."""
+    """Revoke a policy assignment.
+
+    Partner tier. A caller may revoke their own assignment; any other needs Admin or an org Partner.
+    """
     assignment = await db.get(TenantPolicyAssignment, assignment_id)
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found")
@@ -1005,16 +994,15 @@ async def get_my_access(
     """Resolve all access rules for the current user across all assigned policies."""
     highest = get_highest_role(resolve_roles(user))
     if highest == Role.TENANT:
-        # Use the same active, organization-matched, cluster-bound grants as enforcement. The
-        # former self-view independently loaded memberships and assignments, so it could show
-        # an expired, inactive, cross-organization, or unbound rule that authorization had
-        # already revoked. On shared clusters a wildcard is expanded to the concrete project
-        # bound so the response never claims access to a neighbour's project.
+        # Use the same active, organization-matched, cluster-bound grants as enforcement, so this
+        # view never shows an expired, inactive, cross-organization or unbound rule. On shared
+        # clusters a wildcard is expanded to the concrete project bound, so the response never
+        # claims access to a neighbour's project.
         grants = get_current_resolved_tenant_grants()
         if grants is None:
-            # Direct function calls in tests and internal tools do not necessarily execute the
-            # router dependency. Production requests reuse its exact authorization snapshot so
-            # a concurrent revoke cannot make enforcement and this self-view disagree.
+            # Direct calls (tests, internal tools) may skip the router dependency. A request
+            # reuses its exact authorization snapshot, so a concurrent revoke cannot make
+            # enforcement and this view disagree.
             _acl, resolved_grants, _visible_projects = await get_tenant_scope(user, db)
             grants = tuple(resolved_grants or [])
         access_entries: List[ResolvedAccess] = []
@@ -1040,7 +1028,6 @@ async def get_my_access(
 
     now = datetime.now(timezone.utc)
 
-    # find all org memberships
     member_stmt = select(OrganizationMember).where(
         OrganizationMember.user_email == user.email
     )
@@ -1052,7 +1039,6 @@ async def get_my_access(
 
     member_ids = [m.id for m in memberships]
 
-    # find all active (non-expired) policy assignments
     assign_stmt = (
         select(TenantPolicyAssignment)
         .where(
@@ -1062,7 +1048,6 @@ async def get_my_access(
     result = await db.execute(assign_stmt)
     assignments = result.scalars().all()
 
-    # filter expired
     active_assignments = [
         a for a in assignments
         if a.expires_at is None or a.expires_at > now
@@ -1071,7 +1056,6 @@ async def get_my_access(
     if not active_assignments:
         return MyAccessResponse(access=[], total_clusters=0, total_rules=0)
 
-    # load policies with rules
     policy_ids = list({a.policy_id for a in active_assignments})
     policies_stmt = (
         select(TenantAccessPolicy)
@@ -1087,7 +1071,6 @@ async def get_my_access(
             if getattr(p, "access_ends_at", None) is None or _aware(p.access_ends_at) > now
         }
 
-    # build resolved access
     access_entries = []
     cluster_ids = set()
     for assignment in active_assignments:

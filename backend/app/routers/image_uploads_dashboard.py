@@ -1,23 +1,16 @@
 """Dashboard (JWT) resumable custom-image-upload endpoints.
 
-Same tus flow + import/recovery machinery as ``image_uploads.py`` (which is
-OrcaHub-facing, API-key auth), but authenticated with the user session and
-org-scope so a Partner can upload a custom LXD image from Orcastra CMP.
+The same tus flow and import/recovery machinery as ``image_uploads.py`` (OrcaHub-facing,
+API-key auth), authenticated with the user session and org scope so a Partner can upload
+a custom LXD image from the dashboard. The ``image_upload_sessions`` table, the staging
+dir, ``_run_import`` and the recovery sweep are shared. Only authorization differs:
+``require_partner()`` for writes, and ``verify_cluster_access`` (org scope) in place of
+the API-key cluster permission.
 
-Everything durable is reused verbatim: the ``image_upload_sessions`` table, the
-staging dir, ``_run_import`` (verify -> stream into the cluster's LXD image store
-and create a private alias), and the crash-recovery sweep. Only the
-auth/authorization layer differs: ``require_partner()`` for writes, and
-``verify_cluster_access`` (org scope) in place of the API-key cluster-permission
-check. Sessions created here share the same MAX_ACTIVE_SESSIONS / disk-headroom
-guards and the same recovery loop as the OrcaHub path.
-
-This is the exact analogue of ``iso_uploads_dashboard.py``. The only material
-differences are per-image: the session carries an ``alias`` + ``instance_type``
-instead of a ``pool`` + ``volume_name``, and a successful import invalidates the
-images-list cache (``images:list:*``) rather than the storage-volumes cache. An
-image's real type is determined by the uploaded file; ``instance_type`` is the
-declared intent, stored for parity with the OrcaHub contract.
+The analogue of ``iso_uploads_dashboard.py``, except that a session carries an ``alias``
+and ``instance_type`` instead of a ``pool`` and ``volume_name``. An image's real type comes
+from the uploaded file; ``instance_type`` is the declared intent, stored for parity with
+the OrcaHub contract.
 """
 import asyncio
 import os
@@ -68,20 +61,18 @@ import logging
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
 
-# LXD image aliases allow letters, digits and . _ - / (e.g. "windows-11" or
-# "ubuntu/22.04"); must start with an alphanumeric. Kept lenient on purpose so we
-# do not reject aliases the daemon would accept.
-# \A...\Z (not ^...$) so a trailing newline can't slip through into the alias.
-# `/` is intentionally allowed -- image aliases use it (e.g. "ubuntu/22.04").
+# LXD image aliases allow letters, digits and . _ - / (ex; "windows-11" or
+# "ubuntu/22.04") and start with an alphanumeric. Kept lenient so aliases the
+# daemon accepts are not refused here.
+# \A...\Z rather than ^...$ so a trailing newline cannot slip into the alias.
 _ALIAS_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._/-]{0,254}\Z")
 _INSTANCE_TYPES = ("container", "virtual-machine")
 
 # A browser upload abandoned mid-flight (tab closed, reloaded, network dropped)
-# leaves its session in an in-progress state, holding a slot against the global
-# MAX_ACTIVE_SESSIONS cap until the 6h TTL. updated_at is bumped on every chunk
-# PATCH, so a session idle this long is provably not live and its slot can be
-# reclaimed. The OrcaHub path is unaffected: this sweep runs only in dashboard
-# create. Mirrors iso_uploads_dashboard.
+# leaves its session in progress, holding a slot against the global
+# MAX_ACTIVE_SESSIONS cap until the session TTL. updated_at is bumped on every
+# chunk PATCH, so a session idle this long is not live and its slot can be
+# reclaimed. The sweep runs only in dashboard create, as in iso_uploads_dashboard.
 IMAGE_UPLOAD_IDLE_RECLAIM = timedelta(minutes=int(os.getenv("IMAGE_UPLOAD_IDLE_RECLAIM_MIN", "30")))
 # Statuses that represent an in-progress upload (not yet importing/ready/failed).
 _IN_PROGRESS = ("pending", "uploading", "uploaded")
@@ -99,10 +90,9 @@ async def _reclaim_idle_sessions(db: AsyncSession) -> None:
             select(ImageUploadSession).where(
                 ImageUploadSession.status.in_(_IN_PROGRESS),
                 ImageUploadSession.updated_at < cutoff,
-                # Only reclaim dashboard-created (JWT) sessions. OrcaHub sessions
-                # stamp api_key_id, so this leaves their resumable 6h window
-                # untouched -- the sweep runs on every dashboard create_upload and
-                # must not delete another caller's in-flight upload + staging file.
+                # Only dashboard-created (JWT) sessions. OrcaHub sessions stamp
+                # api_key_id and keep their full resumable window: this sweep must
+                # not delete another caller's in-flight upload and staging file.
                 ImageUploadSession.api_key_id.is_(None),
             )
         )
@@ -136,8 +126,7 @@ async def _audit_import_outcome(session_id: str) -> None:
 
     The shared import records its outcome on the session row and never raises, so the row is
     the truth and this record mirrors it; the task journal closes the upload task it opened
-    at finalize on the same session id. Best-effort: a failure here is logged, never raised,
-    so the cache refresh that follows still runs.
+    at finalize on the same session id. Best-effort: a failure here is logged, never raised.
     """
     try:
         async with async_session_maker() as db:
@@ -223,11 +212,9 @@ async def create_upload(
 
     session_id = secrets.token_hex(16)
     path = _staging_path(session_id)
-    # note: deliberately NOT pre-created. Creating the file before the row is committed leaks
-    # it on any failure between the two, and nothing sweeps staging files that have no row
-    # (the recovery loop only re-drives stuck imports). Two such leaks were found on the dev
-    # box. append_request_body creates the file on the first PATCH, so there is nothing to
-    # leak and one fewer thing to keep consistent.
+    # Not pre-created: a file created before the row commits leaks on any failure in
+    # between, and nothing sweeps staging files that have no row (the recovery loop only
+    # re-drives stuck imports). append_request_body creates the file on the first PATCH.
 
     row = ImageUploadSession(
         session_id=session_id,
@@ -302,11 +289,10 @@ async def patch_upload(
             label=f"image_upload_dashboard[{session_id}]",
         )
     except UploadStagingUnavailable:
-        # important: retire the row rather than leaving it resumable. The staging volume is
-        # refusing writes, so this session can never make progress however long the client
-        # retries, and every attempt keeps holding one of only MAX_ACTIVE_SESSIONS slots. Two
-        # of these used to lock the key out for the full six-hour TTL. Failing it frees the
-        # slot now, and the client can start a fresh upload once an operator fixes the volume.
+        # important: retire the row rather than leaving it resumable. The staging volume
+        # refuses writes, so the session can never progress, yet while active it holds one
+        # of the MAX_ACTIVE_SESSIONS slots. Failing it frees the slot now, and the client can
+        # start a fresh upload once an operator fixes the volume.
         row.status = "failed"
         row.error = "upload staging not writable on the server"
         await db.commit()

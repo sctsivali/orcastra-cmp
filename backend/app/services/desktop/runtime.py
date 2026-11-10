@@ -1,13 +1,11 @@
 """Pools, budgets and caps for desktop control, kept beside the code that spends them.
 
-Mirrors `services/lxd/proxy.py`, which is where the same facts live for the proxy surface, and for
-the same reason: a tunable that is not next to its own reasoning gets changed by somebody who does
-not know what it was protecting.
+As in `services/lxd/proxy.py` for the proxy surface, each tunable sits next to the reason for its
+value, so whoever changes it can see what it protects.
 
-important: its own thread pool, never `exec_executor`. That pool's own docstring is the argument -
-the point of a private pool is that "the blast radius of a runaway exec is other execs" - and it
-has four workers. A screenshot loop at even a modest rate would fill all four and take the
-ordinary `exec_instance` of every other integration down with it.
+important: desktop control has its own thread pool, never `exec_executor`. That pool is private
+so a runaway exec only affects other execs, and it has four workers; a screenshot loop at a modest
+rate would fill all four and stall every other integration's `exec_instance`.
 """
 
 import os
@@ -57,15 +55,13 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-# On, with an off switch kept for an operator who wants one.
+# On by default, with an off switch for an operator who wants one.
 #
-# important: this is NOT the consent boundary and must not be read as one. Four things stand
-# between an agent and a customer's screen, and none of them is a deployment flag: the desktop.*
-# capability, which no application type seeds and no key issued before capabilities existed
-# inherits; the per-cluster grant; the project allow-list; and the owning organization's own row
-# in desktop_control_policy, which defaults to refusing and is the tenant's decision rather than
-# the deployment's. A flag in front of those is a fifth lock on a door that already has four, and
-# the risk of one is that it gets mistaken for the lock that matters.
+# important: this flag is not the consent boundary. Four checks stand between an agent and a
+# customer's screen: the desktop.* capability, which no application type seeds and no key issued
+# before capabilities existed inherits; the per-cluster grant; the project allow-list; and the
+# owning organization's row in desktop_control_policy, which defaults to refusing and is the
+# tenant's decision.
 DESKTOP_CONTROL_ENABLED = _env_bool("ORCASTRA_DESKTOP_CONTROL_ENABLED", True)
 
 # ── budgets ────────────────────────────────────────────────────────────────────────────────────
@@ -78,8 +74,8 @@ DESKTOP_PROBE_TIMEOUT = _env_float("ORCASTRA_DESKTOP_PROBE_TIMEOUT", 30.0)
 
 # ── the pool ───────────────────────────────────────────────────────────────────────────────────
 DESKTOP_POOL_WORKERS = _env_int("ORCASTRA_DESKTOP_POOL_WORKERS", 4)
-# Equal to the worker count rather than a multiple, matching the exec pool's ratio: these calls
-# are long-ish, so shedding beats queueing. A queued screenshot is stale before it runs.
+# Equal to the worker count, as for the exec pool: these calls are long, so shedding is better
+# than queueing, and a queued screenshot is stale before it runs.
 DESKTOP_MAX_IN_FLIGHT = _env_int("ORCASTRA_DESKTOP_MAX_IN_FLIGHT", DESKTOP_POOL_WORKERS)
 
 desktop_executor = ThreadPoolExecutor(
@@ -97,26 +93,25 @@ DESKTOP_STDERR_LIMIT = _env_int("ORCASTRA_DESKTOP_STDERR_LIMIT", 64 * 1024)
 # Above this the capture chain re-encodes as JPEG rather than shipping a large PNG.
 DESKTOP_IMAGE_SOFT_LIMIT = _env_int("ORCASTRA_DESKTOP_IMAGE_SOFT_LIMIT", 2 * 1024 * 1024)
 
-# ── what a vision model will actually accept ───────────────────────────────────────────────────
-# A screenshot returned to a computer-use tool is REJECTED rather than downscaled when it exceeds
-# the model's limits, so the platform has to guarantee the bound rather than hope.
+# ── what a vision model accepts ────────────────────────────────────────────────────────────────
+# A computer-use tool rejects a screenshot over the model's limits instead of downscaling it, so
+# the platform has to guarantee the bound.
 #
 # Visual tokens are ceil(w/28) * ceil(h/28). The standard tier accepts a long edge up to 1568 and
-# up to 1568 visual tokens, and every current model accepts that tier. Targeting it rather than the
-# wider one available on newer models removes a class of "works on one model, 400s on another".
+# up to 1568 visual tokens, and every current model accepts that tier. Targeting it instead of the
+# wider tier newer models offer keeps a capture valid on every model.
 DESKTOP_MAX_LONG_EDGE = _env_int("ORCASTRA_DESKTOP_MAX_LONG_EDGE", 1568)
 DESKTOP_MAX_VISUAL_TOKENS = _env_int("ORCASTRA_DESKTOP_MAX_VISUAL_TOKENS", 1568)
 # 1280x800 is 46 x 29 = 1334 visual tokens with a 1280 long edge. Fits the standard tier with room,
-# and is a geometry desktops actually run at.
+# and is a common desktop geometry.
 DESKTOP_TARGET_WIDTH = _env_int("ORCASTRA_DESKTOP_TARGET_WIDTH", 1280)
 DESKTOP_TARGET_HEIGHT = _env_int("ORCASTRA_DESKTOP_TARGET_HEIGHT", 800)
 
 # ── per-target rate limits ─────────────────────────────────────────────────────────────────────
-# Keyed per (key, cluster, project, instance) rather than per key, so one runaway agent on one
-# guest cannot starve another guest, and so raising the per-key limit for an unrelated reason does
-# not silently widen this.
+# Keyed per (key, cluster, project, instance) instead of per key, so one runaway agent on one
+# guest cannot starve another guest, and raising the per-key limit does not widen this.
 DESKTOP_ACTIONS_PER_MINUTE = _env_int("ORCASTRA_DESKTOP_ACTIONS_PER_MINUTE", 60)
-# Tighter than actions on purpose: a frame costs capture, encode, megabytes on the wire, and about
+# Tighter than actions: a frame costs capture, encode, megabytes on the wire, and about
 # 1334 vision tokens to read. One every three seconds is well above a human's reading speed.
 DESKTOP_SCREENSHOTS_PER_MINUTE = _env_int("ORCASTRA_DESKTOP_SCREENSHOTS_PER_MINUTE", 20)
 
@@ -129,6 +124,6 @@ DESKTOP_SESSION_MAX_AGE = _env_int("ORCASTRA_DESKTOP_SESSION_MAX_AGE", 4 * 3600)
 
 # ── per-action input bounds ────────────────────────────────────────────────────────────────────
 DESKTOP_TYPE_MAX = _env_int("ORCASTRA_DESKTOP_TYPE_MAX", 1024)
-# A wait is served on the event loop and never reaches the guest, so this bounds politeness rather
-# than resource use. Ten seconds is longer than any UI settle worth waiting on in one call.
+# A wait is served on the event loop and never reaches the guest. Ten seconds is longer than any
+# UI settle worth waiting on in one call.
 DESKTOP_WAIT_MAX = _env_float("ORCASTRA_DESKTOP_WAIT_MAX", 10.0)

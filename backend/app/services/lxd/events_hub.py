@@ -1,26 +1,15 @@
 """
-LXD operation-events hub (shared per-node fan-out).
+LXD operation-events hub: one upstream WebSocket per node, fanned out to many subscribers.
 
-Maintains ONE upstream WebSocket to each node's
-``/1.0/events?type=operation,lifecycle&all-projects=true`` stream and fans the parsed
-events out to many browser subscribers. This is the
-shared-per-node model: the first subscriber for a node starts the upstream
-listener; when the last subscriber leaves, the listener is torn down. The
-upstream connection auto-reconnects (with backoff) as long as subscribers remain.
+The stream is ``/1.0/events?type=operation,lifecycle&all-projects=true``. The first
+subscriber for a node starts the listener, the last tears it down, and it reconnects with
+backoff while subscribers remain; sockets reuse the terminal service's Vault-issued cert.
 
-It powers realtime instance-creation progress on the dashboard. LXD reports
-image-pull progress via the operation's ``metadata.download_progress`` field, so
-the frontend can show "Pulling image… 48%" without polling. See
-``app/routers/events.py`` for the browser-facing WebSocket endpoint.
-
-The task journal follower (``app/services/task_journal/follower.py``) is the second consumer:
-it subscribes in firehose mode and receives every lifecycle action, the operation fields the
-browser never needed, and a ``hub`` frame when the upstream connects or drops. A browser
-subscriber receives a projection restricted to ``BROWSER_FRAME_KEYS`` and only ``instance-*``
-lifecycle, exactly what it received before the follower existed.
-
-Reuses the terminal service's certificate/SSL plumbing (same Vault-issued client
-cert) to connect to LXD over wss.
+Browser subscribers (``app/routers/events.py``; LXD reports image-pull progress in
+``metadata.download_progress``) get only ``BROWSER_FRAME_KEYS`` and ``instance-*``
+lifecycle. The task journal follower (``task_journal/follower.py``) subscribes in firehose
+mode: every lifecycle action, full operation fields, and a ``hub`` frame when the upstream
+connects or drops.
 """
 import asyncio
 import contextvars
@@ -37,17 +26,17 @@ from app.services.terminal_service import get_terminal_service
 
 logger = logging.getLogger(__name__)
 
-# Max events buffered per slow subscriber before we drop the oldest. Progress
+# Events buffered per slow subscriber before the oldest is dropped. Progress
 # updates are cumulative, so dropping stale frames is harmless.
 _QUEUE_MAXSIZE = 100
 
-# How long a node whose breaker is open waits before the hub dials it again. Most registered
-# clusters on a development fleet are dead, and the follower subscribes to all of them.
+# Seconds a node whose breaker is open waits before the hub dials it again. The follower
+# subscribes to every registered cluster, dead ones included.
 _TRIPPED_SLEEP_S = 60
 
-# important: the exact key set a browser frame carried before the firehose existed. A browser
-# subscriber never receives `requestor`, `class`, `location`, `resources`, `context` or any
-# key added later; extending this set is a deliberate change to the browser contract.
+# important: the browser frame contract. A browser subscriber never receives `requestor`,
+# `class`, `location`, `resources`, `context` or any key added later; extending this set
+# changes what every browser receives.
 BROWSER_FRAME_KEYS = frozenset(
     {
         "type",
@@ -123,8 +112,8 @@ class LXDEventsHub:
 
         `accept` is judged for every frame BEFORE it is queued, under a copy of the calling
         task's context taken now, so call this after the subscriber's scope is set. A frame
-        the subscriber may not see never costs it a queue slot: on a busy shared host a
-        tenant's queue used to fill with neighbours' frames and drop-oldest evicted its own.
+        the subscriber may not see never costs it a queue slot, so on a busy shared host
+        neighbours' frames cannot evict a tenant's own through drop-oldest.
 
         `firehose` and `maxsize` are keyword-only so every browser call site keeps its shape.
         """
@@ -239,9 +228,8 @@ class LXDEventsHub:
         # lifecycle: instance created/started/stopped/deleted/... so the dashboard
         # can keep its list current from the stream instead of polling.
         #
-        # important: all-projects. Without it LXD emits the default project's events only, so a
-        # create into any other project produced no frame at all: the "Creating..." placeholder
-        # sat until its ten-minute expiry while the instance had been running for nine of them.
+        # important: all-projects. Without it LXD emits the default project's events only, and a
+        # create into any other project produces no frame at all.
         # Every frame names its project. The hub judges each frame under the subscriber's
         # captured scope (tenant ACL, Partner project bound) before it is queued, and
         # routers/events.py judges it again under the refreshed scope before sending.
@@ -256,8 +244,8 @@ class LXDEventsHub:
             if not node or not node.subscribers:
                 return
             # important: consulted before dialing. The follower subscribes to every registered
-            # cluster, and on a fleet where most of them are dead the backoff alone would keep
-            # re-dialing each one every 30 s for as long as the process lives.
+            # cluster, and the backoff alone would keep re-dialing each dead one every 30 s for
+            # as long as the process lives.
             if health.is_tripped(host):
                 # The follower learns a cluster is down only from this frame; a cluster whose
                 # breaker was already open when it subscribed would otherwise never be marked
@@ -368,9 +356,9 @@ class LXDEventsHub:
             return None
         resources = md.get("resources", {}) or {}
         # important: a resource URL outside the default project is
-        # `/1.0/instances/<name>?project=<p>`. Taking the last path segment with the query
-        # still attached produced `<name>?project=<p>`, which matched no placeholder, so a
-        # create that LXD refused in another project never flipped its row to "Failed".
+        # `/1.0/instances/<name>?project=<p>`. The query is split off before taking the last
+        # path segment; `<name>?project=<p>` would match no placeholder, and a create LXD
+        # refused in another project would never flip its row to "Failed".
         resource_names: Dict[str, list] = {}
         url_project: Optional[str] = None
         for kind, urls in resources.items():

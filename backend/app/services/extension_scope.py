@@ -1,20 +1,13 @@
 """What an installation may reach, decided at install time and again at request time.
 
-The rule the whole platform rests on: an installation's reach is the manifest's request,
-intersected with the installing partner's own cluster scope, intersected with the clusters the
-target organization is still bound to. It is never read from the stored grant alone.
+At install time the reach is the manifest's request, intersected with the installing partner's own
+cluster scope and with the clusters the target organization is bound to. `granted_scope` on the
+row records that consent.
 
-important: that is why `granted_scope` on the row is a record of consent rather than a licence.
-Storing a flattened intersection and trusting it afterwards is how an installation keeps working
-against a cluster the partner lost, and on a platform where clusters are rented to paying
-customers that means one tenant's add-on reading the next tenant's workload.
-
-The two halves are split by how fast the underlying fact moves. Suspension and uninstall are
-instant decisions, so they are checked on every request against a short-lived snapshot with the
-same cross-worker tombstone the key cache already uses. A partner losing a cluster is slow, so it
-is caught by the reconcile sweep instead; a two-table join on the warm authentication path would
-be a worse trade than a bounded window, and the window is named in the documentation rather than
-left implicit.
+At request time, suspension and uninstall are checked on every request against a short-lived
+snapshot that shares the key cache's cross-worker tombstone. An organization losing a cluster is
+slower, so the reconcile sweep (extension_reconcile) narrows the stored grant instead of a join on
+the authentication path.
 """
 
 import logging
@@ -40,8 +33,8 @@ from app.services.extension_credential_guard import orgs_the_user_runs
 
 logger = logging.getLogger(__name__)
 
-# Mirrors `_REVOKED_NS` in the integrations router, and for the same reason: an installation
-# suspended by one uvicorn worker must stop working on the other three, not on their own TTL.
+# Mirrors `_REVOKED_NS` in the integrations router: an installation suspended by one uvicorn
+# worker must stop working on every other worker at once, not after their own TTL.
 _INSTALL_REVOKED_NS = "extension_install_revoked"
 
 # Matches API_KEY_CACHE_TTL so the two caches expire together and a request cannot see a fresh
@@ -78,8 +71,8 @@ async def assert_install_scope_within_partner(
     """
     requested_clusters = {getattr(g, "cluster_id", None) or g["cluster_id"] for g in grants}
 
-    # 1. The partner's own cluster scope. Reuses exactly the guard `create_api_key` applies to an
-    #    ordinary key, and it is free: org_scope_dependency already resolved it for this request.
+    # 1. The partner's own cluster scope, the same guard `create_api_key` applies to an ordinary
+    #    key. org_scope_dependency already resolved it for this request.
     allowed = get_current_allowed_clusters()
     if allowed is not None:
         outside = sorted(requested_clusters - allowed)
@@ -95,7 +88,7 @@ async def assert_install_scope_within_partner(
             "This installation would reach clusters you reach only through a purchase: " + ", ".join(purchased)
         )
 
-    # 2. The target organization has to be one the operator actually holds.
+    # 2. The target organization has to be one the operator runs.
     if not is_admin:
         own_orgs = await orgs_the_user_runs(db, user.email)
         if organization_id not in own_orgs:
@@ -106,9 +99,9 @@ async def assert_install_scope_within_partner(
 
     # 3. Every granted cluster has to be bound to that organization.
     #
-    #    important: resolve_cluster_orgs, the plural. Its singular sibling takes the lowest bound
-    #    id, which its own docstring calls fine for a label and wrong for a permission, and a
-    #    shared cluster is not hypothetical on this deployment.
+    #    important: resolve_cluster_orgs, the plural. The singular takes the lowest bound id,
+    #    which is fine for a label and wrong for a permission on a cluster several organizations
+    #    share.
     for cluster_id in sorted(requested_clusters):
         bound = {oid for oid, _slug in await resolve_cluster_orgs(cluster_id, db)}
         if organization_id not in bound:
@@ -154,17 +147,14 @@ async def _assert_guest_access_is_consented(
     capabilities: Sequence[str],
     clusters: Set[str],
 ) -> None:
-    """Reaching inside a guest needs a standing organization decision, not just a tick.
+    """Reaching inside a guest needs a standing organization consent, not only the capability.
 
-    important: this closes a real asymmetry rather than adding ceremony. `desktop.*` is gated at
-    request time by three further checks: every organization on the cluster consenting, a live
-    break-glass grant, and a per-instance budget that fails closed. `instance.exec` and
-    `instance.files` are gated by the explicit-capability check and nothing else. So without this,
-    ticking a box during an install would be the only thing standing between a third-party
-    application and root inside a renting customer's container.
-
-    The consent consulted is the one that already exists, so no new surface is introduced and an
-    organization that has already made this decision does not make it twice.
+    important: `desktop.*` is gated at request time by every organization on the cluster
+    consenting, a live break-glass grant and a per-instance budget that fails closed, while
+    `instance.exec` and `instance.files` have only the explicit-capability check. Without this, a
+    box ticked during an install would be all that stands between a third-party add-on and root
+    inside a tenant's guest. The consent consulted is the existing desktop policy, so an
+    organization does not decide twice.
     """
     wanted = sorted(set(capabilities) & GUEST_ACCESS_CAPABILITIES)
     if not wanted:
@@ -173,17 +163,15 @@ async def _assert_guest_access_is_consented(
     from app.services.desktop_policy import consent_for_cluster
 
     for cluster_id in sorted(clusters):
-        # important: the second element names the first organization that withheld consent, and it
-        # is discarded on purpose. A shared cluster carries more than one tenant, and the installer
-        # is not necessarily one of them, so naming the dissenter would tell a partner who else is
-        # on that hardware. It is audit-only by the contract of `consent_for_cluster`, and the
-        # desktop router drops it for the same reason. Keep it unused.
+        # important: keep the second element unused. It names the first organization that withheld
+        # consent, and on a shared cluster telling the installer would reveal who else is on that
+        # hardware. It is audit-only by the contract of `consent_for_cluster`; the desktop router
+        # drops it too.
         consent, _refused_by = await consent_for_cluster(db, cluster_id)
-        # important: the accessors, not the raw fields. `may_view` and `may_input` exist because
-        # `allow_input` alone must never authorize typing against a row that is disabled overall,
-        # and reading the fields directly is correct here only because `consent_for_cluster`
-        # happens to pre-compose them. Hand this a `DesktopConsent` from `get_consent`, which does
-        # not, and a disabled organization would authorize guest access.
+        # important: use the accessors, not the raw fields. `may_view` and `may_input` keep
+        # `allow_input` alone from authorizing input on a row that is disabled overall. The raw
+        # fields are safe only because `consent_for_cluster` pre-composes them; a `DesktopConsent`
+        # from `get_consent` does not, and a disabled organization would authorize guest access.
         if not consent.may_guest_access:
             raise ScopeRefused(
                 "This add-on asks to reach inside guests ("
@@ -192,8 +180,8 @@ async def _assert_guest_access_is_consented(
                 "administrator of every organization on that cluster enables guest access in the "
                 "organization's settings first."
             )
-        # Typing into a live session is a larger power than running a command, and the existing
-        # policy already separates them, so the install respects the same split.
+        # Typing into a live session is a larger power than running a command, and the desktop
+        # policy separates them, so the install keeps the same split.
         if "desktop.input" in wanted and not consent.may_input:
             raise ScopeRefused(
                 f"Cluster {cluster_id} consents to viewing a desktop but not to controlling one, "
@@ -204,7 +192,7 @@ async def _assert_guest_access_is_consented(
 def effective_capabilities(
     consented: Sequence[str], requested_by_manifest: Sequence[str]
 ) -> List[str]:
-    """What an install may actually be granted: never more than the manifest asked for."""
+    """What an install may be granted: never more than the manifest asked for."""
     return sorted(set(consented) & set(requested_by_manifest))
 
 
@@ -220,8 +208,8 @@ def _install_revoked_elsewhere(api_key_id: str) -> bool:
 def evict_install_cache(api_key_id: str) -> None:
     """Publish that an installation changed, so every worker drops its snapshot on next use.
 
-    Suspend and re-scope change the row without touching the Vault key, so the key cache's own
-    tombstone would not notice. Uninstall and rotate publish to both, because both stores moved.
+    Suspend changes only the row, so the key cache's own tombstone would not notice. Re-scope,
+    uninstall and rotate change the Vault key as well and publish to both.
     """
     with _install_cache_lock:
         _install_cache.pop(api_key_id, None)
@@ -256,12 +244,9 @@ async def load_install_snapshot(db: AsyncSession, api_key_id: str) -> Optional[D
         return cached
 
     # important: a rotation's superseded key must resolve too. It is retired by shortening its
-    # expiry, not by revoking it, so it is legitimately usable inside the grace window and
-    # `validate_api_key` is what ends it. Matching only `api_key_id` made this return None for the
-    # old key the moment a rotation happened, which turned the grace window into a flag day.
-    # The add-on's own status rides along, because disabling one has to stop the installations it
-    # already has and the request path is where that has to bite. One join, on the same query
-    # that was already being made, on a path that is cached for the key's own TTL.
+    # expiry, so it stays usable inside the grace window until `validate_api_key` ends it; matching
+    # only `api_key_id` would end the grace window at the rotation. The add-on's own status is
+    # joined in so that disabling an add-on stops the installations it already has.
     result = await db.execute(
         select(ExtensionInstallation, Extension.status)
         .join(Extension, Extension.id == ExtensionInstallation.extension_id)
@@ -297,29 +282,23 @@ async def load_install_snapshot(db: AsyncSession, api_key_id: str) -> Optional[D
 async def assert_install_is_live(
     db: AsyncSession, api_key_id: str, *, cluster_id: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Refuse a credential whose installation is suspended, gone, or no longer reaches here.
+    """Refuse a credential whose add-on is disabled or whose installation is suspended, gone, or
+    does not reach `cluster_id`.
 
-    A credential that outlives its installation is the failure this exists to prevent: the Vault
-    key would still authenticate perfectly well with nothing left that says whose it is.
+    Without this, a Vault key that outlives its installation would still authenticate.
     """
     snapshot = await load_install_snapshot(db, api_key_id)
     if snapshot is None:
         raise ScopeRefused("This credential's installation no longer exists", status_code=401)
-    # important: the ADD-ON's status, not only the installation's. `disabled` was consulted at
-    # install time and at resume, and nowhere else, so disabling a misbehaving add-on refused new
-    # installs while every organization that already had one kept a fully working credential.
-    # Withdrawing it is refused while anything is installed, so this was the only lever an owner
-    # had, and it did not reach the thing it was aimed at.
+    # important: the add-on's status as well as the installation's. Withdrawing an add-on is
+    # refused while anything is installed, so `disabled` is the only way to stop the
+    # installations it already has.
     if snapshot.get("extension_status") == "disabled":
         raise ScopeRefused("This add-on has been disabled")
     if snapshot["status"] != "active":
-        # important: the reason travels with the refusal. Without it the add-on was told only
-        # "suspended", and when the reconcile sweep is what suspended it, that stored sentence is
-        # the only explanation that exists anywhere the add-on can reach.
-        #
-        # This is a deliberate disclosure: an operator types that text and a third party reads it.
-        # The party whose access stopped is the party who has to act, so it is returned, and the
-        # form that collects it says so.
+        # The stored reason travels with the refusal; after a sweep suspension it is the only
+        # explanation the add-on can reach. This shows operator-typed text to a third party on
+        # purpose, and the form that collects it says so.
         reason = (snapshot.get("suspend_reason") or "").strip()
         detail = f"This installation is {snapshot['status']}"
         if reason:

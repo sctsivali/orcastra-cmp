@@ -5,9 +5,9 @@ instance at once, read state once and stamp the sample at the read's midpoint, f
 then turn the cumulative counters into rates through the shared sampler.
 
 important: `build_state_sample` is the only place that names a sample's identity, epoch and
-counter keys. The monitoring fleet sweep observes the same instances through it; two builders
-that disagreed on any of those would re-seed each other's baseline on every poll and leave both
-surfaces stuck on "calculating".
+counter keys. The monitoring fleet sweep samples the same instances through it; two builders
+that disagreed would re-seed each other's baseline on every poll and leave both surfaces stuck
+on "calculating".
 """
 
 import hashlib
@@ -50,8 +50,8 @@ logger = logging.getLogger(__name__)
 STATE_SAMPLER = RateSampler(
     "instance_state", SamplerPolicy(min_window=1.5, max_age=120.0, ttl_seconds=180)
 )
-# note: a 10 s floor because the counters come from a scrape cached for 10 s; a shorter window
-# would only ever compare a scrape with itself.
+# A 10 s floor because the counters come from a scrape cached for 10 s; a shorter window would
+# only compare a scrape with itself.
 IO_SAMPLER = RateSampler(
     "instance_io", SamplerPolicy(min_window=10.0, max_age=180.0, ttl_seconds=240)
 )
@@ -60,7 +60,7 @@ _HOST_THREADS_TTL_SECONDS = 1800.0
 _HOST_THREADS_MAX_ENTRIES = 512
 _host_threads_cache: "OrderedDict[str, Tuple[float, int]]" = OrderedDict()
 _host_threads_lock = threading.Lock()
-# note: bounds on what an LXD response can put into a Redis key or a stored sample.
+# Bounds on what an LXD response can put into a Redis key or a stored sample.
 _IDENTITY_PART_MAX = 200
 _MAX_INTERFACES = 64
 
@@ -89,9 +89,8 @@ def _start_marker(last_used_at: Any) -> str:
     """Whole seconds of the last start, the same for LXD's string and a parsed datetime.
 
     important: the dialog reads last_used_at as LXD's raw string ("...T00:00:00Z") and the fleet
-    list carries it through VMInfo, where pydantic has already parsed it into a datetime. Put
-    into the epoch as they come, the two never matched, and each surface re-seeded the other's
-    baseline on every poll.
+    list as the datetime pydantic parsed into VMInfo. Both must give the same marker, or each
+    surface re-seeds the other's baseline on every poll.
     """
     moment = last_used_at
     if isinstance(moment, str):
@@ -197,8 +196,8 @@ def apply_rates(
         else:
             busy = busy_ns / 1e9
             if vcpus:
-                # note: clamped to the allocation. Scheduler jitter between the two reads can
-                # put a saturated 2-vCPU instance at 2.03 for one window.
+                # Clamped to the allocation: scheduler jitter between the two reads can put a
+                # saturated 2-vCPU instance at 2.03 for one window.
                 busy = min(busy, float(vcpus))
                 metrics.cpu_usage_percent = round(busy / vcpus * 100, 2)
                 metrics.cpu_sample_status = "ready"
@@ -253,10 +252,10 @@ def apply_disk_io(
 ) -> None:
     """Disk I/O rates over an instance's whole disks, from two scrapes at least 10 s apart.
 
-    important: a virtual machine's counters are its guest's own block devices and need its
-    agent. A container's come from its cgroup, which sees only the I/O its storage driver
-    charges to it (container_disk_io.py), so they count only on a proven driver. Where the
-    counters cannot be trusted, disk_io_reason says why instead of a measured zero.
+    A virtual machine's counters are its guest's own block devices and need its agent. A
+    container's come from its cgroup, which sees only the I/O its storage driver charges to it
+    (container_disk_io.py), so they count only on a proven driver. Where the counters cannot be
+    trusted, disk_io_reason says why instead of a measured zero.
     """
     if agent == "not_applicable":
         if not container_disk_io_measured(storage_driver):
@@ -304,8 +303,8 @@ def read_instance_metrics(
     memory and disk come from the state read alone.
     """
     try:
-        # important: scoped to the project the caller authorized. A name is unique per project,
-        # so searching every project answered with whichever tenant's instance LXD listed first.
+        # important: scoped to the project the caller authorized. A name is unique only per
+        # project, so searching every project could answer with another tenant's instance.
         instance, found_project = find_instance_in_projects(client, instance_name, project)
         if not instance:
             raise LXDOperationError(f"Instance '{instance_name}' not found on {host}")
@@ -330,7 +329,7 @@ def read_instance_metrics(
 
         config = getattr(instance, "config", None) or {}
         expanded = getattr(instance, "expanded_config", None) or config
-        # note: the local config alone misses a profile's limits, so an absent key is unknown.
+        # The local config alone misses a profile's limits, so an absent key is unknown.
         metrics.cpu_limit_set, metrics.memory_limit_set = limits_set(
             getattr(instance, "type", None),
             expanded,
@@ -384,8 +383,7 @@ def read_instance_metrics(
             cpu_counted=cpu_counted,
             vcpus=vcpus,
         )
-        # note: only when the caller asked for the metrics read; without it nothing was asked,
-        # so no reason is given either.
+        # Only when the caller asked for the metrics read; otherwise disk I/O gets no reason.
         if deadline is not None:
             driver = None
             if agent == "not_applicable":

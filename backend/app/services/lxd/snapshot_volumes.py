@@ -1,14 +1,11 @@
-"""
-Snapshot operations for custom storage volumes.
+"""Snapshot operations for custom storage volumes.
 
-important: nothing calls any of this. There is no router, no interface and no test, and the
-feature doc records it as the starting point for a volume-snapshot surface rather than as
-half-wired code. It lives in its own module so the instance snapshot path, which is on every
-operator page load, is not read through a hundred lines that never execute.
+Nothing calls this yet: there is no router and no test. It is the starting point for a
+volume-snapshot surface, kept apart from the instance snapshot path in snapshots.py.
 
-The naming policy is shared deliberately: whenever this surface is built, an operator volume
-snapshot must be identifiable and must not collide with the prefixes OrcaHub owns, for the same
-reasons recorded in snapshots.py.
+A surface built on it must name snapshots through the naming policy in snapshots.py, so an
+operator volume snapshot is identifiable and never collides with the prefixes OrcaHub owns.
+create_volume_snapshot takes the name as given and does not apply that policy itself.
 """
 
 import logging

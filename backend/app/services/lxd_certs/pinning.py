@@ -1,22 +1,15 @@
 """Server-certificate pinning for LXD endpoints.
 
-Every connection in this codebase is made with `verify=False`, at roughly twenty-five call sites,
-and nothing pins a fingerprint anywhere. That is not a shortcut around CA validation: LXD does not
-use a public CA at all. Its own trust model is that the client remembers the server's certificate
-fingerprint, which is why `lxc remote add` prints the fingerprint and asks you to accept it. With
-neither CA validation nor pinning, there is no server authentication of any kind, and anyone on
-the path between this control plane and a hypervisor can present their own certificate, take the
-mTLS session, and read or forge everything on it: instance configs, exec streams, console traffic.
+Connections to LXD use `verify=False` because LXD does not use a public CA: its trust model is that
+the client remembers the server's certificate fingerprint, which `lxc remote add` asks the user to
+accept. Without a pin there is no server authentication, and anyone on the path to a hypervisor can
+present their own certificate and read or forge the mTLS session: instance configs, exec streams,
+console traffic.
 
-Trust on first use, then pin. That is the standard pattern for systems with no certificate
-authority, and the one SSH and LXD itself already use, so it is not a weaker substitute for
-something better. Its limit is worth stating plainly: it protects against an attacker who arrives
-after enrolment, not one already in position at the moment a cluster is first seen.
-
-The alternative considered and rejected was requiring an operator to type the fingerprint at
-registration. It is strictly stronger and it does not survive contact with a fleet: eight clusters
-are registered here and six of them are currently unreachable, so a hard requirement would refuse
-them all when they came back.
+The certificate is trusted on first use and then pinned, as SSH and LXD itself do. This protects
+against an attacker who arrives after enrolment, not one already in position when a cluster is
+first seen. A fingerprint typed by the operator at registration would be stronger, but a required
+one would refuse every registered cluster that has no pin yet when it comes back online.
 """
 
 import hashlib
@@ -41,7 +34,7 @@ PREVIOUS_FIELD = "server_cert_previous"
 TRUST_TOFU = "tofu"
 TRUST_PUBLIC_CA = "public-ca"
 
-# note: six renewals is about a year of Let's Encrypt at its 60-day cadence. Anything that holds a
+# Six renewals is about a year of Let's Encrypt at its 60-day cadence. Anything that holds a
 # fingerprint longer than that (a snapshot schedule) moves itself forward to the current pin when
 # it runs, so the bound only has to cover the gap between two uses.
 MAX_PREVIOUS = 6
@@ -57,12 +50,12 @@ class LXDCertificatePinError(Exception):
 
 
 def endpoint_host_port(endpoint: str) -> Tuple[str, int]:
-    """The host and port the LXD client actually dials for this endpoint.
+    """The host and port the LXD client dials for this endpoint.
 
-    important: the port default follows the scheme, exactly as requests does. Defaulting a portless
-    endpoint to LXD's 8443 meant the pin probe and the real connection reached different sockets:
-    a cluster registered as `https://name` (served on 443) was never pinned, and every Migration
-    Center plan on it was refused.
+    important: the port default follows the scheme, as requests does. Defaulting a portless
+    endpoint to LXD's 8443 would send the pin probe and the real connection to different sockets:
+    a cluster registered as `https://name` (served on 443) would never be pinned, and Migration
+    Center would refuse every plan on it.
     """
     parsed = urlparse(endpoint if "://" in endpoint else f"https://{endpoint}")
     if not parsed.hostname:
@@ -96,16 +89,15 @@ def _is_ip_literal(host: str) -> bool:
 def fetch_server_fingerprint(endpoint: str, timeout: int = _HANDSHAKE_TIMEOUT) -> Optional[str]:
     """SHA-256 of the endpoint's presented certificate, or None if it cannot be reached.
 
-    note: deliberately its own TLS handshake rather than reading it off the pooled pylxd client.
-    `requests` does not expose the peer certificate when `verify=False`, and reaching into the
-    urllib3 connection to get it depends on internals that move between releases. One extra
-    handshake per connection attempt is a price worth paying to keep this readable.
+    This is a separate TLS handshake: `requests` does not expose the peer certificate when
+    `verify=False`, and reading it off the urllib3 connection depends on internals that change
+    between releases.
     """
     if not _is_https(endpoint):
         return None
     host, port = endpoint_host_port(endpoint)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    # We are identifying the certificate, not trusting it: verification is what pinning replaces.
+    # The handshake only identifies the certificate; pinning takes the place of verification.
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
     try:
@@ -230,8 +222,8 @@ def _classification(endpoint: str, fingerprint: str) -> dict:
 def repin_fields(endpoint: str, fingerprint: str, *, now: Optional[datetime] = None) -> dict:
     """A fresh pin: classified like a first sighting, with no lineage carried over.
 
-    An Administrator re-pin is a new trust decision, so a fingerprint the old pin would have
-    accepted no longer names this registration.
+    An Administrator re-pin is a new trust decision, so the previous pin's lineage is dropped and
+    its fingerprints stop naming this registration.
     """
     fields = {FINGERPRINT_FIELD: fingerprint, PINNED_AT_FIELD: _now_iso(now)}
     fields.update(_classification(endpoint, fingerprint))
@@ -277,15 +269,14 @@ def decide_pin(
 ) -> PinDecision:
     """Compare the live certificate against the pin, mint one on first sight, or accept a renewal.
 
-    important: "unavailable" is not a failure. A cluster that cannot complete a handshake will
-    fail the connection immediately afterwards on its own terms, and turning an unreadable
-    certificate into a pin error would report a network problem as a security incident. The
-    stored pin is still returned so the real socket is held to it.
+    important: "unavailable" is not a failure. A cluster that cannot complete a handshake fails the
+    real connection right after on its own terms, and a pin error would report a network problem as
+    a security incident. The stored pin is still returned so the real socket is held to it.
 
-    A renewal is accepted only when all of these hold: the cluster was pinned as public-CA, the
-    endpoint still names the pinned host, and a verifying handshake saw the same certificate the
-    identifying one did. Everything else that changed is refused, which includes a self-signed
-    certificate replacing a public one: that downgrade is the shape an interception takes.
+    A renewal is accepted only when the cluster was pinned as public-CA, the endpoint still names
+    the pinned host, and a verifying handshake saw the same certificate as the identifying one.
+    Any other change is refused, including a self-signed certificate replacing a public one: that
+    downgrade is the shape an interception takes.
     """
     metadata = metadata or {}
     state = PinState.from_metadata(metadata)

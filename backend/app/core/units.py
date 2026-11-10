@@ -1,7 +1,7 @@
 """One way to print a size: decimal, and labelled decimal, as the console does.
 
-The wire is separate. LXD still receives whatever spelling it was given, and the parsers accept
-every one of them. This is only for text a person reads. See documentation/ui/byte-units.md.
+This is only for text a person reads. LXD receives whatever spelling it was given, and the
+parsers accept every one of them.
 """
 
 from decimal import Decimal

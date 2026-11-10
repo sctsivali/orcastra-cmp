@@ -37,10 +37,10 @@ async def _move_project_rules(
     """Point project-wide rules at the new identity, each inside the policy that holds it.
 
     important: a rule never changes policy. A policy's assignments decide which tenants a rule
-    reaches, so re-homing a rule (for example from ``dashboard:<old>`` to ``dashboard:<new>``)
-    would hand the project to another policy's tenants (security review). A managed policy may
-    therefore name a project on another cluster after a move; every reader matches rules by
-    their own cluster and project, and a project delete removes them whatever policy holds them.
+    reaches, so re-homing a rule (ex; from ``dashboard:<old>`` to ``dashboard:<new>``) would
+    hand the project to another policy's tenants. A managed policy may therefore name a project
+    on another cluster after a move; every reader matches rules by their own cluster and
+    project, and a project delete removes them whatever policy holds them.
     """
     rows = (
         await db.execute(

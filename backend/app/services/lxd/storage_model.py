@@ -1,27 +1,16 @@
 """Storage pool model: which pools a cluster can add up, and which it must count once.
 
-A clustered host reports storage per member. Adding those up is wrong for any pool whose
-backing store is shared, because every member reports the whole thing: a 400 GB Ceph pool seen
-from three members is 1.2 TB of capacity that does not exist. Measured against the three-member
-QA fixture, a naive sum reports 1450 GB where the cluster holds 1050 GB.
+A clustered host reports storage per member. Adding those up is wrong for a pool whose
+backing store is shared, because every member reports the whole thing: a 400 GB Ceph pool
+seen from three members would count as 1.2 TB.
 
-Two ways to tell shared from local were tried and rejected before this one.
+Shared and local are told apart by driver only, as in `gpu_model.py`. The pool name cannot
+do it (MicroCloud names the per-member ZFS pool `local` on every member), and neither can
+`locations`: a storage pool is a cluster-wide object in LXD, so a ZFS pool defined on all
+three members lists all three exactly as a Ceph pool does.
 
-The pool NAME cannot do it. MicroCloud names the per-member ZFS pool `local` on every member,
-so name-equality marks three separate disks as one.
-
-`locations` cannot do it either. A storage pool is a cluster-wide object in LXD, so a ZFS pool
-defined on all three members lists all three in `locations` exactly as a Ceph pool does. The
-field says where the pool is defined, not where its bytes live.
-
-What is left is the driver, which is also what `gpu_model.py` settled on for the same kind of
-question, and its comment is worth repeating here: classify by driver, and only by driver.
-
-important: unknown drivers are treated as LOCAL. That is the direction that fails safe for an
-operator making a capacity decision: a shared pool misread as local overstates what they have,
-while a local pool misread as shared understates it. Understating loses a sale; overstating
-loses an instance at 3am. A driver this does not know is named in the response so the gap is
-visible rather than silently absorbed.
+Unknown drivers are counted as local. If such a pool is in fact shared, that overstates
+capacity, so every unknown driver is listed in `ClusterStorage.unknown_drivers`.
 """
 
 from dataclasses import dataclass
@@ -30,9 +19,8 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 # One backing store behind every member. Reading a pool on member A and again on member B
 # returns the same bytes, so the cluster holds it once.
 #
-# `lvmcluster` is LVM over shared block storage, which is shared despite the family name.
-# `cephobject` is object storage rather than instance storage and never carries a `space`
-# block, but it is listed so a future reader does not have to wonder whether it was forgotten.
+# `lvmcluster` is LVM over shared block storage, so it is shared despite the family name.
+# `cephobject` is object storage and never carries a `space` block; listed for completeness.
 SHARED_STORAGE_DRIVERS = frozenset({
     "ceph",         # RBD
     "cephfs",
@@ -73,8 +61,8 @@ class ClusterStorage:
     # Capacity that exists: a shared backing store counted once, local pools summed.
     total: int
     used: int
-    # Every member's every pool added up, which is what a naive read reports. Kept so no
-    # consumer loses a figure it had, the way gpu_cards_total sits beside gpu_total.
+    # Every member's every pool added up, as a naive read reports it. Kept beside the real
+    # figure, the way gpu_cards_total sits beside gpu_total.
     raw_total: int
     raw_used: int
     # One row per pool, shared pools collapsed, each carrying its scope and its members.
@@ -93,7 +81,7 @@ def is_shared_driver(driver: Optional[str]) -> bool:
 
 
 def classify_driver(driver: Optional[str]) -> str:
-    """`shared`, `local`, or `unknown`. Unknown is counted as local; see the module note."""
+    """`shared`, `local`, or `unknown`. Unknown is counted as local (module docstring)."""
     normalised = (driver or "").strip().lower()
     if normalised in SHARED_STORAGE_DRIVERS:
         return "shared"
@@ -103,17 +91,14 @@ def classify_driver(driver: Optional[str]) -> str:
 
 
 def summarise_cluster_storage(readings: Iterable[PoolReading]) -> ClusterStorage:
-    """Fold per-member pool readings into what the cluster actually holds.
+    """Fold per-member pool readings into what the cluster holds.
 
     A shared pool is identified by (name, driver) across members and contributes once. Members
-    of a healthy cluster report the same store, so any of them would do; when they disagree one
-    of them is mid-resync and sees less than is there. The largest total and the largest used
-    are therefore taken INDEPENDENTLY, because both are the more complete view of the same
-    store, and pinning both to whichever member happened to win on size would let a stale
-    member's usage figure ride in on a fresh member's capacity.
+    of a healthy cluster report the same store; when they disagree, one is mid-resync and sees
+    less than is there. The largest total and the largest used are taken independently, so a
+    stale member's usage figure cannot ride in on a fresh member's capacity.
 
-    A local pool contributes once per member, and its row names the members it was read from,
-    because "local 600 GB" with no member list is three numbers pretending to be one.
+    A local pool contributes once per member, and its row names the members it was read from.
     """
     shared: Dict[Tuple[str, str], PoolReading] = {}
     shared_used: Dict[Tuple[str, str], int] = {}

@@ -2,8 +2,8 @@
 
 Every handler calls `verify_file_access` itself, so the cluster-scope ratchet can see it, and then
 enters `guest_session`, which adds the break-glass rule, the migration fence and the worker's
-limits. Reads are POST on purpose. On a Partner cluster past its paid term `_is_change()` refuses a
-POST and lets a GET through, and reading a guest's files is what the console is refused there too.
+limits. Reads are POST: on a Partner cluster past its paid term `_is_change()` refuses a POST and
+lets a GET through, and reading a guest's files is refused there, as the console is.
 
 A session JWT is required: nothing here is reachable with an integration key, which has its own
 door in `instance.files`.
@@ -97,7 +97,7 @@ async def list_directory(
     await record_browse(user, host, bound, instance_name, record.get("break_glass_grant_id"), path)
     if len(listing["entries"]) < _SERIALIZE_OFF_LOOP_ENTRIES:
         return listing
-    # note: 20,000 rows cost about 160 ms to encode, on the loop every other request shares.
+    # 20,000 rows cost about 160 ms to encode, on the loop every other request shares.
     return Response(content=await asyncio.to_thread(json.dumps, listing), media_type="application/json")
 
 
@@ -156,8 +156,8 @@ async def preview_image(
         async with guest_session(user, host, bound, instance_name, record=record) as guest:
             payload, mime = await text_edit.read_image(guest, clean_path(body.path))
         record["size"] = len(payload)
-    # note: `attachment` and nosniff although this answers a POST: these bytes came from a guest,
-    # and nothing may ever make them render on this origin by being opened directly.
+    # important: `attachment` and nosniff although this answers a POST: these bytes come from a
+    # guest and must never render on this origin by being opened directly.
     return Response(
         content=payload,
         media_type=mime,

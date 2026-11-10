@@ -1,15 +1,12 @@
 """How a worker follows a client certificate that was rotated somewhere else.
 
-Each of the four workers keeps its own pooled client per cluster, built from the certificate it
-read when it connected, and nothing tells the other three when a renewal or regenerate replaces it.
-Before trust cleanup existed that never mattered: the old certificate stayed trusted forever. Once
-its trust entry is removed, a worker still presenting it is refused, and the refusal branch used to
-evict the credentials and trip the breaker, so that worker answered 503 and showed the cluster as
-Pending Trust for a minute while it had a perfectly good certificate one Vault read away.
+Each worker keeps its own pooled client per cluster, built from the certificate it read when it
+connected, and nothing tells the other workers when a renewal or regenerate replaces it. Once the
+old certificate's trust entry is removed, a worker still presenting it is refused.
 
-Now the refusal branch reads the active certificate once. If it differs from the one just refused,
-the worker connects with it and the request carries on. If it is the same certificate, or Vault
-cannot say, everything happens exactly as before.
+On a refusal the worker reads the active certificate from Vault once. If it differs from the one
+just refused, the worker connects with it and the request carries on. If it is the same
+certificate, or Vault cannot say, the refusal is recorded as usual.
 """
 
 import logging
@@ -57,7 +54,7 @@ class CertificateRotationMixin:
         try:
             client = get_vault_client(settings.vault_addr, settings.vault_token)
             certs = client.vault_read(f"{settings.vault_clusters_path}/{cluster_id}/certs") or {}
-        except Exception as exc:  # noqa: BLE001 - an unreadable Vault keeps today's behaviour
+        except Exception as exc:  # noqa: BLE001 - an unreadable Vault means no rotated certificate
             logger.info("Could not read the active certificate for %s: %s", cluster_id, exc)
             return None
         cert, key = certs.get("client.crt"), certs.get("client.key")
@@ -72,7 +69,7 @@ class CertificateRotationMixin:
     ):
         """Reconnect with the Vault certificate when it is not the one the cluster just refused.
 
-        Returns the new client, or None to let the caller record the refusal as it always has.
+        Returns the new client, or None to let the caller record the refusal.
         One thread per cluster does the Vault read; the others find its client when they get in.
         """
         refused_fp = _fingerprint_or_none(refused.get("cert_content"))
@@ -102,8 +99,8 @@ class CertificateRotationMixin:
                 # connect_with_vault_cert already dropped the info and recorded it unauthorized.
                 return None
             except Exception as exc:  # noqa: BLE001
-                # The host answered a moment ago and refused us, so this stays unauthorized rather
-                # than being downgraded to offline by the generic handler's record.
+                # The host answered a moment ago and refused the held certificate, so this stays
+                # unauthorized instead of being downgraded to offline by the generic handler.
                 logger.warning("Reconnect to %s with the current certificate failed: %s", cluster_id, exc)
                 health.record_failure(
                     cluster_id, "certificate not trusted", kind=health.KIND_UNAUTHORIZED
@@ -113,9 +110,9 @@ class CertificateRotationMixin:
     def adopt_vault_certificate(self, cluster_id: str, endpoint: str, cert: str, key: str):
         """Switch this worker to a certificate already proven trusted, and keep the cluster listed.
 
-        note: verify used to call remove_connection first, which also drops the cluster from this
-        worker's registered whitelist, so it vanished from every list page served by this worker
-        until the next healer pass. Connecting over the existing entry replaces the client in place.
+        Connects over the existing entry, replacing the client in place. remove_connection would
+        also drop the cluster from this worker's registered whitelist and hide it from every list
+        page this worker serves until the next healer pass.
         """
         verify = bool((self._connection_info.get(cluster_id) or {}).get("verify", False))
         try:

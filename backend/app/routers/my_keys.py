@@ -1,7 +1,7 @@
-"""
-API Router for My Keys management with Vault integration.
-Provides endpoints for generating, managing, and downloading TLS identity keys.
-Keys are securely stored in HashiCorp Vault instead of local filesystem.
+"""My Keys: TLS client keys for LXD and Incus clusters, generated here and stored in Vault.
+
+A key is trusted on its cluster (an identity and group on LXD, a certificate on Incus), and its
+certificate and private key stay in Vault for download as a PFX file.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
@@ -52,23 +52,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
 
-# important: raised from require_tenant() to require_partner(). Every page that consumes this
-# router declares useRequireRole(Role.PARTNER), so the UI already treated it as partner-tier while
-# the API accepted a tenant. Mutations here were gated individually and reads were not, which is
-# the pattern this closes. Org scope still applies on top, so this narrows the tier rather than
-# replacing the boundary.
+# important: partner-tier, reads included, to match the pages that use this router
+# (useRequireRole(Role.PARTNER)). Org scope still applies on top.
 router = APIRouter(
     prefix="/my-keys",
     tags=["My Keys"],
     dependencies=[Depends(require_partner()), Depends(org_scope_dependency)],
 )
 
-# Vault path for storing keys (without secret/data prefix - will be added by vault methods)
+# Vault path for keys, without the KV v2 secret/data/ prefix that the call sites add.
 VAULT_KEYS_PATH = "my_keys"
 
 
 class KeyInfo(BaseModel):
-    """Key information."""
+    """One issued key."""
     id: str = Field(..., description="Unique key ID")
     name: str = Field(..., description="Key name")
     node: str = Field(..., description="Target cluster")
@@ -103,7 +100,7 @@ class KeyCreateRequest(BaseModel):
 
 
 class KeyListResponse(BaseModel):
-    """Response for listing keys."""
+    """The caller's keys; active and expired count the whole set before any filter."""
     total: int = Field(..., description="Total number of keys")
     active: int = Field(..., description="Number of active keys")
     expired: int = Field(..., description="Number of expired keys")
@@ -114,7 +111,7 @@ def _new_key_id(name: str) -> str:
     """key_<UTC second>_<random>_<name slug>.
 
     The random part keeps two creates in one second under one name from sharing a Vault record and,
-    on Incus, a trust name (security review, 2026-11-08). The slug keeps to [a-z0-9_-].
+    on Incus, a trust name. The slug keeps to [a-z0-9_-].
     """
     slug = re.sub(r"[^a-z0-9_-]+", "_", name.lower())[:20].strip("_") or "key"
     return f"key_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(3)}_{slug}"
@@ -134,10 +131,9 @@ def get_vault_keys_client():
 def read_key_roster(vault_client) -> Tuple[List[Dict[str, Any]], bool]:
     """Read every key's metadata from Vault, and say whether the read was complete.
 
-    important: an outage used to read as an empty roster, and a key whose metadata read failed
-    was skipped. Display tolerates that, but the orphaned-group cleanup deletes every group the
-    roster does not name, so it must be able to tell "no keys" from "could not read the keys".
-    A missing path (404) is a genuinely empty roster and counts as complete.
+    important: display tolerates a partial roster, but the orphaned-group cleanup deletes every
+    group the roster does not name, so it must tell "no keys" from "could not read the keys". A
+    missing path (404) is an empty roster and counts as complete.
     """
     try:
         # List keys in Vault - for KV v2, metadata path is secret/metadata/<path>
@@ -222,9 +218,7 @@ def get_key_from_vault(vault_client, key_id: str) -> tuple[bytes, bytes]:
 def delete_key_from_vault(vault_client, key_id: str):
     """Delete key from Vault."""
     try:
-        # Delete credentials
         vault_client.vault_delete(f"secret/data/{VAULT_KEYS_PATH}/{key_id}/credentials")
-        # Delete metadata
         vault_client.vault_delete(f"secret/data/{VAULT_KEYS_PATH}/{key_id}/metadata")
         logger.info(f"Successfully deleted key {key_id} from Vault")
     except Exception as e:
@@ -232,21 +226,16 @@ def delete_key_from_vault(vault_client, key_id: str):
 
 
 def generate_certificate(common_name: str, expire_days: int) -> tuple[bytes, bytes, str]:
-    """
-    Generate a self-signed certificate and private key.
-    Returns: (cert_pem, key_pem, fingerprint)
-    """
-    # Generate private key
+    """A self-signed certificate and private key, as (cert_pem, key_pem, SHA-256 fingerprint hex)."""
     private_key = rsa.generate_private_key(
         public_exponent=65537,
         key_size=2048,
         backend=default_backend()
     )
     
-    # Generate certificate
-    # note: the O stays on the pre-CMP name so every issued certificate carries one value.
-    # Nothing reads it back (cert_manager matches on COMMON_NAME, and the LXD trust identity
-    # is named "<name>@orcastra" below), so renaming it would only split the fleet in two.
+    # The O stays "Orcastra Dashboard" so every issued certificate carries one value. Nothing
+    # reads it back (cert_manager matches on COMMON_NAME, and the LXD trust identity is named
+    # "<name>@orcastra"), so renaming it would only split the issued keys in two.
     subject = issuer = x509.Name([
         x509.NameAttribute(NameOID.COMMON_NAME, common_name),
         x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Orcastra Dashboard"),
@@ -258,9 +247,9 @@ def generate_certificate(common_name: str, expire_days: int) -> tuple[bytes, byt
         .issuer_name(issuer)
         .public_key(private_key.public_key())
         .serial_number(x509.random_serial_number())
-        # note: five minutes back. A cluster member forwards a new client certificate to its
-        # peers, and a peer whose clock is a moment behind refused one valid from this second
-        # ("The provided certificate isn't valid yet", Incus lab 2026-11-08).
+        # Five minutes back: a cluster member forwards a new client certificate to its peers,
+        # and a peer whose clock is a moment behind refuses one valid from this second
+        # ("The provided certificate isn't valid yet").
         .not_valid_before(datetime.utcnow() - timedelta(minutes=5))
         .not_valid_after(datetime.utcnow() + timedelta(days=expire_days))
         .add_extension(
@@ -278,7 +267,6 @@ def generate_certificate(common_name: str, expire_days: int) -> tuple[bytes, byt
         encryption_algorithm=serialization.NoEncryption()
     )
     
-    # Calculate fingerprint
     fingerprint = cert.fingerprint(hashes.SHA256()).hex()
     
     return cert_pem, key_pem, fingerprint
@@ -286,10 +274,8 @@ def generate_certificate(common_name: str, expire_days: int) -> tuple[bytes, byt
 
 def create_pfx(cert_pem: bytes, key_pem: bytes, password: str = "") -> bytes:
     """Create PFX/PKCS12 file from certificate and key using cryptography library."""
-    # Load certificate
     cert = x509.load_pem_x509_certificate(cert_pem, default_backend())
     
-    # Load private key
     private_key = serialization.load_pem_private_key(
         key_pem,
         password=None,
@@ -315,19 +301,19 @@ def create_pfx(cert_pem: bytes, key_pem: bytes, password: str = "") -> bytes:
 
 
 def _short_fingerprint(fingerprint: str) -> str:
-    """The first 16 characters, as the audit log in this file already uses."""
+    """The first 16 characters, as this file's audit log records it."""
     return f"{fingerprint[:16]}..." if fingerprint else ""
 
 
 def _owned_by_caller(metadata: Dict[str, Any], caller_email: Optional[str]) -> bool:
     """A record that names an owner is that owner's alone; one that predates the field is not.
 
-    The comparison folds case: the owner was stamped from the token's email claim, and the IdP
+    The comparison folds case: the owner is stamped from the token's email claim, and the IdP
     does not promise to spell an address the same way on every token it issues.
 
-    important: a record from before owners were recorded stays on cluster scope only where one
-    party holds the cluster. On a cluster several organizations share, nobody but an
-    Administrator can tell whose it is, and it holds a private key (security review 2026-10-27).
+    important: a record without an owner stays on cluster scope only where one party holds the
+    cluster. On a cluster several organizations share, only an Administrator can tell whose it
+    is, and it holds a private key.
     """
     owner = metadata.get("owner_email")
     if not owner:
@@ -338,29 +324,25 @@ def _owned_by_caller(metadata: Dict[str, Any], caller_email: Optional[str]) -> b
 def _authorize_key(vault_client, key_id: str, caller_email: Optional[str]) -> Dict[str, Any]:
     """Return a key's metadata only if the caller may reach its cluster and owns it.
 
-    important: a key here is a real LXD client certificate with a private key, and an
-    ``auth_level`` of "admin" provisions it server-scope on that node. Nothing tied these
-    records to the caller: the router gate is ``require_tenant()``, which every authenticated
-    user satisfies, so any user could name any key id. The cluster is the boundary that already
-    governs every other resource, so it governs these too.
-
-    important: the cluster alone is not enough on a cluster two partners share. ``list_keys``
-    hid another owner's key, but this guard let partner B name it and download its private key.
-    An unrestricted context (administrator) reads every key, as the list does.
+    important: a key is a real LXD client certificate with its private key, and an ``auth_level``
+    of "admin" provisions it server-scope on that cluster. The cluster is the boundary, as for
+    every other resource, but it is not enough on a cluster two partners share: ownership is
+    checked too, so one partner cannot name another's key and download its private key, which
+    ``list_keys`` already hides. An unrestricted context (administrator) reads every key, as the
+    list does.
     """
     try:
         metadata = vault_client.vault_read(f"secret/data/{VAULT_KEYS_PATH}/{key_id}/metadata")
     except Exception:
         metadata = None
     if not metadata:
-        # Same shape as a genuinely missing key, so an out-of-scope id cannot be distinguished
-        # from a non-existent one by probing.
+        # The same 404 for a missing record, so an out-of-scope id cannot be told from a
+        # non-existent one by probing.
         raise HTTPException(status_code=404, detail="Key not found")
     node = metadata.get("node")
     if not node:
-        # important: this used to skip the check entirely, and it guards a PKCS#12 download that
-        # contains the private key. A record with no node cannot be scoped, so it cannot be
-        # authorised. Reported as 404 to match the deliberate non-distinguishable shape above.
+        # important: a record with no node cannot be scoped, so it cannot be authorised; this
+        # guards a PKCS#12 download that contains the private key. The same 404 as above.
         logger.warning("Refusing key %s: the record carries no node to scope it by", key_id)
         raise HTTPException(status_code=404, detail="Key not found")
     verify_cluster_access(node)
@@ -381,8 +363,8 @@ def _key_capability(client: Any, node: str) -> KeyCapability:
     verdict = floor_verdict("client_keys", engine, client_identities.server_version(client))
     if verdict.allowed:
         return KeyCapability(node=node, engine=engine, allowed=True, version=verdict.seen, minimum=verdict.minimum)
-    # important: the 2026-10-29 Incus advisories let a restricted certificate reach the default
-    # project, so below the baseline a project key would not be held to its project.
+    # important: below the baseline a restricted certificate can reach the default project
+    # (published Incus advisories), so a project key would not be held to its project.
     reason = (
         f"{verdict.engine} {verdict.seen} predates {verdict.minimum}, the first build that holds a "
         "project certificate to its project. Upgrade the cluster to issue keys."
@@ -405,8 +387,8 @@ def _known_incus(client: Any) -> bool:
 def _require_project(client: Any, node: str, project: str) -> None:
     """404 before anything is minted when the key's project does not exist on the cluster.
 
-    Found on the Incus lab: the daemon refused the certificate with "Project not found" and the
-    caller got a 500. Anything but a definite not-found is left to the daemon to judge.
+    Otherwise the daemon refuses the certificate with "Project not found" and the caller gets a
+    500. Anything but a definite not-found is left to the daemon to judge.
     """
     try:
         client.api.projects[safe_segment(project)].get(timeout=(5, 30))
@@ -449,23 +431,21 @@ async def create_key(
     vault_client = get_vault_keys_client()
 
     try:
-        # Generate unique key ID
         key_id = _new_key_id(request.name)
 
-        # Calculate expiration date
         created_at = datetime.utcnow()
         expires_at = created_at + timedelta(days=request.expire_days)
 
-        # note: get_client is memory-only, so on a worker that never connected to this cluster the
-        # create answered 404 "not connected"; client_for connects from Vault (lazy_client.py).
+        # client_for connects from Vault when this worker has no client yet (lazy_client.py);
+        # get_client is memory-only.
         client = require_client(await client_for(lxd_service, request.node, label="my_keys_create"), request.node)
 
         if target.isolated_project_required:
-            # important: before the credential exists, so a refusal leaves nothing on the cluster
+            # important: before the credential exists, so a refusal leaves nothing on the cluster.
             await asyncio.to_thread(refuse_an_unisolated_project, client, request.node, project)
 
         engine = _key_engine(client, request.node)
-        # note: off the event loop; each of these waits on the cluster for up to 30 s.
+        # Off the event loop: each of these waits on the cluster for up to 30 s.
         if request.auth_level != "admin":
             await asyncio.to_thread(_require_project, client, request.node, project)
         try:
@@ -484,7 +464,6 @@ async def create_key(
         identity_id, group_name, fingerprint = issued.identity_id, issued.group_name, issued.fingerprint
         logger.info(f"Created {engine} credential {identity_id} for key {key_id}")
 
-        # Prepare metadata
         key_metadata = {
             "id": key_id,
             "name": request.name,
@@ -499,11 +478,9 @@ async def create_key(
             "group_name": group_name,
             "fingerprint": fingerprint,
             "trust_name": issued.trust_name,
-            # important: the record carried no owner at all, so `list_keys` could only scope by
-            # cluster and two people in the same scope saw each other's key records. There is
-            # nothing to backfill from on existing records (no created_by, and identity_id is the
-            # LXD identity rather than the requester), so this closes it going forward and the
-            # filter falls back to cluster scope for records issued before it.
+            # important: the owner keeps `list_keys` and downloads to the person who created the
+            # key. Older records without it have nothing to backfill from (identity_id is the LXD
+            # identity, not the requester) and fall back to cluster scope.
             "owner_email": _rbac.email,
         }
 
@@ -511,14 +488,14 @@ async def create_key(
         try:
             save_key_to_vault(vault_client, key_id, issued.cert_pem, issued.key_pem, key_metadata)
         except Exception:
-            # important: the private key exists only in this request. Without the record nobody
-            # can download or revoke the credential, so it must not outlive the failure.
+            # important: the private key exists only in this request. Without the record the
+            # credential can be neither downloaded nor revoked, so it must not outlive the failure.
             leftovers = await asyncio.to_thread(client_identities.revoke, client, key_metadata)
             if leftovers:
                 logger.error(f"Key {key_id} not stored and its cluster credential not removed: {leftovers}")
             raise
         
-        # Log activity for audit trail (HIGH severity - SSH key creation)
+        # Audit trail, high severity.
         activity_logger.log_activity(
             action="user.ssh_key.create",
             target_type="ssh_key",
@@ -570,7 +547,7 @@ def _audit_create_failure(request: KeyCreateRequest, code: str, message: str) ->
         action="user.ssh_key.create",
         # important: its own type and a prefixed id. As an ssh_key row named after the request, a
         # caller could name a failing request after another owner's key id and plant the row in
-        # that key's trail (security review 2026-10-27).
+        # that key's trail.
         target_type="ssh_key_request",
         target_id=f"request:{request.name}",
         target_host=request.node,
@@ -610,7 +587,7 @@ async def list_keys(
     _rbac: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all keys from Vault."""
+    """List the caller's keys from Vault."""
     vault_client = get_vault_keys_client()
     
     try:
@@ -632,15 +609,14 @@ async def list_keys(
         else:
             keys_metadata = cached_data
 
-        # important: Vault holds every key in the fleet, and the cache key is scoped but the
-        # DATA was not, so a scoped cache entry was still filled from an unfiltered read. Each
-        # key belongs to a cluster, so the caller's cluster set is the filter. `None` means an
-        # unrestricted context (admin, dev mode, background task) and keeps everything.
+        # important: Vault holds every key in the fleet, and the scoped cache entry is filled from
+        # an unfiltered read, so filter here. Each key belongs to a cluster, so the caller's
+        # cluster set is the filter. `None` means an unrestricted context (admin, dev mode,
+        # background task) and keeps everything.
         allowed = get_current_allowed_clusters()
         if allowed is not None:
-            # important: `not k.get("node") or ...` let a record with no node through to
-            # everyone. A key record is meaningless without the cluster it belongs to, so an
-            # absent node is a record nobody should be shown rather than one everybody should.
+            # important: a scoped caller never sees a record with no node. A key record is
+            # meaningless without the cluster it belongs to.
             keys_metadata = [
                 k for k in keys_metadata
                 if k.get("node") in allowed
@@ -649,13 +625,8 @@ async def list_keys(
                 and _owned_by_caller(k, _rbac.email)
             ]
         
-        # Process keys and check expiration
-        #
-        # important: this used to parse inside a bare `except: pass` with `is_expired` seeded
-        # False, so an unreadable expiry, an offset-bearing one included, reported the key as
-        # active and counted it in the Active tab. That is the only place in this chain where a
-        # surprise reads as "still valid" rather than failing, and it is the reason the decision
-        # now lives in one helper for both surfaces.
+        # important: expiry is decided by one helper (key_expired) for both surfaces, so an
+        # unreadable expiry, an offset-bearing one included, never reads as active.
         now = now_utc()
         processed_keys = []
         active_count = 0
@@ -665,10 +636,8 @@ async def list_keys(
             expires_at_str = key_meta.get("expires_at")
             is_expired = key_expired(expires_at_str, now)
 
-            # important: count before the filters, not after. These two are the tab labels,
-            # so counting inside the filtered branch made "Expired (0)" always read 0 while
-            # the Active tab was open, and vice versa. The counts describe the caller's whole
-            # key set; the filters describe what is being returned.
+            # important: count before the filters. These two are the tab labels and describe the
+            # caller's whole key set; the filters describe what is returned.
             if is_expired:
                 expired_count += 1
             else:
@@ -702,7 +671,7 @@ async def list_keys(
                 is_expired=is_expired,
                 identity_id=key_meta["identity_id"],
                 group_name=key_meta["group_name"],
-                # note: truncated to match what this file already does for its own audit log.
+                # Truncated, as in this file's audit log.
             fingerprint=_short_fingerprint(key_meta.get("fingerprint", "")),
             )
             processed_keys.append(key_info)
@@ -731,8 +700,8 @@ async def download_key(
     """Download PFX file for a key."""
     vault_client = get_vault_keys_client()
 
-    # important: this streams a private key. Authorize before reading it, not after. A refused
-    # attempt is recorded: someone naming a key that is not theirs is the record most worth having.
+    # important: this streams a private key, so authorize before reading it. A refused attempt
+    # is recorded as well.
     try:
         metadata = _authorize_key(vault_client, key_id, _rbac.email)
     except HTTPException as refusal:
@@ -740,17 +709,14 @@ async def download_key(
         raise
 
     try:
-        # Get certificate and key from Vault
         cert_pem, key_pem = get_key_from_vault(vault_client, key_id)
         
         if not cert_pem or not key_pem:
             raise HTTPException(status_code=404, detail="Key not found")
         
-        # Create PFX
         pfx_data = create_pfx(cert_pem, key_pem)
         _audit_download(key_id, metadata, "success")
         
-        # Return as streaming response
         return StreamingResponse(
             io.BytesIO(pfx_data),
             media_type="application/x-pkcs12",
@@ -776,12 +742,12 @@ def _audit_download(
     code: Optional[str] = None,
     message: Optional[str] = None,
 ) -> None:
-    """A download hands out the private key, so each one is on the key's trail (HIGH severity)."""
+    """A download hands out the private key, so each one is on the key's trail (high severity)."""
     activity_logger.log_activity(
         action="user.ssh_key.download",
         target_type="ssh_key",
         target_id=key_id,
-        # note: no cluster for a refused attempt; a host-less key row reaches Admin and the actor only.
+        # No cluster for a refused attempt; a host-less key row reaches Admin and the actor only.
         target_host=(metadata or {}).get("node"),
         target_project=(metadata or {}).get("project"),
         result=result,
@@ -810,17 +776,15 @@ async def delete_key(
     _authorize_key(vault_client, key_id, _rbac.email)
 
     try:
-        # Get metadata from Vault
         key_meta = vault_client.vault_read(f"secret/data/{VAULT_KEYS_PATH}/{key_id}/metadata")
         
         if not key_meta:
             raise HTTPException(status_code=404, detail="Key not found")
         
         # important: the record is the only way to find the cluster credential again, so it goes
-        # only once the cluster confirmed the removal, or once the cluster is no longer registered
-        # here and nothing could reach it anyway. get_client is memory-only: on a worker that never
-        # connected to the cluster it answered None and the revoke was skipped (security review,
-        # 2026-11-08), so the client comes from client_for.
+        # only once the cluster confirmed the removal, or once the cluster is unregistered here
+        # and nothing could reach it anyway. The client comes from client_for: get_client is
+        # memory-only and answers None on a worker that never connected, skipping the revoke.
         node = key_meta["node"]
         cleanup_errors = []
         client = await client_for(lxd_service, node, label="my_keys_delete")
@@ -853,10 +817,9 @@ async def delete_key(
                 )
             logger.info(f"Cluster cleanup completed for key {key_id}")
 
-        # Delete from Vault
         delete_key_from_vault(vault_client, key_id)
         
-        # Log activity for audit trail (HIGH severity - SSH key deletion)
+        # Audit trail, high severity.
         activity_logger.log_activity(
             action="user.ssh_key.delete",
             target_type="ssh_key",
@@ -909,7 +872,7 @@ async def cleanup_orphaned_groups(
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_admin()),
 ):
-    """Cleanup orphaned groups from LXD."""
+    """Delete the `key_` groups on LXD clusters that no key in Vault names."""
     vault_client = get_vault_keys_client()
     
     try:
@@ -938,7 +901,7 @@ async def cleanup_orphaned_groups(
         
         logger.info(f"Found {len(valid_groups)} valid groups in Vault")
         
-        # Get all nodes (org-scope filtered via get_node_names)
+        # Connected clusters, org-scope filtered by get_node_names.
         nodes = lxd_service.connection_manager.get_node_names()
         
         deleted_count = 0
@@ -953,7 +916,6 @@ async def cleanup_orphaned_groups(
                     # Incus has no groups: a key there is one certificate, removed with the key.
                     continue
                 
-                # Get all groups from LXD
                 groups_response = client.api.auth.groups.get(timeout=(5, 30))
                 if groups_response.status_code != 200:
                     logger.warning(f"Failed to get groups from {node}: {groups_response.status_code}")
@@ -966,12 +928,12 @@ async def cleanup_orphaned_groups(
                 orcastra_groups = 0
                 skipped_groups = 0
                 
-                # Filter groups created by our system (starts with "key_")
+                # Only groups this service created (named key_...) are candidates.
                 for group_url in groups_data:
                     group_name = group_url.split('/')[-1]
                     
-                    # SAFETY: Only process groups created by Orcastra CMP
-                    # Groups created manually by users in LXD UI are SKIPPED
+                    # important: a group created by hand on the cluster (no key_ prefix) is
+                    # never touched.
                     if not group_name.startswith("key_"):
                         skipped_groups += 1
                         logger.debug(f"Skipping non-Orcastra group: {group_name} (created manually by user)")
@@ -979,7 +941,6 @@ async def cleanup_orphaned_groups(
                     
                     orcastra_groups += 1
                     
-                    # Check if group is orphaned
                     if group_name not in valid_groups:
                         try:
                             logger.info(f"Deleting orphaned group: {group_name} from {node}")
@@ -1003,7 +964,7 @@ async def cleanup_orphaned_groups(
         
         logger.info(f"Cleanup summary: Deleted {deleted_count} orphaned Orcastra groups, {len(valid_groups)} valid Orcastra groups retained")
         if deleted_count:
-            # the same families the group and identity routes clear when they remove one
+            # The same cache families the group and identity routes clear when they remove one.
             cache = get_cache_manager()
             cache.delete_pattern("api_responses", "groups:*")
             cache.delete_pattern("api_responses", "identities:*")

@@ -1,14 +1,10 @@
-"""
-Cheap per-cluster reachability, for surfaces that need to know which clusters will answer
-without paying for the ones that will not.
+"""Cheap per-cluster reachability, for surfaces that need to know which clusters will answer.
 
-`/nodes` answers the same question, but it also reads resources, aggregates MicroCloud member
-capacity and builds a GPU inventory per cluster. That is right for the node-status page and
-wrong for a dropdown an operator opens six times an hour, both in latency and in payload: a
-picker row needs a name and a status, not the hardware inventory of every cluster in scope.
+`/nodes` answers the same question but also reads resources, aggregates MicroCloud member
+capacity and builds a GPU inventory per cluster; a picker row needs only a name and a status.
 
-Reachability is a one-round-trip question. `GET {endpoint}/1.0` with the client certificate
-returns `metadata.auth`, which is the entire online / not_authorized / offline discriminator.
+Reachability is one round trip: `GET {endpoint}/1.0` with the client certificate returns
+`metadata.auth`, which tells online, not_authorized and offline apart.
 """
 
 import asyncio
@@ -44,7 +40,7 @@ from .exceptions import LXDAuthorizationError, LXDConnectionError
 logger = logging.getLogger(__name__)
 
 # Bounded so a large fleet cannot outgrow the pool. Every probe carries its own socket
-# timeouts, so the worst case is one read timeout of wall clock, not one per cluster.
+# timeouts, so the probes in flight together cost one read timeout of wall clock.
 _probe_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="lxd_probe")
 
 # Availability probes get their own pool so a slow reachability sweep cannot starve the
@@ -53,7 +49,7 @@ _availability_executor = ThreadPoolExecutor(
     max_workers=4, thread_name_prefix="nodes_availability"
 )
 # One connect budget (3s) plus one read budget (8s) plus margin. The probes run in parallel,
-# so this bounds the whole sweep, not one cluster.
+# so this bounds the whole sweep.
 AVAILABILITY_PROBE_TIMEOUT = 20.0
 
 # The reason string reaches an operator, so it must stay short and must never carry a stack
@@ -87,9 +83,9 @@ def _short(message: Optional[str]) -> Optional[str]:
 def resolve_display_name(cluster_id: str, vault_display_name: Optional[str]) -> str:
     """Vault metadata first, the local override store second, the id last.
 
-    important: the two stores can disagree. A rename through PATCH /nodes/{name} writes the
-    local JSON store only, so preferring one consistently is what stops a cluster having two
-    names depending on which endpoint the page called.
+    The two stores can disagree: a rename through PATCH /nodes/{name} writes the local JSON
+    store only. One fixed order keeps a cluster from having two names depending on which
+    endpoint the page called.
     """
     if vault_display_name:
         return vault_display_name
@@ -112,11 +108,10 @@ def _availability(
     node_type: Optional[str] = None,
     collected_at: Optional[datetime] = None,
 ) -> ClusterAvailability:
-    # important: `error` is deliberately NOT forwarded to derive_status here. Raw exception
-    # text from this layer carries the Vault base URL, the KV path to a cluster's certs and the
-    # temp client-cert path, and this endpoint is reachable by every role down to tenant. The
-    # curated sentence plus `reason_code` says everything an operator can act on; the detail
-    # stays in the logs. The caller still passes `error` so it can be logged upstream.
+    # important: `error` is never forwarded to derive_status. Raw exception text from this
+    # layer carries the Vault base URL, the KV path to a cluster's certs and the temp
+    # client-cert path, and this endpoint is reachable by every role down to tenant. The curated
+    # sentence and `reason_code` carry what an operator can act on.
     status, reason_code, message = derive_status(
         connected=connected, reachable=reachable, auth=auth
     )
@@ -128,10 +123,9 @@ def _availability(
         reason_code=reason_code,
         reason=None if status == ClusterStatus.ONLINE else _short(message),
         node_type=node_type,
-        # important: _now() only when the caller genuinely just checked. The projection
-        # path below replays an already-cached /nodes body, and stamping it now reported
-        # "checked just now" for data up to three minutes old, on the one field that
-        # exists to say otherwise.
+        # important: _now() only when the caller just checked. The projection path replays a
+        # cached /nodes body, and stamping it now would report "checked just now" for data
+        # minutes old.
         checked_at=collected_at or _now(),
     )
 
@@ -144,7 +138,7 @@ def project_from_nodes_body(body: Dict[str, Any]) -> List[ClusterAvailability]:
     """
     rows: List[ClusterAvailability] = []
     # The batch stamp covers offline nodes too, which carry no resources and so have no
-    # sample time of their own. Absent on a pre-v5 body, which correctly falls back to now.
+    # sample time of their own. A body without it falls back to now.
     body_collected_at = _parse_timestamp(body.get("collected_at"))
     for node in body.get("nodes", []) or []:
         name = node.get("name")
@@ -230,7 +224,7 @@ def probe_cluster(
         vault_display_name = metadata.get("display_name")
         node_type = metadata.get("type")
     except Exception as exc:
-        # A metadata read failure is a fault in us, not an observation about the cluster.
+        # A metadata read failure is a local fault and says nothing about the cluster.
         logger.warning("Could not read Vault metadata for %s: %s", cluster_id, exc)
         return ClusterAvailability(
             name=cluster_id,
@@ -289,7 +283,7 @@ def probe_cluster(
             node_type=resolve_cluster_type(node_type, client),
         )
     except LXDAuthorizationError as exc:
-        # The host answered and refused the certificate. Pending Trust, not Offline.
+        # The host answered and refused the certificate: Pending Trust.
         return _availability(
             cluster_id,
             display_name=vault_display_name,
@@ -332,15 +326,14 @@ def probe_clusters(
 ) -> List[ClusterAvailability]:
     """Probe every cluster in parallel.
 
-    important: a plain def, not async. Every caller must reach it through run_blocking, which
-    is what tests/test_no_inline_get_client.py enforces: get_client revalidates with a live
-    request, so calling it inline would park a whole event loop on a dead peer.
+    A plain def: every caller must reach it through run_blocking, the rule
+    tests/test_no_inline_get_client.py enforces. get_client revalidates with a live request, so
+    an inline call would park the event loop on a dead peer.
 
-    important: `cluster_ids` MUST already be org-filtered by the caller. run_in_executor does
-    not carry contextvars into the worker threads, so the org-scope check inside
-    connection.get_client sees an empty context and never denies anything from here. The router
-    filters through lxd_service.get_node_names() before offloading; a future caller that does
-    not gets no second line of defence.
+    important: `cluster_ids` must already be org-filtered by the caller. `_probe_executor` does
+    not carry contextvars into its threads, so the org-scope check inside connection.get_client
+    sees an empty context and denies nothing from here. resolve_availability filters through
+    apply_cluster_filter before offloading.
     """
     if not cluster_ids:
         return []
@@ -360,8 +353,8 @@ def probe_clusters(
         try:
             rows.append(future.result())
         except Exception as exc:
-            # A cluster is never dropped. An operator who cannot see a cluster in the list
-            # concludes it was deregistered, which is a worse lie than "we could not tell".
+            # A cluster is never dropped: a missing row reads as deregistered, which is worse
+            # than "could not tell".
             logger.warning("Probe raised for %s: %s", cid, exc)
             rows.append(
                 ClusterAvailability(
@@ -381,9 +374,9 @@ def probe_clusters(
 def _build_response(rows, source: str) -> ClusterAvailabilityResponse:
     """Build the availability body.
 
-    note: an all-offline result IS the answer here and is cached like any other. That differs
-    from the list fan-outs elsewhere, which refuse to cache an empty result because an empty
-    list cannot be told apart from "nobody answered". Here the difference is the payload.
+    An all-offline result is the answer here and is cached like any other. The list fan-outs
+    elsewhere refuse to cache an empty result because it cannot be told apart from "nobody
+    answered"; here every cluster still has a row.
     """
     return ClusterAvailabilityResponse(
         clusters=rows,
@@ -397,9 +390,9 @@ def _build_response(rows, source: str) -> ClusterAvailabilityResponse:
 def _fresh_body(cache, key: str) -> Optional[Any]:
     """A cached body inside its soft TTL, or None.
 
-    important: only a fresh entry may answer here. These keys are now kept past their TTL for
+    Only a fresh entry may answer here. These keys are kept past their TTL for
     stale-while-revalidate, and a reader outside core/swr.serve() never triggers the background
-    read that replaces a stale one, so it must not serve it either.
+    read that replaces a stale entry, so it must not serve one either.
     """
     getter = getattr(cache, "get_entry", None)
     if getter is None:
@@ -437,10 +430,9 @@ def peek_availability(
 
 
 def _from_cache(body: Any) -> ClusterAvailabilityResponse:
-    # note: overwrite `source`, and only `source`. The stored body records how it was first
-    # produced, so returning it verbatim reports "probe" on every cache hit and makes the field
-    # useless for the one question it exists to answer. `generated_at` is deliberately left as
-    # stored: restamping it would claim data was built now.
+    # Only `source` is overwritten: the stored body records how it was first produced, which
+    # would report "probe" on every cache hit. `generated_at` stays as stored; restamping it
+    # would claim the data was built now.
     return ClusterAvailabilityResponse(**{**body, "source": "availability_cache"})
 
 
@@ -453,27 +445,16 @@ async def resolve_availability(
 ) -> ClusterAvailabilityResponse:
     """Reachability for every cluster in the caller's org scope, cheapest path first.
 
-    The one resolver behind both `/nodes/availability` and `/integrations/available-clusters`.
-    Two endpoints deriving reachability separately is how the API key surface would come to
-    disagree with the Clusters page about which cluster is answering, and on a surface whose
-    only job is to say what a credential can reach that is the wrong kind of ambiguity.
+    The one resolver behind `/nodes/availability` and `/integrations/available-clusters`, so the
+    API key surface and the Clusters page cannot disagree. Tiers, in cost order: the scoped
+    availability cache, a projection of a warm `/nodes` body, then a reachability-only probe.
+    swr.serve() collapses concurrent misses for both endpoints through single_flight and serves
+    an entry past its TTL while one background read replaces it.
 
-    Three tiers, in cost order: the scoped availability cache, then projecting a warm `/nodes`
-    body, then a reachability-only probe. Sharing the cache key is what keeps a second caller
-    free: it is one Redis read, never a second fan-out.
-
-    important: the cluster ids come from `lxd_service.get_node_names()`, which applies the
-    org-scope filter. `probe_clusters` documents why that filter cannot be left to the layer
-    below: contextvars do not cross into the worker threads.
-
-    important: the collapse sits here rather than on `/nodes/availability`, where it used to.
-    On the route it only collapsed arrivals at that one endpoint, so a picker open reaching this
-    through `/integrations/available-clusters` started a fan-out of its own beside the one
-    already running for the same scope. swr.serve() collapses a miss through single_flight and
-    serves an entry past its TTL while one background read replaces it.
-
-    Raises BlockingTimeout or BlockingPoolFull when the probe cannot run. Callers decide what
-    that means for them; it is never "every cluster is offline".
+    The cluster ids are the registry's, filtered here through `apply_cluster_filter`
+    (`probe_clusters` explains why the layer below cannot). Raises BlockingTimeout or
+    BlockingPoolFull when the probe cannot run, and RegistryUnavailable when the registry cannot
+    be read and nothing is known; never "every cluster is offline".
     """
     cache = get_cache_manager()
 
@@ -487,11 +468,10 @@ async def resolve_availability(
                     body=projected.model_dump(mode="json"),
                     fresh_for=NODES_AVAILABILITY_CACHE_TTL,
                 )
-        # note: the registry read is a Vault LIST with its own budget (core/vault_client), so it
-        # runs off the loop; inline it parked every request for the length of a lost LIST. A lost
-        # registry with nothing known is the one case this cannot answer: probing an empty fleet
-        # would report "no clusters". While the last known registry is served the probe runs over
-        # it like any other read.
+        # The registry read is a Vault LIST with its own budget (core/vault_client), so it runs
+        # off the loop. A lost registry with nothing known is the one case this cannot answer:
+        # probing an empty fleet would report "no clusters". While the last known registry is
+        # served, the probe runs over it.
         registry = await asyncio.to_thread(lxd_service.cert_manager.read_registry)
         if not registry.readable and registry.source is None:
             raise RegistryUnavailable()
@@ -510,8 +490,8 @@ async def resolve_availability(
             label="nodes.availability",
             executor=_availability_executor,
             # important: without a cap, _acquire never raises and the pool-full path is dead
-            # code. The collapse covers same-scope arrivals; this bounds what it cannot, sweeps
-            # for *different* scopes queueing up on a degraded fleet.
+            # code. The collapse covers same-scope arrivals; this bounds sweeps for different
+            # scopes queueing up on a degraded fleet.
             max_in_flight=4,
         )
         response = _build_response(rows, "probe")

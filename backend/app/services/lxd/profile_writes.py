@@ -1,12 +1,12 @@
-"""
-Profile reads and writes against LXD, synchronous, for the profile router to run off the loop.
+"""Profile reads and writes against LXD, synchronous, for the profile router to run off the loop.
 
-Same shape as instance_devices.py. The single read keeps the daemon's ETag so an update can
-carry it back as If-Match; the update is a read-modify-write (LXD's PUT replaces the whole
-object, and a caller that sends only a description must not blank the devices); every verb
-carries a write timeout and waits for the operation LXD 6.9 answers a profile PUT with (5.21
-answers synchronously and the wait is a no-op); the delete reads first so a profile still in
-use is refused with the instances named rather than by the daemon's terse text.
+- A read keeps the daemon's ETag so an update can carry it back as If-Match.
+- An update is a read-modify-write: LXD's PUT replaces the whole object, and a caller that sends
+  only a description must not blank the devices.
+- Every verb carries a write timeout and waits for the operation LXD 6.9 answers a profile PUT
+  with (5.21 answers synchronously and the wait is a no-op).
+- A delete refuses a profile the visible instances still use, naming them, rather than leaving
+  it to the daemon's terse text.
 """
 
 import logging
@@ -18,7 +18,7 @@ from app.services.lxd.utils import wait_for_lxd_operation, write_timeout
 
 logger = logging.getLogger(__name__)
 
-# a profile PUT on LXD 6.9 is an operation; same budget as the network and ACL writes
+# A profile PUT on LXD 6.9 is an operation; same budget as the network and ACL writes.
 PROFILE_WRITE_WAIT_SECONDS = 60
 PROFILE_READ_TIMEOUT = (5, 25)
 

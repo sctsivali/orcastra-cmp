@@ -5,13 +5,12 @@ out of the target's way:
 
 * ``boot.autostart`` is turned off, so a host reboot cannot start it next to the target.
 * On the same cluster, every NIC is masked with a ``none`` device before any target starts. LXD
-  refuses to start a bridged NIC while another instance on the same member and network has the
-  same name, MAC address, or static IP (``checkAddressConflict`` in LXD's ``nic_bridged.go``),
-  stopped instances and other projects included. A move keeps both the name and the MAC, so the
-  target could not start beside its own retained source (found live).
+  refuses to start a bridged NIC while another instance on the same member and network, stopped
+  or in another project, has the same name, MAC address, or static IP (``checkAddressConflict``
+  in LXD's ``nic_bridged.go``), and a move keeps both the name and the MAC.
 
 Each fence records the original values first, so a resumed job re-derives the approved contract
-from the source as it was, and rollback or abort restores it exactly before the source starts.
+from the source as it was, and rollback or abort restores it before the source starts.
 """
 
 from __future__ import annotations
@@ -136,7 +135,7 @@ async def fence_source_nics(
             "source_nic_fence_intent": True,
             "original_nic_local": {nic: (dict(local[nic]) if nic in local else None) for nic in nics},
             "original_nic_expanded": {nic: dict(expanded[nic]) for nic in nics},
-            # LXD drops the generated MAC with the device, so it is put back on restore (found live).
+            # LXD drops the generated MAC with the device, so it is put back on restore.
             "original_nic_hwaddr": {
                 nic: config[f"volatile.{nic}.hwaddr"]
                 for nic in nics
@@ -196,8 +195,8 @@ async def unfence_source_nics(
     )
     config = (restored or {}).get("config") or {}
     if restored is not None and any(config.get(key) != mac for key, mac in macs.items()):
-        # note: LXD generates a new MAC for a device added in the same write, so the original
-        # is set once the NIC exists (found live).
+        # LXD generates a new MAC for a device added in the same write, so the original is set
+        # once the NIC exists.
         current_devices = dict(restored.get("devices") or {})
         await _write_devices(
             job,

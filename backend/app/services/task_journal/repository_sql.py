@@ -1,7 +1,7 @@
 """The SQL fragments and bind builders every journal write shares.
 
-Split out of `repository` so that module stays under the house limit; nothing here touches a
-session. The fragments name the existing row by table (`task_journal.status`) so one text
+Split out of `repository` to keep that module small; nothing here touches a session. The
+fragments name the existing row by table (`task_journal.status`) so one text
 serves a plain UPDATE and an ON CONFLICT DO UPDATE, and every bind that is read in more than
 one type context carries an explicit cast (asyncpg deduces one type per parameter).
 """
@@ -23,7 +23,7 @@ _RESULT_STATUS = {"accepted": "running", "success": "success", "failure": "failu
 
 # important: asyncpg deduces one type per bind. `:new_status` is read in VALUES (a varchar
 # column), in a CASE and in an IN list (text), so every use carries the same cast or Postgres
-# refuses the statement with "inconsistent types deduced". Found on the first live seed.
+# refuses the statement with "inconsistent types deduced".
 _NEW = "CAST(:new_status AS varchar)"
 _TERMINAL_3 = "('success', 'failure', 'cancelled')"
 
@@ -43,10 +43,9 @@ MONOTONIC_STATUS = (
 # `status_code`, and only a terminal frame writes one of 200 / 400 / 401, so a finished row
 # carrying a code of 200 or more is final. A finished row with no code, or an open code (105
 # Pending, 103 Running), was closed by the dashboard's audit (a `wait=True` router that timed
-# out or answered early) and yields to the cluster's terminal frame, never to an open one.
-# `lost` is the journal's own mark and yields to whatever the cluster reports next. Found on
-# the scratch database: a Pending frame, the router's success, then the cluster's Failure
-# left the row on success.
+# out or answered early) and yields to the cluster's terminal frame, never to an open one, so
+# a Pending frame, the router's success, then the cluster's Failure ends on failure. `lost` is
+# the journal's own mark and yields to whatever the cluster reports next.
 _CLUSTER_VERDICT_FINAL = (
     f"task_journal.status IN {_TERMINAL_3} AND task_journal.status_code >= 200"
 )
@@ -110,8 +109,7 @@ _OPERATION_GUARD = (
 # important: LXD names no resource on some operations ("Creating instance", "Deleting project"
 # arrive with `resources: {}`), so the stream row has no key of its own. The audit record is
 # the one writer that knows the name; it fills whatever the row lacks and never overwrites
-# what the daemon did report. Found live: a create with no instance name and a project
-# delete listed twice.
+# what the daemon did report.
 _KEY_BACKFILL = (
     "resource_type = COALESCE(task_journal.resource_type, :resource_type), "
     "resource_name = COALESCE(task_journal.resource_name, :resource_name), "
@@ -123,8 +121,7 @@ _KEY_BACKFILL = (
 # important: a rebuild or an upload is a dashboard-owned job of several steps; its LXD
 # operation is one step. The job's verdict (the audit's) is the row's verdict and its error
 # is the row's error, over a Success the daemon reported for the one step it saw. Every
-# other kind keeps the cluster's verdict. Found by review: a rebuild whose start step failed
-# showed success with an error beneath it.
+# other kind keeps the cluster's verdict.
 _JOB_KIND = "CAST(:kind AS varchar) IN ('rebuild', 'upload')"
 _AUDIT_STATUS = (
     f"CASE WHEN {_JOB_KIND} AND {_NEW} IN {_TERMINAL_3} THEN {_NEW} "

@@ -70,7 +70,7 @@ async def read_text(guest: SftpClient, path: str) -> Dict[str, Any]:
 async def _atomic_replace(
     guest: SftpClient, target: bytes, payload: bytes, attrs: codec.Attrs, parent: bytes
 ) -> bool:
-    """Temp then rename, so a crash leaves the old file or the new one. False when not possible."""
+    """Temp then rename, so a crash leaves one whole version or the other. False if impossible."""
     temp = parent.rstrip(b"/") + b"/" + to_guest(temp_name(_expiry()))
     try:
         handle = await guest.open(temp, codec.PFLAG_WRITE | codec.PFLAG_CREAT | codec.PFLAG_EXCL, mode=0o600)
@@ -138,7 +138,7 @@ async def write_text(
 
 
 def sniff_image(payload: bytes) -> Optional[str]:
-    """A fixed MIME for bytes that really are an image. SVG is never one: it can carry script."""
+    """A fixed MIME type for bytes whose magic matches an image. Never SVG: it can carry script."""
     for magic, mime in _IMAGE_MAGIC:
         if payload.startswith(magic):
             return mime

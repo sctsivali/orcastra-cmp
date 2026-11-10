@@ -1,9 +1,8 @@
 """Changing an instance that already exists, or creating one. `write` on the named cluster.
 
-Every tool here is a separate tool even where the proxy shares a branch. start, stop and restart
-run the same code and cost the same level, and collapsing them into one `power` tool with an
-`action` would be smaller. It would also mean a host allow-rule for "start this instance" grants
-"stop it", which is not a distinction an operator should lose to save one entry in a list.
+Each tool stays separate even where the proxy shares a branch. start, stop and restart run the
+same code at the same level, but in one `power` tool with an `action`, a host allow-rule for
+"start this instance" would also grant "stop it".
 """
 
 from typing import Annotated, Any, Dict, Literal, Optional

@@ -8,8 +8,8 @@ important: fails closed. A read that errors, times out, meets a 5xx or finds no 
 nothing (ChecksNotFinished), because what the write changes cannot be judged. The cluster's breaker
 is left alone for it, as for the limited-key plan reads.
 
-note: the read and the write are two requests, so the value can change in between. What passes is
-only a value the object held, which someone allowed to write it put there, never the caller's own.
+The read and the write are two requests, so the value can change in between. What passes is only a
+value the object held, put there by someone allowed to write it, never the caller's own.
 """
 
 import logging
@@ -54,7 +54,7 @@ def cloud_init_changes(
     except requests.exceptions.Timeout:
         raise
     except requests.exceptions.RequestException as unreachable:
-        # note: the requests message names the LXD host's address, which the caller has no use for
+        # Fixed text: the requests message names the LXD host's address, which the caller has no use for
         raise ReadRefused("the cluster did not answer a read the write depends on") from unreachable
     if held is None:
         raise _not_sent(404, "not_found", f"{path} does not exist in project {project}")
@@ -107,7 +107,7 @@ async def proxy_cloud_init_owed(
     """The capability a /proxy operation owes for the cloud-init data it carries, else None.
 
     An update from a key without exec is read first and owes nothing when every value it carries is
-    already the instance's own. A create, and a key holding exec, are priced as before.
+    already the instance's own. A create, and a key holding exec, are priced without a read.
     """
     owed = proxy_cloud_init_capability_for(operation, params)
     if owed is None or has_explicit_capability(api_key, owed):

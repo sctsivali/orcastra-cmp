@@ -1,18 +1,15 @@
-"""The journal follower: one worker of four follows every registered cluster's event stream.
+"""The journal follower: one backend worker follows every registered cluster's event stream.
 
-Election is a Postgres session-level advisory lock on a dedicated connection. The lock dies
-with the session, so a worker that is killed frees it without a word and the next retry on
-another worker wins; a `SELECT 1` heartbeat every fifteen seconds is how a leader learns its
-session is gone. The overlap between two leaders during a hand-over is bounded by one heartbeat
-plus one retry, and every write the leader makes is idempotent, so the overlap is safe.
+Election is a Postgres session-level advisory lock on a dedicated connection, so a killed
+worker frees it and the next retry elsewhere wins; a `SELECT 1` heartbeat every HEARTBEAT_S
+tells a leader its session is gone. Two leaders overlap for at most one heartbeat plus one
+retry, which is safe because every leader write is idempotent. The leader re-reads the registry
+every REGISTRY_INTERVAL_S and gives each followed cluster a firehose subscription and a
+consumer: hub state frames set the state row and schedule a seed, operation and lifecycle
+frames go to the writer. The sweeps run on their own timers.
 
-While leading: the registry is read every thirty seconds and every registered, non-excluded
-cluster gets a firehose subscription on the events hub and a consumer; hub state frames set
-the cluster's state row and schedule a seed; operation and lifecycle frames go to the writer;
-and the sweeps (racing pairs, stale actions, reconcile, warnings) run on their own timers.
-
-important: nothing here may name an org-scope helper. A background task's scope ContextVars
-are unset, and unset means allowed; rows are written as facts and scope is applied on read.
+important: nothing here may name an org-scope helper. A background task's scope ContextVars are
+unset, and unset means allowed; rows are written as facts and scope is applied on read.
 """
 
 from __future__ import annotations
@@ -250,8 +247,8 @@ class JournalFollower:
         if ids is None:
             return
         wanted: Set[str] = {host for host in ids if not self.is_excluded(host)}
-        # An exclusion that names no registered cluster is a typo protecting nothing; say so
-        # once per registry read so a production cluster is not followed by accident.
+        # An exclusion that names no registered cluster is likely a typo; warn whenever that set
+        # changes so a cluster meant to be excluded is not followed by accident.
         unknown = sorted(self._excluded - {host.strip().lower() for host in ids})
         if unknown and unknown != self._warned_unknown_exclusions:
             self._warned_unknown_exclusions = unknown
@@ -264,9 +261,9 @@ class JournalFollower:
             await self._follow(host)
         for host in sorted(current - wanted):
             await self._unfollow(host, record_state=True)
-        # note: `wanted`, not the registry's ids: an excluded cluster leaves no trace in the journal
-        # (TASK_JOURNAL_EXCLUDE_CLUSTERS), and a row it kept from before it was excluded is one the
-        # follower no longer answers for, so it reads `unregistered` too.
+        # `wanted`, not the registry's ids: an excluded cluster leaves no trace in the journal
+        # (TASK_JOURNAL_EXCLUDE_CLUSTERS), so rows it has from before the exclusion read
+        # `unregistered` too.
         async with self._session_maker() as db:
             await repository.mark_unregistered_except(db, wanted)
             await db.commit()

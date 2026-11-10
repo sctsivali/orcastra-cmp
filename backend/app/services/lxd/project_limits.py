@@ -1,14 +1,14 @@
 """What LXD says when a project limit refuses a create, read into fields.
 
 LXD's project limit checks (lxd/project/limits.go) refuse a create synchronously with one of
-two sentences, which reach this service as the text of an LXDAPIException:
+these sentences, which reach this service as the text of an LXDAPIException:
 
     Reached maximum aggregate value "4" for "limits.cpu" in project "web-tier"
     Reached maximum number of instances in project "web-tier"
     Reached maximum number of instances of type "virtual-machine" in project "web-tier"
 
-A person reads those fine. A form cannot: it needs the limit key to mark a field, the project
-to name, and the maximum to compare. This module is the one place that parses them.
+A form needs the limit key to mark a field, the project to name and the maximum to compare, so
+this module is the one place that parses them.
 """
 
 import re

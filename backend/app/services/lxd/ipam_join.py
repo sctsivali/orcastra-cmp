@@ -1,12 +1,11 @@
 """
 Join LXD's network allocations with the instances and networks they belong to.
 
-`/1.0/network-allocations` answers an address, its type and who uses it, and nothing else:
-not whether the instance asked for that address or was handed it, not what kind of network
-it sits on, not the subnet. Reconciling the list against a corporate IPAM needs all three.
-The pin state is decided the way the instances page decides it (a NIC device carrying
-`ipv4.address` or `ipv6.address`), read from expanded devices so a profile-inherited pin
-counts, and compared as parsed addresses so a prefix or IPv6 compression cannot hide a match.
+`/1.0/network-allocations` gives an address, its type and its user, but not whether the
+instance pinned the address, what kind of network it sits on, or the subnet, all of which an
+IPAM reconciliation needs. A pin is a NIC device carrying `ipv4.address` or `ipv6.address`, as
+on the instances page, read from expanded devices so a profile-inherited pin counts, and
+compared as parsed addresses so a prefix or IPv6 compression cannot hide a match.
 
 Pure functions: the router does the reads and hands the dicts in.
 """
@@ -63,9 +62,8 @@ def classify(
 ) -> AllocationKind:
     """What kind of allocation one LXD row is.
 
-    important: "unknown" is the answer when the instance could not be read, never "dhcp".
-    A reconciliation that lists a reservation as a lease is worse than one that says it
-    does not know.
+    "unknown" is the answer when the instance could not be read, never "dhcp".
+    Listing a reservation as a lease is worse than saying it is not known.
     """
     if row_type in _ROW_KINDS:
         return _ROW_KINDS[row_type]
@@ -100,7 +98,7 @@ def network_facts(
     row = networks.get((owner, network)) or networks.get((DEFAULT_PROJECT, network))
     if row is None:
         return "", "", "", ""
-    # the project the record actually came from, not the one the flags predicted: when the
-    # project read failed the prediction is a guess and the default fallback is what matched
+    # The project the record came from, not the one the flags predicted: when the project
+    # read failed the prediction is a guess, and the default fallback is what matched.
     holder = str(row.get("project") or owner)
     return str(row.get("type") or ""), holder, _cidr(row, "ipv4.address"), _cidr(row, "ipv6.address")

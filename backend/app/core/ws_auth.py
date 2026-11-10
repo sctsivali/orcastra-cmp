@@ -1,4 +1,4 @@
-"""Who opened a WebSocket: a redeemed ticket, or the old ?token= while it is still accepted.
+"""Who opened a WebSocket: a redeemed ticket, or a ?token= while `ws_query_token_enabled` allows it.
 
 important: a ticket is checked against the socket it opens. It must be of this socket's kind,
 for this socket's Cluster, project, instance and console type, and minted under a session that
@@ -6,9 +6,9 @@ has not ended; anything else is refused, and the ticket is spent either way. A s
 presents both a ticket and a token while tokens are refused is refused too, so a URL that still
 carries a token never opens a socket.
 
-note: returns None to refuse, like get_ws_user, and raises only for a server that cannot verify
-anyone (auth enabled without an issuer). A refusal also records its close code and reason token on
-the socket (refusal_of), so an interactive socket can tell the page why (core/ws_close.py).
+Returns None to refuse, like get_ws_user, and raises only for a server that cannot verify anyone
+(auth enabled without an issuer). A refusal also records its close code and reason token on the
+socket (refusal_of), so an interactive socket can tell the page why (core/ws_close.py).
 """
 
 import logging
@@ -79,8 +79,8 @@ async def _redeemed(kind: str, websocket: WebSocket, ticket: str) -> Optional[Au
         logger.warning("WebSocket refused: the %s ticket's session has ended", kind)
         _refuse_as(websocket, ws_close.AUTH, "session_ended")
         return None
-    # note: the display group rides on the socket, not on the identity: the console endpoint
-    # reads it to join the channels of one SPICE display to one LXD operation.
+    # The display group is kept on the socket rather than the identity: the console endpoint reads
+    # it to join the channels of one SPICE display to one LXD operation.
     websocket.state.ws_ticket_group = claims.group
     return claims.user()
 
@@ -132,7 +132,7 @@ def _refused_without_role(kind: str, user: Optional[AuthenticatedUser], websocke
     """Whether a caller identified for a socket has no Orcastra role and must be refused.
 
     important: the REST routes refuse such a caller (rbac.refuse_unmapped); a socket that let one in
-    would hand it the live feeds the access notice is meant to keep from it (issue #17).
+    would hand it the live feeds the access notice is meant to keep from it.
     """
     if user is None or has_mapped_role(user):
         return False

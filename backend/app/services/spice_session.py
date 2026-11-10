@@ -1,39 +1,16 @@
 """One LXD console operation for every channel of one SPICE display, across workers.
 
-spice-html5 opens a WebSocket per SPICE channel (main, display, inputs, cursor), and each one
-used to create its own LXD console operation: four operations, four control and four data
-sockets, four tracked sessions and four rounds of cluster setup per console. LXD serves a VGA
-operation's data secret to as many sockets as connect with it (that is how LXD-UI runs
-spice-html5 on one operation), so one operation is enough.
+spice-html5 opens a WebSocket per channel; LXD serves a VGA operation's data secret to every socket
+that presents it, so a display's channels share one operation through Redis, under the group id on
+its tickets. The first to redeem (main, opened alone) owns it and publishes the data URL, the rest
+open only a data socket, and the owner's leaving ends it. QEMU serves one SPICE client per display,
+so a viewer whose display a newer one took stops. Any failure falls back to one operation per channel.
 
-The channels of one display reach different uvicorn workers, so they meet here, in Redis:
-
-- The VGA ticket mint stamps all of a display's tickets with one random group id.
-- The first channel to redeem (the main channel, which spice-html5 opens alone) claims the group,
-  creates the operation, keeps its control socket, and publishes the operation's data URL.
-- Every later channel waits for that record and opens only a data socket.
-- When the owner leaves it retracts the record and closes the control socket; LXD then ends the
-  operation and with it the other channels.
-- Members count their bytes under the group so the owner's one tracked session reports the
-  whole display.
-
-important: the record carries the data URL with the operation's secret, a bearer credential for
-the guest's screen and keyboard. It is stored only Fernet-encrypted under a key derived from
-SECRET_KEY, keyed by a digest of the group id, and lives no longer than the owner keeps renewing
-it. The group id itself only ever travels inside signed tickets.
-
-important: Fernet authenticates the bytes, not where they sit. A sealed record copied under
-another group's key would decrypt there and hand a stranger's channels the victim's display, so
-the record carries its own key and is refused anywhere else, and a joining channel also checks
-the record's instance and operation URL against its own (console_proxy).
-
-QEMU serves one SPICE client per display, and a new one takes the display from the last. The
-store also names each instance's current display (the newest owner's operation), so a viewer
-whose display was taken can tell that apart from a dropped connection and stop, instead of
-taking it back and starting a loop with the other viewer.
-
-note: anything that fails here falls back to the old behaviour, an operation per channel, rather
-than refusing the console.
+important: the data URL carries the operation secret, a bearer credential for the guest's screen and
+keyboard. It is stored only Fernet-encrypted (key from SECRET_KEY) under a digest of the group id,
+which only signed tickets carry, and expires unless the owner renews it. Fernet does not bind a
+record to where it is stored, so each seals its own Redis key and is refused under any other; a
+joining channel also checks the instance and operation URL (console_proxy).
 """
 
 from __future__ import annotations
@@ -60,8 +37,8 @@ _POLL_SECONDS = 0.05
 _SEAL_TTL_SECONDS = 120
 _KEY_CONTEXT = b"orcastra:spice-session:v1"
 _CONNECT_TIMEOUT = 2.0
-# Compare and act in one step: a GET followed by EXPIRE or DEL let a leaving viewer delete the mark
-# a newer viewer had written in between.
+# Compare and act in one step: a separate GET then EXPIRE or DEL would let a leaving viewer delete
+# a mark a newer viewer wrote in between.
 _KEEP_IF_OURS = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('EXPIRE', KEYS[1], ARGV[2]) end return 0"
 _FORGET_IF_OURS = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0"
 _SOCKET_TIMEOUT = 2.0
@@ -164,7 +141,7 @@ class SpiceSessionStore:
 
     def _local_set(self, key: str, value: Any, ttl: float) -> None:
         now = time.monotonic()
-        # Records nobody reads again (a failure, a member's last bytes) expire here too.
+        # Also expires records that are never read again (a failure, a member's last bytes).
         for stale in [k for k, (expires, _) in self._local.items() if expires <= now]:
             del self._local[stale]
         self._local[key] = (now + ttl, value)
@@ -200,9 +177,9 @@ class SpiceSessionStore:
     async def wait_for(self, group: str, timeout: float = ATTACH_WAIT_SECONDS) -> Optional[Dict[str, Any]]:
         """The owner's record, or None when it did not appear within ``timeout`` or was refused.
 
-        note: a record that is there but refused (another display's, a different SECRET_KEY, one
-        sealed by an older build during a deploy) ends the wait at once and is logged once; the
-        channel then opens its own operation instead of polling it for the whole window.
+        A record that is present but refused (another display's, a different SECRET_KEY, one sealed
+        by another build during a deploy) ends the wait at once and is logged once; the channel then
+        opens its own operation instead of polling for the whole window.
         """
         _, op_key, _ = _keys(group)
         deadline = time.monotonic() + timeout

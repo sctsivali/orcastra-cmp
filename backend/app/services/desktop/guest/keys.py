@@ -1,11 +1,9 @@
 """Validating key names and modifiers before they become argv.
 
-The injection boundary for this whole feature. A key name arrives from a model, and it ends up as
-an element of an argv list handed to a tool inside a customer's guest. `guest_exec._argv` already
-refuses a shell string for exactly this reason, and its comment states the principle: every
-quoting rule invented at a boundary is a place where the audit record and what actually ran
-disagree. So nothing here is ever interpolated into a shell string, and a name that does not match
-the grammar is refused rather than escaped.
+The injection boundary for this feature. A key name arrives from a model and ends up in an argv
+list handed to a tool inside a customer's guest, and in hold_key's fixed shell script. A name that
+does not match the grammar is refused, never escaped: an escaping rule invented here would be a
+place where the audit record and what ran disagree (see `guest_exec._argv`).
 """
 
 import re
@@ -15,14 +13,13 @@ from fastapi import HTTPException
 
 __all__ = ["MODIFIERS", "split_combination", "validate_key"]
 
-# X keysym names: letters, digits and underscore. Deliberately narrow. Real keysyms that fall
-# outside it exist, and a caller that needs one can be told to ask rather than have this open up
-# to characters a shell would find interesting.
+# X keysym names: letters, digits and underscore. Kept narrow: some real keysyms fall outside it,
+# but widening it would admit characters a shell treats specially.
 _KEYSYM = re.compile(r"^[A-Za-z0-9_]{1,32}$")
 
 MODIFIERS = frozenset({"ctrl", "alt", "shift", "super", "meta", "cmd"})
 
-# What a model is likely to write, mapped to what the tools actually take.
+# What a model is likely to write, mapped to the names the tools take.
 _ALIASES = {
     "control": "ctrl",
     "cmd": "super",
@@ -59,9 +56,8 @@ def _normalise(token: str) -> str:
 def split_combination(combination: str) -> Tuple[List[str], str]:
     """A combination like "ctrl+shift+t" as (modifiers, key).
 
-    Refuses rather than guesses when there is no key left after the modifiers, because
-    "ctrl+" is far more likely a truncated string than an intent to press control alone, and a
-    silently-dropped keystroke is very hard to debug from the model's side.
+    Refuses when there is no key left after the modifiers: "ctrl+" is far more likely a
+    truncated string than an intent to press control alone.
     """
     if not isinstance(combination, str) or not combination.strip():
         raise HTTPException(status_code=400, detail="a key combination is required")

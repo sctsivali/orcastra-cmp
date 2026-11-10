@@ -193,7 +193,7 @@ async def _start_source_if_needed(
     ):
         raise MigrationUnknown(f"Source '{source_name}' no longer matches its pinned identity.")
     if state.get("source_autostart_fenced") or state.get("source_autostart_fence_intent"):
-        # note: restoring is safe either way; a fence that never landed is set to the same value.
+        # Restoring is safe either way; a fence that never landed is set to the same value.
         original = state.get("original_autostart_local")
         await _assert_mutation_lease()
         operation_id = await _blocking(
@@ -236,7 +236,7 @@ async def remove_created_project_if_empty(
 
     Returns the ids of the access rules that named the project when it was deleted, so those go
     too. They are recorded before the delete: a rollback resumed later revokes only them, never a
-    rule written since for a new project of the same name (security review F3).
+    rule written since for a new project of the same name.
     """
     project_resource = next(
         (
@@ -311,7 +311,7 @@ async def abort_before_activation(
         event_message="A step failed before activation. Undoing what this job changed.",
     )
     # The runner reads the reason from this object when it records the outcome; without this
-    # it saw the pre-abort copy and reported the generic "Transfer failed." (found live).
+    # it would read the pre-abort copy and report the generic "Transfer failed.".
     job.safe_result = safe_result
     job.phase = "rolling_back"
     if getattr(job, "scope", None) == "project":

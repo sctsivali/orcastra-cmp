@@ -1,14 +1,11 @@
 """Request and response shapes for the add-on registry, installations and their settings.
 
-Every boundary rule an add-on is held to lives here or in `core/extension_manifest.py`. The
-division is that the manifest module holds the vocabulary and the pure functions, and this module
-holds the shapes a request arrives in.
+Every boundary rule an add-on is held to lives here or in `core/extension_manifest.py`, which
+holds the vocabulary and the pure functions; this module holds the shapes a request arrives in.
 
-important: cluster grants reuse `ClusterPermissionRequest` from the integrations router rather
-than restating its rules. That model already normalises the project allow-list, refuses the
-`["tenant-a", "*"]` mix, caps the list, and refuses a grant that grants nothing. A second
-declaration of the same shape is how one of them ends up a rule behind the other, which is the
-same reason this codebase now has exactly one private-network table.
+important: cluster grants reuse `ClusterPermissionRequest` from the integrations router. It
+normalises the project allow-list, refuses the `["tenant-a", "*"]` mix, caps the list and refuses
+a grant that grants nothing; a second declaration of the same rules would drift.
 """
 
 from datetime import datetime
@@ -39,9 +36,8 @@ from app.routers.integrations import ClusterPermissionRequest
 class SettingField(BaseModel):
     """One configuration field the dashboard renders on the add-on's behalf.
 
-    A closed vocabulary rather than JSON Schema. The add-on ships no UI, so the host draws this
-    form, and an open schema language would let an author describe something we cannot render
-    consistently or safely.
+    Field types are a closed vocabulary, not JSON Schema: the add-on ships no UI, so the dashboard
+    draws the form and accepts only types it can render consistently and safely.
     """
 
     key: str = Field(..., description="Stable identifier the add-on reads its value back by")
@@ -100,7 +96,7 @@ class SettingField(BaseModel):
 # ── the manifest ───────────────────────────────────────────────────────────────────────────────
 
 class RequestedScope(BaseModel):
-    """The shape a manifest asks for. Not values: an author does not name a customer's clusters."""
+    """The breadth of access a manifest asks for. An author never names a customer's clusters."""
 
     permission: str = Field("read", description="read | write | admin")
     clusters: str = Field("selected", description="all | selected")
@@ -145,9 +141,8 @@ class ExtensionManifest(BaseModel):
                 "slug must be lowercase ASCII letters, digits and hyphens, "
                 "starting and ending with a letter or digit"
             )
-        # note: refuse rather than normalise. NFKC folds FULLWIDTH ASTERISK onto `*`, which is
-        # how a lookalike becomes a wildcard elsewhere in this codebase, so a charset that
-        # rejects is safer than one that transforms.
+        # Refuse, never normalise: NFKC folds FULLWIDTH ASTERISK onto `*`, which turns a
+        # lookalike into a wildcard, so a charset that rejects is safer than one that transforms.
         if value in RESERVED_SLUGS:
             raise ValueError("that slug is reserved")
         return value
@@ -162,12 +157,10 @@ class ExtensionManifest(BaseModel):
     @field_validator("homepage_url", "support_url")
     @classmethod
     def _a_rendered_link_is_checked_without_a_lookup(cls, value: Optional[str]) -> Optional[str]:
-        """These are shown to an operator and never fetched by this server.
+        """Shown to an operator and never fetched, so checked for scheme and shape only.
 
-        So they are checked for scheme and shape but not resolved. Resolving costs a DNS lookup
-        on every write for no security benefit, and would refuse a legitimate homepage behind a
-        CDN that happens to answer with a private address from our vantage point. Fetched versus
-        rendered is what decides which guard applies.
+        Resolving would cost a DNS lookup per write and could refuse a legitimate homepage whose
+        CDN answers with a private address from this server's vantage point.
         """
         if value is None:
             return None
@@ -217,7 +210,7 @@ class ExtensionManifest(BaseModel):
 
 
 class ExtensionUpdate(BaseModel):
-    """A published add-on may change everything except who it is."""
+    """Editable details and status of an add-on. The slug and version do not change here."""
 
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     description: Optional[str] = Field(None, max_length=2000)
@@ -236,12 +229,13 @@ class ExtensionUpdate(BaseModel):
 # ── consent and installation ───────────────────────────────────────────────────────────────────
 
 class ConsentBlock(BaseModel):
-    """What the operator was actually shown, echoed back so the server can check it still holds.
+    """What the operator was shown, echoed back so the server can check it still holds.
 
-    important: this is not ceremony. Without it the attack is publish a benign manifest, wait for
-    the consent screen to render, update the manifest to ask for more, and let the install request
-    land against the new one. One round trip, one real control.
+    A version or manifest digest that no longer matches the published add-on is refused with 409.
     """
+
+    # important: without it, an author could publish a benign manifest, wait for the consent screen
+    # to render, change the manifest to ask for more, and let the install land against the new one.
 
     version: str = Field(..., max_length=32)
     manifest_digest: str = Field(..., min_length=64, max_length=64)
@@ -283,7 +277,7 @@ class InstallRequest(BaseModel):
 
 
 class ScopeRequest(BaseModel):
-    """Re-scoping is declarative: the request states the whole grant, not a delta."""
+    """Replaces an installation's whole grant: send the full capability and cluster lists."""
 
     consent: ConsentBlock
     capabilities: List[str] = Field(..., min_length=1)
@@ -293,8 +287,8 @@ class ScopeRequest(BaseModel):
 class SettingsUpdate(BaseModel):
     """Values for the fields the manifest declared.
 
-    A secret field's value is accepted here and never returned. Omitting a secret key leaves the
-    stored value alone, which is what lets a form save without re-typing every credential.
+    A secret field's value is accepted here and never returned. Omitting a secret key keeps the
+    stored value, so a form can save without re-typing every credential.
     """
 
     values: Dict[str, Any] = Field(default_factory=dict)
@@ -350,7 +344,7 @@ class InstallResponse(BaseModel):
     extension_id: int
     extension_slug: str
     extension_name: str
-    # note: the version this installation consented to, not what the add-on has published since.
+    # The version this installation consented to; see available_version for a newer one.
     extension_version: str
     # Present only when the add-on has moved on, so the difference is visible to the operator who
     # would have to approve it. Null when the installation is on the current version.
@@ -361,8 +355,8 @@ class InstallResponse(BaseModel):
     granted_capabilities: List[str]
     granted_scope: List[Dict[str, Any]]
     settings: Dict[str, Any] = Field(default_factory=dict)
-    # important: the NAMES of the secret fields that hold a value, never the values. A form needs
-    # to show a field as configured without the server handing back what was typed into it.
+    # important: names of the secret fields that hold a value, never the values, so a form can show
+    # a field as configured without the server returning what was typed into it.
     configured_secrets: List[str] = Field(default_factory=list)
     api_key_id: str
     credential_generation: int
@@ -372,9 +366,8 @@ class InstallResponse(BaseModel):
     suspended_at: Optional[datetime] = None
     suspended_by: Optional[str] = None
     suspend_reason: Optional[str] = None
-    # Credential health, so "is this add-on working" is answerable without reading a log.
-    # `credential_readable` false means the key could not be read, which is a different thing from
-    # a credential that has never been used and must not render as one.
+    # Credential health. `credential_readable` false means the key could not be read, which must
+    # not render as a credential that has never been used.
     credential_last_used_at: Optional[str] = None
     credential_expires_at: Optional[str] = None
     credential_readable: bool = True
@@ -383,12 +376,11 @@ class InstallResponse(BaseModel):
 
 
 class InstallCreateResponse(BaseModel):
-    """The one response that carries secrets, and it is shown once.
+    """The one response that carries secrets; it is shown once.
 
-    Two of them, deliberately separate. The API credential authenticates the add-on to us; the
-    signing secret lets it verify that a delivery came from us. Making them the same value, which
-    is what the existing OrcaHub emitter does, means anyone who can merely verify a signature
-    holds a live control-plane credential.
+    The API credential authenticates the add-on to this deployment; the signing secret lets it
+    verify that a webhook delivery came from this deployment. They are separate values, so
+    verifying a signature never requires a live control-plane credential.
     """
 
     install: InstallResponse

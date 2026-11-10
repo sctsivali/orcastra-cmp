@@ -1,9 +1,7 @@
 """The audit catalogue: every action the console emits, its category and its severity.
 
-Split out of `activity_logger` so that module stays under the house limit. The catalogue is
-data; the ratchets in tests/ (`test_a_task_action_is_named_in_the_audit_catalogue`,
-`test_a_schedule_action_is_named_in_the_audit_catalogue`, `test_proxy_destructive_actions_are_named`)
-read it through `activity_logger`, which re-exports every name here.
+The catalogue is data. `activity_logger` re-exports every name here, so callers and tests may
+import it from either module.
 """
 
 from enum import Enum
@@ -67,8 +65,8 @@ ACTION_CATEGORIES = {
     "instance.snapshot.restore": EventCategory.LXD_INFRA,
     "instance.snapshot.delete": EventCategory.LXD_INFRA,
     "instance.snapshot.billing_override": EventCategory.LXD_INFRA,
-    # Orcastra's own recurring snapshots. Registered explicitly because an unregistered action
-    # falls through to LXD_INFRA/MEDIUM silently, which is a category nobody chose.
+    # Orcastra's own recurring snapshots. Registered explicitly: an unregistered action falls
+    # through to LXD_INFRA/MEDIUM silently.
     "instance.snapshot.schedule.create": EventCategory.LXD_INFRA,
     "instance.snapshot.schedule.update": EventCategory.LXD_INFRA,
     "instance.snapshot.schedule.delete": EventCategory.LXD_INFRA,
@@ -113,21 +111,18 @@ ACTION_CATEGORIES = {
     "console.screenshot.take": EventCategory.ADMIN,
     # The key-authenticated surface. `integration.instance.exec` and `integration.instance.files`
     # are the API-key equivalents of the two session actions above: they reach inside a guest.
-    # `integration.proxy.request` covers everything else that goes through the raw proxy, which
-    # had no audit record at all before, only an app log line that the deduplication filter
-    # collapsed.
+    # `integration.proxy.request` covers everything else that goes through the raw proxy.
     "integration.instance.exec": EventCategory.ADMIN,
     "integration.instance.files": EventCategory.ADMIN,
-    # Seeing and driving a guest's graphical session. Three names rather than one so an alert can
-    # tell an agent looking at a screen from an agent typing into it: they are different events to
-    # whoever reviews them, and only one of them can change anything.
+    # Seeing and driving a guest's graphical session. Separate names let an alert tell an agent
+    # looking at a screen from one typing into it.
     "desktop_control.consent.set": EventCategory.ADMIN,
     "integration.instance.desktop_view": EventCategory.ADMIN,
     "integration.instance.desktop_input": EventCategory.ADMIN,
     "integration.instance.desktop_clipboard": EventCategory.ADMIN,
     "integration.proxy.request": EventCategory.ADMIN,
-    # A key setting the snapshot-schedule config keys. Not refused yet, so the record IS the
-    # control: it is what says which keys write them before a refusal is fitted to the answer.
+    # A key setting the snapshot-schedule config keys. The write is not refused, so this record
+    # is the only control over it.
     "integration.instance.config.policy_key_write": EventCategory.ADMIN,
     # Credential lifecycle. The actor here is a human operator holding a JWT, not the key,
     # so these carry the operator in `actor` and the key only as an annotation in details.
@@ -163,9 +158,8 @@ ACTION_CATEGORIES = {
     "extension.webhook.redeliver": EventCategory.ADMIN,
     "extension.webhook.suspended": EventCategory.ADMIN,
     # A destructive proxy call removes the same resource the dashboard's own endpoint would, so
-    # it is named for the act rather than for the transport. Without these it landed under
-    # `integration.proxy.request`, which is not high severity, and an alert on `image.delete`
-    # could never see the API-key route.
+    # it is named for the act. Under `integration.proxy.request` it would not be high severity,
+    # and an alert on `image.delete` would miss the API-key route.
     "integration.image.delete": EventCategory.LXD_INFRA,
     "integration.instance.delete": EventCategory.LXD_INFRA,
     "integration.network.delete": EventCategory.LXD_INFRA,
@@ -222,12 +216,11 @@ ACTION_CATEGORIES = {
     "task.journal.prune": EventCategory.ADMIN,
     "task.journal.follower.elected": EventCategory.ADMIN,
     "task.journal.follower.lost": EventCategory.ADMIN,
-    # Dashboard uploads had no audit record at all; these two are the accepted and terminal
-    # records the journal turns into an upload task.
+    # Dashboard uploads: the accepted and terminal records the journal turns into an upload task.
     "image.upload.import": EventCategory.LXD_INFRA,
     "storage.iso.upload.import": EventCategory.STORAGE,
-    # Emitted for a long time without a registration, so they filed under LXD_INFRA/MEDIUM by
-    # accident. Registered here so the cluster log's category column says what they are.
+    # Registered so the cluster log's category column says what they are, rather than the
+    # LXD_INFRA/MEDIUM fallback.
     "audit.view": EventCategory.ADMIN,
     "extension.version.publish": EventCategory.SETTINGS,
     "file.push": EventCategory.ADMIN,

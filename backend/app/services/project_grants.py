@@ -1,15 +1,14 @@
 """Record which organization a dashboard-created project belongs to, and forget it on delete.
 
 On a cluster bound to more than one organization a Partner is held to the default project
-plus the projects their organizations' tenant access policies name (`get_visible_projects`).
-A Partner may not write such a rule for a project they cannot already see
-(`routers/tenant_access.py`), which left a project a Partner had just created outside their
-own bound. This module writes that rule for them, and only for a project the request brought
-into existence: LXD refuses a duplicate name before anything here runs, so the name a rule
-carries cannot belong to another organization.
+plus the projects their organizations' tenant access policies name (`get_visible_projects`),
+and may not write such a rule for a project they cannot already see (`routers/tenant_access.py`).
+This module writes that rule for them, and only for a project the request brought into
+existence: LXD refuses a duplicate name before anything here runs, so the name a rule carries
+cannot belong to another organization.
 
 One policy per (organization, cluster), named `dashboard:<cluster>` with `source="local"`,
-holds one rule per project. No assignment is written: the rule feeds the Partner bound, it
+holds one rule per project. No assignment is written: the rule feeds the Partner bound and
 grants no tenant anything; `["view"]` is the least a later assignment could widen to.
 """
 
@@ -96,8 +95,8 @@ async def grant_project_to_creator(
         await db.flush()
         policy_created = True
 
-    # Select then insert, the house pattern: a second call for the same project is a no-op
-    # against the (policy, cluster, project, instance) unique constraint.
+    # Select then insert: a second call for the same project is a no-op against the
+    # (policy, cluster, project, instance) unique constraint.
     rule = (
         await db.execute(
             select(TenantPolicyRule).where(
@@ -154,10 +153,10 @@ async def revoke_project_grants(
 ) -> RevokeOutcome:
     """Remove every rule naming (cluster, project), whichever organization wrote it.
 
-    important: every organization, not the deleter's. Organization A's leftover rule for a
-    project it deleted would otherwise put organization B's future project of the same name
-    inside A's bound. A managed policy left with no rules and no assignments is dropped; an
-    OrcaHub-owned policy keeps its row, OrcaHub upserts it by `external_id`.
+    important: every organization's rules go, or organization A's leftover rule for a project
+    it deleted would put organization B's later project of the same name inside A's bound. A
+    managed policy left with no rules and no assignments is dropped; an OrcaHub-owned policy
+    keeps its row, since OrcaHub upserts it by `external_id`.
 
     `only_rule_ids` limits the removal to rules captured earlier, for a delete settled after
     its request ended: a same-name project created in between brings rules of its own.

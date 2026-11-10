@@ -1,19 +1,16 @@
 """Two-key enrollment: an owner key vouches for another key it also holds, which then joins the owner set.
 
-OrcaHub holds every connection's key and secret. When a provider connects a second key to the same
-Orcastra, OrcaHub proves possession of both (the vouching owner key in the headers, the new key's id and
-secret in the body), and the new key joins the organization's owner set. Holding an owner key already
-grants everything an owner can do, so vouching gives its holder no new power over the organization;
-what this guards is the new key, whose secret the endpoint checks, and which must belong to the same
-side (party_check).
+OrcaHub proves possession of both (the vouching owner key in the headers, the new key's id and secret
+in the body). An owner key already grants everything an owner can do, so the checks guard the new key:
+its secret must match and it must belong to the same side (party_check).
 
-The secret check makes this endpoint an oracle for another key's secret. So the calling key must own
-the organization before anything about the new key is read (a non-owner, a missing organization and an
-unclaimed one get one answer), a missing key and a wrong secret then answer one sentence, and the route
-is limited per vouching key, per organization (spent only once the caller is an owner) and per
-(vouching key, new key) pair, which is locked out after repeated failures. A store that cannot answer is
-503 and never counts as a failure. Every limit falls back to an in-process counter when the shared store
-cannot answer, rather than open: a secret oracle must not become unlimited during a Redis outage.
+important: the secret check is an oracle for another key's secret. The caller must own the
+organization before anything about the new key is read (non-owner, missing and unclaimed organization
+get one answer), a missing key and a wrong secret get one answer, and the route is limited per
+vouching key, per organization (spent only once the caller is an owner) and per (vouching key, new
+key) pair, which locks out after repeated failures. A store that cannot answer is 503 and never
+counts as a failure. Every limit falls back to an in-process counter, never to open, when Redis
+is down.
 """
 
 import threading
@@ -87,8 +84,8 @@ def within_key_limits(vouching_key_id: str) -> bool:
 def within_org_limits(organization_external_id: str) -> bool:
     """Spend one enrollment attempt for this organization; False once over a limit.
 
-    important: only once the caller is known to own the organization, so a key that does not cannot
-    spend its budget.
+    important: call only once the caller is known to own the organization, so a non-owner cannot spend
+    its budget.
     """
     return all([
         _consume(f"owner-enroll:org:{organization_external_id}:m", 60) <= PER_MINUTE,
@@ -119,25 +116,19 @@ async def party_check(
     db: AsyncSession, org: Organization, vouching: Mapping[str, Any], new: Mapping[str, Any],
     *, vouching_key_id: Optional[str] = None, now: Optional[datetime] = None,
 ) -> bool:
-    """Whether the new key belongs to the organization's side (decision D1).
+    """Whether the new key belongs to the organization's side.
 
-    Its minter must be a partner of the organization; or the vouching key's minter, or the organization's
-    creator, while a partner of the vouching key's home (the organization a sale through that key proves,
-    cluster_parties.home_partner_keys). Either partner row must be at least PARTNER_MIN_AGE old. Otherwise
-    a holder of one owner key could enroll a key minted by anyone, which would also survive the rotation of
-    the key that vouched for it.
+    Its minter must be a partner of the organization, or the vouching key's minter or the organization's
+    creator while a partner of the vouching key's home (cluster_parties.home_partner_keys). The partner
+    row must be at least PARTNER_MIN_AGE old. Otherwise one owner key's holder could enroll a key minted
+    by anyone, and it would survive the vouching key's rotation.
 
-    important: never the minter relation alone. A minter who left keeps the secrets it held, so "minted
-    the vouching key" or "created this organization" would let it enroll a key of its own that survives
-    the rotation of the key it left with, and that becomes the primary when that key is revoked.
-
-    important: the age, because an owner key writes the organization's members. Without it the holder of
-    a leaked owner key could push its own email as a partner and enroll a key it minted in the same
-    minute. A partner row records no key that wrote it (invited_by says only "orcahub-sync"), so this
-    cannot count only the rows another owner wrote. Known limit: a role change keeps the row's
-    joined_at, so promoting a member row older than a day to partner passes at once. That needs an
-    existing member who can mint integration keys, and the leaked-key runbook checks the owner set after
-    every rotation.
+    important: never the minter relation alone; a minter who left keeps its secrets and could enroll a
+    key that survives rotation and becomes primary when the vouching key is revoked. The age check stops
+    a leaked owner key, which writes the members, from adding itself as a partner and enrolling a key it
+    minted in the same minute; a partner row records no key that wrote it. Known limit: a role change
+    keeps joined_at, so a member row older than a day promoted to partner passes at once; that needs an
+    existing member who can mint integration keys.
     """
     minter = str(new.get("created_by") or "").strip().lower()
     if not minter:
@@ -158,8 +149,8 @@ async def party_check(
     if minter not in {str(vouching.get("created_by") or "").strip().lower(), str(org.created_by or "").strip().lower()}:
         return False
     key_id = vouching_key_id or str(vouching.get("id") or "")
-    # note: the minter as the key records it. home_partner_keys matches a member's email exactly, as the
-    # rotation rule passes it; the lowercased form above would miss a row stored with capitals.
+    # The minter as the key records it: home_partner_keys matches a member's email exactly, so the
+    # lowercased form above would miss a row stored with capitals.
     stored = str(new.get("created_by") or "").strip()
     return bool(key_id) and key_id in await home_partner_keys(db, stored, settled_before=settled)
 

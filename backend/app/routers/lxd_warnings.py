@@ -1,7 +1,4 @@
-"""
-API Router for LXD Warnings.
-Provides endpoints for viewing LXD warnings.
-"""
+"""LXD warnings, and the combined system feed (certificates, connectivity, host kernels)."""
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Dict, Optional, List
@@ -48,18 +45,15 @@ from app.core.swr import Built
 
 logger = logging.getLogger(__name__)
 
-# important: raised from require_tenant() to require_partner(). Every page that consumes this
-# router declares useRequireRole(Role.PARTNER), so the UI already treated it as partner-tier while
-# the API accepted a tenant. Mutations here were gated individually and reads were not, which is
-# the pattern this closes. Org scope still applies on top, so this narrows the tier rather than
-# replacing the boundary.
+# important: partner-tier, reads included, to match the pages that use this router
+# (useRequireRole(Role.PARTNER)). Org scope still applies on top.
 router = APIRouter(
     prefix="/warnings",
     tags=["Warnings"],
     dependencies=[Depends(require_partner()), Depends(org_scope_dependency)],
 )
 
-# Thread pool for parallel operations
+# Pool for the per-cluster fan-out and the registry sweep.
 _executor = ThreadPoolExecutor(max_workers=16)
 
 # Wall clock the polled feed waits for host kernels per cluster; see build_kernel_report.
@@ -71,7 +65,7 @@ WARNINGS_DEGRADED_TTL = 30
 
 
 class WarningInfo(BaseModel):
-    """Warning information."""
+    """One LXD warning, tagged with the cluster that reported it."""
     uuid: str = Field(..., description="Warning UUID")
     location: str = Field("", description="Warning location (cluster member)")
     source_node: str = Field("", description="Cluster that reported this warning")
@@ -86,7 +80,7 @@ class WarningInfo(BaseModel):
 
 
 class WarningListResponse(FanoutReachability):
-    """Response for listing warnings."""
+    """LXD warnings across the requested clusters."""
     total: int = Field(..., description="Total number of warnings")
     warnings: List[WarningInfo] = Field(..., description="List of warnings")
     nodes: List[str] = Field(..., description="Clusters included in this response")
@@ -95,9 +89,9 @@ class WarningListResponse(FanoutReachability):
 def _warning_rows(client) -> list:
     """The cluster's warnings, asking for every project where the daemon honours it.
 
-    note: LXD scopes `/1.0/warnings` by project; `all-projects=true` is the documented way to
-    ask for all of them and a daemon that ignores the parameter answers as it always did. A
-    daemon that refuses it with 400 is asked again without it.
+    LXD scopes `/1.0/warnings` by project; `all-projects=true` is the documented way to ask for
+    all of them, and a daemon that ignores the parameter answers as if it were absent. A daemon
+    that refuses it with 400 is asked again without it.
     """
     try:
         response = client.api.warnings.get(
@@ -111,23 +105,23 @@ def _warning_rows(client) -> list:
 
 
 def _fetch_warnings_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[WarningInfo]:
-    """Fetch warnings for a single node - runs in thread pool."""
+    """Warnings on one cluster. Runs in the thread pool."""
     client = lxd_service.connection_manager.get_client(node_name)
     if client is None:
-        # important: unreachable is not empty. Without this the next line
-        # raises AttributeError on None, which the generic handler below
-        # turns into a partial result and the node is never named.
+        # important: unreachable is not empty. Raise the connection error so the
+        # node is named as unreachable; reading from None would otherwise fail with
+        # an AttributeError and be reported as a failed read.
         raise LXDConnectionError(f"Could not connect to {node_name}")
     read: NodeRead[WarningInfo] = NodeRead()
     for warning_detail in _warning_rows(client):
         if not isinstance(warning_detail, dict):
             continue
         try:
-            # LXD returns "none" for standalone nodes - replace with actual node name
+            # LXD reports location "none" on a standalone server; use the cluster name.
             raw_location = warning_detail.get('location', '')
             location = raw_location if raw_location and raw_location.lower() != "none" else node_name
 
-            # LXD returns "default" for global warnings - keep it as is (it's the default project)
+            # A server-scope warning carries no project; it is listed under `default`.
             project = warning_detail.get('project', '') or 'default'
 
             read.rows.append(WarningInfo(
@@ -159,11 +153,10 @@ async def list_warnings(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
 ):
-    """List all warnings.
+    """List the LXD warnings the caller may see.
 
-    Cached per scope for WARNINGS_CACHE_TTL (DEGRADED when a cluster is down) and served for
-    SWR_MAX_STALE_SECONDS past it while one background read replaces it. It used to read every
-    cluster on every call, polled every 60 s by the dashboard.
+    Cached per scope for WARNINGS_CACHE_TTL (WARNINGS_DEGRADED_TTL when a cluster is down) and
+    served for SWR_MAX_STALE_SECONDS past it while one background read replaces it.
     """
     if host:
         verify_cluster_access(host)
@@ -172,7 +165,7 @@ async def list_warnings(
     async def build() -> Built:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
-        # Fetch warnings from all nodes in parallel, CLUSTER_WALL_SECONDS each
+        # All clusters in parallel, CLUSTER_WALL_SECONDS each.
         results = await gather_clusters(
             nodes_to_query,
             lambda node_name: _fetch_warnings_for_node(lxd_service, node_name),
@@ -182,11 +175,10 @@ async def list_warnings(
             generation=lambda: get_resource_list_generation(cache, "warnings"),
         )
         
-        # important: two different things make a node absent, and both must be named.
-        # A node can fail during the fan-out, or never be asked at all, because
-        # connection_manager.get_node_names() returns only nodes with a live client while
-        # the fleet is whatever Vault has registered. Reporting only the first kind left a
-        # dead cluster silently missing rather than merely empty.
+        # important: two things make a node absent, and both must be named. A node can fail
+        # during the fan-out, or never be asked at all: connection_manager.get_node_names()
+        # returns only nodes with a live client, while the fleet is whatever Vault has
+        # registered. Naming only the first kind leaves a dead cluster silently missing.
         seeded: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
@@ -195,9 +187,9 @@ async def list_warnings(
             nodes_to_query, results, noun="warnings", reasons_visible=not tenant_acl_active()
         )
         unreachable_nodes.extend(fan.unreachable_nodes)
-        # important: rows may now come from every project the daemon reports, and a Partner
-        # is scoped by cluster, not by project; the tenant check below passes everything for
-        # a Partner. Hold the rows to the project bound first.
+        # important: rows come from every project the daemon reports, and the tenant check
+        # below passes everything for a Partner, who is scoped by cluster. Hold the rows to
+        # the project bound first.
         all_warnings = [w for w in fan.rows if project_is_visible(w.source_node, w.project or "default")]
 
         all_warnings = [
@@ -239,9 +231,8 @@ async def list_warnings(
         )
         return served.as_model(WarningListResponse)
     except HTTPException:
-        # note: an authorization refusal is a 403, not a server fault. The generic handler
-        # below would wrap it into a 500 whose body reads "403: Access denied ...", which
-        # misleads clients and pages an on-call for a working permission check.
+        # An authorization refusal stays a 403. The generic handler below would wrap it into
+        # a 500 reading "403: Access denied ...", which misleads clients and pages on-call.
         raise
     except Exception as e:
         logger.error(f"Error listing warnings: {e}")
@@ -267,7 +258,7 @@ async def get_warning(
         
         if warning_response.status_code == 200:
             warning_data = warning_response.json().get('metadata', {})
-            # LXD returns "none" for standalone nodes - replace with actual node name
+            # LXD reports location "none" on a standalone server; use the cluster name.
             raw_location = warning_data.get('location', '')
             location = raw_location if raw_location and raw_location.lower() != "none" else host
             project = warning_data.get('project', '') or 'default'
@@ -336,7 +327,7 @@ async def delete_warning(
         response = client.api.warnings[safe_segment(warning_uuid)].delete(timeout=(5, 30))
         
         if response.status_code in [200, 202]:
-            # Both warning feeds are cached now; the dismissed row must not come back on them.
+            # Both warning feeds are cached; the dismissed row must not come back on them.
             get_cache_manager().invalidate_resource_cache("warnings")
             return {
                 "success": True,
@@ -361,17 +352,15 @@ async def get_all_system_warnings(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
 ):
-    """Get all system warnings including certificate and node issues.
+    """All system warnings: LXD warnings, certificate expiry, connectivity and host kernels.
 
     Cached per scope for WARNINGS_CACHE_TTL and served past it while one background read
     replaces it. A miss reads every cluster's warnings, two Vault reads and a connection probe
-    per cluster and the kernel report, 2 to 10 s on dev, which is why it is no longer done on
-    every 60 s dashboard poll.
+    per cluster, and the kernel report, which takes seconds.
     """
     cache = get_cache_manager()
 
     async def build() -> Built:
-        # Get LXD warnings
         nodes_to_query = lxd_service.connection_manager.get_node_names()
         
         results = await gather_clusters(
@@ -383,9 +372,7 @@ async def get_all_system_warnings(
             generation=lambda: get_resource_list_generation(cache, "warnings"),
         )
 
-        # important: the helper returns a NodeRead, not a list. Testing for a list dropped every
-        # LXD warning from this feed, so its totals undercounted. Same handling as list_warnings,
-        # including the project bound before the tenant check.
+        # Same handling as list_warnings, including the project bound before the tenant check.
         fan = collect(
             nodes_to_query, results, noun="warnings", reasons_visible=not tenant_acl_active()
         )
@@ -422,12 +409,10 @@ async def get_all_system_warnings(
                     await asyncio.to_thread(cert_manager.list_clusters, use_cache=False)
                 )
                 
-                # important: per-cluster check extracted into a helper so the
-                # sweep runs in parallel - this was a serial loop that summed
-                # every dead cluster's connect timeout (the main dashboard stall).
+                # One cluster's checks, run in parallel below: a serial loop would
+                # sum every dead cluster's connect timeout.
                 def _check_one(cluster_id):
                     try:
-                        # Get metadata
                         metadata = cert_manager.vault.vault_read(
                             f"{settings.vault_clusters_path}/{cluster_id}/metadata"
                         )
@@ -472,9 +457,9 @@ async def get_all_system_warnings(
                         except Exception:
                             pass
                         
-                        # Check node connectivity. A cluster this worker already knows is down is
+                        # Check connectivity. A cluster this worker already knows is down is
                         # reported from that verdict: the healer redials it, not this feed (see
-                        # fanout.known_down), and a silent host cost the probe up to 22 s.
+                        # fanout.known_down), and a silent host would hold the probe for seconds.
                         manager = getattr(lxd_service, "connection_manager", None)
                         down = known_down(cluster_id, manager)
                         pooled = (
@@ -484,8 +469,8 @@ async def get_all_system_warnings(
                         )
                         if pooled is not None:
                             # A pooled client validated in this read answers the question the
-                            # probe asks (did it answer, does it trust us) without a second TLS
-                            # connect and a fresh Vault read per cluster.
+                            # probe asks (did it answer, does it trust this client) without a
+                            # second TLS connect and a fresh Vault read per cluster.
                             connected = manager.get_client(cluster_id) is not None
                             error_msg = None if connected else "Cluster is not reachable"
                         elif down is not None:
@@ -498,10 +483,9 @@ async def get_all_system_warnings(
                         else:
                             connected, error_msg = cert_manager.verify_connection(cluster_id)
                         if not connected:
-                            # note: the import that used to sit here made `datetime` a local for
-                            # the entire function, so the earlier `datetime.now(timezone.utc)` in
-                            # the certificate-expiry branch raised UnboundLocalError whenever it
-                            # ran. The name is already imported at the top of this function.
+                            # important: no local `datetime` import in this function. It would
+                            # make the name local, and the certificate-expiry branch's earlier
+                            # `datetime.now(timezone.utc)` would raise UnboundLocalError.
                             node_warnings.append({
                                 "cluster_id": cluster_id,
                                 "display_name": display_name,
@@ -515,9 +499,8 @@ async def get_all_system_warnings(
                     except Exception as e:
                         logger.debug(f"Error checking {cluster_id}: {e}")
 
-                # fan the per-cluster checks out in parallel; dead clusters now
-                # fail fast (circuit breaker + short verify timeout), so the sweep
-                # finishes in ~one slow-cluster time instead of the serial sum.
+                # Dead clusters fail fast (circuit breaker, short verify timeout),
+                # so the sweep takes about one slow cluster's time.
                 loop = asyncio.get_event_loop()
                 await asyncio.gather(
                     *[loop.run_in_executor(_executor, _check_one, cid) for cid in cluster_ids],
@@ -528,8 +511,9 @@ async def get_all_system_warnings(
         except Exception as e:
             logger.warning(f"Could not fetch certificate warnings: {e}")
 
-        # note: from the shared per-cluster cache, with a short wall for the polled feed. A cluster
-        # still reading past it finishes in its thread and lands in the cache for the next poll.
+        # Kernels come from the shared per-cluster cache, with a short wall for the polled feed.
+        # A cluster still reading past it finishes in its thread and lands in the cache for the
+        # next poll.
         # important: an empty list must not read as "every kernel is patched". Clusters whose
         # kernels were not read are named, and a failed assessment says so.
         kernel_rows: List[KernelAdvisoryWarning] = []
@@ -548,7 +532,6 @@ async def get_all_system_warnings(
             logger.warning(f"Could not assess host kernels: {e}")
         kernel_critical, kernel_warning, kernel_info = kernel_severity_totals(kernel_rows)
 
-        # Calculate totals
         critical = sum(1 for w in cert_warnings if w.get("severity") == "critical")
         critical += sum(1 for w in node_warnings if w.get("severity") == "critical")
         critical += sum(1 for w in lxd_warnings if w.severity.lower() in ["critical", "error", "high"])

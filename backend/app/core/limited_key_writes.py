@@ -1,26 +1,18 @@
 """What a project-limited API key's write applies, judged before the raw proxy or /proxy sends it.
 
-A key granted named projects (not `*`) is held to them by the project its request runs in. The
-body can step past that bound in three ways, and each is judged for such a key:
+A key granted named projects (not `*`) is held to its request's project. The body can step past
+that by naming another project (top level, `source` or `target`), by config or devices that reach
+the host (which sits under every project), or by profiles or a source's config and devices that
+reach it without being named. LXD applies profiles a body never names: `default` on a create
+naming none, the source's on a copy, the image's on an image create, the target project's on a
+move, the snapshot's on a restore. The first two are body checks; for the third,
+`limited_write_plan` lists the cluster reads and services/lxd/limited_write_reach.py runs them
+before anything is sent, failing closed when a read cannot answer.
 
-- it names another project, at the top level or in `source` or `target`, which LXD reads for a
-  copy, a move and an image built from an instance;
-- its own config or devices reach the host, which sits under every project at once;
-- it applies profiles, or a source's config and devices, that reach the host. LXD applies profiles
-  a body never names: a create naming none gets `default`, a copy its source's, an image create
-  its image's, a move to another project that project's, and a restore the snapshot's.
-
-The first two are checks on the body alone. The third needs cluster reads, so `limited_write_plan`
-turns the write into the reads it depends on and services/lxd/limited_write_reach.py carries them
-out before anything is sent, failing closed when a read cannot answer.
-
-important: every function here reads a body already held to core/api_key_body (lowercase field
-names, so no case-folded twin reaches LXD unread) and a path through
-core/raw_proxy_path.canonical_proxy_path, the parser the sent URL is built from. A `*` key is
-never judged here.
-
-note: the dashboard does not use this module. Its own allowlist (services/instance_security_policy)
-judges a Partner's effective payload on a cluster another organization also holds.
+important: bodies here are already held to core/api_key_body (lowercase field names, so no
+case-folded twin reaches LXD unread) and paths parsed by core/raw_proxy_path.canonical_proxy_path,
+the parser the sent URL is built from. A `*` key is never judged here; the dashboard's own writes
+go through services/instance_security_policy.
 """
 
 import logging
@@ -35,12 +27,12 @@ from app.core.raw_proxy_path import MUTATING_METHODS, canonical_proxy_path
 
 logger = logging.getLogger(__name__)
 
-# A value is judged, not only a key: a switch set off does not reach the host (the dashboard's create
+# Values are judged as well as keys: a switch set off does not reach the host (the dashboard's create
 # form sends security.privileged "false" for Deny), and security.idmap.isolated only narrows the map.
 _HOST_CONFIG_SET = ("raw.", "security.idmap.base", "security.idmap.size", "linux.kernel_modules")
 _HOST_CONFIG_SWITCHES = ("security.privileged", "security.syscalls.intercept.")
 _SWITCHED_OFF = frozenset({"", "false", "0", "no", "off"})
-# note: a GPU is allowed. It shares the host's cards and reaches neither the host's files nor root.
+# A GPU is allowed: it shares the host's cards and reaches neither the host's files nor root.
 _HOST_DEVICE_TYPES = frozenset(
     {"unix-char", "unix-block", "unix-hotplug", "usb", "pci", "infiniband", "proxy"}
 )
@@ -271,9 +263,9 @@ def limited_write_plan(path: str, method: str, body: Any, project: str) -> List[
 def proxy_instance_write(operation: str, params: Mapping[str, Any]) -> Optional[InstanceWrite]:
     """The instance write a /proxy operation sends, as (verb, instance, body), or None.
 
-    note: mirrors services/lxd/proxy_operations.execute_proxy_operation. create_instance sends
-    params as the body, update_instance merges config and devices into the instance and replaces
-    its profiles, and restore_snapshot re-applies the snapshot's profiles, config and devices.
+    Mirrors services/lxd/proxy_operations.execute_proxy_operation: create_instance sends params as
+    the body, update_instance merges config and devices into the instance and replaces its
+    profiles, and restore_snapshot re-applies the snapshot's profiles, config and devices.
     """
     if operation == "create_instance":
         return ("POST", None, params)
@@ -294,7 +286,7 @@ def proxy_instance_write(operation: str, params: Mapping[str, Any]) -> Optional[
 def profile_reach(read: Callable[[str], Optional[Mapping[str, Any]]], names: Iterable[str]) -> Optional[str]:
     """The first of `names` whose config or devices reach the host, with what it sets, or None.
 
-    note: `read` answers None for a profile that does not exist, which LXD refuses on its own.
+    `read` answers None for a profile that does not exist, which LXD refuses on its own.
     """
     for name in names:
         profile = read(name)

@@ -1,12 +1,11 @@
-"""
-Organization-scoped data isolation (multi-tenancy).
+"""Organization-scoped data isolation (multi-tenancy).
 
-Uses a request-scoped context variable to restrict which clusters
-(and therefore nodes, instances, networks, etc.) a user can see.
+Request-scoped context variables restrict which clusters (and so which nodes, instances, networks
+and other resources) a caller can see, and which projects on a cluster several parties share.
 
 Admin:   sees all clusters (no filter)
-Partner: sees clusters bound to their organization(s)
-Tenant:  sees clusters bound to assigned access policies (ACL)
+Partner: sees clusters bound to its organizations, held to its own projects on a shared cluster
+Tenant:  sees clusters named in its assigned access policies, narrowed further by their ACL
 """
 
 import contextvars
@@ -30,33 +29,31 @@ from app.core.sale_term import ENDED as SALE_ENDED, READ_ONLY as SALE_READ_ONLY,
 
 logger = logging.getLogger(__name__)
 
-# request-scoped allowed clusters (None = no filter / admin)
+# Request-scoped allowed clusters (None = no filter: Admin, dev mode or a background task).
 _allowed_clusters_var: contextvars.ContextVar[Optional[set[str]]] = contextvars.ContextVar(
     "allowed_clusters", default=None
 )
 
-# request-scoped tenant ACL map (None = no ACL / admin or partner)
-# format: {cluster_id: {(project_name, instance_name): set[permissions]}}
+# Request-scoped tenant ACL map (None = no ACL: Admin or Partner).
+# Format: {cluster_id: {(project_name, instance_name): set[permissions]}}
 _tenant_acl_var: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
     "tenant_acl", default=None
 )
 
-# request-scoped project visibility for clusters that carry more than one organization.
-# format: {cluster_id: set[project_name]}. A cluster absent from the map is unrestricted, and
+# Request-scoped project visibility for clusters that carry more than one organization.
+# Format: {cluster_id: set[project_name]}. A cluster absent from the map is unrestricted, and
 # None means nothing is restricted at all.
 #
-# important: this exists because a Partner is scoped by CLUSTER and not by project.
-# get_tenant_acl_rules returns None for Partner as well as Admin, so the used_by filter that
-# protects the network, ACL and profile lists never runs for them. That was harmless only
-# while those lists could not see past the default project. Once they can, a shared cluster
-# would hand one partner another partner's network config, ACL rule bodies and instance
-# inventory.
+# important: a Partner is scoped by cluster, and get_tenant_acl_rules returns None for a Partner
+# as for an Admin, so the used_by filter on the network, ACL and profile lists never runs for it.
+# Without this bound a shared cluster would hand one Partner another's network config, ACL rule
+# bodies and instance inventory.
 _visible_projects_var: contextvars.ContextVar[Optional[dict[str, set[str]]]] = (
     contextvars.ContextVar("visible_projects", default=None)
 )
 
 # Clusters a role_partner buyer reaches only through purchases past their paid term: it may read
-# them, not change anything there (core/sale_term.py). Empty for everyone else.
+# them but change nothing there (core/sale_term.py). Empty for everyone else.
 _read_only_clusters_var: contextvars.ContextVar[frozenset] = contextvars.ContextVar(
     "read_only_clusters", default=frozenset()
 )
@@ -66,11 +63,11 @@ _purchase_only_clusters_var: contextvars.ContextVar[frozenset] = contextvars.Con
     "purchase_only_clusters", default=frozenset()
 )
 # Clusters where `default` is view only for this role_partner: another party also holds the cluster,
-# so `default` carries that party's instances (owner decision 2026-11-05). Empty for everyone else.
+# so `default` carries that party's instances. Empty for everyone else.
 _default_view_only_var: contextvars.ContextVar[frozenset] = contextvars.ContextVar(
     "default_view_only", default=frozenset()
 )
-# Set by an interactive socket (console, terminal): driving a guest is a change, not a read.
+# Set by an interactive socket (console, terminal), where driving a guest counts as a change.
 _interactive_var: contextvars.ContextVar[bool] = contextvars.ContextVar("interactive_scope", default=False)
 
 _READS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -96,8 +93,8 @@ def _is_change() -> bool:
 # ---------------------------------------------------------------------------
 
 def apply_cluster_filter(cluster_ids: list[str]) -> list[str]:
-    """
-    Filter a list of cluster IDs by the current request's allowed set.
+    """Filter a list of cluster IDs by the current request's allowed set.
+
     Returns all clusters if no scope is active (admin / background task).
     """
     allowed = _allowed_clusters_var.get(None)
@@ -125,15 +122,13 @@ def unscoped_cache_key(base_key: str) -> str:
 
 
 def get_scope_cache_key(base_key: str) -> str:
-    """
-    Return a cache key that includes the current org-scope AND tenant ACL.
+    """Return a cache key that includes the current org scope, tenant ACL and project bound.
 
     Admin / background (allowed=None)  -> ``base_key:scope=all``
     Scoped user                        -> ``base_key:scope=<sha256-of-clusters>:acl=<sha256-of-rules>``
 
-    Including ACL in the key prevents cross-tenant cache poisoning where
-    two tenants with the same cluster set but different policies would
-    otherwise share a cache entry.
+    The ACL is part of the key so two tenants with the same clusters but different policies never
+    share a cache entry. A project bound adds a ``:proj=`` suffix.
     """
     allowed = _allowed_clusters_var.get(None)
     if allowed is None:
@@ -142,10 +137,9 @@ def get_scope_cache_key(base_key: str) -> str:
         return f"{base_key}:scope=empty"
     scope_digest = hashlib.sha256(",".join(sorted(allowed)).encode()).hexdigest()[:12]
 
-    # include tenant ACL rules in the cache key
     acl = _tenant_acl_var.get(None)
     if acl is not None:
-        # serialize ACL to a stable string for hashing
+        # Serialize the ACL to a stable string for hashing.
         acl_parts = []
         for cid in sorted(acl.keys()):
             for (proj, inst), perms in sorted(acl[cid].items()):
@@ -159,7 +153,7 @@ def get_scope_cache_key(base_key: str) -> str:
 def _project_bound_suffix() -> str:
     """The per-request project bound, as a cache-key fragment.
 
-    Empty when nothing is bound, so an unrestricted caller keeps the key shape it had.
+    Empty when nothing is bound, so an unrestricted caller's key carries no suffix.
     """
     mapping = _visible_projects_var.get(None)
     if not mapping:
@@ -173,18 +167,15 @@ def _project_bound_suffix() -> str:
 
 
 def verify_cluster_access(cluster_id: str) -> None:
-    """
-    Raise 403 if the current user cannot access ``cluster_id``.
-    No-op for admin / dev mode / background tasks.
+    """Raise 403 if the current user cannot access ``cluster_id``.
 
-    important: a blank id is rejected before the scope check, not after. Every one of the 122
-    call sites passes a required parameter declared as `Query(...)`, which an empty string
-    satisfies, so `?node=` reached the handler. For a scoped caller it then failed the set
-    membership and answered 403, but for an admin the scope var is None and the function
-    returned early, so the request went on to ask Vault for a cluster named "" and logged two
-    ERRORs per attempt. Reachable from the UI: the members page fires this when its refresh is
-    clicked with no cluster chosen. Guarding here covers all 122 sites at once, where adding
-    min_length to 62 signatures would not.
+    No-op for admin / dev mode / background tasks. A change on a cluster past its paid term is
+    refused as well.
+
+    important: a blank id is refused with 422 before the scope check. Call sites pass a required
+    `Query(...)` parameter, which an empty string satisfies, and for an Admin the scope check
+    returns early, so `?node=` would go on to ask Vault for a cluster named "". Guarding here
+    covers every call site at once.
     """
     if not (cluster_id or "").strip():
         raise HTTPException(
@@ -220,9 +211,7 @@ def set_allowed_clusters(clusters: Optional[set[str]]) -> None:
 # ---------------------------------------------------------------------------
 
 def get_tenant_acl() -> Optional[dict]:
-    """
-    Return the current request's tenant ACL map, or None if no ACL applies.
-    """
+    """Return the current request's tenant ACL map, or None if no ACL applies."""
     return _tenant_acl_var.get(None)
 
 
@@ -232,9 +221,7 @@ def check_tenant_permission(
     instance_name: Optional[str] = None,
     required_permission: str = "view",
 ) -> bool:
-    """
-    Check if the current tenant has a specific permission for a resource.
-    """
+    """Whether the current caller holds `required_permission` on a project or one instance."""
     # A wildcard tenant grant is still subordinate to the project bound. On a cluster shared
     # by two organizations, ``*`` means every project attributable to the policy's
     # organization, not every physical LXD project on that cluster.
@@ -243,29 +230,27 @@ def check_tenant_permission(
 
     acl = _tenant_acl_var.get(None)
     if acl is None:
-        # no ACL = full access (admin/partner), except a change needing a grant above view in a
-        # `default` another party also holds (console, files, credentials, power, snapshots).
-        # Reads stay open (owner decision 2026-11-05).
+        # No ACL means full access (Admin or Partner), except a change needing a grant above view
+        # in a `default` another party also holds (console, files, credentials, power, snapshots).
+        # Reads stay open.
         return required_permission == "view" or not (default_is_view_only(cluster_id, project_name) and _is_change())
 
     cluster_rules = acl.get(cluster_id)
     if not cluster_rules:
         return False
 
-    # collect all matching permissions (merge wildcards + specific)
+    # Merge the permissions of every matching rule, wildcard or exact.
     merged_perms: set[str] = set()
 
     for (proj, inst), perms in cluster_rules.items():
-        # check project match (wildcard or exact)
         proj_match = (proj == "*") or (proj == project_name)
         if not proj_match:
             continue
 
         if instance_name is None:
-            # project-level check: any rule for this project grants access
+            # Project-level check: any rule for this project grants access.
             merged_perms.update(perms)
         else:
-            # instance-level check
             inst_match = (inst == "*") or (inst == instance_name)
             if inst_match:
                 merged_perms.update(perms)
@@ -279,9 +264,9 @@ def verify_tenant_permission(
     instance_name: Optional[str] = None,
     required_permission: str = "view",
 ) -> None:
-    """
-    Like check_tenant_permission but raises 403 on failure.
-    No-op if no ACL is active (admin/partner).
+    """Like check_tenant_permission, but raises 403 on failure.
+
+    With no ACL (Admin or Partner) only the project bound and a view-only `default` can refuse.
     """
     if not check_tenant_permission(cluster_id, project_name, instance_name, required_permission):
         resource = f"{cluster_id}/{project_name}"
@@ -294,12 +279,9 @@ def verify_tenant_permission(
 
 
 def filter_projects_by_acl(cluster_id: str, project_names: list[str]) -> list[str]:
-    """
-    Filter a list of project names by the current tenant ACL.
-    Returns all projects if no ACL is active.
-    """
-    # Apply the organization project bound before interpreting an ACL wildcard. Returning the
-    # original list for ``*`` used to undo the bound and expose a neighbour's projects.
+    """Filter project names by the project bound, then by the current tenant ACL."""
+    # Apply the organization project bound before interpreting an ACL wildcard: returning the
+    # original list for ``*`` would undo the bound and expose a neighbour's projects.
     visible_names = [name for name in project_names if project_is_visible(cluster_id, name)]
 
     acl = _tenant_acl_var.get(None)
@@ -310,12 +292,10 @@ def filter_projects_by_acl(cluster_id: str, project_names: list[str]) -> list[st
     if not cluster_rules:
         return []
 
-    # check if wildcard project exists
     for (proj, _inst), _perms in cluster_rules.items():
         if proj == "*":
             return visible_names
 
-    # filter to allowed projects
     allowed_projects = {proj for (proj, _inst), _perms in cluster_rules.items()}
     return [p for p in visible_names if p in allowed_projects]
 
@@ -339,13 +319,12 @@ def project_is_visible(cluster_id: str, project: Optional[str]) -> bool:
 def verify_project_access(cluster_id: str, project_name: Optional[str]) -> str:
     """Authorize one concrete project and return its normalized name.
 
-    A missing or whitespace-only project means LXD's ``default`` project. The returned value
-    must be carried through to the service call: several LXD helpers interpret a falsy project
-    as "search every project", which can select another organization's same-named instance.
+    A missing or whitespace-only project means LXD's ``default`` project. Carry the returned
+    value through to the service call: several LXD helpers read a falsy project as "search every
+    project", which can select another organization's same-named instance.
 
-    This gate is independent of the tenant-operation feature flag. Partner isolation on a
-    shared cluster is a project boundary, not a tenant ACL feature, and must always run before
-    any LXD client or service lookup.
+    This gate runs whatever the tenant-operation feature flag says: Partner isolation on a shared
+    cluster is a project boundary and must run before any LXD client or service lookup.
     """
     project = (project_name or "default").strip() or "default"
     verify_cluster_access(cluster_id)
@@ -388,9 +367,8 @@ def can_view_instance(
 ) -> bool:
     """Whether this request may read one instance in one concrete project.
 
-    This deliberately combines the Partner project bound and the Tenant instance ACL. Calling
-    only ``check_tenant_permission`` is insufficient because Admin and Partner carry no tenant
-    ACL, while calling only ``project_is_visible`` is insufficient for a Tenant.
+    Combines the Partner project bound and the Tenant instance ACL after normalizing an empty
+    project to ``default``.
     """
     project = (project_name or "default").strip() or "default"
     return project_is_visible(cluster_id, project) and check_tenant_permission(
@@ -408,8 +386,8 @@ def verify_instance_view_access(
 ) -> str:
     """Authorize one instance read and return its normalized project.
 
-    The cluster and project gates run before the LXD lookup, so a deliberately invalid request
-    cannot use response timing or errors to enumerate another organization's projects.
+    The cluster and project gates run before the LXD lookup, so an invalid request cannot use
+    response timing or errors to enumerate another organization's projects.
     """
     project = verify_project_access(cluster_id, project_name)
     verify_tenant_permission(cluster_id, project, instance_name, "view")
@@ -421,10 +399,7 @@ def filter_instances_by_acl(
     project_name: str,
     instance_names: list[str],
 ) -> list[str]:
-    """
-    Filter a list of instance names by the current tenant ACL.
-    Returns all instances if no ACL is active.
-    """
+    """Filter instance names by the project bound and the current tenant ACL."""
     if not project_is_visible(cluster_id, project_name):
         return []
 
@@ -436,13 +411,11 @@ def filter_instances_by_acl(
     if not cluster_rules:
         return []
 
-    # check for instance wildcard within this project (or wildcard project)
     for (proj, inst), _perms in cluster_rules.items():
         proj_match = (proj == "*") or (proj == project_name)
         if proj_match and inst == "*":
             return instance_names  # wildcard = all instances
 
-    # filter to specific allowed instances
     allowed_instances: set[str] = set()
     for (proj, inst), _perms in cluster_rules.items():
         proj_match = (proj == "*") or (proj == project_name)
@@ -460,9 +433,9 @@ def filter_instances_by_acl(
 class TenantPolicyGrant:
     """One active tenant grant with the policy organization kept attached.
 
-    The public ACL map deliberately stays compact, but it cannot answer which organization a
-    wildcard came from. This provenanced form is used while deriving shared-cluster project
-    bounds and by the tenant self-view, then flattened only after those boundaries are known.
+    The ACL map is compact and cannot say which organization a wildcard came from. This form is
+    used while deriving shared-cluster project bounds and by the tenant self-view, and is
+    flattened only after those bounds are known.
     """
 
     organization_id: int
@@ -576,8 +549,8 @@ async def get_tenant_policy_grants(
     )
     rows = (await db.execute(stmt)).unique().all()
     # important: a local policy in a buyer organization naming a cluster the buyer reaches only by
-    # purchase follows that purchase's term. Without this a rule a founder wrote while the term ran
-    # kept granting after it ended (security review 2026-10-27, core/sale_term.py).
+    # purchase follows that purchase's term, so a rule a founder wrote while the term ran stops
+    # granting when it ends (core/sale_term.py).
     sale_terms = {}
     if enforce_term:
         bought = {
@@ -601,7 +574,7 @@ async def get_tenant_policy_grants(
             source=source, term_ended_at=term_ended_at, access_ends_at=access_ends_at,
             permissions=stored, now=now,
         )
-        # Past the paid term the policy grants viewing only (owner decision 2026-10-27).
+        # Past the paid term the policy grants viewing only.
         permissions = clamp(stored, term_ended_at=term_ended_at, now=now) if enforce_term else stored
         grants.append(
             TenantPolicyGrant(
@@ -628,10 +601,7 @@ async def _resolve_user_org_names(
     user: AuthenticatedUser,
     db: AsyncSession,
 ) -> list[str]:
-    """
-    Return a list of org names the user belongs to (via membership or creation).
-    Admin gets an empty list (they see everything, no specific org binding).
-    """
+    """Names of the organizations the user belongs to or created; empty for an Admin."""
     from app.core.rbac import resolve_roles, get_highest_role, Role
     from app.models.db_models import Organization, OrganizationMember
 
@@ -664,12 +634,10 @@ async def _ordered_org_ids_for_email(
     user_email: str,
     db: AsyncSession,
 ) -> list[int]:
-    """
-    Org IDs a user (by email) belongs to via membership or creation, with
-    partner/admin (owner) orgs first so callers can pick a deterministic primary.
+    """Org IDs a user (by email) belongs to or created, owner (partner or admin) orgs first.
 
-    Shared by ``get_user_org_ids`` and ``reconcile_personal_clusters`` so the
-    "which org owns this user's clusters" answer is computed in exactly one place.
+    Shared by ``get_user_org_ids`` and ``reconcile_personal_clusters`` so the primary org that
+    owns a user's clusters is picked in one place.
     """
     from app.models.db_models import Organization, OrganizationMember
 
@@ -707,26 +675,23 @@ async def get_user_org_ids(
     user: AuthenticatedUser,
     db: AsyncSession,
 ) -> list[int]:
-    """
-    Return the org IDs a user belongs to (via membership or creation), with
-    partner/admin (owner) orgs first so callers can pick a deterministic primary.
+    """The org IDs a user belongs to or created, owner (partner or admin) orgs first.
 
-    Uses the SAME membership predicate as ``get_user_allowed_clusters`` so cluster
-    binding at registration cannot drift from cluster visibility (the root cause of
-    orphaned clusters: a role-filtered binding query vs a role-agnostic scope query).
+    Uses the same role-agnostic membership predicate as ``get_user_allowed_clusters``, so the org
+    a cluster is bound to at registration cannot drift from cluster visibility and orphan it.
     """
     return await _ordered_org_ids_for_email(user.email, db)
 
 
 async def _query_owned_clusters(user_email: str, db: AsyncSession) -> set[str]:
-    """
-    Role-agnostic owned-cluster set for an email: clusters of orgs they created or
-    belong to, plus any cluster they personally registered (registered_by fallback,
-    incl. unbound NULL-org rows).
+    """Role-agnostic owned-cluster set for an email.
 
-    important: OUTER join + is_active INSIDE the and_ - a registrant's cluster may be
-    unbound (organization_id NULL), so an inner join / top-level is_active filter would
-    drop the very rows the registered_by branch is meant to surface.
+    Clusters of orgs the user created or belongs to, plus any cluster it registered itself
+    (registered_by), unbound NULL-org rows included.
+
+    important: OUTER join, with is_active inside the and_. A registrant's cluster may be unbound
+    (organization_id NULL), so an inner join or a top-level is_active filter would drop the rows
+    the registered_by branch exists for.
     """
     from app.models.db_models import (
         Organization,
@@ -737,11 +702,10 @@ async def _query_owned_clusters(user_email: str, db: AsyncSession) -> set[str]:
     )
 
     # important: a binding provisioning wrote for a sale (registered_by NULL on an OrcaHub
-    # organization) exists only because a buyer bought something on that cluster. A buyer founder
-    # holding role_partner reached the cluster through it for as long as the binding stood, after
-    # the sale itself had ended. Such a binding now counts only while the organization still has a
-    # live access rule on that cluster. Bindings someone registered, local organizations and the
-    # organization's creator are unaffected.
+    # organization) exists only because a buyer bought something on that cluster, so it counts only
+    # while the organization still has a live access rule there. Otherwise a buyer founder holding
+    # role_partner would keep reaching the cluster after the sale ended. Registered bindings, local
+    # organizations and the organization's creator are unaffected.
     sale_still_live = (
         select(TenantPolicyRule.id)
         .join(TenantAccessPolicy, TenantAccessPolicy.id == TenantPolicyRule.policy_id)
@@ -750,7 +714,7 @@ async def _query_owned_clusters(user_email: str, db: AsyncSession) -> set[str]:
             TenantPolicyRule.cluster_id == OrganizationCluster.cluster_id,
             # important: only the purchase's own policies. A local policy a founder wrote in the
             # buyer organization would otherwise keep the binding, and the founder's reach, alive
-            # after the purchase ended (security review 2026-10-27).
+            # after the purchase ended.
             TenantAccessPolicy.source == "orcahub",
             or_(
                 not get_settings().tenant_term_enforcement_enabled,
@@ -794,10 +758,7 @@ async def get_user_allowed_clusters(
     user: AuthenticatedUser,
     db: AsyncSession,
 ) -> Optional[set[str]]:
-    """
-    Query the DB to determine which clusters a user may access.
-    Admin returns None (no filter / operational god-view).
-    """
+    """Which clusters a user may access; None (no filter) for an Admin."""
     from app.core.rbac import resolve_roles, get_highest_role, Role
 
     roles = resolve_roles(user)
@@ -815,13 +776,10 @@ async def get_owned_clusters_ignoring_admin(
     user: AuthenticatedUser,
     db: AsyncSession,
 ) -> set[str]:
-    """
-    The clusters a user actually OWNS (via org membership/creation or personal
-    registration), computed regardless of the admin role short-circuit.
+    """The clusters a user owns (org membership, creation or own registration), even for an Admin.
 
-    Used by the break-glass gate: a pure admin owns nothing here (every tenant
-    cluster is out-of-scope and needs a grant), while an admin who is ALSO a partner
-    still owns their own org's clusters and must not be locked out of them.
+    Used by the break-glass gate: a pure Admin owns nothing here (every tenant cluster needs a
+    grant), while an Admin who is also a Partner keeps its own org's clusters.
     """
     return await _query_owned_clusters(user.email, db)
 
@@ -830,10 +788,10 @@ async def resolve_cluster_org(
     host: str,
     db: AsyncSession,
 ) -> tuple[Optional[int], Optional[str]]:
-    """
-    Map a cluster_id (the LXD ``host`` key) to its owning organization (id, slug).
-    Returns (None, None) for an unbound or unknown cluster. A bound row wins over the
-    unbound (NULL-org) ownership row that can also exist for the same cluster.
+    """Map a cluster_id (the LXD ``host`` key) to its lowest-id bound organization (id, slug).
+
+    Returns (None, None) for an unbound or unknown cluster. A bound row wins over the unbound
+    (NULL-org) ownership row that can also exist for the same cluster.
     """
     from app.models.db_models import Organization, OrganizationCluster
 
@@ -857,10 +815,10 @@ async def org_to_hold_project_grant(
 ) -> Optional[int]:
     """The organization a project this user creates on `host` is recorded under.
 
-    The first of the user's organizations in the documented primary order
-    (`_ordered_org_ids_for_email`: owner orgs first) that is bound to the cluster. None when
-    none of them is: a rule for a cluster under an organization not bound to it is exactly the
-    stale shape the policy repair removes, so there is no fallback to an unbound org.
+    The first of the user's organizations in primary order (`_ordered_org_ids_for_email`: owner
+    orgs first) that is bound to the cluster and that the user runs. None when there is none: a
+    rule under an organization not bound to the cluster is the stale shape the policy repair
+    removes, so there is no fallback to an unbound org.
     """
     from app.services import cluster_parties
 
@@ -880,12 +838,11 @@ async def resolve_cluster_orgs(
     host: str,
     db: AsyncSession,
 ) -> list[tuple[int, str]]:
-    """EVERY organization bound to a cluster, lowest id first.
+    """Every organization bound to a cluster, lowest id first.
 
-    important: `resolve_cluster_org` answers "which one org do we attribute this to" and takes the
-    lowest id, which is fine for a label and wrong for a permission. A cluster can carry more than
-    one binding, and one does on this deployment today, so a rule that consults a single row is
-    asking one tenant a question about another tenant's guests.
+    important: `resolve_cluster_org` takes the lowest id, which suits a label but not a permission.
+    A cluster can carry more than one binding, so a rule that consults a single row asks one
+    tenant a question about another tenant's guests.
     """
     from app.models.db_models import Organization, OrganizationCluster
 
@@ -919,20 +876,13 @@ async def _query_user_org_ids(user_email: str, db: AsyncSession) -> set[int]:
 
 
 async def _clusters_with_several_orgs(db: AsyncSession) -> set[str]:
-    """Clusters bound to more than one organization.
-
-    important: resolve_cluster_org answers "which one org do we attribute this to" and takes
-    the lowest id, which is right for a label and wrong for a permission. A cluster can carry
-    more than one binding, and one does on this deployment today.
-    """
+    """Clusters bound to more than one organization, each unbound registrant counted as an owner."""
     from app.models.db_models import OrganizationCluster
 
-    # important: organization_id is nullable by design. A cluster a partner registered before
-    # their org was synced is stored with a NULL org and owned through registered_by, and
-    # count(distinct col) in Postgres skips NULLs. Counting the raw column would read
-    # "one org bound plus one unbound registrant" as a single owner and leave the cluster
-    # unrestricted, which is the direction that leaks. coalesce gives every unbound row its
-    # own identity so it counts as another owner.
+    # important: organization_id is nullable. A cluster a partner registered before its org was
+    # synced is stored with a NULL org and owned through registered_by, and Postgres
+    # count(distinct col) skips NULLs, so "one org plus one unbound registrant" would read as a
+    # single owner and leave the cluster unrestricted. coalesce gives each unbound row its own key.
     owner_key = func.coalesce(
         cast(OrganizationCluster.organization_id, String),
         "unbound:" + cast(OrganizationCluster.id, String),
@@ -952,13 +902,12 @@ async def _resolve_tenant_grants(
 ) -> tuple[list[TenantPolicyGrant], dict[str, set[str]]]:
     """Expand shared-cluster wildcards before grants from different orgs are merged.
 
-    A project has no first-class owner record in the current schema. The established ownership
-    evidence is therefore the same conservative evidence used for Partners: ``default`` plus
-    concrete project names in policies from that organization while it remains bound to the
-    cluster. Expansion happens per ``(organization_id, cluster_id)`` while policy provenance is
-    still attached. This ordering is the security boundary: computing one global project union
-    first would let organization A's wildcard consume a narrow project grant from organization
-    B when the same Tenant legitimately belongs to both.
+    A project has no owner record, so ownership is inferred as for Partners: ``default`` plus
+    the concrete project names in that organization's policies while it stays bound to the cluster.
+
+    important: expansion runs per ``(organization_id, cluster_id)`` while the policy organization
+    is still attached. A global project union computed first would let organization A's wildcard
+    consume a narrow project grant from organization B when one Tenant belongs to both.
     """
     from app.models.db_models import (
         Organization,
@@ -1060,20 +1009,16 @@ async def get_visible_projects(
 ) -> Optional[dict[str, set[str]]]:
     """Which LXD projects this user may see, on clusters that carry more than one org.
 
-    Returns None when nothing needs restricting, and otherwise a map of cluster to the set of
-    project names that may be shown. A cluster absent from the map is unrestricted.
-
-    Admin is unrestricted here. A Partner is scoped by cluster alone, so the safe default on a
-    shared cluster is ``default`` widened by concrete projects their own policies name. A
-    Tenant also needs a project bound: their ACL can contain ``project_name='*'``, which must
-    mean the policy organization's projects rather than every project another organization
-    happens to run on the same cluster.
+    Returns None when nothing needs restricting, and otherwise a map of cluster to the project
+    names that may be shown; a cluster absent from the map is unrestricted. An Admin is
+    unrestricted. A Partner sees ``default`` plus the concrete projects its own policies name. A
+    Tenant is bound too, because ``project_name='*'`` in its ACL must mean the policy
+    organization's projects, never every project on the cluster.
 
     important: for a Partner, `reachable` (the request's cluster scope) adds every cluster another
-    party holds (services.cluster_parties), even where only one organization is bound. A partner
-    reaches such a cluster through a member row in an organization it bought from, and counting
-    bindings alone left it unbounded there. This only tightens: a cluster counted shared stays
-    bounded even when the partner's own party holds it whole.
+    party holds (services.cluster_parties), even where only one organization is bound: a Partner
+    reaches such a cluster through a member row in an organization it bought from. This only
+    tightens; a cluster counted as shared stays bounded even when the Partner's party holds it whole.
     """
     from app.core.rbac import resolve_roles, get_highest_role, Role
 
@@ -1124,9 +1069,9 @@ async def partner_projects_on(db: AsyncSession, email: str, cluster_ids: Iterabl
     from app.services import cluster_parties
 
     org_ids = set(await cluster_parties.run_orgs(db, email))
-    # note: and the policies assigned to the caller's own member rows, as the release line does. A
-    # teammate added from the dashboard holds a member row, runs nothing, and is given its projects
-    # by assignment; the seller's other policies stay out.
+    # Policies assigned to the caller's own member rows count too: a teammate added from the
+    # dashboard holds a member row, runs nothing, and is given its projects by assignment. The
+    # seller's other policies stay out.
     now = datetime.now(timezone.utc)
     assigned = (
         select(TenantPolicyAssignment.policy_id)
@@ -1165,11 +1110,9 @@ async def partner_projects_on(db: AsyncSession, email: str, cluster_ids: Iterabl
             .distinct()
         )
         named = set((await db.execute(stmt)).scalars().all())
-        # important: '*' does NOT lift the bound. project_name defaults to '*' on the
-        # model and on the create schema, so any organization that had ever written a
-        # single tenant policy for this cluster would have been unrestricted, which is the
-        # control switched off by default rather than an edge case. A wildcard also cannot
-        # answer the question being asked here, which is WHICH projects belong to this
+        # important: '*' does not lift the bound. project_name defaults to '*' on the model and
+        # the create schema, so any organization with a single tenant policy for this cluster
+        # would be unrestricted. A wildcard also cannot say which projects belong to this
         # organization; on a cluster shared with another org it names theirs too.
         allowed |= {n for n in named if n and n != "*"}
         mapping[cluster_id] = allowed
@@ -1180,24 +1123,22 @@ async def partner_projects_on(db: AsyncSession, email: str, cluster_ids: Iterabl
 async def reconcile_personal_clusters(
     db: AsyncSession,
     user_email: str,
-    # note: called as (cluster_id, from_org, to_org) for each row it moves, before the commit
+    # Called as (cluster_id, from_org, to_org) for each row it moves, before the commit.
     on_rebind: Optional[Callable[[str, Optional[int], int], None]] = None,
-    # important: when given, the caller has decided the destination and the primary-org
-    # ordering is not consulted. An integration push passes the one org its key claimed.
+    # When given, the caller has decided the destination and the primary-org ordering is not
+    # consulted. An integration push passes the one org its key claimed.
     organization_id: Optional[int] = None,
 ) -> int:
-    """
-    Bind a user's still-unbound (organization_id NULL) clusters to their primary org.
+    """Bind a user's still-unbound (organization_id NULL) clusters to their primary org.
 
-    Called once a partner becomes linked to an org (creates an API key, or their org
-    is synced from OrcaHub), so clusters they registered before that point stop being
-    "personal" and become visible to org-mates / eligible for tenant policies + webhooks.
+    Called once a partner is linked to an org (it creates an API key, or its org is synced from
+    OrcaHub), so clusters it registered earlier become visible to org-mates and eligible for
+    tenant policies and webhooks.
 
-    Idempotent: filtered on ``organization_id IS NULL`` so a second run is a no-op, and
-    returns 0 when the user has no org or no unbound clusters. A row whose cluster is
-    already bound to the primary org is deleted (would violate uq_org_cluster), not
-    duplicated. The rebind is a plain UPDATE on a standalone row - never routed through
-    ``Organization.clusters`` so the delete-orphan cascade cannot fire.
+    Idempotent: filtered on ``organization_id IS NULL``, and returns 0 when the user has no org
+    or no unbound clusters. A row whose cluster is already bound to the primary org is deleted
+    rather than duplicated (uq_org_cluster). The rebind is a plain UPDATE on a standalone row,
+    never routed through ``Organization.clusters``, so the delete-orphan cascade cannot fire.
     """
     from app.models.db_models import OrganizationCluster
     from app.services.shared_cluster_audit import (
@@ -1271,9 +1212,7 @@ async def get_tenant_acl_rules(
     user: AuthenticatedUser,
     db: AsyncSession,
 ) -> Optional[dict]:
-    """
-    Build the resolved ACL map for a tenant user.
-    """
+    """The resolved ACL map for a Tenant; None for an Admin or Partner."""
     acl, _grants, _visible_projects = await get_tenant_scope(user, db)
     return acl
 
@@ -1281,11 +1220,10 @@ async def get_tenant_acl_rules(
 def _tenant_acl_from_grants(
     grants: Optional[list[TenantPolicyGrant]],
 ) -> Optional[dict[str, dict[tuple[str, str], set[str]]]]:
-    """Flatten provenanced grants only after the project-bound inputs are retained."""
+    """Flatten resolved grants into the compact ACL map, merging permissions across policies."""
     if grants is None:
         return None
 
-    # build ACL map: merge permissions across policies
     acl: dict[str, dict[tuple[str, str], set[str]]] = {}
     for grant in grants:
         cluster_id = grant.cluster_id
@@ -1337,21 +1275,17 @@ def _narrow_by_tenant_acl(
     allowed: Optional[set[str]],
     acl: Optional[dict],
 ) -> Optional[set[str]]:
-    """
-    Intersect the org-derived cluster set with the clusters the tenant's ACL grants.
+    """Intersect the org-derived cluster set with the clusters the tenant's ACL grants.
 
-    important: an EMPTY acl dict is a real answer, not a missing one. It means the tenant holds
-    no active policy assignment, and check_tenant_permission already denies every cluster for
-    it. Keeping the org-wide set here contradicted that: the tenant saw zero instances while
-    unreachable_nodes still named every down cluster in the partner's organisation, and every
-    power route whose ACL check sits behind TENANT_PERM_ENFORCEMENT_ENABLED still passed
-    verify_cluster_access. Empty ACL means empty scope, so the two layers agree.
+    important: an empty ACL dict means the tenant holds no active policy assignment, and
+    check_tenant_permission already denies every cluster for it. An empty ACL therefore means an
+    empty scope; keeping the org-wide set would let unreachable_nodes name every down cluster in
+    the organization and let power routes behind TENANT_PERM_ENFORCEMENT_ENABLED pass
+    verify_cluster_access.
 
-    note: None stays unrestricted and is returned untouched. get_user_allowed_clusters returns
-    None only for an admin and get_tenant_acl_rules returns None only for admin or partner, so
-    both are non-None for tenants and only for tenants. The guard is kept anyway: without it a
-    future role answering None for one and a dict for the other would raise inside a
-    router-level dependency, which is a 500 on every request rather than a visible mistake.
+    None stays unrestricted and is returned untouched. Both inputs are non-None only for a
+    Tenant; the guard keeps a role that answers None for one and a dict for the other from
+    raising inside a router-level dependency on every request.
     """
     if acl is None or allowed is None:
         return allowed
@@ -1409,7 +1343,7 @@ def refuse_grants_on_purchased_clusters(cluster_ids: Iterable[str]) -> None:
     """403 when a Partner tries to grant on a cluster it reaches only through a purchase.
 
     A key or add-on grant there would reach the cluster with no paid term on it, outliving the
-    purchase (security review 2026-10-27). The seller's side and Administrators are unaffected.
+    purchase. The seller's side and Administrators are unaffected.
     """
     refused = sorted(set(cluster_ids) & purchase_only_clusters())
     if refused:
@@ -1426,15 +1360,12 @@ async def org_scope_dependency(
     user: Optional[AuthenticatedUser] = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """
-    Router-level dependency that sets the org-scope context variable
-    and tenant ACL if applicable.
-    """
+    """Router-level dependency that sets this request's org scope and, for a Tenant, its ACL."""
     _interactive_var.set(False)
     _read_only_clusters_var.set(frozenset())
     _default_view_only_var.set(frozenset())
     if user is None:
-        # dev mode - no filter
+        # Dev mode: no filter.
         _allowed_clusters_var.set(None)
         _tenant_acl_var.set(None)
         _visible_projects_var.set(None)
@@ -1444,9 +1375,9 @@ async def org_scope_dependency(
     allowed = await get_user_allowed_clusters(user, db)
     _allowed_clusters_var.set(allowed)
 
-    # Resolve once so the compact ACL and the project bound are derived from exactly the same
-    # provenanced grant rows. Querying the assignment join twice costs every API request and can
-    # also observe two sides of a concurrent revoke.
+    # Resolve once so the compact ACL and the project bound come from the same grant rows.
+    # Querying the assignment join twice costs every API request and can also observe two sides
+    # of a concurrent revoke.
     acl, tenant_grants, tenant_visible_projects = await get_tenant_scope(user, db)
     _tenant_acl_var.set(acl)
     _resolved_tenant_grants_var.set(
@@ -1461,10 +1392,10 @@ async def org_scope_dependency(
     _read_only_clusters_var.set(await _partner_read_only(user, db, allowed))
     _default_view_only_var.set(await _default_view_only(user, db, allowed))
 
-    # for tenants: restrict to the clusters their ACL grants (empty ACL means empty scope)
+    # A Tenant is narrowed to the clusters its ACL grants; an empty ACL means an empty scope.
     _allowed_clusters_var.set(_narrow_by_tenant_acl(allowed, acl))
 
-    # push org names into RequestContext for audit logs
+    # Org names for the audit log.
     from app.core.request_context import get_request_context
     org_names = await _resolve_user_org_names(user, db)
     ctx = get_request_context()
@@ -1473,11 +1404,10 @@ async def org_scope_dependency(
 
 
 async def set_org_scope_for_ws(user: Optional["AuthenticatedUser"], *, interactive: bool = False) -> None:
-    """
-    Set org scope and tenant ACL for WebSocket handlers where DI is unavailable.
+    """Set org scope and tenant ACL for WebSocket handlers, where FastAPI DI is unavailable.
 
-    `interactive` for a socket that drives a guest (console, terminal): on a cluster a buyer reaches
-    only through an ended paid term, that is refused like any other change.
+    `interactive` marks a socket that drives a guest (console, terminal): on a cluster a buyer
+    reaches only through an ended paid term, it is refused like any other change.
     """
     _interactive_var.set(interactive)
     _read_only_clusters_var.set(frozenset())
@@ -1518,12 +1448,11 @@ async def set_org_scope_for_ws(user: Optional["AuthenticatedUser"], *, interacti
         _read_only_clusters_var.set(await _partner_read_only(user, db, allowed))
         _default_view_only_var.set(await _default_view_only(user, db, allowed))
 
-        # important: the same narrowing as the HTTP dependency, through the same helper. These
-        # were two duplicated blocks, which is how the empty-ACL fallback survived: fixing one
-        # copy leaves console, terminal and events on the old behaviour, with nothing to notice.
+        # important: the same narrowing as the HTTP dependency, through the same helper, so the
+        # console, terminal and events sockets cannot drift from it.
         _allowed_clusters_var.set(_narrow_by_tenant_acl(allowed, acl))
 
-        # push org names into RequestContext for audit logs
+        # Org names for the audit log.
         from app.core.request_context import get_request_context
         org_names = await _resolve_user_org_names(user, db)
         ctx = get_request_context()

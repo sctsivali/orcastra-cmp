@@ -1,13 +1,13 @@
 """
-Break-glass grant lifecycle + sensitive-access enforcement.
+Break-glass grant lifecycle and sensitive-access enforcement.
 
 A platform admin keeps operational visibility of the fleet but cannot open a console
 or terminal into a tenant's VM without an explicit, justified, time-boxed grant. This
-module owns: creating/listing/revoking grants, the authoritative "is there a live grant"
-lookup, and the gate that console/terminal session creation calls.
+module creates, lists and revokes grants, answers whether a live grant exists, and holds
+the gate that console and terminal session creation calls.
 
-Single source of truth so the router and the enforcement gate share one liveness rule:
-a grant is live iff ``revoked_at IS NULL AND expires_at > now()`` (status is advisory).
+The router and the gate share one liveness rule: a grant is live iff
+``revoked_at IS NULL AND expires_at > now()`` (status is advisory).
 """
 
 import asyncio
@@ -51,8 +51,7 @@ async def _active_grant_for(
 ) -> Optional[BreakGlassGrant]:
     """The live grant for one principal on one cluster, whichever kind of principal it is.
 
-    One query rather than two near-copies, because the liveness predicate is the load-bearing part
-    and a second spelling of it is a second thing to get wrong. Authoritative liveness is
+    Both principal kinds share this query so the liveness predicate is written once: liveness is
     ``revoked_at IS NULL AND expires_at > now()``; `status` stays advisory so a lazy expiry sweep
     never widens access.
     """
@@ -87,16 +86,14 @@ async def get_active_key_grant(
     fingerprint: Optional[str] = None,
     pin_state: Optional["PinState"] = None,
 ) -> Optional[BreakGlassGrant]:
-    """The live grant (if any) authorizing an INTEGRATION KEY to reach cluster_id.
+    """The live grant (if any) authorizing an integration key to reach cluster_id.
 
-    A key has no human behind it, so the grant is what supplies the reason, the expiry and the
-    revocation that an unattended caller cannot otherwise be held to.
+    A key has no human behind it, so the grant supplies the reason, the expiry and the revocation.
 
-    important: when the caller can supply the cluster's current server-certificate fingerprint,
-    a grant that recorded a different one is refused. `cluster_id` is a free-text Vault key with
-    no foreign key, so a cluster deleted and re-registered under another owner matches an old
-    grant by string alone. A grant issued before that column existed has no fingerprint and is
-    not subjected to the check, because it never made the promise.
+    important: when the caller supplies the cluster's current certificate fingerprint or pin state,
+    a grant that recorded a different certificate is refused. `cluster_id` is a free-text Vault key
+    with no foreign key, so a cluster deleted and re-registered under another owner matches an old
+    grant by string alone. A grant that recorded no fingerprint is not checked.
     """
     grant = await _active_grant_for(db, BreakGlassGrant.api_key_id, api_key_id, cluster_id)
     if grant is None:
@@ -122,10 +119,10 @@ async def get_active_key_grant(
 
 async def _effective_owned(user: AuthenticatedUser, db: AsyncSession) -> set[str]:
     """
-    Clusters the actor OWNS (role-agnostic). Reuses the request-scoped allowed set for
-    partner/tenant (already resolved by org_scope_dependency / set_org_scope_for_ws); for
-    admin (context var is None) computes the real owned set so an admin-who-is-also-a-partner
-    is never locked out of their own org's clusters (the admin+partner trap).
+    Clusters the actor owns, whatever its role. Reuses the request-scoped allowed set for
+    partner/tenant (resolved by org_scope_dependency / set_org_scope_for_ws); for an admin
+    (context var is None) computes the owned set so an admin who is also a partner is not
+    locked out of their own organization's clusters.
     """
     allowed = get_current_allowed_clusters()
     if allowed is not None:
@@ -137,9 +134,9 @@ async def inspect_access(
     user: AuthenticatedUser, host: str, db: AsyncSession
 ) -> dict:
     """
-    Non-mutating pre-flight: does this actor need a break-glass grant to open
-    console/terminal on ``host``, and do they already hold one? Lets the UI prompt for
-    a grant before connecting instead of failing at the gate. No session is created.
+    Read-only pre-flight: whether this actor needs a break-glass grant to open a console or
+    terminal on ``host``, and whether they already hold one. Lets the UI ask for a grant
+    before connecting instead of failing at the gate. No session is created.
     """
     org_id, org_slug = await resolve_cluster_org(host, db)
     if not get_settings().auth_enabled:
@@ -166,7 +163,7 @@ async def enforce_sensitive_access(
     """
     Gate a sensitive (console/terminal) access on cluster ``host``.
 
-    Returns None when the actor owns the cluster (in-scope self-service: unchanged).
+    Returns None when the actor owns the cluster (in-scope self-service).
     Returns the live grant when access is authorized under break-glass.
     Raises HTTPException(403, break_glass_required) when out-of-scope without a grant.
     Local dev (auth disabled) bypasses the gate.
@@ -234,16 +231,12 @@ async def cluster_pin_state(cluster_id: str, *, strict: bool = False) -> Optiona
 async def cluster_fingerprint(cluster_id: str) -> Optional[str]:
     """The cluster's pinned server-certificate fingerprint, or None when nothing is pinned.
 
-    Recorded on a key grant so the grant dies with the registration it was issued against.
-    `cluster_id` is a free-text Vault key with no foreign key anywhere in this schema, so a
-    cluster deleted and re-registered under a different owner matches an old grant by string
-    alone. A re-registration cannot reproduce the key pair, so the fingerprint is what tells the
-    two apart.
+    Recorded on a key grant so the grant ends with the registration it was issued against: a
+    re-registration under the same `cluster_id` cannot reproduce the key pair.
 
-    None rather than a raise when Vault is unreachable or nothing is pinned: a grant that records
-    no fingerprint is simply not subjected to the check, which is the same rule applied to grants
-    issued before the column existed. Refusing to issue a grant because a pin is missing would
-    make an unrelated Vault problem look like an authorisation failure.
+    Returns None instead of raising when Vault is unreachable; a grant that records no fingerprint
+    is not checked. Refusing the grant would make an unrelated Vault problem look like an
+    authorisation failure.
     """
     state = await cluster_pin_state(cluster_id)
     return state.fingerprint if state else None
@@ -265,11 +258,9 @@ async def create_grant(
 
     Reason is mandatory; duration is clamped to [1, max].
 
-    important: `created_by` is now separate from the grantee. For a human self-grant the two are
-    the same email and nothing changes. For a key grant they must not be: the key is what the
-    grant authorises, and the human who issued it is who answers for it. Collapsing them, which
-    is what the previous signature did by using `admin_email` for both, would leave a key grant
-    with no accountable person on it.
+    important: `created_by` is separate from the grantee. For a human self-grant both are the same
+    email. For a key grant the key is what the grant authorises and `created_by` is the person who
+    answers for it; using `admin_email` for both would leave no accountable person on the grant.
     """
     settings = get_settings()
     if not reason or not reason.strip():
@@ -358,11 +349,10 @@ async def watch_grant_while_open(
 ) -> None:
     """Close ``websocket`` once the grant that authorized it stops being active.
 
-    important: console and terminal sockets authorize once, at connect, and then stay open for
-    as long as the operator keeps the tab. A one-minute grant therefore bought an unbounded
-    session, and revoking a grant did nothing to a session already running, which is the case
-    revocation exists for. This re-reads the row on a timer and closes the socket the moment it
-    is no longer active.
+    important: console and terminal sockets authorize once, at connect, and stay open as long as
+    the tab does. Without this watch a short grant would buy an unbounded session and a revocation
+    would not reach a running one. The row is re-read on a timer and the socket closed as soon as
+    the grant stops being active.
 
     Runs as a background task; it must never raise into the session it is watching.
     """
@@ -380,8 +370,8 @@ async def watch_grant_while_open(
                 continue
             if not still_valid:
                 logger.info("Break-glass grant %s no longer active; closing session", grant_id)
-                # 4428, not 1008: the page reads it as "break-glass ended" and does not reconnect
-                # into a refusal (core/ws_close.py).
+                # 4428 instead of 1008: the page reads it as "break-glass ended" and does not
+                # reconnect into a refusal (core/ws_close.py).
                 try:
                     await websocket.close(code=ws_close.BREAK_GLASS, reason="break_glass_expired")
                 except Exception:  # noqa: BLE001 - already gone

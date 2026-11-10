@@ -2,14 +2,14 @@
 
 core/lxd_path.safe_segment percent-encodes a value so a `/`, `?`, `#` or `&` in it stays inside its
 segment, which stops a name from adding a query (`x?project=other&` reads another project) or
-climbing the path. It leaves `.` and `..` as they are, because both are unreserved characters, and
-requests then removes them as dot segments: `/instances/web/snapshots/..` leaves this process as
-`/instances/web/`, which is the instance. Encoding the dots would not help, since requests decodes
-an encoded unreserved character before it normalises the path. So a value that is a whole dot
-segment, or empty, is refused, the rule core/raw_proxy_path applies to a raw-proxy path.
+climbing the path. It leaves `.` and `..` alone, since both are unreserved characters, and requests
+then removes them as dot segments: `/instances/web/snapshots/..` is sent as `/instances/web/`, the
+instance itself. Encoding the dots does not help, because requests decodes an encoded unreserved
+character before it normalises the path. So a value that is a whole dot segment, or empty, is
+refused, the rule core/raw_proxy_path applies to a raw-proxy path.
 
-note: LXD matches its routes on the encoded path and decodes each name once, so a name holding a
-`/`, such as the image alias `mkt/<org>/<slug>`, still reaches the object it names when encoded.
+LXD matches its routes on the encoded path and decodes each name once, so a name holding a `/`,
+such as the image alias `mkt/<org>/<slug>`, still reaches the object it names when encoded.
 """
 
 from typing import Any

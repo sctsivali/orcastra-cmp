@@ -38,18 +38,17 @@ GPU_DISPLAY_DRIVERS = frozenset({
     "virtio-gpu", "vmwgfx", "hyperv_drm",               # virtual display inside a VM
 })
 
-# important: LXD reports no discrete/integrated bit for AMD. `amdgpu` drives both a Radeon
-# RX 7900 and a Ryzen APU's iGPU, and neither vendor/product nor pci_address separates them.
-# Every amdgpu card is classified `compute`: hiding a real discrete Radeon from every view is
-# strictly worse than counting an APU an operator can see and ignore. These markers only set
-# the unified-memory hint, they never change the class.
+# LXD reports no discrete/integrated bit for AMD: `amdgpu` drives both a discrete Radeon and
+# a Ryzen APU's iGPU, and neither vendor/product nor pci_address separates them. Every amdgpu
+# card is classified `compute`, since hiding a discrete Radeon is worse than counting an APU.
+# These markers only set the unified-memory hint; they never change the class.
 _AMD_APU_PRODUCT_MARKERS = (
     "renoir", "cezanne", "lucienne", "barcelo", "rembrandt", "phoenix",
     "raphael", "mendocino", "van gogh", "vega mobile", "radeon graphics",
 )
 
 # Intel ships discrete accelerators on the same drivers as its iGPUs, so the product string
-# is the only separator LXD gives us.
+# is the only separator LXD reports.
 _INTEL_DISCRETE_PRODUCT_MARKERS = ("arc ", "arc(", "data center gpu", "flex ", "max ", "ponte vecchio")
 
 _DRIVER_VENDOR_LABELS = {
@@ -59,7 +58,7 @@ _DRIVER_VENDOR_LABELS = {
     "habanalabs": "Habana", "hl": "Habana",
 }
 
-# Device nodes that unambiguously mean "this instance holds a compute GPU".
+# One card's class and what it means for capacity and passthrough.
 @dataclass(frozen=True)
 class GpuClassification:
     gpu_class: str        # "compute" | "integrated" | "display" | "unknown"
@@ -69,15 +68,11 @@ class GpuClassification:
 
 
 def classify_gpu_card(card: Dict[str, Any]) -> GpuClassification:
-    """Classify one raw LXD GPU card by driver.
+    """Classify one raw LXD GPU card by its driver alone.
 
-    important: driver-first and driver-only. Two heuristics look tempting on a Jetson and
-    both are wrong on the verified payload:
-      1. "has a render node, therefore compute". The Tegra DISPLAY card exposes renderD128
-         and the compute card exposes renderD129, so a render node proves nothing.
-      2. "driver_version mentions tegra, therefore NVIDIA". The display card's
-         driver_version is the KERNEL string, "5.15.148-tegra", so that rule would promote a
-         display controller into sellable capacity.
+    Other signals mislead on a Jetson: the Tegra display card exposes a render node
+    (renderD128) just as the compute card does (renderD129), and its driver_version is the
+    kernel string ("5.15.148-tegra"). Neither proves an NVIDIA compute GPU.
     """
     driver = (card.get("driver") or "").strip().lower()
     product = (card.get("product") or "").strip().lower()
@@ -88,7 +83,7 @@ def classify_gpu_card(card: Dict[str, Any]) -> GpuClassification:
 
     # A VM's virtio GPU can be reported by its PCI transport ("virtio-pci") rather than by
     # virtio-gpu; the product ("Virtio 1.0 GPU") is what names it. It is the guest's virtual
-    # display, never capacity. Seen live on Console Lab (nested LXD), 2026-11-07.
+    # display, never capacity. Nested LXD reports it this way.
     if driver == "virtio-pci" and "gpu" in product:
         return GpuClassification("display", False, False, False)
 
@@ -104,9 +99,8 @@ def classify_gpu_card(card: Dict[str, Any]) -> GpuClassification:
             return GpuClassification("compute", True, False, True)
         return GpuClassification("integrated", False, True, True)
 
-    # fail-closed: an unrecognized driver is never sellable capacity and is never offered as
-    # a compute device, but it stays in the card list with an honest label so an operator can
-    # still see that the hardware exists.
+    # Fail closed: an unrecognized driver is never capacity or a compute device, but the card
+    # stays listed as `unknown` so an operator can still see the hardware.
     return GpuClassification("unknown", False, False, False)
 
 
@@ -126,10 +120,9 @@ def _normalize_pci(addr: str) -> str:
 def card_match_keys(card: Dict[str, Any]) -> Set[str]:
     """Stable identifiers by which a device definition can name this card.
 
-    important: list position is deliberately not a key. The previous parser matched a
-    device's `id:` against `str(index)`, but LXD's `id:` is the DRM card id (drm.id). The two
-    coincide only by luck, so a skipped or reordered card moved in_use/used_by onto the wrong
-    row.
+    List position is not a key: a device's `id:` is the DRM card id (drm.id), which matches
+    the list index only by chance, so a skipped or reordered card would move in_use/used_by
+    onto the wrong row.
     """
     keys: Set[str] = set()
     drm = card.get("drm") or {}
@@ -247,9 +240,8 @@ def parse_gpu_cards(
 
             vendor = card.get("vendor")
             if not vendor:
-                # Tegra and some platform GPUs report no vendor string at all. The kernel
-                # driver names the vendor deterministically, and the driver is shown beside
-                # it in the UI, so this is a derivation rather than an invention.
+                # Tegra and some platform GPUs report no vendor string. The kernel driver
+                # names the vendor deterministically, and the UI shows the driver beside it.
                 vendor = driver_vendor_label(card.get("driver")) or (
                     system_vendor if classification.is_integrated else None
                 )
@@ -297,7 +289,7 @@ def parse_gpu_cards(
 
         except Exception as e:
             logger.warning(f"Failed to parse GPU card {index}: {e}")
-            # A card that cannot be parsed stays visible with whatever LXD did give us. It is
+            # A card that cannot be parsed stays visible with the fields LXD gave. It is
             # never capacity and never attachable, so a parse failure can only under-report.
             drm_raw = card.get("drm") if isinstance(card.get("drm"), dict) else {}
             cards.append(GPUCardInfo(

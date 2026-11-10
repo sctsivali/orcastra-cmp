@@ -4,10 +4,10 @@ The collector runs in every uvicorn worker. One of them leads: it holds the leas
 fleet for the monitoring dashboard and pushes it to its WebSocket clients. The others relay the
 dashboard the leader stored to their own clients and never sweep.
 
-important: the lease is held, not taken per cycle. A per-cycle lease that expired after 30 s
-elected nobody for the rest of a cycle that lasted the sweep plus 30 s, so another worker took it
-mid-cycle and swept again. Every worker runs a heartbeat that claims the lease: the leader's
-renews it, through any sweep, and a follower's takes it over once the leader stops renewing.
+important: the lease is held across cycles. A lease taken per cycle expires during a long sweep,
+and another worker then takes it mid-cycle and sweeps again. Every worker runs a heartbeat that
+claims the lease: the leader's renews it through any sweep, and a follower's takes it over once
+the leader stops renewing.
 """
 
 import logging
@@ -40,7 +40,7 @@ class CollectorLease:
         self.key = key
         self.seconds = seconds
         self._redis = redis
-        # note: unique per process and per start, so a restarted worker that happens to get the
+        # Unique per process and per start, so a restarted worker that happens to get the
         # same pid never mistakes a dead predecessor's lease for its own.
         self.token = f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
 
@@ -48,7 +48,7 @@ class CollectorLease:
         """True when this worker leads: it took the lease or renewed its own.
 
         True as well when Redis is unavailable, so a single-worker or Redis-down deployment
-        keeps collecting rather than going silent: over-collecting beats electing nobody.
+        keeps collecting; several workers sweeping is better than none.
         """
         try:
             client = self._redis()
@@ -98,9 +98,9 @@ class DashboardRelay:
             broadcaster = get_monitoring_broadcaster()
             if broadcaster.client_count == 0:
                 return
-            # note: mode="json" so datetimes go out as ISO 8601. The broadcaster's
-            # json.dumps(default=str) wrote "2026-10-07 12:00:00+00:00" with a space,
-            # which not every browser's Date.parse accepts, and the page now reads it.
+            # mode="json" so datetimes go out as ISO 8601. The broadcaster's
+            # json.dumps(default=str) would write them with a space instead of "T",
+            # which not every browser's Date.parse accepts.
             data = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
             stamp = data.get("timestamp") if isinstance(data, dict) else None
             if stamp is not None and stamp == self._last_pushed:

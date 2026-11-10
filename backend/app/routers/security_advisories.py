@@ -1,11 +1,10 @@
 """Host security advisories: which cluster members run a kernel with a known host-side flaw.
 
-Partner and Admin only. A Tenant has no business with host facts, and the org scope still
-limits a Partner to the clusters bound to its organization.
+Partner and Admin only; the org scope limits a Partner to the clusters bound to its organization.
 
-GETs answer from cached kernel facts and the last stored reads of Ubuntu's records; none of them
-reaches the internet. POST .../check reads Ubuntu now: Administrators only, at most once a minute
-across every worker, and audited.
+GETs answer from cached kernel facts and the last stored reads of Ubuntu's records and never reach
+the internet. POST .../check reads Ubuntu now: Administrators only, at most once a minute across
+every worker, and audited.
 """
 
 import asyncio

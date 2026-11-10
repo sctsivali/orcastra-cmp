@@ -13,7 +13,7 @@ class LXDTransportPinError(LXDConnectionError):
 
     Migration jobs persist the certificate fingerprint they were approved against. This
     distinct error lets that higher-level workflow stop on an identity boundary without
-    changing the best-effort connection semantics used by legacy request paths.
+    changing the best-effort connection semantics of other request paths.
     """
 
     pass
@@ -30,12 +30,11 @@ class LXDLocalUnavailableError(LXDConnectionError):
 
 
 class LXDAuthorizationError(LXDConnectionError):
-    """The host answered our probe and refused our certificate.
+    """The host answered the probe and refused the client certificate.
 
-    important: subclasses LXDConnectionError so every existing `except LXDConnectionError`
-    handler keeps working unchanged. It exists only so a caller can tell "answered and said
-    no" from "never answered" without matching on message text. That distinction is what
-    decides whether a cluster reads as Pending Trust or Offline.
+    Subclasses LXDConnectionError so every `except LXDConnectionError` handler still catches
+    it, while a caller can tell "answered and said no" (Pending Trust) from "never answered"
+    (Offline) without matching on message text.
     """
     pass
 
@@ -43,12 +42,10 @@ class LXDAuthorizationError(LXDConnectionError):
 class LXDLocalStorageError(Exception):
     """The backend could not write the TLS material a client needs, on its own disk.
 
-    important: deliberately NOT a subclass of LXDConnectionError. Roughly sixty handlers catch
-    that type and read it as a verdict about the cluster, and connect_with_vault_cert records it
-    against the circuit breaker as KIND_OFFLINE. A full /tmp is neither: the peer was never
-    contacted. Reported as a connection error it read as "every cluster is offline" while the
-    hypervisors were healthy, and the breaker then suppressed the retries that would have shown
-    otherwise. Keeping it off that hierarchy is what forces callers to say something true.
+    important: NOT a subclass of LXDConnectionError. Handlers catching that type read it as a
+    verdict about the cluster, and connect_with_vault_cert records it against the circuit
+    breaker as KIND_OFFLINE. A full /tmp is neither: the peer was never contacted, and as a
+    connection error it would show every cluster offline while the hypervisors are healthy.
     """
     pass
 
@@ -75,8 +72,8 @@ class LXDGracefulTimeoutError(LXDOperationError):
 
     Distinct from a generic operation failure because it is recoverable in a
     specific way: the caller can retry with force. It most often means the guest
-    never answered the ACPI shutdown request -- e.g. a VM with no OS installed,
-    or one sitting at a boot menu/UEFI shell, which has nothing listening.
+    never answered the ACPI shutdown request, ex; a VM with no OS installed or one
+    sitting at a boot menu/UEFI shell, which has nothing listening.
     """
     pass
 

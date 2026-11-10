@@ -1,9 +1,8 @@
 """
-Console Service - VGA/Graphics Console Handler.
-Provides graphics console access to LXD VMs via WebSocket (SPICE protocol).
+Console service: LXD console operations, instance startup order and ISO media.
 
-LXD/Incus VMs use QEMU with SPICE for graphics console access.
-The console data is streamed via WebSocket from LXD API.
+LXD/Incus VMs use QEMU with SPICE for the graphical console; it and the serial console are
+streamed over WebSockets from the LXD console API.
 """
 
 import logging
@@ -25,13 +24,9 @@ logger = logging.getLogger(__name__)
 
 
 class GraphicsType(str, Enum):
-    """Supported graphics types.
-    
-    LXD/Incus uses SPICE for VM graphics console.
-    VNC is kept for future compatibility but SPICE is the default.
-    """
-    SPICE = "spice"  # Default for LXD/Incus VMs
-    VNC = "vnc"      # Future/alternative
+    """Graphics protocol of a console. LXD/Incus VMs always use SPICE; nothing here reports VNC."""
+    SPICE = "spice"
+    VNC = "vnc"
     NONE = "none"
 
 
@@ -80,8 +75,8 @@ class StartupOrderEntry:
     instance_name: str
     host: str
     project: str
-    priority: int  # lower = starts first
-    delay: int = 0  # seconds to wait before starting
+    priority: int  # boot.autostart.priority; LXD starts the highest first
+    delay: int = 0  # seconds LXD waits after this instance starts before the next one
     autostart: bool = True
     instance_type: str = "container"
     status: str = "Unknown"
@@ -139,8 +134,8 @@ class AttachedISO:
 
 class ConsoleService:
     """
-    Service for managing console access to LXD instances.
-    Handles VGA/graphics consoles, startup order, and ISO management.
+    Console access to LXD instances: graphical and serial console operations, startup
+    order, and ISO media.
     """
     
     def __init__(self):
@@ -175,12 +170,7 @@ class ConsoleService:
         host: str,
         project: str = "default"
     ) -> Tuple[Optional[ConsoleCapabilities], Optional[str]]:
-        """
-        Detect console capabilities for an instance.
-        
-        Returns:
-            Tuple of (capabilities, error_message)
-        """
+        """Detect console capabilities for an instance. Returns (capabilities, error_message)."""
         from app.services.lxd_ws import SessionSetupError, read_instance
 
         try:
@@ -193,7 +183,6 @@ class ConsoleService:
             instance_status = instance_data.get("status", "Unknown")
             devices = instance_data.get("devices", {})
             
-            # Initialize capabilities with instance state
             caps = ConsoleCapabilities(
                 instance_name=instance_name,
                 instance_type=instance_type,
@@ -202,32 +191,28 @@ class ConsoleService:
                 state=instance_status,
             )
             
-            # Check for graphics devices (VMs only)
             if instance_type == "virtual-machine":
                 for device_name, device_config in devices.items():
                     device_type = device_config.get("type", "")
                     
                     if device_type == "gpu":
-                        # GPU passthrough device
                         gputype = device_config.get("gputype", "")
                         if gputype in ("physical", "mdev", "sriov"):
-                            # Physical GPU passthrough - SPICE still used for console
+                            # A passed-through GPU still leaves the console on SPICE.
                             caps.graphics_console = True
                             caps.graphics_type = GraphicsType.SPICE
                     
-                    # Check for explicit graphics device
                     if device_name in ("graphics", "display", "vnc", "spice"):
                         caps.graphics_console = True
-                        # LXD/Incus always uses SPICE for VGA console
+                        # LXD/Incus always uses SPICE for the VGA console.
                         caps.graphics_type = GraphicsType.SPICE
                         caps.audio_enabled = device_config.get("audio", "false").lower() == "true"
                         caps.usb_redirect = device_config.get("usb", "false").lower() == "true"
                 
-                # VMs always have VGA console available via LXD console API
-                # LXD/Incus uses SPICE protocol for all VM graphics consoles
+                # Every VM has a SPICE VGA console through the LXD console API.
                 caps.graphics_console = True
                 if caps.graphics_type == GraphicsType.NONE:
-                    caps.graphics_type = GraphicsType.SPICE  # LXD/Incus default
+                    caps.graphics_type = GraphicsType.SPICE
             
             return caps, None
             
@@ -263,7 +248,7 @@ class ConsoleService:
         client = lxd_client(host)
         if client is None:
             raise SessionSetupError(f"Cannot reach cluster {host}", retryable=True)
-        # note: LXD-UI sends 0x0 for vga so QEMU keeps its own mode; a serial console takes the
+        # LXD-UI sends 0x0 for vga so QEMU keeps its own mode; a serial console takes the
         # terminal's size so the guest's tty wraps where the browser does.
         body = {"type": console_type, "width": max(0, int(width)), "height": max(0, int(height))}
         response = client.api.instances[safe_segment(instance_name)].console.post(
@@ -317,7 +302,6 @@ class ConsoleService:
                 for inst in instances_data:
                     config = inst.get("config", {})
                     
-                    # Extract boot.autostart settings
                     autostart = config.get("boot.autostart", "false").lower() == "true"
                     priority_str = config.get("boot.autostart.priority", "0")
                     delay_str = config.get("boot.autostart.delay", "0")
@@ -344,7 +328,6 @@ class ConsoleService:
                     )
                     entries.append(entry)
                 
-                # Sort by priority (lower first), then by name
                 entries.sort(key=lambda x: (x.priority, x.instance_name))
                 
             except Exception as e:
@@ -382,7 +365,6 @@ class ConsoleService:
                     continue
                 
                 try:
-                    # Get current instance config
                     if project and project != "default":
                         response = client.api.instances[safe_segment(instance_name)].get(
                             params={"project": project}
@@ -396,7 +378,6 @@ class ConsoleService:
                             "profiles": list(instance.profiles),
                         }
                     
-                    # Update config
                     config = dict(instance_data.get("config", {}))
                     
                     if "priority" in update:
@@ -408,7 +389,6 @@ class ConsoleService:
                     if "autostart" in update:
                         config["boot.autostart"] = "true" if update["autostart"] else "false"
                     
-                    # Apply update
                     patch_data = {"config": config}
                     
                     if project and project != "default":
@@ -457,7 +437,6 @@ class ConsoleService:
             isos = []
             
             try:
-                # Get all storage pools
                 pools_response = client.api.storage_pools.get(timeout=ALL_PROJECTS_READ_TIMEOUT)
                 pools = pools_response.json().get("metadata", [])
                 
@@ -465,8 +444,6 @@ class ConsoleService:
                     pool_name = pool_url.split("/")[-1]
                     
                     try:
-                        # Get volumes of type "custom" (where ISOs are stored)
-                        # or type "iso" if available
                         volumes = list_in_project(
                             client, "storage-volumes", owner,
                             path=f"storage-pools/{safe_segment(pool_name)}/volumes",
@@ -478,9 +455,7 @@ class ConsoleService:
                             content_type = vol.get("content_type", "")
                             config = vol.get("config", {})
                             
-                            # Check if it's an ISO volume
-                            # ISOs can be stored as custom volumes with iso content type
-                            # or have .iso extension in the name
+                            # An ISO is a volume with the iso content type, or one named *.iso.
                             is_iso = (
                                 content_type == "iso" or 
                                 vol_name.lower().endswith(".iso") or
@@ -493,7 +468,7 @@ class ConsoleService:
                                     continue
                                 size_str = config.get("size", "0")
                                 try:
-                                    # Parse size (could be like "1GiB", "500MiB", etc)
+                                    # LXD sizes carry a unit, ex; "1GiB".
                                     size = parse_lxd_size(size_str) or 0
                                 except (TypeError, ValueError, OverflowError):
                                     size = 0
@@ -508,8 +483,6 @@ class ConsoleService:
                                 )
                                 isos.append(iso_info)
                         
-                        # Also check for block volumes that might be ISOs
-                        # Some setups store ISOs as block devices
                         
                     except Exception as e:
                         logger.warning(f"Error listing volumes in pool {pool_name}: {e}")
@@ -522,7 +495,8 @@ class ConsoleService:
             return isos, None
             
         except Exception as e:
-            # important: this route is open to a Tenant, and str(e) can carry the cluster's address.
+            # important: this route is open to a Tenant, and str(e) can carry the cluster's address,
+            # so it is logged and never returned.
             logger.error(f"Error getting ISOs: {e}")
             return [], "ISO discovery failed. Retry the request."
     
@@ -554,23 +528,21 @@ class ConsoleService:
                     instance = client.instances.get(safe_segment(instance_name))
                     devices = instance.devices
                 
-                # Look for disk devices with cdrom/iso source
                 for device_name, device_config in devices.items():
                     device_type = device_config.get("type", "")
                     
                     if device_type == "disk":
                         source = device_config.get("source", "")
                         
-                        # Check if it's an ISO (by source path or special markers)
+                        # An ISO by its source path, a boot priority, or an install-media device name.
                         if (
                             source.lower().endswith(".iso") or
                             device_config.get("boot.priority") is not None or
                             device_name in ("cdrom", "iso", "install-media")
                         ):
                             # LXD: "A higher value indicates a higher boot
-                            # precedence." An unset boot.priority therefore means
-                            # no precedence at all (lowest), not the highest --
-                            # reporting 99 here would read as "boots first".
+                            # precedence." An unset boot.priority is the lowest
+                            # precedence, so it reads as 0.
                             boot_priority_str = device_config.get("boot.priority", "0")
                             try:
                                 boot_priority = int(boot_priority_str)
@@ -605,9 +577,7 @@ class ConsoleService:
         boot_priority: int = 0,
     ) -> Tuple[bool, Optional[str]]:
         """
-        Attach an ISO to a VM instance.
-        
-        Note: This typically requires the VM to be stopped or restarted.
+        Attach an ISO to a VM instance. A running VM needs a restart before it sees the ISO.
         """
         try:
             if not self.lxd_service.ensure_connection(host):
@@ -618,7 +588,6 @@ class ConsoleService:
                 return False, f"No connection to host: {host}"
             
             try:
-                # Get current instance
                 if project and project != "default":
                     response = client.api.instances[safe_segment(instance_name)].get(
                         params={"project": project}
@@ -631,10 +600,9 @@ class ConsoleService:
                     devices = dict(instance.devices)
                     instance_status = instance.status
                 
-                # Check if VM is running (warn but allow)
+                # Allowed while running; the reply asks for a restart.
                 needs_restart = instance_status == "Running"
                 
-                # Add/update cdrom device
                 devices[device_name] = {
                     "type": "disk",
                     "source": volume,
@@ -642,9 +610,8 @@ class ConsoleService:
                     "boot.priority": str(boot_priority),
                 }
                 
-                # Apply changes
                 patch_data = {"devices": devices}
-                
+
                 if project and project != "default":
                     client.api.instances[safe_segment(instance_name)].patch(
                         json=patch_data,
@@ -653,7 +620,7 @@ class ConsoleService:
                 else:
                     instance.devices = devices
                     instance.save(wait=True)
-                
+
                 msg = "ISO attached successfully"
                 if needs_restart:
                     msg += " (restart required for changes to take effect)"
@@ -700,10 +667,8 @@ class ConsoleService:
                 if device_name not in devices:
                     return False, f"Device {device_name} not found"
                 
-                # Remove the device
                 del devices[device_name]
-                
-                # Apply changes
+
                 patch_data = {"devices": devices}
                 
                 if project and project != "default":
@@ -726,7 +691,6 @@ class ConsoleService:
             return False, str(e)
 
 
-# Singleton instance
 _console_service: Optional[ConsoleService] = None
 
 

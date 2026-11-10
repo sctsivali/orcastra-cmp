@@ -1,4 +1,4 @@
-"""What the dashboard's Vault notice shows (issue #15): Vault's own state, then the registry's.
+"""What the dashboard's Vault notice shows: Vault's own state, then the registry's.
 
 Vault can be unsealed and still refuse the cluster registry (a token whose policy denies the LIST),
 which reads the same to an operator as a sealed one. So the probe's answer comes first and the
@@ -27,9 +27,9 @@ class VaultHealth:
     registry_checked_at: Optional[float]
 
 
-# note: its own spacing rather than vault_status.retry_due(). The registry's retry hold is set by
-# the very failure the unseal just ended, so honouring it kept the notice up for 15 s after Vault
-# had already said it was fine.
+# Its own spacing rather than vault_status.retry_due(). The registry's retry hold is set by the
+# very failure the unseal just ended, so honouring it would keep the notice up after Vault has
+# already said it is fine.
 CONFIRM_INTERVAL_SECONDS = 5.0
 _confirm_lock = threading.Lock()
 _last_confirm_at = 0.0

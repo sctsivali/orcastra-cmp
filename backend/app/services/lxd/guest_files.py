@@ -1,20 +1,12 @@
 """Reading and writing one file inside a guest, for the key-authenticated surface.
 
-`instance.files` has been in the capability vocabulary since capabilities existed, described as
-"Read and write files inside an instance", and until now nothing implemented it. It appeared in
-exactly one place outside the vocabulary: the audit action map. So an operator could tick it, the
-create dialog would mark it elevated and never-inherited, and the key it produced could not read
-a file. Worse, `guest_exec` refuses an oversized stdin with "use instance.files instead", which
-pointed callers at a door that was not there.
+Implements the `instance.files` capability. Kept apart from `guest_exec` and `proxy_operations`
+because it reaches inside a guest and carries bounds of its own.
 
-Split from `guest_exec` for the same reason that module was split from `proxy_operations`: it
-reaches INSIDE a guest rather than managing one from outside, and it carries bounds of its own.
-
-important: the read is bounded as chunks ARRIVE, and that is the whole reason this does not call
-pylxd. `FilesManager.get` is `return response.content` (pylxd/models/instance.py), which buffers
-the entire body with no cap, so `get_file` on `/dev/zero`, a sparse image or a multi-gigabyte log
-would grow a worker's memory until it died. Same defect class as the one `_BoundedStream` was
-written for on the exec path, and the same answer.
+important: the read is bounded as chunks arrive, which is why this does not call pylxd's
+`FilesManager.get`. That returns `response.content` (pylxd/models/instance.py) and buffers the
+whole body, so reading `/dev/zero`, a sparse image or a multi-gigabyte log would exhaust the
+worker's memory. `_BoundedStream` solves the same problem on the exec path.
 """
 
 import base64
@@ -32,10 +24,9 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["get_file", "put_file"]
 
-# A path is a guest-side absolute path. LXD resolves it inside the guest, so `..` is the guest's
-# own business rather than a traversal against this host, but a relative path is refused anyway:
-# it would be resolved against a working directory this layer does not choose and cannot explain,
-# so the same request could mean two things on two LXD versions.
+# Paths are guest-side and absolute. LXD resolves them inside the guest, so `..` is no traversal
+# against this host. A relative path is refused: it would resolve against a working directory this
+# layer does not choose, and could mean different things on different LXD versions.
 _MAX_PATH_BYTES = 4096
 
 
@@ -58,10 +49,10 @@ def _validated_path(params: Dict[str, Any]) -> str:
 
 
 def _validated_mode(params: Dict[str, Any]) -> Optional[str]:
-    """A octal file mode, as LXD wants it: a string like ``0644``.
+    """An octal file mode, as LXD wants it: a string like ``0644``.
 
-    Accepts an int or a string so a caller can send either without guessing, and normalises here
-    rather than letting LXD reject it with wording about its own unmarshalling.
+    Accepts an int or a string and normalises here, so a bad value gets a clear 400 instead of
+    LXD's unmarshalling error.
     """
     mode = params.get("mode")
     if mode is None:
@@ -89,9 +80,8 @@ def _validated_mode(params: Dict[str, Any]) -> Optional[str]:
 def _payload_bytes(params: Dict[str, Any]) -> bytes:
     """The bytes to write, from exactly one of ``content_base64`` or ``content``.
 
-    Two fields rather than one guessed encoding: a caller writing a config file should not have to
-    base64 it, and a caller writing a binary must not have it mangled by a UTF-8 round trip. Naming
-    both is refused rather than silently preferring one, because which one won would be invisible.
+    Text can be sent as is, and a binary goes as base64 so no UTF-8 round trip mangles it. Naming
+    both is refused, since silently preferring one would hide which was written.
     """
     raw = params.get("content_base64")
     text = params.get("content")
@@ -104,8 +94,8 @@ def _payload_bytes(params: Dict[str, Any]) -> bytes:
         if not isinstance(raw, str):
             raise HTTPException(status_code=400, detail="params.content_base64 must be a string")
         try:
-            # validate=True so a truncated or mistyped payload is an error here rather than
-            # silently shorter bytes landing in the guest.
+            # validate=True so a truncated or mistyped payload is an error instead of shorter
+            # bytes landing in the guest.
             payload = base64.b64decode(raw, validate=True)
         except (binascii.Error, ValueError):
             raise HTTPException(
@@ -131,8 +121,8 @@ def _payload_bytes(params: Dict[str, Any]) -> bytes:
 def _read_bounded(response: Any) -> tuple[bytes, bool]:
     """Collect the body up to the cap, stopping as chunks arrive.
 
-    Returns the bytes and whether more were available. The connection is released either way, so a
-    caller that stops early does not leak the socket back into the pool half-read.
+    Returns the bytes and whether more were available. The connection is closed either way, so
+    stopping early does not return a half-read socket to the pool.
     """
     chunks: list[bytes] = []
     size = 0
@@ -160,9 +150,8 @@ def _read_bounded(response: Any) -> tuple[bytes, bool]:
 def _maybe_text(payload: bytes) -> Optional[str]:
     """The bytes as text, when they are text.
 
-    note: strict decode, no error handler. A file that is not UTF-8 gets `text: null` and the
-    caller reads content_base64, rather than receiving a string full of replacement characters
-    that looks like the file and is not.
+    Strict decode: a file that is not UTF-8 gets `text: null` and the caller reads
+    content_base64, instead of a string of replacement characters that looks like the file.
     """
     try:
         return payload.decode("utf-8")
@@ -173,14 +162,13 @@ def _maybe_text(payload: bytes) -> Optional[str]:
 def get_file(inst: Any, params: Dict[str, Any]) -> Dict[str, Any]:
     """Read one path inside a guest.
 
-    A directory is a successful read that returns its entries rather than an error: asking what is
-    in a directory is the normal way to find the file you actually want, and refusing it would
-    push callers into `exec_instance` with `ls`, which costs a strictly larger capability.
+    A directory returns its entries instead of an error. Listing is how a caller finds a file,
+    and refusing it would push callers to `exec_instance` with `ls`, a larger capability.
     """
     path = _validated_path(params)
 
-    # is_api=False because the body is the file, not an LXD response envelope. stream=True is the
-    # point: without it requests has already buffered everything before the cap could apply.
+    # is_api=False because the body is the file, not an LXD response envelope. stream=True keeps
+    # requests from buffering the whole body before the cap can apply.
     response = inst.api.files.get(
         params={"path": path}, is_api=False, stream=True
     )
@@ -207,9 +195,8 @@ def get_file(inst: Any, params: Dict[str, Any]) -> Dict[str, Any]:
     payload, truncated = _read_bounded(response)
     text = _maybe_text(payload)
 
-    # note: the content is never logged, at any level. This surface exists to read files a caller
-    # is authorized to read, and an operator debugging a 500 must not end up with the contents of
-    # /etc/shadow in the log index. Same rule the exec path applies to command output.
+    # important: never log the content, at any level, or a file like /etc/shadow ends up in the
+    # log index. The exec path applies the same rule to command output.
     return {
         "path": path,
         "type": "symlink" if entry_type == "symlink" else "file",
@@ -242,9 +229,8 @@ def put_file(inst: Any, params: Dict[str, Any]) -> Dict[str, Any]:
 
     inst.api.files.post(params={"path": path}, data=payload, headers=headers)
 
-    # The written size, not the payload the caller sent, so a caller can tell a partial write from
-    # a full one without reading the file back. LXD writes all or nothing, so they agree today;
-    # returning it keeps that checkable rather than assumed.
+    # size_bytes is the payload length. LXD writes a file all or nothing, so it is also the
+    # written size.
     return {
         "path": path,
         "written": True,

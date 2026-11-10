@@ -1,6 +1,6 @@
 """
 API Router for Regions/Geographic Overview.
-Provides endpoints for viewing nodes grouped by geographic region with hardware summaries.
+Provides endpoints for viewing clusters grouped by geographic region with hardware summaries.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -65,11 +65,6 @@ router = APIRouter(
     dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
 )
 
-
-# note: the CPU and disk helpers these three names used to hold now live in
-# services/lxd/hardware.py, so the region rollup and the per-node profile read the same
-# code. The disk classifier gained a fix on the way: it used to branch on a `rotational`
-# key LXD does not emit, so every SATA disk was reported as an SSD.
 
 def region_hardware(
     nodes_hardware: List[Optional[ExtendedHardwareInfo]],
@@ -167,10 +162,9 @@ async def build_regions_overview(
         get_resource_list_generation(cache, "regions"),
     )
 
-    # note: stale-while-revalidate since 2026-11-04. The page polls every 120 s and the plain
-    # cache lived exactly 120 s, so a poll landed just after expiry and paid the whole fan-out
-    # (about 4 s on dev) nearly every time. swr.serve also collapses concurrent cold rebuilds per
-    # scope, which the lock here used to do, and keeps fresh=true a real read.
+    # Stale-while-revalidate: the page polls every 120 s, the same as the fresh window, so with a
+    # plain TTL nearly every poll would land just after expiry and pay the whole fan-out.
+    # swr.serve also collapses concurrent cold rebuilds per scope and keeps fresh=true a real read.
     async def build() -> Built:
             # Get all registered clusters from Vault
             try:
@@ -186,7 +180,7 @@ async def build_regions_overview(
                 # Get org-scoped cluster list
                 cluster_ids = apply_cluster_filter(cert_manager.list_clusters())
                 # An unreadable registry with nothing known is not an empty map, and the branch
-                # below would cache it for 120 s (issue #15).
+                # below would cache it for 120 s.
                 require_known_registry(cluster_ids)
 
                 if not cluster_ids:
@@ -200,22 +194,20 @@ async def build_regions_overview(
                 tenant_acl = get_tenant_acl()
 
                 # important: a cluster that answered but whose resource read failed is reported
-                # ONLINE with no hardware, so the fleet totals leave it out. Caching that pins a
-                # silently shrunken fleet for the full 120s. Recording the failure here lets the
-                # write below decline, the same way
-                # the monitoring dashboard declines to cache a no-cluster-answered body.
-                # note: set.add from the thread pool is safe under the GIL.
+                # ONLINE with no hardware, so the fleet totals leave it out. Recording it here
+                # keeps that shrunken fleet out of the cache. set.add from the thread pool is safe
+                # under the GIL.
                 degraded_clusters: Set[str] = set()
                 late_clusters: Set[str] = set()
 
-                # process single cluster (runs in thread pool for parallelism)
+                # One cluster, run in the thread pool.
                 def _process_cluster(cluster_id: str) -> Optional[Tuple[str, Dict, RegionNodeInfo, int, int]]:
                     """Fetch metadata + resources for one cluster. Returns (region_id, region_data, node_info, inst_count, inst_running) or None."""
                     try:
                         cluster_info = cert_manager.get_cluster_info(cluster_id)
                         metadata = cluster_info.get("metadata", {})
-                        # note: an unreadable stored location places the cluster under Unknown
-                        # instead of dropping it from the map (a string or list raised here).
+                        # An unreadable stored location places the cluster under Unknown
+                        # instead of dropping it from the map.
                         location_data = stored_location_fields(cluster_id, metadata)
 
                         if not location_data or not location_data.get("region_id"):
@@ -231,16 +223,16 @@ async def build_regions_overview(
                 
                         status = ClusterStatus.PENDING
                         # Stored value only; resolved against the live client further down,
-                        # once one is in hand. None means not determined yet, not LXD.
+                        # once one is in hand. None means not determined yet (it does not imply LXD).
                         node_type = metadata.get("type")
-                        # note: None until a resource read succeeds. An offline cluster or a
-                        # failed read is "not read", not a profile of zeros.
+                        # None until a resource read succeeds: an offline cluster or a failed
+                        # read is "not read" rather than a profile of zeros.
                         node_hardware: Optional[ExtendedHardwareInfo] = None
                         instance_count = 0
                         instance_running = 0
                 
-                        # A cluster this worker knows is down and holds no client for: the
-                        # healer redials it, not this read (see fanout.known_down).
+                        # A cluster this worker knows is down and holds no client for is left
+                        # to the healer to redial (see fanout.known_down).
                         down = known_down(cluster_id, getattr(lxd_service, "connection_manager", None))
                         try:
                             client = (
@@ -266,10 +258,9 @@ async def build_regions_overview(
                                 # stored string may predate any trusted read.
                                 node_type = resolve_cluster_type(node_type, client)
                                 try:
-                                    # important: a live read, not pylxd's client.resources.
-                                    # That property memoises the body for the life of the
-                                    # pooled client, so this map showed each worker's
-                                    # connect-time snapshot rather than the fleet now.
+                                    # important: a live read. pylxd's client.resources
+                                    # memoises the body for the life of the pooled client, so
+                                    # it would show each worker's connect-time snapshot.
                                     resources = read_resources(client, cluster_id).body
                                     cpu_info = resources.get("cpu", {})
                                     cpu_total = cpu_info.get("total", 0)
@@ -282,10 +273,9 @@ async def build_regions_overview(
                                     memory_total = memory_info.get("total", 0)
                                     memory_used = memory_info.get("used", 0)
                             
-                                    # note: counting cards here would double-count a Tegra
-                                    # iGPU, which enumerates a display node beside its compute
-                                    # node, and the old vendor bucketing produced nothing at
-                                    # all on hardware that reports no vendor string.
+                                    # Counted through the shared inventory: a Tegra iGPU
+                                    # enumerates a display node beside its compute node, so
+                                    # counting cards would count it twice.
                                     gpu_inv = build_gpu_inventory(resources)
                             
                                     disk_info = resources.get("storage", {})
@@ -293,17 +283,10 @@ async def build_regions_overview(
                             
                                     # important: folded through the same summariser /nodes uses,
                                     # so a region's capacity and a node's capacity are the same
-                                    # arithmetic. This loop used to add every pool it saw, which
-                                    # on a clustered host counts a shared backing store once per
-                                    # member, and /regions and /nodes then disagreed about the
-                                    # same cluster. That is the defect gpu-inventory.md exists to
-                                    # stop repeating.
-                                    #
-                                    # note: still the coordinator's untargeted view, so a
-                                    # clustered host contributes what the member we are connected
-                                    # to can see. Reading every member here would multiply this
-                                    # fan-out by the cluster size; /nodes carries the per-member
-                                    # figure and is cached for it.
+                                    # arithmetic; adding every pool seen would count a clustered
+                                    # host's shared backing store once per member. This is the
+                                    # coordinator's untargeted view; for a clustered host the
+                                    # member aggregate below replaces it when that read succeeds.
                                     storage_drivers: Set[str] = set()
                                     region_pool_readings: List[PoolReading] = []
                                     try:
@@ -341,12 +324,9 @@ async def build_regions_overview(
                                     ]
                             
                                     # important: a clustered host's capacity is the sum of its
-                                    # members, and /nodes has aggregated it since the MicroCloud
-                                    # work. This map did not, so the SAME cluster reported one
-                                    # member's CPU, memory, GPU and storage here and the whole
-                                    # cluster's on the nodes page. The aggregate is cached under
+                                    # members, as /nodes reports it. The aggregate is cached under
                                     # the key /nodes writes, so a warm fleet pays a Redis get and
-                                    # the two pages cannot drift apart again.
+                                    # the two pages agree about the same cluster.
                                     if resolve_clustered(metadata.get("clustered"), client):
                                         try:
                                             cluster_totals = aggregate_microcloud_resources(
@@ -399,12 +379,12 @@ async def build_regions_overview(
                                     logger.warning(f"Could not get resources for {cluster_id}: {e}")
                                     degraded_clusters.add(cluster_id)
 
-                                # important: outside the resources read, so a cluster whose
+                                # important: kept outside the resources read, so a cluster whose
                                 # hardware read failed still reports its instances. These counts
                                 # are the only figures a Tenant is sent, so a listing that failed
                                 # keeps the body out of the cache rather than pinning a zero.
                                 try:
-                                    # every project: the pooled client is bound to default, and
+                                    # Every project: the pooled client is bound to default, and
                                     # the ACL check just below reads instance.project, which a
                                     # default-scoped listing never carries.
                                     instances, _ = list_instance_records(client)
@@ -444,21 +424,13 @@ async def build_regions_overview(
                         logger.warning(f"Error processing cluster {cluster_id}: {e}")
                         return None
         
-                # run all cluster introspections in parallel
-                #
-                # important: each task carries its OWN copy of the caller's context.
-                # `loop.run_in_executor` copies nothing, so `get_client` inside the thread read
-                # an unset org-scope var and its filter could never deny; core/blocking.py
-                # records the full consequence list. One shared Context would be worse than
-                # none: `Context.run` refuses re-entry, so ten threads entering the same copy
-                # raise "cannot enter context", which is why the copy is per task and not
-                # hoisted out of the comprehension.
-                # note: run_blocking copies the context per call, which is the rule the note
-                # above states, on one module pool rather than a new one per rebuild, under a wall
-                # per cluster. A cluster still reading past it is left out of this answer and named
-                # degraded, so a slow host no longer holds the map.
-                # note: queued for a slot, never refused one (fanout.run_in_slot): a scope with
-                # more clusters than the pool has threads must not lose the rest.
+                # important: each task needs its own copy of the caller's context.
+                # `loop.run_in_executor` copies nothing, so the org-scope filter inside the thread
+                # could never deny (see core/blocking.py), and one shared Context fails because
+                # `Context.run` refuses re-entry. run_in_slot runs each call through run_blocking,
+                # which copies the context, under a wall per cluster; a cluster still reading past
+                # it is marked late. Calls queue for a slot instead of being refused one, so a
+                # scope with more clusters than the pool has threads keeps them all.
                 tasks = [
                     run_in_slot(
                         "regions_overview",
@@ -525,7 +497,7 @@ async def build_regions_overview(
                         total_gpu_cards += hardware.gpu_cards_total
                         total_gpu_integrated += hardware.gpu_integrated_total
         
-                # aggregate hardware per region
+                # Aggregate hardware per region.
                 for region in regions_map.values():
                     region.hardware = region_hardware([n.hardware for n in region.nodes])
         
@@ -535,9 +507,8 @@ async def build_regions_overview(
                     total_cpu=total_cpu, total_memory=total_memory,
                     total_storage=total_storage, total_gpu=total_gpu,
                     total_gpu_cards=total_gpu_cards, total_gpu_integrated=total_gpu_integrated,
-                    # important: when the fan-out finished, carried through the 120s
-                    # cache. Restamping on the cached read would make this map claim to
-                    # be current every time anyone looked at it.
+                    # important: stamped when the fan-out finished and carried through the
+                    # cache. Restamping on a cached read would report an old map as current.
                     collected_at=datetime.now(timezone.utc),
                 )
         
@@ -578,9 +549,9 @@ async def build_regions_overview(
 
 
 def _can_read_hardware(user: AuthenticatedUser) -> bool:
-    # important: the line GET /nodes draws. Hardware inventory and the hypervisor family are
-    # Partner and above; a Tenant reads places, cluster names and status, and its own instance
-    # counts, which the build already narrowed to its ACL.
+    # important: the same line GET /nodes draws. Hardware inventory and the hypervisor family
+    # are Partner and above; a Tenant reads places, cluster names and status, and its own
+    # instance counts, which the build already narrowed to its ACL.
     return has_permission(user, Permission.CLUSTER_READ)
 
 
@@ -601,7 +572,7 @@ def _overview_for_caller(
 ) -> RegionsOverviewResponse:
     """The overview as this caller may read it.
 
-    important: new models, never an edit of the one passed in. That body is the cached entry,
+    important: build new models, never edit the one passed in. That body is the cached entry,
     stored unprojected so the prewarm, which has no caller, can write it too.
     """
     if _can_read_hardware(user):

@@ -1,8 +1,7 @@
 """API cache prewarm run by the background collector's leader.
 
 The collector keeps a few slow list endpoints warm so a request after a TTL expiry does not pay
-for a fleet-wide fan-out. Moved out of metrics_collector unchanged; MetricsCollector mixes it in
-and provides `_lxd_service`.
+for a fleet-wide fan-out. MetricsCollector mixes this in and provides `_lxd_service`.
 """
 
 import asyncio
@@ -18,34 +17,27 @@ class CachePrewarm:
     _lxd_service: object
 
     async def _prewarm_instances_cache(self):
-        """
-        Pre-warm critical API caches to ensure fast response times.
-        This runs every 30 seconds to keep caches fresh before TTL expiry (120s).
-        
-        Performance impact (roughly estimated):
-        - Cold cache: ~11 seconds for instances, varies for others
-        - Warm cache: ~25-50 milliseconds
+        """Pre-warm the slow list caches once per collector cycle, before their TTLs expire.
+
+        Covers the VM list, regions, storage pool resources and cluster availability.
         """
         try:
             from app.core.cache import get_cache_manager
             # important: prewarm keys must be built the same way the endpoints
-            # build theirs. Without get_scope_cache_key() they lacked the
-            # ":scope=all" suffix, so nothing ever read them and every request
-            # after a TTL expiry still paid the full cold cost.
+            # build theirs. Without get_scope_cache_key() a key lacks the
+            # ":scope=all" suffix and no endpoint ever reads it.
             from app.core.org_scope import get_scope_cache_key
             
             cache = get_cache_manager()
             
-            # important: the TTL belongs to the endpoint, not to this loop. A single
-            # hardcoded 180 pinned the instances list six times longer than GET /instances
-            # intends, so a prewarm both wrote a key the endpoint owns and changed how long
-            # it lived. Each of these matches its handler's own cache.set.
+            # important: the TTL belongs to the endpoint. Each TTL here matches its handler's
+            # own cache.set, so a prewarm never changes how long the endpoint's key lives.
 
-            # note: no instances prewarm. It wrote "instances:list:host=None:...", a key GET
-            # /instances never reads (its key is "instances:list:v2:...:project=..."), so every
-            # worker paid a full recursion=2 fleet list each cycle for a value nobody used.
+            # No instances prewarm. GET /instances keys its list as
+            # "instances:list:v3:host=...:project=...:status=...", and a list written under any
+            # other key goes unread while costing a full recursion=2 fan-out each cycle.
 
-            # Pre-warm VMs cache (VM-only view) - key: vms:list:host=None:status=None
+            # VM-only list view, as GET /vms caches it.
             await self._prewarm_single_cache(
                 cache,
                 get_scope_cache_key("vms:list:host=None:status=None:o=0:l=0"),
@@ -58,18 +50,17 @@ class CachePrewarm:
             # a plain body written here would read as fresh with no age (cache_envelope.unwrap).
             await self._prewarm_regions()
 
-            # Storage pool resources are warmed through their own handler.
-            # important: the fetcher this replaced called pylxd directly from this coroutine,
-            # serially per cluster, on the leader's event loop: a median 5.7 s and up to 13.9 s
-            # in which that worker answered no request at all. The handler reads every cluster
-            # in its thread pool, and it writes the entry itself behind its generation fence.
+            # Storage pool resources are warmed through their own handler, which reads every
+            # cluster in its thread pool and writes the entry itself behind its generation fence.
+            # important: never call pylxd from this coroutine. Serial per-cluster reads on the
+            # leader's event loop leave that worker answering no request for seconds.
             await self._prewarm_storage_pool_resources()
 
             # Pre-warm cluster availability so a node picker never pays for a probe sweep. The
             # resolver owns its key: it answers from a fresh entry, serves a stale one while one
             # background read replaces it, and writes behind its own generation fence.
-            # important: unlike the list fan-outs above, an all-offline result IS the answer
-            # here and is cached. "Everything is offline" is precisely the fact a picker needs.
+            # Unlike the list fan-outs above, an all-offline result is the answer here and is
+            # cached: "everything is offline" is the fact a picker needs.
             await self._prewarm_availability()
             
         except Exception as e:
@@ -87,12 +78,12 @@ class CachePrewarm:
 
         important: a fetcher returns None to mean "nobody answered, do not remember this".
         The endpoints refuse to cache a fan-out no cluster answered, and this loop writes
-        the same keys, so without that refusal here the collector reinstated the outage
-        30s later through a side door and the endpoint's own guard accomplished nothing.
+        the same keys, so it must refuse too or it would reinstate the outage 30 s later.
 
-        important: behind the endpoint's own generation fence. A key is most likely missing
-        right after a mutation cleared it, which is exactly when this read runs; one that began
-        before an invalidation would otherwise write the pre-mutation list back for its TTL.
+        important: the write sits behind the endpoint's own generation fence. A key is most
+        likely missing right after a mutation cleared it, which is when this read runs; a read
+        that began before an invalidation would otherwise write the pre-mutation list back for
+        its TTL.
         """
         try:
             cached = cache.get("api_responses", cache_key)
@@ -123,9 +114,8 @@ class CachePrewarm:
         """Registered clusters that did not answer this sweep.
 
         important: a prewarm writes the payload the endpoint later serves, so any field the
-        endpoint fills must be filled here too. Leaving this to the model default wrote an
-        empty list into the cache, and every unforced read then reported a healthy fleet
-        while fourteen clusters were down. The same shape mismatch took out GET /nodes.
+        endpoint fills must be filled here too. Left to the model default, the cached list is
+        empty and every unforced read reports a healthy fleet.
         """
         return sorted(set(self._lxd_service.get_node_names()) - set(connected_nodes))
 
@@ -137,7 +127,6 @@ class CachePrewarm:
         if not connected_nodes:
             # mirrors the guard in routers/vms.py
             return None
-        # Filter to VMs only (type == virtual-machine)
         vms_only = [vm for vm in all_vms if vm.type == "virtual-machine"]
         unreachable_nodes = self._unreachable(connected_nodes)
         response = VMListResponse(
@@ -149,20 +138,17 @@ class CachePrewarm:
         )
         return response.model_dump()
     
-    # note: there is deliberately no nodes prewarm. It used to write
-    # {"nodes": [<names>], "count": N} to a key nobody read, so the shape mismatch
-    # against NodesStatusResponse was invisible. Once the keys were corrected to
-    # carry the scope suffix the two collided and GET /nodes returned 500 for the
-    # rest of the TTL. Warming it properly means replicating the handler's Vault
-    # cluster merge, which is not worth duplicating; get_node_names() never did
-    # the expensive work anyway, so nothing is lost by leaving this cold.
+    # No nodes prewarm. Warming GET /nodes means replicating the handler's Vault
+    # cluster merge to build a NodesStatusResponse, and any other shape under the
+    # same key makes GET /nodes answer 500 for the rest of the TTL.
+    # get_node_names() is cheap, so nothing is lost by leaving it cold.
     
     async def _prewarm_regions(self):
         """Warm the regions overview through its builder, which stores the entry itself.
 
-        important: the builder, not the route. The route projects for a caller, and this shared
-        entry has none. fresh=False: a warm entry is a hit, a stale one starts its own background
-        read, and only a missing one is built here.
+        important: use the builder, never the route. The route projects for a caller, and this
+        shared entry has none. fresh=False: a warm entry is a hit, a stale one starts its own
+        background read, and only a missing one is built here.
         """
         try:
             from app.routers.regions import build_regions_overview

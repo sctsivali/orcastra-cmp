@@ -1,19 +1,15 @@
 """Refusing an instance create whose network the target project cannot reach.
 
-The create form offered every network the default project held, whatever project
-the instance was going into, so an operator could pick one the project cannot see. LXD accepts
-the create as an async operation and only fails the background job, and the dashboard's
-placeholder row has nothing to clear it, so the instance sat at "Creating..." with empty
-columns and no reason shown. The fix is to reject at the boundary with a clear message, or
-succeed.
+LXD accepts such a create as an async operation and only fails the background job, so the
+instance would sit at "Creating..." with no reason shown. This check refuses it at the boundary
+with a clear message instead.
 
-Two things the obvious version of this check gets wrong:
+Two details the check has to get right:
 
-- The NIC usually is not in the request. It comes from a profile, because the form submits
-  `profiles: ["default"]` and lets the project's default profile supply eth0. Checking only
-  `devices` passes exactly the case seen in the field.
-- A NIC can name its network with `parent` instead of `network`. The console already reads
-  both when it displays inherited NICs, so the check has to as well.
+- The NIC usually is not in the request. The form submits `profiles: ["default"]` and lets the
+  project's default profile supply eth0, so profile devices are merged in before checking.
+- A NIC can name its network with `parent` instead of `network`; the console reads both when
+  it displays inherited NICs.
 """
 
 import ipaddress
@@ -54,14 +50,9 @@ def managed_network_of(dev: Dict[str, Any]) -> Optional[str]:
 
     important: `network` always names a managed LXD network, but `parent` usually does not.
     For a macvlan, physical, sriov, ipvlan, routed or bridged NIC it names an interface on the
-    host, which is not in the project's network list at all.
-
-    Reading the two as interchangeable is what a display needs and the opposite of what a
-    refusal needs. A stock LXD default profile hands out `eth0` as macvlan on a physical
-    parent, so treating that parent as a missing network refuses every create that inherits it,
-    on a daemon that would have accepted it. Verified against nuc1: the default profile is
-    `{"nictype": "macvlan", "parent": "enp86s0"}` and `enp86s0` is listed by `/1.0/networks`
-    with `managed: false`, so it resolves and then fails the managed test.
+    host, which is not in the project's network list. A stock LXD default profile hands out
+    `eth0` as macvlan on a physical parent (ex; `{"nictype": "macvlan", "parent": "enp86s0"}`),
+    so treating that parent as a missing network would refuse every create that inherits it.
     """
     value = dev.get("network")
     if value:
@@ -74,7 +65,7 @@ def managed_network_of(dev: Dict[str, Any]) -> Optional[str]:
 
 
 def _network_of(dev: Dict[str, Any]) -> Optional[str]:
-    """Backwards-compatible alias kept for call sites inside this module."""
+    """Alias of managed_network_of for call sites inside this module."""
     return managed_network_of(dev)
 
 
@@ -97,10 +88,9 @@ def merge_effective_devices(
 ) -> Dict[str, Dict[str, Any]]:
     """Apply LXD profile order and instance overrides to the complete device map.
 
-    Device type matters only after merging. Filtering each profile to NICs first loses an
-    explicit ``type=none`` override, so an inherited ``eth0`` incorrectly survives and a
-    deliberately isolated instance is reported as networked. Later profiles replace earlier
-    profiles, then the instance wins. ``type=none`` removes the inherited device entirely.
+    Later profiles replace earlier ones and the instance wins; ``type=none`` removes the
+    inherited device. Device type is filtered only after merging: filtering each profile to NICs
+    first would lose a ``type=none`` override and report an isolated instance as networked.
     """
     merged: Dict[str, Dict[str, Any]] = {}
     for profile in profile_devices:
@@ -215,7 +205,7 @@ def check_nics(
         try:
             rows = list_in_project(client, "profiles", profile_owner)
             by_name = {row.get("name"): row for row in rows if row.get("name")}
-            # important: LXD applies profiles in request order, not daemon listing order.
+            # important: LXD applies profiles in request order rather than daemon listing order.
             # Later profiles can replace a device from an earlier profile.
             profile_devices = [
                 (by_name[name].get("devices") or {})
@@ -274,11 +264,9 @@ def check_address_for_network(
         raise NicPreflightError(
             f"Network '{network_name}' does not exist in project '{project}'."
         )
-    # important: LXD lists a bare host interface as an unmanaged network, so a NIC whose
-    # `parent` is one (a macvlan off `enp86s0`, which is what a stock default profile hands
-    # out) resolves here and then fails the subnet test below. That refusal is correct but
-    # names the wrong reason, and it invites an operator to go looking for a subnet to add.
-    # The create-time check already says this properly; say the same thing here.
+    # LXD lists a bare host interface as an unmanaged network, so a NIC whose `parent` is one
+    # (a macvlan off a host NIC, as a stock default profile hands out) resolves here. Refuse it
+    # as unmanaged, like the create-time check, rather than with a misleading subnet error.
     if not row.get("managed"):
         raise NicPreflightError(
             f"Interface is attached to '{network_name}', which LXD does not manage, so an "

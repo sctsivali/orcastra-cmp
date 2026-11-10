@@ -3,8 +3,7 @@ configured days.
 
 Every worker runs the loop; a transaction-level advisory lock decides which one does the work
 this pass, so a worker that dies mid-delete releases it with its transaction and the next pass
-on any worker picks up. Deletes go in bounded batches so a month of rows never becomes one
-long lock.
+on any worker picks up.
 """
 
 from __future__ import annotations
@@ -68,8 +67,8 @@ async def prune_once(session_maker: Callable[[], Any]) -> Optional[Tuple[int, in
 
 
 async def _roll_up_key_usage(db: Any, *, log_days: int, task_days: int) -> None:
-    # note: under a savepoint, so a registry the database does not have yet (a rolling upgrade)
-    # costs the roll-up and never the prune.
+    # Under a savepoint, so a registry the database does not have yet (a rolling upgrade) costs
+    # only the roll-up, never the prune.
     try:
         async with db.begin_nested():
             rolled = await repository.roll_up_key_usage(db, log_days=log_days, task_days=task_days)

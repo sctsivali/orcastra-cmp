@@ -1,10 +1,10 @@
 """Rows of `lxd_trust_cleanup`, and the per-cluster lock every certificate change takes.
 
-The lock is what keeps the record honest. Two renewals racing on one cluster each read the same
-current certificate, each mint a new one and each add it to trust, and only the last write to Vault
-survives, so the loser's certificate stays trusted on the cluster with nothing anywhere naming it.
-Serializing every certificate mutation of a cluster (renew, verify, cancel, regenerate, remove now,
-the sweep, deregistration) closes that, and makes the select-then-insert below safe.
+important: without the lock, two renewals racing on one cluster each read the same current
+certificate, mint a new one and add it to trust, and only the last write to Vault survives, so the
+loser's certificate stays trusted on the cluster with nothing naming it. Serializing every
+certificate mutation of a cluster (renew, verify, cancel, regenerate, remove now, the sweep,
+deregistration) prevents that and makes the select-then-insert below safe.
 """
 
 import asyncio
@@ -21,7 +21,7 @@ from app.core.cert_fingerprint import is_lxd_fingerprint
 from app.models.trust_cleanup_models import LxdTrustCleanup
 
 # A removed row stays visible this long: the page can say "removed 3 minutes ago", and the task
-# journal still recognises an operation that started under the old certificate and ended after.
+# journal still recognises an operation that started under the previous certificate and ended after.
 RECENTLY_REMOVED = timedelta(hours=24)
 
 OPEN_STATES = ("pending", "failed")
@@ -52,7 +52,7 @@ def _dialect_name(db: AsyncSession) -> str:
 
 
 def _local_lock(cluster_id: str) -> asyncio.Lock:
-    # note: SQLite and test sessions only. An asyncio lock belongs to one loop, so it is keyed by it.
+    # SQLite and test sessions only. An asyncio lock belongs to one loop, so it is keyed by the loop.
     key = (id(asyncio.get_running_loop()), cluster_id)
     with _local_locks_guard:
         return _local_locks.setdefault(key, asyncio.Lock())
@@ -199,7 +199,7 @@ async def tracked_fingerprints(
     A row waiting out its grace period (workers that have not switched yet), or one removed within
     the last day (an operation started before the removal can still report after it). Never a
     `failed` row: that certificate can stay trusted indefinitely, and counting it as the dashboard
-    would file anything done with it, including by someone who obtained its key, as our own.
+    would file anything done with it, including by someone who obtained its key, as the dashboard's.
     """
     since = (now or utcnow()) - RECENTLY_REMOVED
     result = await db.execute(
@@ -221,11 +221,11 @@ async def record_superseded_now(session_maker: Callable[[], Any], **record: Any)
     """record_superseded on its own short transaction, committed before the overwrite it protects.
 
     important: the caller's session holds the cluster lock, and that lock is transaction scoped, so
-    committing there would release it mid-change. Writing the row there and committing after the
-    Vault overwrite left a window where a dead worker or a failed commit lost the row while the
-    overwrite stayed, and the replaced certificate stayed trusted with nothing naming it. A row
-    committed first and an overwrite that then fails costs nothing: the sweep cancels a row that
-    still names the current certificate.
+    committing there would release it mid-change. Committing the row only after the Vault
+    overwrite leaves a window where a dead worker or a failed commit loses the row while the
+    overwrite stays, and the replaced certificate stays trusted with nothing naming it. A row
+    committed first costs nothing if the overwrite then fails: the sweep cancels a row that still
+    names the current certificate.
     """
     async with session_maker() as db:
         await record_superseded(db, **record)

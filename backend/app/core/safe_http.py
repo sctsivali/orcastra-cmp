@@ -1,18 +1,11 @@
 """Outbound HTTP the server makes on a caller's behalf.
 
-`core/url_safety.py` decides whether a URL is one this server may call. That check happens at the
-request boundary and is the right shape for a Pydantic refusal, but on its own it is not enough
-for anything the server fetches later:
-
-  * a name validated once and fetched afterwards can answer differently the second time, and the
-    gap is the whole life of the stored value rather than a few milliseconds;
-  * a redirect moves the request to a URL nobody validated at all;
-  * a response body is read into memory before any size check the caller writes after the call.
-
-So every outbound fetch on behalf of a caller goes through here, and this module owns all three.
-There is exactly one such implementation in the tree, enforced by a test, because the reason the
-image proxy shipped a weaker copy of the private-range list is that having two made one of them
-stale without anybody noticing.
+`core/url_safety.py` decides at the request boundary whether a URL may be called. A later fetch
+needs more: a validated name can resolve differently when it is fetched, a redirect moves the
+request to an unvalidated URL, and a response body is read into memory before the caller can
+check its size. Every outbound fetch on behalf of a caller goes through here, which pins the
+judged address, rechecks every redirect and caps the body while streaming it. A test keeps
+`url_safety.py` the only private-range table.
 """
 
 import asyncio
@@ -28,16 +21,15 @@ from app.core.url_safety import describe_url_risk, resolve_safe_addresses
 
 logger = logging.getLogger(__name__)
 
-# Split rather than a single total, because one number is gamed by a receiver that accepts the
-# connection and then drips a byte at a time.
+# Per-phase limits. httpx applies `read` to each wait for the next chunk; there is no total.
 DEFAULT_TIMEOUT = httpx.Timeout(connect=3.0, read=10.0, write=5.0, pool=2.0)
 
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 # Every fetch asks for the body as it is stored. A server may still compress it, and httpx would
 # then hand out decompressed chunks of any size before a cap could look at them: one 64 KiB gzip
-# chunk inflates to about 64 MB (security review 2026-11-07). So bodies are read raw and inflated
-# here, never more than the caller's limit plus one byte at a time.
+# chunk inflates to about 64 MB. So bodies are read raw and inflated here, never more than the
+# caller's limit plus one byte at a time.
 _ACCEPT_ENCODING = "identity"
 
 
@@ -47,7 +39,7 @@ class _Undecodable(Exception):
 
 class _Inflater:
     """One gzip or deflate layer. "deflate" is meant to be zlib-wrapped, but some servers send the
-    bare stream, which httpx accepted; the first block decides, and the stream is read once."""
+    bare stream, which httpx also accepts; the first block decides, and the stream is read once."""
 
     def __init__(self, gzip: bool) -> None:
         self._raw_fallback = not gzip
@@ -97,8 +89,8 @@ def _inflate_into(decoder: _Inflater, raw: bytes, body: bytearray, limit: int) -
     """Append what `raw` inflates to, stopping one byte past `limit`. True when it went past.
 
     Bytes after the end of the compressed stream are refused: zlib would keep copying them into
-    unused_data on every chunk, a cost that grows with the square of what a sender trickles in
-    (security review 2026-11-07), and a second gzip member is not something these callers expect.
+    unused_data on every chunk, a cost that grows with the square of what a sender trickles in,
+    and a second gzip member is not something these callers expect.
     """
     data = raw
     try:
@@ -167,14 +159,11 @@ async def fetch_guarded(
     """GET `url`, following redirects only to destinations that pass the same check.
 
     Returns (content_type, body). Raises SafeHTTPError on refusal, transport failure, or a body
-    that runs past `max_bytes`.
+    past `max_bytes`; the body is streamed and abandoned as soon as it exceeds the cap.
 
-    `allowed_hosts` pins every hop, the first included, to those names (lowercase): a fetch with
-    a fixed purpose, like the release feed, never follows a redirect anywhere else. `exemptions`
-    are the private networks an operator allowed for it (url_safety.describe_url_risk).
-
-    important: the body is streamed and abandoned the moment it exceeds the cap. Reading first
-    and measuring afterwards means a hostile responder decides how much memory a worker uses.
+    `allowed_hosts` (lowercase) pins every hop, the first included, to those names, for a fetch
+    with a fixed purpose such as the release feed. `exemptions` are the private networks an
+    operator allowed for it (url_safety.describe_url_risk).
     """
     current = url
     # No keepalive: a pooled connection outlives the moment its address was judged (see _pin).
@@ -192,9 +181,9 @@ async def fetch_guarded(
                 raise SafeHTTPError(reason)
             if allowed_hosts is not None and (urlsplit(current).hostname or "").lower() not in allowed_hosts:
                 raise SafeHTTPError("destination is not one this fetch may reach")
-            # important: connect to the address just judged, never to the name. httpx resolving the
-            # name again let a rebinding name pass the check public and connect to loopback
-            # (security review 2026-11-05, finding 3). Every hop is pinned, redirects included.
+            # important: connect to the address just judged, never to the name. If httpx resolved
+            # the name again, a rebinding name could pass the check as public and then connect to
+            # loopback. Every hop is pinned, redirects included.
             try:
                 connect_url, host, _address = await asyncio.to_thread(_pin, current, exemptions=exemptions)
             except ValueError as exc:
@@ -228,8 +217,8 @@ async def fetch_guarded(
                         raise SafeHTTPError(str(exc)) from exc
                     body = bytearray()
                     raw_seen = 0
-                    # important: raw chunks, not aiter_bytes. Both the bytes on the wire and what
-                    # they inflate to are held to max_bytes (see _ACCEPT_ENCODING).
+                    # important: read raw chunks; aiter_bytes inflates before any cap applies. Both
+                    # the bytes on the wire and what they inflate to are held to max_bytes.
                     async for chunk in chunks:
                         raw_seen += len(chunk)
                         if raw_seen > max_bytes:
@@ -252,7 +241,7 @@ async def fetch_guarded(
             except SafeHTTPError:
                 raise
             except httpx.HTTPError as exc:
-                # note: the exception string can carry the target URL and, from httpx, sometimes
+                # The exception string can carry the target URL and, from httpx, sometimes
                 # request headers. Log the type only and hand the caller a category.
                 logger.warning("Guarded fetch failed: %s", type(exc).__name__)
                 raise SafeHTTPError("could not reach the URL") from exc
@@ -268,20 +257,10 @@ def _host_header(url: str) -> str:
 def _pin(url: str, *, exemptions: Sequence[Any] = ()) -> Tuple[str, str, str]:
     """Resolve once and rewrite the URL to connect to that exact address.
 
-    Returns (connect_url, original_host, resolved_address).
-
-    important: this is the half a boundary check cannot do. `describe_url_risk` resolves a name to
-    decide whether it is safe, and then the HTTP client resolves it again to connect. For a value
-    validated at the boundary and fetched moments later the gap is small. For a delivery endpoint
-    stored at subscribe time and contacted for the life of an installation, the gap is the whole
-    life of the installation: a name registered against a public record can answer with Vault's
-    address the next day and nothing revalidates.
-
-    Pinning closes it by resolving exactly once, judging every address that name answers with, and
-    then connecting to the literal rather than to the name. `Host` and `sni_hostname` are carried
-    across so the server still receives the request it expects and TLS still validates the
-    certificate against the real hostname, which means a pinned connection to an attacker's
-    address fails the handshake rather than succeeding quietly.
+    Returns (connect_url, original_host, resolved_address). Without it the HTTP client resolves
+    the name again to connect, and a stored endpoint can answer with a public address when judged
+    and an internal one later. Every address the name answers with is judged. The caller sends
+    the real name in `Host` and `sni_hostname`, so TLS validates the certificate against it.
     """
     parts = urlsplit(url)
     host = parts.hostname or ""
@@ -307,17 +286,13 @@ async def post_pinned(
     exemptions: Optional[Sequence[Any]] = None,
     require_https: Optional[bool] = None,
 ) -> Tuple[int, bytes, int]:
-    """Deliver a signed body to a caller-registered endpoint, safely.
+    """Deliver a signed body to a caller-registered endpoint, pinned to the judged address.
 
-    Returns (status_code, first bytes of the response, total bytes seen).
-
-    Redirects are refused outright rather than revalidated. A receiver controls the URL it
-    registered with us, so it has no legitimate need to redirect, and every implementation of
-    per-hop revalidation in the wild has had a bug in it. A 3xx is a delivery failure with a
-    reason, which is more useful to the operator than a silent hop.
+    Returns (status_code, first bytes of the response, total bytes seen). A redirect is a delivery
+    failure: the receiver controls the URL it registered, so it has no need to redirect.
 
     `exemptions` and `require_https` default to the webhook settings. A caller whose URL was
-    accepted under a stricter boundary passes that boundary, so delivery is held to the same rule.
+    accepted under a stricter boundary passes that boundary.
     """
     from app.core.config import webhook_destination_exemptions, webhook_requires_https
 
@@ -337,8 +312,7 @@ async def post_pinned(
     except ValueError as exc:
         raise SafeHTTPError(str(exc)) from exc
 
-    # No keepalive: a pooled connection outlives the moment its address was judged, which is the
-    # same staleness the pin exists to remove.
+    # No keepalive: a pooled connection outlives the moment its address was judged.
     limits = httpx.Limits(max_connections=4, max_keepalive_connections=0)
     async with httpx.AsyncClient(
         timeout=timeout, follow_redirects=False, limits=limits, transport=transport
@@ -384,7 +358,7 @@ async def post_pinned(
                             readable = False
                             head.clear()
                 if seen > max_response_bytes:
-                    # Stop reading. What the receiver says is diagnostic, not payload.
+                    # Stop reading: the reply is only kept as a diagnostic excerpt.
                     break
             return response.status_code, bytes(head[:max_response_bytes]), seen
         finally:

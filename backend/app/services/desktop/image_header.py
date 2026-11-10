@@ -1,18 +1,12 @@
 """Reading an image's geometry from its container header, without decoding it.
 
-The platform has to guarantee a screenshot is within a vision model's limits, because a
-computer-use tool result over them is REJECTED with a validation error rather than downscaled. So
-something has to know how big the image is.
+A computer-use tool result over a vision model's limits is rejected with a validation error instead
+of being downscaled, so the platform has to know a screenshot's size before returning it.
 
-important: it parses the header and never the pixels, and Pillow is deliberately not a dependency.
-The bytes come from inside a customer's guest, which may be compromised. Handing attacker-
-influenceable image data to a decoder inside the control plane would be the first parsing surface
-from a guest into this process: nothing else in this backend decodes untrusted binary, and the
-console proxy is byte-level precisely so that it does not. Reading two integers out of a fixed
-offset cannot be made to execute anything.
-
-The cost of that choice is that resizing has to happen in the guest, where the pixels already are
-and where tools that resize for free already exist. That is the better place for it anyway.
+important: only the header is parsed, and Pillow is not a dependency. The bytes come from a guest
+that may be compromised, and a decoder in the control plane would be the first parsing surface from
+a guest into this process; reading two integers at a fixed offset cannot execute anything. Resizing
+therefore happens in the guest, where the pixels and the tools already are.
 """
 
 import logging
@@ -60,8 +54,8 @@ class ImageGeometry(tuple):
 def _visual_tokens(width: int, height: int) -> int:
     """What a model spends to read an image of this size.
 
-    The published formula is ceil(w/28) * ceil(h/28). Stated here rather than approximated,
-    because the refusal it feeds has to be right at the boundary and not merely close.
+    The published formula ceil(w/28) * ceil(h/28), computed exactly so the refusal it feeds is
+    right at the boundary.
     """
     if width <= 0 or height <= 0:
         return 0
@@ -119,8 +113,8 @@ def _jpeg_geometry(payload: bytes) -> Optional[ImageGeometry]:
 def read_geometry(payload: bytes) -> Optional[ImageGeometry]:
     """The image's dimensions, or None when the bytes are not a container this understands.
 
-    None is not "zero by zero". A caller must treat it as "this is not an image I can vouch for"
-    and refuse, rather than pass unverified bytes to a model.
+    A caller must treat None as an image it cannot vouch for and refuse, instead of passing
+    unverified bytes to a model.
     """
     if not payload:
         return None

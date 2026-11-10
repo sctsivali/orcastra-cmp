@@ -6,8 +6,8 @@ by either leaves no rule behind for a later same-name project of another organiz
 important: grants are revoked only once the project is known to be gone. Before the DELETE goes
 out, a follow-up row records the rules captured under the cluster lock (services/project_delete_store.py).
 A delete whose outcome is unknown leaves that row to the sweeper (services/project_delete_sweeper.py),
-which revokes only those rules once the project reads 404, and nothing at all if it is still there
-when the row's deadline passes. The row is in Postgres, so a restart loses none of it.
+which revokes only those rules once the project reads 404, and nothing if it is still there when the
+row's deadline passes. The row is in Postgres, so it survives a restart.
 """
 
 from __future__ import annotations
@@ -102,10 +102,10 @@ async def delete_project_and_forget(
                 await lxd_service.delete_project(host, name)
         except LXDProjectNotFoundError:
             if followup.created_here:
-                # important: a 404 revokes nothing on its own. Anyone with a cluster-wide delete
-                # could otherwise name a project that does not exist and strip every
-                # organization's rules staged for that name. Only the rules an earlier delete
-                # captured go, because that delete is what made the project disappear.
+                # important: a 404 revokes nothing on its own, or anyone with a cluster-wide
+                # delete could name a missing project and strip every organization's rules staged
+                # for that name. Only the rules an earlier delete captured go, because that delete
+                # made the project disappear.
                 await store.give_back(followup)
                 return ProjectDeleted(already_gone=True, revoke_note="")
             note = await project_grants.forget_deleted_project(

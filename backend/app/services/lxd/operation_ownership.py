@@ -1,9 +1,9 @@
 """Which project an LXD operation belongs to, read off the resources it names.
 
-An operation id is cluster-wide: LXD answers GET /1.0/operations/{id} whatever ?project= says
-(observed on nuc2, LXD 5.21, 2026-10-14). So every surface that hands an operation to a caller
-scoped to some projects decides ownership here, from the resource URLs, and treats an operation
-whose owner it cannot determine as not found.
+An operation id is cluster-wide: LXD 5.21 answers GET /1.0/operations/{id} whatever ?project=
+says. So every surface that hands an operation to a caller scoped to some projects decides
+ownership here, from the resource URLs, and treats an operation whose owner it cannot determine
+as not found.
 """
 
 from dataclasses import dataclass
@@ -22,16 +22,15 @@ __all__ = [
 ]
 
 # An operation is project-owned only when every resource URL names one of these API families.
-# Cluster members, certificates, storage pools themselves, and any future/unknown family are
-# deliberately absent. A query parameter on a cluster-wide URL must never turn it into a
-# project-owned resource by assertion alone.
+# Cluster members, certificates, storage pools themselves and any unknown family are absent:
+# a query parameter on a cluster-wide URL must never make it project-owned by assertion alone.
 PROJECT_RESOURCE_ROOTS = {
     "instances": frozenset({"instances", "containers", "virtual-machines"}),
     "containers": frozenset({"instances", "containers"}),
     "virtual-machines": frozenset({"instances", "virtual-machines"}),
     "instance-snapshots": frozenset({"instances", "containers", "virtual-machines"}),
-    # The spelling LXD 5.21 actually writes for a snapshot operation ("instances_snapshots",
-    # observed on nuc2). Without it every snapshot create, restore or delete had no owner.
+    # The spelling LXD 5.21 writes for a snapshot operation ("instances_snapshots").
+    # Without it a snapshot create, restore or delete has no owner.
     "instances-snapshots": frozenset({"instances", "containers", "virtual-machines"}),
     "instance-backups": frozenset({"instances", "containers", "virtual-machines"}),
     "images": frozenset({"images"}),
@@ -143,7 +142,7 @@ def operation_ownership(operation: Any) -> Optional[OperationOwnership]:
 def visible_to(operation: Any, visible_projects: Optional[FrozenSet[str]]) -> bool:
     """Whether a caller holding `visible_projects` may see this operation; None means every project.
 
-    An operation without a determinable owner is visible only to nobody scoped, never by default.
+    An operation without a determinable owner is visible to no caller, unscoped ones included.
     """
     owner = operation_ownership(operation)
     return owner is not None and (visible_projects is None or owner.project in visible_projects)

@@ -71,7 +71,7 @@ async def reconcile_staged(
     ):
         return False
     # Only jobs that submitted against an approved contract stamp their targets with the job
-    # marker. Jobs accepted before that keep the operation-id based reconciliation.
+    # marker. Jobs without a contract hash keep the operation-id based reconciliation.
     if not any((resource.safe_result or {}).get("contract_hash") for resource in instances):
         return False
     from .transfer import build_live_contract
@@ -172,8 +172,8 @@ async def reconcile_staged(
         lease_expires_at=None,
         error_code=None,
         error_message=None,
-        # important: only new adoption is progress. Resetting the streak when every target had
-        # been adopted before made a start that keeps failing count as a first attempt forever.
+        # important: only new adoption is progress. Resetting the streak when every target was
+        # adopted before would count a start that keeps failing as a first attempt forever.
         safe_result=sanitize_payload(
             {**(job.safe_result or {}), "reconciliation_streak": 0} if adopted else dict(job.safe_result or {})
         ),

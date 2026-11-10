@@ -1,7 +1,6 @@
 """API shapes for certificate fingerprints and superseded trust entries.
 
-Kept apart from schemas.py, which is past two thousand lines; that file re-exports SupersededTrust
-because CertificateInfo carries it.
+schemas.py re-exports SupersededTrust because CertificateInfo carries it.
 """
 
 from datetime import datetime

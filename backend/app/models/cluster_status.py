@@ -1,11 +1,7 @@
-"""
-Cluster connection status vocabulary and the single derivation that produces it.
+"""Cluster connection status vocabulary and the single derivation that produces it.
 
-Every surface that reports whether a cluster can be used goes through `derive_status`.
-It exists because three call sites used to answer the question three different ways:
-`/clusters` collapsed any failure to NOT_AUTHORIZED, `/regions` collapsed any failure to
-OFFLINE, and `/monitoring` invented "pending_trust" by substring-matching the error text.
-An operator reading two pages about one dead cluster saw two different reasons.
+Every surface that reports whether a cluster can be used goes through `derive_status`, so two
+pages never give different reasons for the same cluster.
 """
 
 from enum import Enum
@@ -25,7 +21,7 @@ class AvailabilityReason(str, Enum):
     """Machine-readable reason behind a status.
 
     The frontend keys its copy off this, never off the human sentence, so rewording a
-    message can never change what the UI decides.
+    message cannot change what the UI decides.
     """
     OK = "ok"
     UNTRUSTED_CERTIFICATE = "untrusted_certificate"
@@ -51,15 +47,12 @@ def derive_status(
 ) -> Tuple[ClusterStatus, AvailabilityReason, str]:
     """Map one probe result to the status vocabulary. Returns (status, reason_code, message).
 
-    important: `reachable` is the whole discriminator, and nothing here inspects the text of
-    `error`. NOT_AUTHORIZED means the host answered and refused our certificate; OFFLINE means
-    it never answered. Guessing that from a message is what labelled seven dead clusters
-    "Pending Trust" on the Clusters page.
+    important: `reachable` is the whole discriminator; never inspect the text of `error`.
+    NOT_AUTHORIZED means the host answered and refused the client certificate; OFFLINE means it
+    never answered.
 
-    note: `has_certificate` is accepted but callers on read paths pass the default. Its only
-    honest source, LXDCertificateManager.get_cluster_info, hardcodes True unless the caller
-    also asks for the certificate body, which costs a Vault round trip per cluster. So PENDING
-    reaches this function only from the registration flow, which does have the real answer.
+    Read paths pass the default `has_certificate` (LXDCertificateManager.get_cluster_info reports
+    True unless asked for the certificate body), so PENDING comes only from registration.
     """
     if connected:
         return ClusterStatus.ONLINE, AvailabilityReason.OK, ""
@@ -83,7 +76,7 @@ def derive_status(
             error or f"Cluster answered but is not usable (auth={auth}).",
         )
 
-    # important: default to OFFLINE, never ERROR. connected=False already means we could not
-    # use the cluster, and a picker must not present an unconfirmed cluster as usable. ERROR is
-    # reserved for a fault in us (a failed metadata read), not for a cluster that is merely down.
+    # important: default to OFFLINE, never ERROR. connected=False already means the cluster could
+    # not be used, and a picker must not present an unconfirmed cluster as usable. ERROR is
+    # reserved for a fault in the dashboard (a failed metadata read).
     return ClusterStatus.OFFLINE, AvailabilityReason.UNKNOWN, error or _UNREACHABLE_TEXT

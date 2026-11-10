@@ -1,14 +1,12 @@
 """The one seam between the MCP surface and the REST handlers it wraps.
 
-`proxy_operation` is roughly 380 lines of authorization, breaker check, thread-pool dispatch,
-timeout classification, audit, cache invalidation and error taxonomy. Reimplementing any of that
-here would guarantee drift, and the half that drifted would be the half nobody tested. So the tools
-build the same request model the endpoint takes and call the handler function directly.
+`proxy_operation` carries authorization, the breaker check, thread-pool dispatch, timeout
+classification, audit, cache invalidation and the error taxonomy. Rather than reimplement any of
+it, the tools build the same request model the endpoint takes and call the handler directly.
 
-important: calling a FastAPI handler as a plain function skips its `Depends` defaults, and two of
-them are load-bearing. `require_capability("lxd.proxy")` and `check_read_only_mode` are therefore
-invoked explicitly below. Missing the second would mean a read-only deployment still accepted
-writes through MCP, which is exactly the kind of gap a second door onto the same API creates.
+important: calling a FastAPI handler as a plain function skips its `Depends` defaults, so
+`require_capability("lxd.proxy")` and `check_read_only_mode` are invoked explicitly below.
+Without the second, a read-only deployment would still accept writes through MCP.
 """
 
 import logging
@@ -30,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["call_proxy", "run_inventory"]
 
-# Parameters whose VALUES name what a call acted on. They identify a resource the same way the
+# Parameters whose values name what a call acted on. They identify a resource the same way the
 # handler's own audit records do, and none of them carries content a caller chose to send.
 _TARGET_PARAMS = ("name", "snapshot_name", "operation_id")
 
@@ -57,10 +55,9 @@ async def call_proxy(
         result = await _run_proxy(api_key, operation, cluster_id, project, params or {}, wait)
         return result
     finally:
-        # important: AFTER the call and whatever happened, so the record says how it ended. It
-        # used to be written before the call with the logger's default result, so a refused
-        # delete was recorded as a successful one. A call that raised or was cancelled reaches
-        # here with no result and is recorded as a failure.
+        # important: written after the call, whatever happened, so the record says how it ended;
+        # written before, a refused delete would be recorded as a success. A call that raised or
+        # was cancelled reaches here with no result and is recorded as a failure.
         _audit_tool_call(api_key, operation, cluster_id, project, params or {}, result)
 
 
@@ -97,9 +94,9 @@ async def _run_proxy(
         return tool_result({"operation": operation, "cluster_id": cluster_id,
                             "data": getattr(response, "data", None)})
 
-    # note: `error_code` is one of PROXY_ERROR_CODES and is the reason it exists. "not_found" and
-    # "cluster_unavailable" demand opposite responses from a caller: give up, or retry later.
-    # Handing the model the prose alone would make it guess which.
+    # `error_code` is one of PROXY_ERROR_CODES. "not_found" and "cluster_unavailable" call for
+    # opposite responses (give up, or retry later), and the prose alone would leave the model
+    # guessing which.
     return tool_error(
         str(getattr(response, "error", "operation failed")),
         error_code=getattr(response, "error_code", None),
@@ -131,9 +128,8 @@ async def run_inventory(
     if isinstance(payload, CallToolResult):
         return payload
     if isinstance(payload, BaseModel):
-        # note: dumped here because `tool_result` renders with `json.dumps(default=str)`, which
-        # turns a model into its repr. whoami's text read `valid=True app_name=...` rather than
-        # JSON, so the one tool a model is told to start with answered in Python syntax.
+        # Dumped here because `tool_result` renders with `json.dumps(default=str)`, which would
+        # turn a model into its repr (`valid=True app_name=...`) instead of JSON.
         payload = payload.model_dump(mode="json")
     return tool_result(payload if isinstance(payload, dict) else {"data": payload})
 
@@ -141,8 +137,8 @@ async def run_inventory(
 def _outcome(result: Optional[CallToolResult]) -> Tuple[str, Optional[str]]:
     """(result, error_code) for the audit record: success, denied for a refusal, else failure.
 
-    note: no result means the call raised or was cancelled, and a blocking write may still finish
-    on its worker afterwards, so the code says the outcome is unknown rather than that it failed.
+    No result means the call raised or was cancelled, and a blocking write may still finish on its
+    worker afterwards, so the code says the outcome is unknown rather than that it failed.
     """
     if result is None:
         return "failure", "outcome_unknown"
@@ -163,15 +159,13 @@ def _audit_tool_call(
 ) -> None:
     """Record which tool a model chose and how it ended, separately from what the key then did.
 
-    Two records, two questions. The handler's own `_audit_key_action` answers "what happened to
-    this cluster" where it writes one; this answers "what did the model ask for", which is the one
-    a reviewer needs when the concern is an agent behaving unexpectedly rather than a cluster
-    changing.
+    The handler's own `_audit_key_action` records what happened to the cluster, where it writes
+    one; this records what the model asked for, which a reviewer needs when an agent behaves
+    unexpectedly.
 
-    note: parameter NAMES, plus only the values in `_TARGET_PARAMS`. `params` on a guest-reaching
-    operation carries the command or the file path, and on a write carries config the caller chose.
-    The exec path already argues this for command output: an audit index that stored it becomes a
-    copy of every secret anyone ever read.
+    Parameter names only, plus the values in `_TARGET_PARAMS`. `params` on a guest-reaching
+    operation carries the command or the file path, and on a write carries config the caller chose;
+    an audit index that stored them would become a copy of every secret anyone read.
     """
     outcome, error_code = _outcome(result)
     targets = {

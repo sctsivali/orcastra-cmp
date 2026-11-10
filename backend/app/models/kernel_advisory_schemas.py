@@ -1,7 +1,7 @@
 """Response models for host kernel advisories.
 
-note: every field a cached or older payload might lack has a default, as FanoutReachability
-asks of its subclasses.
+Every field a cached or older payload might lack has a default, as FanoutReachability asks of
+its subclasses.
 """
 
 from datetime import date, datetime
@@ -13,8 +13,9 @@ from app.models.schemas import FanoutReachability
 
 AdvisoryState = Literal["patched", "exposed", "unverified"]
 AdvisorySeverity = Literal["critical", "warning", "info"]
-# "ubuntu": Ubuntu's record of the CVE decided (services/kernel_cve_feed/), read at checked_at.
-# "built-in": the data shipped in kernel_advisory_data.py decided, as of data_as_of.
+# "ubuntu": the verdict comes from Ubuntu's record of the CVE (services/kernel_cve_feed/), read
+# at checked_at. "built-in": it comes from the data bundled in kernel_advisory_data.py, as of
+# data_as_of.
 AdvisorySource = Literal["ubuntu", "built-in"]
 
 
@@ -131,6 +132,6 @@ class KernelCveFeedStatus(BaseModel):
     """GET /security/kernel-advisories/ubuntu-status and POST .../check: how current Ubuntu's statuses are."""
 
     enabled: bool
-    # Reading the operator's KERNEL_CVE_FEED_URL mirror rather than ubuntu.com.
+    # True when reading the operator's KERNEL_CVE_FEED_URL mirror instead of ubuntu.com.
     mirror: bool = False
     advisories: List[KernelCveCheck] = Field(default_factory=list)

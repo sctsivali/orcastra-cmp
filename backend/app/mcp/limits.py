@@ -21,11 +21,11 @@ _ENVELOPE_HEADROOM = 64 * 1024
 def request_body_limit() -> int:
     """The largest request body the transport accepts.
 
-    important: the SDK's default is 4 MiB for the whole body, and `lxd_write_file` promises
-    `FILE_WRITE_LIMIT` (4 MiB by default) DECODED. Base64 of that is a third larger, so the largest
-    documented write was answered 413 before it reached a tool, while the same write over REST
-    `/proxy` succeeded. Derived from the limit rather than restated, so retuning
-    ORCASTRA_FILE_WRITE_LIMIT moves both together; never below the SDK's own default.
+    important: the SDK's default is 4 MiB for the whole body, and `lxd_write_file` accepts
+    `FILE_WRITE_LIMIT` (4 MiB by default) decoded. Base64 of that is a third larger, so under the
+    SDK default the largest documented write would be answered 413 before it reached a tool.
+    Derived from the limit rather than restated, so retuning ORCASTRA_FILE_WRITE_LIMIT moves both
+    together; never below the SDK's own default.
     """
     encoded = 4 * math.ceil(lxd_proxy.FILE_WRITE_LIMIT / 3)
     return max(DEFAULT_MAX_REQUEST_BODY_SIZE, encoded + _ENVELOPE_HEADROOM)

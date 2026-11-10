@@ -1,8 +1,6 @@
-"""
-OrcaHub Sync Service
+"""Push member changes from Orcastra back to OrcaHub.
 
-Handles pushing member/branding changes from Orcastra back to OrcaHub
-via the external API endpoints authenticated with API key credentials.
+Calls go to OrcaHub's external API, authenticated with the organization's API key credentials.
 """
 
 import json
@@ -20,23 +18,21 @@ from app.services.integration_callback_url import bound_callback_url
 
 logger = logging.getLogger(__name__)
 
-# orcastra role -> orcahub member role mapping
 _ROLE_TO_ORCAHUB = {
-    "admin": "partner",    # admin managing org -> push as partner
+    "admin": "partner",    # an admin managing the org is pushed as a partner
     "partner": "partner",
     "tenant": "tenant",
 }
 
 
 async def _get_orcahub_credentials(org: Organization, owner_keys: Sequence[str] = ()) -> Optional[Dict[str, Any]]:
-    """
-    Retrieve OrcaHub callback URL and API key credentials for an org.
-    The org must have source='orcahub' and a stored api_key_id.
-    Returns dict with app_url, api_key_id, api_key_secret or None.
+    """OrcaHub callback URL and API key credentials for an org, or None.
 
-    The primary owner key is asked first. When it cannot call back (ended, or no URL stored with its
-    current secret), the other keys of the owner set (`owner_keys`, oldest first) are tried in turn, so
-    an organization another owner still serves keeps its callbacks. Nothing is written.
+    The org must have source='orcahub' and a stored api_key_id; the result holds app_url,
+    api_key_id and api_key_secret. The primary owner key is tried first. When it cannot call back
+    (ended, or no URL stored with its current secret), the other keys of the owner set
+    (`owner_keys`, oldest first) are tried in turn, so an organization another owner still serves
+    keeps its callbacks. Nothing is written.
     """
     if org.source != "orcahub" or not org.api_key_id:
         return None
@@ -98,10 +94,7 @@ async def push_members_to_orcahub(
     org_id: int,
     members: List[Dict[str, Any]],
 ) -> bool:
-    """
-    Push member changes to OrcaHub.
-    """
-    # load org to get credentials
+    """Push member changes to OrcaHub. False when the org is not synced or the call failed."""
     result = await db.execute(select(Organization).where(Organization.id == org_id))
     org = result.scalar_one_or_none()
     if not org:
@@ -115,7 +108,6 @@ async def push_members_to_orcahub(
         logger.debug(f"Org {org_id} is not OrcaHub-synced or has no callback URL, skipping push")
         return False
 
-    # map roles for OrcaHub
     payload_members = []
     for m in members:
         orcahub_role = _ROLE_TO_ORCAHUB.get(m.get("role", "tenant"), "tenant")
@@ -161,15 +153,14 @@ async def push_member_removal_to_orcahub(
     user_email: str,
     org_ids: List[int],
 ) -> bool:
-    """
-    Tell OrcaHub a user left the given organizations, for those OrcaHub syncs with a key.
+    """Tell OrcaHub a user left the given organizations, for those OrcaHub syncs with a key.
 
-    important: only the organizations the removal actually left. This once sent "remove" to every
-    keyed OrcaHub organization, so a partner clearing a tenant from its own organization also
-    dropped that person from another partner's organization on the next sync.
+    important: only the organizations the removal left. A "remove" sent to every keyed OrcaHub
+    organization would let a partner clearing a tenant from its own organization also drop that
+    person from another partner's organization on the next sync.
 
-    note: the callback carries no organization id, so OrcaHub reads the key; two removed
-    organizations on one key get one call.
+    The callback carries no organization id, so OrcaHub reads the key; two removed organizations
+    on one key get one call.
     """
     if not org_ids:
         return True

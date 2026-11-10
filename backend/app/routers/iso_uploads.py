@@ -1,23 +1,12 @@
-"""
-External resumable-ISO-upload endpoints for OrcaHub.
+"""External resumable ISO upload endpoints, called by OrcaHub with an API key.
 
-A partner uploads a custom ISO (installer media, LiveCD, vendor appliance) that OrcaHub streams to
-the connected cluster. OrcaHub creates a session here (server-to-server, API-key auth), the browser
-then streams the file in resumable chunks through OrcaHub's proxy to the tus PATCH/HEAD endpoints
-below, and on finalize the file is imported into the chosen storage pool as an LXD custom volume of
-content-type 'iso' - exactly what the console ISO attach/eject flow discovers, so a VM can boot it.
-
-This mirrors image_uploads.py (same durability/recovery machinery, same API-key auth, reached only
-via OrcaHub) with two differences: the target is a storage-pool custom volume (identity = pool +
-volume_name), not the image store (identity = fingerprint/alias); and the LXD call is
-`POST /storage-pools/{pool}/volumes/custom` with headers X-LXD-name + X-LXD-type: iso (equivalent
-to `lxc storage volume import <pool> <file> <name> --type=iso`).
-
-Session state lives in Postgres (iso_upload_sessions) so it survives across the uvicorn workers and
-restarts. Bytes stage on a writable host-mounted dir, are verified (SHA-256, optional) before import,
-and the staging file is removed afterwards. The import runs detached with a heartbeat + recovery sweep
-so a worker restart cannot strand a session at 'importing'; it is idempotent (short-circuits if the
-named volume already exists in the pool), so re-driving is safe and skips the multi-GB re-stream.
+OrcaHub opens a session here; the browser streams the file in tus chunks through OrcaHub's proxy
+to the HEAD/PATCH endpoints below. Finalize imports it into the chosen storage pool as a custom
+volume of content-type `iso` (`lxc storage volume import <pool> <file> <name> --type=iso`), which
+the console ISO attach flow finds. Mirrors image_uploads.py, with pool and volume name in place
+of the fingerprint. Sessions live in Postgres (iso_upload_sessions) so they survive worker
+restarts; the import runs detached with a heartbeat and a recovery sweep, so a restart cannot
+strand a session at 'importing'.
 """
 
 import asyncio
@@ -58,23 +47,21 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/integrations", tags=["Integrations - ISO Upload"])
 
-# Bytes stage on a host-mounted writable dir (see docker-compose), NOT the pool; staging only holds
-# one in-flight upload at a time before it is streamed into the cluster volume.
+# Bytes stage on a host-mounted writable directory (see docker-compose), not on the pool, until
+# they are streamed into the cluster volume.
 UPLOAD_DIR = os.getenv("ISO_UPLOAD_DIR", os.getenv("IMAGE_UPLOAD_DIR", "/app/uploads"))
 SESSION_TTL_HOURS = int(os.getenv("ISO_UPLOAD_TTL_HOURS", "6"))
 DISK_HEADROOM_BYTES = int(os.getenv("ISO_UPLOAD_DISK_HEADROOM", str(2 * 1024 * 1024 * 1024)))
 MAX_ACTIVE_SESSIONS = int(os.getenv("ISO_UPLOAD_MAX_ACTIVE", "2"))
-# Server-side ceiling for one upload. important: this is advertised as Tus-Max-Size AND
-# enforced at create. Both matter -- max_bytes/total_bytes arrive from the client, so
-# without this the only ceiling is free disk, and staging shares a filesystem with the rest
-# of the box.
+# important: the server-side ceiling for one upload, advertised as Tus-Max-Size and enforced at
+# create. max_bytes and total_bytes come from the client, so without it the only ceiling is free
+# disk, and staging shares a filesystem with the rest of the host.
 MAX_UPLOAD_BYTES = int(os.getenv("ISO_UPLOAD_MAX_BYTES", str(8 * 1024 * 1024 * 1024)))
 TUS_VERSION = "1.0.0"
 
-# LXD custom-volume names: letters, digits, dot, hyphen (LXD rejects slashes/spaces). This is also the
-# IDOR/traversal gate since volume_name lands in the LXD URL path and the X-LXD-name header.
-# \A...\Z (not ^...$) so a trailing newline can't slip through -- both names go
-# straight into the LXD storage-volume URL path.
+# important: LXD custom-volume names (letters, digits, dot, underscore, hyphen). This is also the
+# IDOR/traversal gate, since volume_name lands in the LXD URL path and the X-LXD-name header.
+# \A...\Z because `$` would let a trailing newline through.
 _VOLUME_NAME_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,62}\Z")
 # The pool name lands in the same URL path; validate it with the same shape.
 _POOL_NAME_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,62}\Z")
@@ -133,14 +120,11 @@ def _staging_path(session_id: str) -> str:
 
 
 def _assert_session_owner(api_key: Dict[str, Any], row: Any) -> None:
-    """A session belongs to the key that opened it, not to everyone on its cluster.
+    """A session belongs to the key that opened it, not to every key on its cluster.
 
-    important: every handler here resolved the row and then checked only
-    `_assert_cluster_permission(api_key, row.cluster_id, ...)`. The row records `api_key_id` and
-    nothing compared it, so any key with `write` on the same cluster could HEAD, PATCH, finalize
-    or read another integration's in-flight upload, including corrupting its bytes. Reported as
-    404 rather than 403: the id is the only thing an attacker needs, so a distinguishable refusal
-    would confirm the session exists.
+    Without this check any key with `write` on the same cluster could HEAD, PATCH, finalize or read
+    another integration's in-flight upload and corrupt its bytes. Refused as 404 rather than 403:
+    the id is all an attacker needs, so a distinguishable refusal would confirm the session exists.
     """
     owner = getattr(row, "api_key_id", None)
     if owner and owner != api_key.get("id"):
@@ -148,7 +132,7 @@ def _assert_session_owner(api_key: Dict[str, Any], row: Any) -> None:
 
 
 def _assert_cluster_permission(api_key: Dict[str, Any], cluster_id: str, required: str) -> None:
-    """Thin alias so the call sites below read unchanged. The check itself is shared."""
+    """Local alias for the shared `assert_cluster_permission`."""
     assert_cluster_permission(api_key, cluster_id, required)
 
 
@@ -161,7 +145,7 @@ async def _get_session(db: AsyncSession, session_id: str) -> IsoUploadSession:
 
 
 async def _gc_expired(db: AsyncSession) -> None:
-    """Best-effort sweep of stale, non-terminal sessions + their staging files."""
+    """Best-effort sweep of expired, non-terminal sessions and their staging files."""
     res = await db.execute(
         select(IsoUploadSession).where(
             IsoUploadSession.status.in_(("pending", "uploading", "uploaded")),
@@ -212,10 +196,9 @@ async def create_upload(
         raise HTTPException(status_code=422, detail="Invalid ISO volume name")
     if not _POOL_NAME_RE.match(body.pool):
         raise HTTPException(status_code=422, detail="Invalid storage pool name")
-    # ISO discovery (the console attach/eject flow) only queries the default
-    # project, so an ISO imported elsewhere would report ready yet never be
-    # discoverable or attachable. Reject non-default up front as a clear 422
-    # rather than a silent dead end (matches iso_uploads_dashboard).
+    # ISO discovery (the console attach/eject flow) queries only the default
+    # project, so an ISO imported elsewhere would report ready and never be
+    # attachable. Refused up front with a 422, as in iso_uploads_dashboard.
     if (body.project or "default") != "default":
         raise HTTPException(
             status_code=422,
@@ -233,13 +216,10 @@ async def create_upload(
     _ensure_dir()
     await _gc_expired(db)
 
-    # Bound concurrency so staging disk cannot be exhausted by parallel uploads.
-    #
-    # important: counted PER KEY. The count used to be platform-wide, so any key with
-    # storage.upload on any single cluster could open the two allowed sessions, never send a
-    # byte, and every other tenant's uploads answered 503 until the expiry sweep hours later.
-    # The disk-watermark check below is the global bound, and it is the one that actually
-    # protects staging space; this one is about fairness between integrations.
+    # important: concurrent sessions are counted per key. A platform-wide count would let any
+    # key with storage.upload open every allowed session, never send a byte, and hold every other
+    # tenant's uploads at 503 until the expiry sweep. The disk-watermark check below is the global
+    # bound that protects staging space; this one keeps integrations from starving each other.
     active = await db.execute(
         select(func.count()).select_from(IsoUploadSession).where(
             IsoUploadSession.status.in_(_ACTIVE),
@@ -256,11 +236,9 @@ async def create_upload(
 
     session_id = secrets.token_hex(16)
     path = _staging_path(session_id)
-    # note: deliberately NOT pre-created. Creating the file before the row is committed leaks
-    # it on any failure between the two, and nothing sweeps staging files that have no row
-    # (the recovery loop only re-drives stuck imports). Two such leaks were found on the dev
-    # box. append_request_body creates the file on the first PATCH, so there is nothing to
-    # leak and one fewer thing to keep consistent.
+    # The staging file is not created here. Created before the row commits, it would leak on any
+    # failure between the two, and nothing sweeps staging files that have no row (the recovery
+    # loop only re-drives stuck imports). append_request_body creates it on the first PATCH.
 
     row = IsoUploadSession(
         session_id=session_id,
@@ -359,11 +337,10 @@ async def patch_upload(
             label=f"iso_upload[{session_id}]",
         )
     except UploadStagingUnavailable:
-        # important: retire the row rather than leaving it resumable. The staging volume is
-        # refusing writes, so this session can never make progress however long the client
-        # retries, and every attempt keeps holding one of only MAX_ACTIVE_SESSIONS slots. Two
-        # of these used to lock the key out for the full six-hour TTL. Failing it frees the
-        # slot now, and the client can start a fresh upload once an operator fixes the volume.
+        # important: retire the row rather than leave it resumable. The staging volume refuses
+        # writes, so the session can never progress, and while it lives it holds one of the key's
+        # MAX_ACTIVE_SESSIONS slots until the TTL. Failing it frees the slot now; the client starts
+        # a fresh upload once an operator fixes the volume.
         row.status = "failed"
         row.error = "upload staging not writable on the server"
         await db.commit()
@@ -456,10 +433,10 @@ def _sha256_file(path: str) -> str:
 
 _IMPORT_UPLOAD_TIMEOUT = int(os.getenv("ISO_IMPORT_UPLOAD_TIMEOUT", "600"))  # stream the file in
 _IMPORT_WAIT_TIMEOUT = int(os.getenv("ISO_IMPORT_WAIT_TIMEOUT", "900"))      # wait for LXD to create the volume
-# important: pass (connect, read), never a scalar. requests applies a scalar to BOTH legs, so
-# `timeout=900` also grants a 900s *connect* budget -- against a peer that accepts TCP and
-# then goes silent that is the RC3 failure shape with extra steps. The read leg has to be
-# long (multi-GB stream, then an LXD operation wait); the connect leg never does.
+# important: pass (connect, read), never a scalar. requests applies a scalar to both legs, so
+# `timeout=900` would also allow a 900 s connect against a peer that accepts TCP and then goes
+# silent. The read leg has to be long (multi-GB stream, then an LXD operation wait); the connect
+# leg never does.
 _CONNECT_TIMEOUT = int(os.getenv("ISO_IMPORT_CONNECT_TIMEOUT", "5"))
 
 _HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("ISO_IMPORT_HEARTBEAT_INTERVAL", "30"))
@@ -487,13 +464,13 @@ def _resolve_volume_sync(cluster_id: str, pool: str, volume_name: str, project: 
     if r.status_code >= 400:
         return None
     meta = r.json().get("metadata") or {}
-    # Only treat an *ISO* volume of this name as "already imported". A same-named
-    # volume of a different content-type is a different object and must not be
-    # mistaken for our upload (recovery would otherwise adopt it).
+    # Only an ISO volume of this name counts as already imported. A same-named
+    # volume of another content type is a different object, and recovery must
+    # not adopt it.
     if meta.get("content_type") != "iso":
         return None
-    # LXD reports a volume's config.size as a STRING byte count (ex; "358400"); coerce to int for the
-    # BigInteger column. Non-numeric/absent -> None (size is informational, not load-bearing).
+    # LXD reports a volume's config.size as a string byte count (ex; "358400"). Non-numeric or
+    # absent becomes None; the size is informational only.
     raw_size = (meta.get("config") or {}).get("size")
     try:
         size = int(raw_size) if raw_size is not None else None
@@ -507,25 +484,24 @@ def _lxd_import_iso_sync(cluster_id: str, path: str, pool: str, volume_name: str
     """Stream the staged ISO into the cluster's storage pool as a custom volume (content-type iso).
 
     Equivalent to `lxc storage volume import <pool> <file> <volume_name> --type=iso`:
-    POST /storage-pools/{pool}/volumes/custom with X-LXD-name + X-LXD-type: iso, raw body, then wait
-    on the returned operation.
+    POST /storage-pools/{pool}/volumes/custom with X-LXD-name and X-LXD-type: iso and the raw body,
+    then wait on the returned operation.
 
-    The (pool, volume_name) key is caller-chosen, so -- unlike image_uploads.py, which keys on the
-    content fingerprint -- "a volume of this name exists" does NOT mean "same bytes". The
-    skip-if-exists fast-path therefore runs ONLY on a recovery re-drive (where the volume can only be
-    our own earlier import). On a first import a pre-existing name is a genuine clash: we let LXD
-    reject it and fail, rather than silently keeping the old file under the requested name.
+    The (pool, volume_name) key is caller-chosen, so unlike image_uploads.py (keyed on the content
+    fingerprint) an existing volume of that name does not mean the same bytes. The skip-if-exists
+    path therefore runs only on a recovery re-drive, where the volume can only be this session's
+    earlier import. On a first import a pre-existing name is a clash, and LXD's refusal fails it.
     """
     svc = get_lxd_service()
     client = svc.connection_manager.get_client(cluster_id)
     if client is None:
         raise RuntimeError(f"Cluster {cluster_id} is not connected")
 
-    endpoint = client.api._api_endpoint  # e.g. https://host:8443/1.0
+    endpoint = client.api._api_endpoint  # ex; https://host:8443/1.0
     session = client.api.session
     project_q = _volume_project_q(project)
 
-    # Recovery only: a pre-existing ISO volume is our earlier import -> skip the re-stream.
+    # Recovery only: an existing ISO volume is this session's earlier import, so skip the re-stream.
     if recovery:
         existing = _resolve_volume_sync(cluster_id, pool, volume_name, project)
         if existing is not None:
@@ -545,9 +521,9 @@ def _lxd_import_iso_sync(cluster_id: str, path: str, pool: str, volume_name: str
         )
 
     if resp.status_code >= 400:
-        # On recovery a duplicate-name error means our prior import already landed
-        # -> resolve + continue. On a first import it is a real name clash the
-        # partner must resolve, so surface LXD's error instead of adopting the
+        # On recovery a duplicate-name error means the earlier import already landed,
+        # so resolve and continue. On a first import it is a real name clash for the
+        # caller to resolve, so LXD's error is surfaced instead of adopting the
         # existing volume.
         if recovery and "already exists" in resp.text.lower():
             got = _resolve_volume_sync(cluster_id, pool, volume_name, project)
@@ -684,8 +660,9 @@ async def _finalize_from_existing(
     absent_error: str = "import incomplete and no staged file remained to retry",
     cleanup_path: Optional[str] = None,
 ) -> None:
-    """Recovery for a stranded row whose staging file is already gone: if the volume is in the pool the
-    import had effectively succeeded -> ready; otherwise there is nothing to retry -> failed."""
+    """Settle a stranded row whose staging file is gone: ready if the volume is in the pool, else failed.
+
+    A read that raises leaves the row importing, since it cannot prove the import did not land."""
     loop = asyncio.get_event_loop()
     async with async_session_maker() as db:
         row = await _get_session(db, session_id)
@@ -724,8 +701,9 @@ async def _finalize_from_existing(
 
 
 async def _recover_orphaned_imports() -> None:
-    """Re-drive or fail imports stranded at 'importing' by a worker death/restart. Multi-worker safe:
-    each candidate is claimed with a conditional UPDATE so exactly one worker acts on it."""
+    """Re-drive or settle imports stranded at 'importing' by a worker death or restart.
+
+    Each candidate is claimed with a conditional UPDATE, so exactly one worker acts on it."""
     now = _now()
     stale_before = now - timedelta(seconds=_RECOVERY_STALE_SECONDS)
     too_old_before = now - timedelta(seconds=_RECOVERY_MAX_AGE_SECONDS)
@@ -833,16 +811,14 @@ async def _gc_expired_standalone() -> None:
 
 
 async def expiry_sweep_loop() -> None:
-    """Reclaim expired iso upload sessions on a timer.
+    """Reclaim expired ISO upload sessions on a timer.
 
-    important: _gc_expired used to run ONLY from inside create_upload, which made it
-    unreachable exactly when it was needed. MAX_ACTIVE_SESSIONS is per API key, so a key whose
-    two slots are held by dead rows has every create refused with 503 before it can trigger the
-    sweep that would free them, and the rows only age out after the six-hour TTL. Two failed
-    PATCHes were enough to lock an integration out for the rest of the day.
+    Running the sweep only from create_upload is not enough: MAX_ACTIVE_SESSIONS is per API key,
+    so a key whose slots are held by dead rows has every create refused with 503 before it could
+    trigger the sweep that would free them.
 
-    Runs in every worker. The sweep is idempotent: it only moves already-expired rows to
-    failed, so two workers doing it concurrently reach the same state.
+    Runs in every worker. The sweep only moves already-expired rows to failed, so two workers
+    running it concurrently reach the same state.
     """
     while True:
         try:

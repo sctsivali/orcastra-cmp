@@ -1,10 +1,10 @@
 """
 WebSocket router streaming LXD operation events to the browser.
 
-Backs realtime instance-creation progress on the dashboard: one browser
-connection subscribes to one node's shared event stream (see
-``app/services/lxd/events_hub.py``). Mirrors the terminal router's auth pattern:
-the bearer token is passed as the ``token`` query parameter.
+Backs live instance-creation progress on the dashboard: one browser connection
+subscribes to one cluster's shared event stream (``app/services/lxd/events_hub.py``).
+It authenticates like the terminal router, with a ticket from POST /ws-tickets
+(``app/core/ws_auth.py``).
 """
 import asyncio
 import logging
@@ -34,37 +34,29 @@ router = APIRouter(prefix="/events", tags=["Events"])
 
 # How long a subscriber's resolved scope is trusted before it is read again.
 #
-# important: the scope is resolved once at connect and the socket lives as long as the tab. A
-# Partner who connected while a cluster had one owner keeps an unrestricted scope after a second
-# organisation is bound to it, and a tenant keeps a policy that was revoked, until the socket
-# drops. That window always existed for the tenant ACL; with the stream carrying every project
-# it is worth closing, so a busy socket re-reads its scope at most this often.
+# important: the scope is resolved at connect and the socket lives as long as the tab. Without a
+# re-read, a Partner keeps an unrestricted scope after a second organization is bound to the
+# cluster, and a tenant keeps a revoked policy, until the socket drops.
 SCOPE_REFRESH_S = 60.0
 
 
 def frame_is_visible(host: str, payload: dict) -> bool:
     """Whether one parsed event frame may reach the subscriber whose scope is in context.
 
-    important: the hub subscribes with all-projects, so the node's stream carries every
-    project's operation and lifecycle frames (instance names, image aliases, progress, error
-    text). Four gates, in the order the REST path applies them:
+    important: the hub subscribes with all-projects, so a cluster's stream carries every project's
+    frames (instance names, image aliases, progress, error text). Gates, in the REST path's order:
 
-    1. Current cluster membership. A long-lived socket must stop when its organization binding
-       or tenant grant no longer includes this host.
-    2. The Partner project bound. `check_tenant_permission` is no bound for a Partner (it
-       returns open for anyone without a tenant ACL), so without this a Partner on a cluster
-       two organisations share would receive the other organisation's frames the moment the
-       subscription widened. A frame with no project reads as the default project, the same
-       reading the lists give a record with no project.
-    3. The tenant ACL, per instance, mirroring verify_tenant_permission on the REST path.
-    4. A tenant gets nothing this stream cannot attribute to an instance: a neighbour's
-       storage-volume create or image download names nothing of theirs. Admin and Partner
-       carry no ACL and still receive those cluster-wide frames, which are for them.
+    1. Current cluster membership, so a long-lived socket stops once a binding or grant drops
+       this host.
+    2. The Partner project bound. `check_tenant_permission` is open without a tenant ACL, so a
+       Partner on a shared cluster would otherwise get the other organization's frames. A frame
+       with no project reads as `default`, as in the lists.
+    3. The tenant ACL per instance, as verify_tenant_permission on the REST path.
+    4. A tenant gets nothing the stream cannot attribute to an instance (ex; a neighbour's volume
+       create or image download). Admin and Partner still receive those cluster-wide frames.
     """
-    # The project and tenant predicates below deliberately do not imply cluster access:
-    # a Partner has no tenant ACL, and an absent shared-project bound means unrestricted
-    # projects. Re-check the cluster context first so a subscriber whose organization binding
-    # or tenant grant was revoked cannot keep accepting frames under those permissive defaults.
+    # Checked first: for a Partner the project and tenant predicates below default to open (no
+    # tenant ACL, no shared-project bound), so they do not imply cluster access.
     allowed_clusters = get_current_allowed_clusters()
     if allowed_clusters is not None and host not in allowed_clusters:
         return False
@@ -84,13 +76,12 @@ async def events_websocket(
     host: str = Query(..., description="Cluster to stream operation events from"),
     user: Optional[AuthenticatedUser] = Depends(ws_user("events")),
 ):
-    """Stream a node's LXD operation events (incl. image-pull progress) to the
+    """Stream a cluster's LXD operation events (incl. image-pull progress) to the
     browser. Opened with a ticket from POST /ws-tickets; closes with 4401 when the session ends."""
     settings = get_settings()
-    # important: gated on auth_enabled ALONE. This used to also require
-    # `_settings.authentik_issuer`, which is the variable whose absence produces the
-    # unauthenticated `user`, so the guard switched itself off in exactly the situation it
-    # existed to catch. ws_user now refuses a misconfigured server itself.
+    # important: gated on auth_enabled alone. A missing `authentik_issuer` is what produces an
+    # unauthenticated `user`, so also requiring it would switch the guard off in the case it
+    # exists for. ws_user refuses a misconfigured server itself.
     if settings.auth_enabled and user is None:
         await websocket.close(code=1008, reason="Authentication required")
         return
@@ -105,19 +96,17 @@ async def events_websocket(
 
     await websocket.accept()
     hub = get_events_hub()
-    # The hub judges every frame under a copy of THIS task's context, taken now, so the scope
-    # resolved above is what decides whether a frame is queued for this subscriber at all.
+    # The hub judges every frame under a copy of this task's context, taken now, so the scope
+    # resolved above decides whether a frame is queued for this subscriber at all.
     queue = await hub.subscribe(host, accept=partial(frame_is_visible, host))
     user_id = user.user_id if user else "anonymous"
     logger.info(f"[events] browser connected host={host} user={user_id}")
 
     async def _sender():
-        # The scope set above lives in this task's copy of the context, so frame_is_visible
-        # reads the same bound and ACL the handler resolved for this subscriber. A `.set()`
-        # inside this task updates that same copy, and `rescope` hands the hub a fresh copy
-        # for the pre-enqueue check. The wait is bounded by the time the scope is due, because
-        # a subscriber whose frames are all filtered before enqueue is never woken by one, and
-        # a widened scope (a new project grant) has to land regardless.
+        # frame_is_visible reads the scope from this task's copy of the context; a `.set()` here
+        # updates that copy and `rescope` hands the hub a fresh one for its pre-enqueue check.
+        # The wait is bounded by the refresh deadline: a subscriber whose frames are all filtered
+        # before enqueue is never woken by one, and a widened scope has to land anyway.
         scope_read_at = time.monotonic()
         while True:
             due_in = SCOPE_REFRESH_S - (time.monotonic() - scope_read_at)
@@ -130,10 +119,10 @@ async def events_websocket(
             if time.monotonic() - scope_read_at >= SCOPE_REFRESH_S:
                 await set_org_scope_for_ws(user)
                 try:
-                    # important: refreshing the context is not itself authorization. A
-                    # revoked Partner binding or Tenant grant removes `host` from the new
-                    # allowed set, so fail the socket closed before installing that context
-                    # in the hub or sending a frame that was queued under the old scope.
+                    # important: refreshing the context does not authorize. A revoked Partner
+                    # binding or Tenant grant removes `host` from the new allowed set, so close
+                    # the socket before installing that context in the hub or sending a frame
+                    # queued under the stale scope.
                     verify_cluster_access(host)
                 except HTTPException:
                     await websocket.close(code=1008, reason="Forbidden")
@@ -142,14 +131,14 @@ async def events_websocket(
                 scope_read_at = time.monotonic()
             if payload is None:
                 continue
-            # Judged again under the refreshed scope: a frame queued just before a narrowing
-            # must not go out, and this is the site the partner-bound ratchet owns.
+            # Judged again under the refreshed scope, so a frame queued just before a narrowing
+            # does not go out. The partner-bound ratchet test checks for this call.
             if not frame_is_visible(host, payload):
                 continue
             await websocket.send_json(payload)
 
     async def _receiver():
-        # We don't expect inbound messages; this just detects browser close.
+        # No inbound messages are expected; this only detects the browser closing.
         while True:
             await websocket.receive_text()
 

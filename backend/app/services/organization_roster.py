@@ -1,14 +1,11 @@
 """Who may change an organization's roster, and which rows OrcaHub owns.
 
-The member routes checked OrganizationService.user_has_access, which answers "may this user see
-the organization" and is true for a tenant row too. A partner who only bought from another partner
-could add, change and remove that partner's members with it.
-
-A roster is changed by whoever runs the organization: an admin, its creator, or a partner row
-(services.cluster_parties.RUNNING_ROLES, the same answer the party model reads). OrcaHub owns the
-roster of an organization it synced and lets only a platform admin remove a partner there, so a
-non-admin change to a partner row of such an organization is refused and named: the dashboard
-change is not sent there for a partner, and the next sync would quietly undo it.
+OrganizationService.user_has_access answers "may this user see the organization" and is true for a
+tenant row too, so it must not gate roster changes. A roster is changed by whoever runs the
+organization: an admin, its creator, or a partner row (services.cluster_parties.RUNNING_ROLES, the
+same answer the party model reads). OrcaHub owns the roster of an organization it synced and lets
+only a platform admin remove a partner there, so a non-admin change to a partner row of such an
+organization is refused and named: the change is not sent to OrcaHub, and the next sync would undo it.
 """
 
 from typing import Dict, List
@@ -34,8 +31,8 @@ def synced_partner_refusal(member_email: str, slugs: List[str]) -> str:
 async def user_runs_org(db: AsyncSession, org_id: int, user_email: str, user_role: str) -> bool:
     """Whether a user may change an organization's roster: admin, its creator, or its partner row.
 
-    note: the creator counts whatever its own row says. create_organization writes the creator's
-    row as the legacy "member" role, so created_by is what makes it run the organization.
+    The creator counts whatever its own row says: create_organization writes the creator's row with
+    the legacy "member" role, so created_by is what makes it run the organization.
     """
     if user_role == "admin":
         return True

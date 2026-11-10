@@ -1,7 +1,4 @@
-"""
-Request ID Middleware
-Generates and propagates unique request IDs for end-to-end tracing.
-"""
+"""Request ID middleware: mints the ID that ties a request to its log records."""
 
 import re
 import uuid
@@ -14,13 +11,12 @@ from app.core.request_context import RequestContext, set_request_context
 from app.core.request_security import resolve_client_ip
 
 
-# Header name for request ID propagation
 REQUEST_ID_HEADER = "X-Request-ID"
 
-# important: the request ID is always minted here. It becomes the access log's OpenSearch `_id`
-# (Fluent Bit `Id_Key request_id`, an upsert), so a caller-chosen ID let a client overwrite the
-# access record of an earlier request, its own included, and shape the bulk metadata line. The
-# caller's header is kept for correlation as `client_request_id`, and only when it is a plain token.
+# important: always mint the request ID here. It becomes the access log's OpenSearch `_id`
+# (Fluent Bit `Id_Key request_id`, an upsert), so a caller-chosen ID could overwrite another
+# request's access record and shape the bulk metadata line. The caller's header is kept for
+# correlation as `client_request_id`, and only when it is a plain token.
 _CLIENT_REQUEST_ID = re.compile(r"[A-Za-z0-9._-]{1,128}")
 
 
@@ -30,13 +26,10 @@ def client_request_id(value: str | None) -> str | None:
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware to generate and propagate request IDs.
-    
-    - Generates a new UUID for every request (see the note above on why a caller's is not used)
-    - Keeps a caller's plain-token X-Request-ID as request.state.client_request_id
-    - Stores request ID in context for access by other components
-    - Adds X-Request-ID header to response
+    """Mints a UUID per request, keeps it in the request context, returns it as X-Request-ID.
+
+    A caller's plain-token X-Request-ID is kept as request.state.client_request_id; the comment
+    on `_CLIENT_REQUEST_ID` says why it never becomes the request ID.
     """
     
     async def dispatch(
@@ -59,17 +52,13 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             path=request.url.path,
         )
         
-        # Set context for this request
         set_request_context(context)
         
-        # Store in request state for easy access
         request.state.request_id = request_id
         request.state.request_context = context
         
-        # Process request
         response = await call_next(request)
         
-        # Add request ID to response headers
         response.headers[REQUEST_ID_HEADER] = request_id
         # What the response cache served (core/swr.py): the frontend reads it to ask again once
         # a background read has replaced a stale body, and operators read it in the browser.
@@ -82,7 +71,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         return response
     
     def _get_client_ip(self, request: Request) -> str:
-        """Extract client IP, considering proxies."""
+        """The client IP, honouring forwarded headers only from trusted proxies."""
         if hasattr(request.state, "client_ip") and request.state.client_ip:
             return request.state.client_ip
         settings = get_settings()

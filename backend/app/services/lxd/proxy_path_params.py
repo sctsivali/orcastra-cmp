@@ -1,15 +1,15 @@
-"""The /proxy params that become an LXD URL path segment, refused before any cluster call when they cannot.
+"""The /proxy params that become an LXD URL path segment, refused when they cannot be one.
 
 services/lxd/proxy_operations.py puts a caller's instance name, operation id, network, storage pool
 and project name into the path pylxd requests. requests folds a `.` or `..` segment out of that path,
-so `..` as an instance name addressed the instance collection, and for a delete the server root. Each
-branch encodes its name with core/lxd_segment.lxd_segment, and this gate refuses a dot or empty name
-with 400 before a client is built, which on the real cluster is already a request.
+so `..` as an instance name would address the instance collection, and for a delete the server root.
+Each branch encodes its name with core/lxd_segment.lxd_segment, and this gate refuses a dot or empty
+name with 400 before a client is built, which on a real cluster is already a request.
 
-note: a create's name is a path segment too. pylxd reads a new network, project or storage pool
-back by name, and an instance model syncs itself by name. A snapshot's name is the path a later read,
-rename or delete of it addresses, and LXD accepts `.` and `..` for one (validate.IsURLSegmentSafe),
-so a snapshot created with a dot name could not be deleted through any key door afterwards.
+A create's name is a path segment too: pylxd reads a new network, project or storage pool back by
+name, and an instance model syncs itself by name. LXD accepts `.` and `..` as a snapshot name
+(validate.IsURLSegmentSafe), and a snapshot created with one could not be deleted through any API
+key route afterwards.
 """
 
 from typing import Any, Dict, Tuple

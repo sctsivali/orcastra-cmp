@@ -1,22 +1,15 @@
 """The identity provider's signing keys, cached per worker and refreshed without blocking a request.
 
-Every signed-in request verifies its JWT against keys published at the IdP's JWKS endpoint. Two
-things went wrong when the IdP misbehaved (2026-10-14, auth.orca.id answering 502):
+Every signed-in request verifies its JWT against keys published at the IdP's JWKS endpoint.
+`ensure_keys` refreshes asynchronously, once per worker at a time and at most once per
+`_FETCH_SPACING`, and never raises, so an IdP outage never holds a request for the HTTP timeout.
+`get_signing_key` makes no network call: it answers from the keys held for up to
+`AUTH_JWKS_MAX_STALE` after the last successful fetch, and otherwise refuses with a 503 the client
+can act on.
 
-1. The refresh ran on a blocking HTTP client inside the async request path, so every request on a
-   worker paid up to the full timeout while the IdP was down, and nothing held further attempts
-   back.
-2. A failed refresh escaped as an uncaught exception, a plain-text 500, although the keys fetched
-   an hour earlier were still in memory and would have verified the token.
-
-Now `ensure_keys` refreshes asynchronously, once per worker at a time and at most once per
-`_FETCH_SPACING`, and never raises. `get_signing_key` makes no network call: it answers from the
-keys held for up to `AUTH_JWKS_MAX_STALE` after the last successful fetch, and otherwise refuses
-with a 503 the client can act on instead of a 500.
-
-note: serving keys past their TTL is the standard trade every JWKS cache makes. A key the IdP
-revoked during an outage keeps verifying until the outage ends or max-stale passes, and access
-tokens themselves still expire on their own schedule.
+Serving keys past their TTL is the usual JWKS cache trade-off: a key the IdP revoked during an
+outage keeps verifying until the outage ends or max-stale passes. Access tokens still expire on
+their own schedule.
 """
 
 import asyncio
@@ -201,8 +194,7 @@ class JWKSClient:
             # A fresh fetch within the last minute did not contain it.
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                # note: the kid is the caller's own input echoed back; it is not secret, but it is
-                # also not useful to them, and leaving it out keeps the reply uniform.
+                # The kid is the caller's own input; leaving it out keeps the reply uniform.
                 detail="Unable to find the token's signing key",
             )
         # The refresh that would tell a rotated key from a forged kid failed or is held back.
@@ -257,7 +249,7 @@ class JWKSClient:
         return True
 
     def _remember_absent_kid(self, kid: str) -> None:
-        # Bounded so the negative cache cannot itself become the memory exhaustion it prevents.
+        # Bounded, so tokens carrying random kids cannot grow the negative cache without limit.
         if len(self._absent_kids) >= self._ABSENT_KID_MAX:
             self._absent_kids.clear()
         self._absent_kids[kid] = _wall()

@@ -1,4 +1,4 @@
-"""Models module containing Pydantic schemas."""
+"""Re-exports the core instance, image and node API schemas from `schemas.py`."""
 
 from .schemas import (
     VMStatus,

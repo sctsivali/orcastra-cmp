@@ -1,15 +1,14 @@
 """What an API key's cluster listing says about each cluster beyond its registration.
 
-`GET /integrations/clusters`, and MCP `orcastra_list_clusters` which runs it, promised a live status
-and returned none, so an agent could not tell a cluster worth calling from one that would only
-time out. Each row now carries the dashboard's availability fields (`status`, `reason_code`,
-`reason`, `checked_at`, the names `AvailableCluster` uses) and the access the presented key holds
-on that cluster.
+Each row of `GET /integrations/clusters` (and MCP `orcastra_list_clusters`, which runs it) carries
+the dashboard's availability fields (`status`, `reason_code`, `reason`, `checked_at`, the names
+`AvailableCluster` uses) and the access the presented key holds on that cluster, so a caller can
+tell a cluster worth calling from one that would only time out.
 
-important: cache-only by design. The state comes from what the dashboard already paid for (the
-shared availability cache, else a warm `/nodes` body) and from this worker's breaker, whichever is
-newer. Nothing here probes a cluster, so a key holder cannot turn a listing into a fleet-wide
-fan-out, and a cluster nothing has checked recently reads as null rather than as a guess.
+important: cache only. The state comes from what the dashboard already holds (the shared
+availability cache, else a warm `/nodes` body) and from this worker's breaker, whichever is newer.
+Nothing here probes a cluster, so a key holder cannot turn a listing into a fleet-wide fan-out, and
+a cluster nothing has checked recently reads as null.
 """
 
 import logging
@@ -30,7 +29,7 @@ _UNKNOWN: Dict[str, Any] = {"status": None, "reason_code": None, "reason": None,
 
 
 def server_type_name(stored: Optional[str]) -> str:
-    """The lowercase family name this surface has always sent, ex; `lxd`, `incus`, `microcloud`."""
+    """The lowercase family name this surface sends, ex; `lxd`, `incus`, `microcloud`."""
     return normalize_cluster_type(stored).lower()
 
 
@@ -41,9 +40,8 @@ def _aware(moment: datetime) -> datetime:
 def _newer(
     cached: Optional[ClusterAvailability], tripped: Optional[ClusterAvailability]
 ) -> Optional[ClusterAvailability]:
-    # note: the breaker is per worker and the cache is shared. A cache row written after this
-    # worker tripped means another worker reached the cluster since, so the newer one wins
-    # either way rather than the breaker always overriding.
+    # The breaker is per worker and the cache is shared. A cache row written after this worker
+    # tripped means another worker reached the cluster since, so the newer one wins either way.
     if cached is None or tripped is None:
         return cached or tripped
     return tripped if _aware(tripped.checked_at) > _aware(cached.checked_at) else cached

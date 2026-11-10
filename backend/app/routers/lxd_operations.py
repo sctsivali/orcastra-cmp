@@ -1,7 +1,4 @@
-"""
-API Router for LXD Operations.
-Provides endpoints for monitoring and managing LXD operations.
-"""
+"""LXD operations: list, inspect, cancel and wait on the daemon's background operations."""
 
 import asyncio
 import logging
@@ -30,8 +27,8 @@ from app.models.db_models import Organization, OrganizationMember
 from app.services.instance_job_identity import resolve_instance_job_organization
 from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd.lazy_client import client_for
-# note: the allowlist moved beside the secret key set so every API-key surface reads this same
-# function. The alias keeps this router's call site as it was.
+# The metadata allowlist lives beside the secret key set, so every API-key surface reads this
+# same function.
 from app.services.lxd.operation_metadata import (
     sanitize_operation_metadata as _sanitize_operation_metadata,
 )
@@ -59,18 +56,15 @@ from app.services.lxd.fanout import complete_reasons
 
 logger = logging.getLogger(__name__)
 
-# important: raised from require_tenant() to require_partner(). Every page that consumes this
-# router declares useRequireRole(Role.PARTNER), so the UI already treated it as partner-tier while
-# the API accepted a tenant. Mutations here were gated individually and reads were not, which is
-# the pattern this closes. Org scope still applies on top, so this narrows the tier rather than
-# replacing the boundary.
+# important: partner-tier, reads included, to match the pages that use this router
+# (useRequireRole(Role.PARTNER)). Org scope still applies on top.
 router = APIRouter(
     prefix="/operations",
     tags=["Operations"],
     dependencies=[Depends(require_partner()), Depends(org_scope_dependency)],
 )
 
-# Thread pool for parallel operations
+# Pool for the per-cluster listing fan-out.
 _executor = ThreadPoolExecutor(max_workers=5)
 _operation_executor = ThreadPoolExecutor(
     max_workers=8,
@@ -241,11 +235,10 @@ def _operation_info(
 
 
 def _require_safe_cancellation(operation: Any) -> None:
-    """Default-deny cancellation classes that are not ordinary project-owned tasks.
+    """Default-deny cancellation of anything but an ordinary project-owned task.
 
-    Migration jobs will own cancellation through their durable job API. Until that ownership
-    model exists here, this legacy endpoint only accepts a daemon task whose resource ownership
-    was independently derived and whose daemon flag explicitly permits cancellation.
+    Only a daemon task whose resource ownership was derived independently and whose `may_cancel`
+    flag is set can be cancelled here.
     """
     if str(_operation_value(operation, "class", "") or "") != "task":
         raise HTTPException(status_code=409, detail="This operation class cannot be cancelled")
@@ -254,7 +247,7 @@ def _require_safe_cancellation(operation: Any) -> None:
 
 
 class OperationInfo(BaseModel):
-    """Operation information."""
+    """One LXD background operation."""
     id: str = Field(..., description="Operation ID")
     class_name: str = Field("", description="Operation class")
     created_at: str = Field("", description="Creation timestamp")
@@ -271,7 +264,7 @@ class OperationInfo(BaseModel):
 
 
 class OperationListResponse(BaseModel):
-    """Response for listing operations."""
+    """Running operations across the requested clusters."""
     total: int = Field(..., description="Total number of operations")
     operations: List[OperationInfo] = Field(..., description="List of operations")
     nodes: List[str] = Field(..., description="Clusters included in this response")
@@ -289,7 +282,7 @@ class OperationListResponse(BaseModel):
 
 
 def _fetch_operations_for_node(lxd_service: LXDService, node_name: str) -> List[OperationInfo]:
-    """Fetch operations for a single node - runs in thread pool."""
+    """Running operations on one cluster. Runs in the thread pool."""
     operations = []
     try:
         client = lxd_service.connection_manager.get_client(node_name)
@@ -298,11 +291,11 @@ def _fetch_operations_for_node(lxd_service: LXDService, node_name: str) -> List[
             # raises AttributeError on None, which the generic handler below
             # turns into a partial result and the node is never named.
             raise LXDConnectionError(f"Could not connect to {node_name}")
-        # Use recursion=1 to get full operation details
+        # recursion=1 returns full operation records rather than URLs.
         response = client.api.operations.get(params={'recursion': '1'}, timeout=(5, 30))
         if response.status_code == 200:
             operations_data = response.json().get('metadata', {})
-            # Operations are returned in 'running' and 'success' keys
+            # LXD groups operations by status; only the running ones are listed.
             running_ops = operations_data.get('running', [])
             
             for op_data in running_ops:
@@ -316,20 +309,20 @@ def _fetch_operations_for_node(lxd_service: LXDService, node_name: str) -> List[
                         _operation_info(op_data, host=node_name, ownership=ownership)
                     )
                 except LXDConnectionError:
-                    # a missing client IS unreachability: let it through
+                    # A missing client is unreachability: let it through.
                     raise
                 except Exception as e:
-                    # important: not unreachability. See networks.py: an item
-                    # vanishing mid-listing must not condemn the whole node.
+                    # important: not unreachability (see networks.py). An item
+                    # vanishing mid-listing must not mark the whole node down.
                     logger.warning(f"Error parsing operation data on {node_name}: {e}")
         else:
             logger.warning(f"Got status {response.status_code} for operations on {node_name}")
     except LXDConnectionError:
-        # a missing client IS unreachability: let it through
+        # A missing client is unreachability: let it through.
         raise
     except Exception as e:
-        # important: not unreachability. See networks.py: an item
-        # vanishing mid-listing must not condemn the whole node.
+        # important: a listing error is not unreachability (see networks.py)
+        # and must not mark the whole node down.
         logger.warning(f"Error listing operations on {node_name}: {e}", exc_info=True)
     return operations
 
@@ -345,13 +338,13 @@ async def list_operations(
     lxd_service: LXDService = Depends(get_lxd_service),
     actor: AuthenticatedUser = Depends(require_partner()),
 ):
-    """List all operations."""
+    """List the running operations the caller may see."""
     try:
         if host:
             verify_cluster_access(host)
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
-        # Fetch operations from all nodes in parallel
+        # All clusters in parallel.
         loop = asyncio.get_event_loop()
         tasks = [
             loop.run_in_executor(_executor, _fetch_operations_for_node, lxd_service, node_name)
@@ -359,13 +352,11 @@ async def list_operations(
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Flatten results
         all_operations = []
-        # important: two different things make a node absent, and both must be named.
-        # A node can fail during the fan-out, or never be asked at all, because
-        # connection_manager.get_node_names() returns only nodes with a live client while
-        # the fleet is whatever Vault has registered. Reporting only the first kind left a
-        # dead cluster silently missing rather than merely empty.
+        # important: two things make a node absent, and both must be named. A node can fail
+        # during the fan-out, or never be asked at all: connection_manager.get_node_names()
+        # returns only nodes with a live client, while the fleet is whatever Vault has
+        # registered. Naming only the first kind leaves a dead cluster silently missing.
         unreachable_nodes: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
@@ -410,9 +401,8 @@ async def list_operations(
             node_errors=complete_reasons(unreachable_nodes, {}),
         )
     except HTTPException:
-        # note: an authorization refusal is a 403, not a server fault. The generic handler
-        # below would wrap it into a 500 whose body reads "403: Access denied ...", which
-        # misleads clients and pages an on-call for a working permission check.
+        # An authorization refusal stays a 403. The generic handler below would wrap it into
+        # a 500 reading "403: Access denied ...", which misleads clients and pages on-call.
         raise
     except Exception as e:
         logger.error(f"Error listing operations: {e}")
@@ -437,9 +427,8 @@ async def get_operation(
         client = require_client(await client_for(lxd_service, host), host)
         operation = await _lookup_operation(client, operation_id, host)
     except HTTPException:
-        # broad handler below converts it into a 500
-        # important: let require_client's 503 through. Without this the
-        # so an offline cluster does not read as a server fault.
+        # important: let require_client's 503 through. The broad handler below
+        # would turn it into a 404, and an offline cluster would read as missing.
         raise
     except Exception as exc:
         logger.info("Operation lookup on %s failed: %s", host, type(exc).__name__)
@@ -514,9 +503,7 @@ async def cancel_operation(
             "message": f"Operation {operation_id} cancelled successfully"
         }
     except HTTPException:
-        # broad handler below converts it into a 500
-        # important: let require_client's 503 through. Without this the
-        # so an offline cluster does not read as a server fault.
+        # Pass an HTTP error through; the broad handler below would turn it into a 500.
         raise
     except BlockingPoolFull as exc:
         logger.warning("Operation cancellation capacity on %s is unavailable", host)

@@ -5,7 +5,7 @@ same announcement from the same row, so neither depends on what the other proces
 
 important: every step is keyed by the row's `event_id`. The webhook skips subscriptions that already
 have a delivery for it and OrcaHub gets a stable per-organization id, so a retry after a partial
-announcement does not repeat either. The audit line goes last, once both have gone out.
+announcement repeats neither. The audit line goes last, once both have gone out.
 """
 
 from __future__ import annotations

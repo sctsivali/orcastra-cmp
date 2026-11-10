@@ -1,13 +1,13 @@
 """Submit one Vault unseal key share, or reset an attempt, on an Administrator's behalf.
 
-Vault's `sys/unseal` is unauthenticated: anyone who reaches Vault can add a share. What the
-dashboard adds is reach (an operator without a shell on the Vault host), progress several key
-holders can watch, and an audit record of who submitted when. It never keeps the share: the value
-lives in this request's memory, goes to Vault once, and appears in no log, audit row, error or cache.
+Vault's `sys/unseal` is unauthenticated: anyone who reaches Vault can add a share. The dashboard
+adds reach (an operator without a shell on the Vault host), progress several key holders can
+watch, and an audit record of who submitted when. It never keeps the share: the value lives in
+this request's memory, goes to Vault once, and appears in no log, audit row, error or cache.
 
-important: a bare `requests.put`, not VaultClient. That session retries PUT on connect errors and
-5xx, and a retried share is a share Vault may have counted already. `allow_redirects=False` so a
-standby node's redirect can never forward a share to another address.
+important: use a bare `requests.put`, never VaultClient. That session retries PUT on connect
+errors and 5xx, and a retried share is a share Vault may have counted already.
+`allow_redirects=False` so a standby node's redirect can never forward a share to another address.
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ def availability(settings, probe: Optional[SealProbe]) -> Tuple[bool, Optional[s
     if not getattr(settings, "vault_unseal_ui_enabled", False):
         return False, "Unsealing from the dashboard is turned off (VAULT_UNSEAL_UI_ENABLED=false)."
     if not getattr(settings, "auth_enabled", False):
-        # require_roles fabricates an Administrator when sign-in is off; nobody could be held to account.
+        # require_roles fabricates an Administrator when sign-in is off, so the audit names no person.
         return False, "Unsealing from the dashboard requires sign-in (AUTH_ENABLED)."
     if not settings.vault_enabled or not settings.vault_addr:
         return False, "Vault is not configured."

@@ -1,11 +1,11 @@
 """Uploading a file of any allowed size, in chunks that each survive on their own.
 
-A chunk is a complete, separately authorized request, which is what makes a long upload outlive a
-token refresh, a dropped connection, a worker restart or a proxy that limits one request's body.
-The session is a signed token rather than a record: Redis here is `allkeys-lru` and shared with the
-cache, so eviction could end an upload, and a database row would need a migration to hold what the
-token already proves. The client keeps the offset, because after a failed chunk only it knows what
-was acknowledged: pipelined writes leave holes, so the temp's size proves nothing.
+Each chunk is a complete, separately authorized request, so a long upload outlives a token refresh,
+a dropped connection, a worker restart or a proxy that limits one request's body. The session is a
+signed token instead of a stored record: Redis here is `allkeys-lru` and shared with the cache, so
+eviction could end an upload, and a database row would need a migration to hold what the token
+already proves. The client keeps the offset: after a failed chunk only it knows what was
+acknowledged, since pipelined writes leave holes and the temp's size proves nothing.
 """
 
 import asyncio
@@ -101,7 +101,7 @@ def unseal(token: str, *, user: str, host: str, project: str, instance: str) -> 
 
 
 async def _temps(guest: SftpClient, folder: bytes) -> Tuple[List[bytes], int]:
-    """The expired temps in a folder and how many others are live, as far as the budget reaches."""
+    """Expired temps in a folder and the count of live ones, within the sweep budget."""
     now = time.time()
     expired: List[bytes] = []
     active = 0
@@ -159,8 +159,8 @@ def _check_destination(dest: str) -> None:
 async def _final_attrs(guest: SftpClient, dest: bytes, existing: Optional[codec.Attrs]) -> bytes:
     """Owner and mode a finished file gets.
 
-    important: this service writes as root and the person is usually not root. A file uploaded to
-    /home/lab left owned by root is one they cannot edit, so a new file takes its folder's owner
+    This service writes as root and the person usually is not root. A file uploaded to their home
+    folder and left owned by root is one they cannot edit, so a new file takes its folder's owner
     and a replaced file keeps the owner and mode it had.
     """
     keep = existing if existing is not None and not is_symlink(existing) else None
@@ -208,7 +208,7 @@ async def commit_temp(guest: SftpClient, temp: bytes, dest: bytes, *, replace: b
 async def _reopen_temp(guest: SftpClient, temp: bytes) -> Tuple[bytes, codec.Attrs]:
     """Open a temp that sat between requests, in a folder its owner may be able to write to.
 
-    important: the temp is root's and 0600 until commit, so anything else at its name is a swap.
+    The temp is root's and 0600 until commit, so anything else at its name is a swap.
     `open_unchanged` then proves the handle is that same file before a byte changes.
     """
     attrs = await guest.lstat(temp)
@@ -221,7 +221,7 @@ async def _reopen_temp(guest: SftpClient, temp: bytes) -> Tuple[bytes, codec.Att
 async def _ensure_folder(guest: SftpClient, folder: str, raw_folder: bytes) -> None:
     """The destination folder, made when missing.
 
-    note: a folder upload sends its small files and new folders in bundles while large files start
+    A folder upload sends its small files and new folders in bundles while large files start
     alongside them, so a large file can arrive before the bundle that makes its folder.
     """
     try:
@@ -304,7 +304,7 @@ async def write_chunk(
     if offset > held:
         raise GuestFileError("offset_conflict", 409, "This chunk does not fit the upload.", {"temp_size": held})
     if offset < held:
-        # What a failed attempt left past the acknowledged offset, holes included.
+        # Drop what a failed attempt left past the acknowledged offset, holes included.
         await guest.fsetstat(handle, codec.encode_attrs(size=offset))
     at = offset
     received = 0

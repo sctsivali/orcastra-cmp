@@ -1,16 +1,15 @@
 """The rules a new guest password has to meet, after NIST SP 800-63B revision 4.
 
 A guest login prompt (Serial, Graphics) is a single factor, and section 3.1.1.2 sets 15 characters
-as the floor for a password used alone. Length is what resists an offline guess against a leaked
-/etc/shadow; composition rules are forbidden by the same section because people answer them with
-`Password1!`. What is checked instead: length, a blocklist of common passwords, the account and
-instance names, and runs that a person would type without thinking.
+as the floor for a password used alone. Length resists an offline guess against a leaked
+/etc/shadow; the same section forbids composition rules. Checked instead: length, a blocklist of
+common passwords, the account and instance names, repeats, and alphabet, digit and keyboard runs.
 
-important: printable ASCII only, a deliberate departure from the standard's Unicode SHOULD. The
-password has to be typed at a guest console whose keymap nobody here controls; a password that
-cannot be typed there is a lockout. The documentation records this.
+important: printable ASCII only, departing from the standard's Unicode SHOULD. The password has to
+be typed at a guest console with an unknown keymap, and a password that cannot be typed there is a
+lockout.
 
-note: every refusal is a code. Nothing here returns, logs or formats the password.
+Every refusal is a code. Nothing here returns, logs or formats the password.
 """
 
 from __future__ import annotations

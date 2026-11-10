@@ -1,9 +1,9 @@
 """Where Host Health keeps what outlives one pass: the last report, each check's since-time, and the
 Fluent Bit samples that delivery is judged against.
 
-Redis when it answers, so four workers serve one report and agree on when a check changed. The
+Redis when it answers, so every worker serves one report and agrees on when a check changed. The
 since-time is a compare-and-set in one Lua call: whichever worker observes a change first records
-it, and only that worker reports the transition, so the audit trail gets one row, not four.
+it, and only that worker reports the transition, so the audit trail gets one row.
 
 When Redis does not answer, each worker keeps its own copy (`mode == "process"`). Since-times may
 then differ between workers, and the caller logs transitions without writing audit rows, because

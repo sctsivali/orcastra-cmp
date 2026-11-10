@@ -1,12 +1,9 @@
 """One fire of one schedule: authorize, prune, create, record.
 
-The order is the design. Everything decidable without touching a cluster runs first, every read
-runs before any write, and retention runs before the create rather than after it.
-
-Prune-before-create is not a preference. Peak occupancy under prune-after-create is `keep_last + 1`,
-and that peak lands at exactly the instant a concurrent manual snapshot would be refused by
-`assert_capacity`. Pruning first means the schedule's ceiling is `keep_last`, strictly below the
-instance's five, and the two spare slots stay the operator's.
+Everything decidable without touching a cluster runs first, every read runs before any write, and
+retention runs before the create. Pruning after the create would peak at `keep_last + 1`, the moment
+a concurrent manual snapshot is refused by `assert_capacity`. Pruning first caps the schedule at
+`keep_last`, below the instance's five, so the remaining slots stay the operator's.
 """
 
 import logging
@@ -34,34 +31,33 @@ from app.services.snapshots.naming import build_scheduled_snapshot_name, schedul
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
 
-# important: its own pool, never `proxy_executor`. That one is eight workers shared with the paid
-# integration's raw proxy, and the isolation argument is symmetric: a schedule firing across the
-# fleet must not occupy the workers OrcaHub is waiting on, and OrcaHub must not be able to starve
-# every schedule by being busy.
+# important: its own pool, never `proxy_executor`, which is eight workers shared with the OrcaHub
+# raw proxy. A schedule firing across the fleet must not occupy the workers OrcaHub waits on, and a
+# busy OrcaHub must not starve every schedule.
 _SCHEDULE_WORKERS = 4
 _SCHEDULE_MAX_IN_FLIGHT = 8
 _SCHEDULE_EXECUTOR = ThreadPoolExecutor(
     max_workers=_SCHEDULE_WORKERS, thread_name_prefix="snapshot-schedule"
 )
 
-# A snapshot on a `dir` pool is a full copy of the instance, so the settle wait is the same 20 the
-# operator path uses rather than something tighter.
+# A snapshot on a `dir` pool is a full copy of the instance, so the settle wait matches the
+# operator path's 20 seconds.
 _LXD_CALL_TIMEOUT = 30.0
 _SETTLE_TIMEOUT = 20
 
 _NAME_RE = re.compile(LXD_NAME_PATTERN)
 
-# What LXD says when it already holds the name. Confirmed against a live daemon rather than assumed:
-# `Failed creating instance snapshot record "<name>": Snapshot "<instance>/<name>" already exists`,
-# delivered asynchronously as the operation's error, never as an HTTP status.
+# What LXD says when it already holds the name, delivered asynchronously as the operation's error,
+# never as an HTTP status:
+# `Failed creating instance snapshot record "<name>": Snapshot "<instance>/<name>" already exists`.
 _ALREADY_EXISTS = "already exists"
 
 
 def _invalidate_snapshot_views(schedule: Any) -> None:
     """Best-effort refresh after LXD has already decided the snapshot outcome.
 
-    Only the scheduled instance's cached sizes are forgotten; an hourly schedule used to make the
-    next Snapshots page read re-measure every holder on every cluster.
+    Only the scheduled instance's cached sizes are forgotten, so a run does not make the next
+    Snapshots page read re-measure every holder on every cluster.
     """
     try:
         cache = get_cache_manager()
@@ -87,28 +83,24 @@ class RunOutcome:
 
     @property
     def counts_as_failure(self) -> bool:
-        """`deferred` deliberately does not.
+        """`deferred` does not count.
 
-        A shed call is this service being busy, not the cluster being unhealthy. Counting it toward
-        the pause threshold would let a busy console pause an operator's schedules.
+        A shed call means this service is busy, not that the cluster is unhealthy; counting it
+        toward the pause threshold would let a busy console pause schedules.
         """
         return self.result in ("refused", "failed")
 
 
 def adopt_schedule_context(schedule: Any) -> None:
-    """Make the audit trail name the human who authorized this, not the process.
+    """Make the audit trail name the operator who authorized this, not the process.
 
-    important: a background task has no RequestContext, and `log_activity` fills the gap with an
-    all-null actor and no warning. For the product's only unattended write path that is total loss
-    of attribution, and it is invisible: nothing raises, the row is simply blank where the person
-    should be.
-
-    A synthetic "system" actor would be worse than blank, because it looks correct. The actor is
-    the operator who created the schedule; `automated` in the details is what distinguishes their
-    scheduled snapshot from one they took by hand this morning.
+    A background task has no RequestContext, and `log_activity` then writes an all-null actor
+    without a warning. A synthetic "system" actor would look correct and still lose attribution, so
+    the actor is the schedule's creator and `automated` in the details marks the snapshot as
+    scheduled.
 
     Set per run, not once at start-up: a ContextVar written inside one asyncio Task does not reach
-    another, and there is no reset helper, so this is overwrite-per-cycle by design.
+    another, and there is no reset helper.
     """
     set_request_context(
         RequestContext(
@@ -147,11 +139,10 @@ def _audit(schedule: Any, action: str, result: str, **details: Any) -> None:
 def _stored_names_are_addressable(schedule: Any) -> Optional[authority.Refusal]:
     """Re-validate what will become a request path, at the moment it is used.
 
-    important: these three strings were validated when the schedule was created and are used months
-    later, by a code path the validating router is not part of. pylxd builds URLs by concatenation
-    and escapes nothing, so a segment carrying `?` ends the path and moves the request to a
-    different resource. Anything that edits a row afterwards, a migration, an admin fixup, a bug,
-    puts an unvalidated string on the wire. Validation at creation is not validation at use.
+    important: these names were validated at creation and are used months later by a path the
+    validating router is not part of. pylxd builds URLs by concatenation and escapes nothing, so a `?` in a
+    segment ends the path and moves the request to a different resource. Any later edit to the row
+    (a migration, a manual fix, a bug) would otherwise put an unvalidated string on the wire.
     """
     for field_name in ("cluster_id", "project", "instance_name"):
         value = getattr(schedule, field_name, None) or ""
@@ -180,7 +171,7 @@ async def _blocking(fn, *args, label: str, **kwargs):
 
 
 def _select_own(rows: List[Dict[str, Any]], prefix: str) -> List[Dict[str, Any]]:
-    """This schedule's snapshots, oldest first, and nobody else's."""
+    """Only this schedule's snapshots, oldest first."""
     mine = [row for row in rows if str(row.get("name") or "").startswith(prefix)]
     return sorted(mine, key=lambda row: str(row.get("created_at") or ""))
 
@@ -212,8 +203,8 @@ async def run_one(
 ) -> RunOutcome:
     """Serialize the complete scheduled snapshot run with migration admission."""
     adopt_schedule_context(schedule)
-    # Validate stored path segments before constructing the migration guard identity. An empty
-    # or malformed stored name is a terminal schedule refusal, not a transient fence outage.
+    # Validate stored path segments before building the migration guard identity: an empty or
+    # malformed stored name is a terminal refusal rather than a transient fence outage.
     refusal = _stored_names_are_addressable(schedule)
     if refusal is not None:
         return RunOutcome(result="refused", refusal=refusal, terminal=refusal.terminal)
@@ -247,8 +238,8 @@ async def _run_one_guarded(
 ) -> RunOutcome:
     """Fire one schedule for its `due_slot`, or say why not.
 
-    Never raises for a business outcome. The caller records the outcome against the row, and a
-    scheduler loop that has to catch exceptions to stay alive is a loop that will one day stop.
+    Never raises for a business outcome: the caller records the outcome against the row, and the
+    scheduler loop should not depend on catching exceptions to stay alive.
     """
     adopt_schedule_context(schedule)
 
@@ -276,7 +267,7 @@ async def _run_one_guarded(
 
     client = await client_for(lxd_service, schedule.cluster_id, label="schedule")
     if client is None:
-        # Unreachable is not unauthorized. The slot is held and tried again.
+        # Unreachable is a failed run, not a refusal: the slot is held and tried again.
         return RunOutcome(
             result="failed",
             error=f"Cluster '{schedule.cluster_id}' could not be reached.",
@@ -355,8 +346,8 @@ async def _run_one_guarded(
                     _SETTLE_TIMEOUT,
                     label=f"settle prune {victim}",
                 )
-                # note: a failed delete used to surface only as the wait raising. The wait now
-                # reads the failure back, so it is raised here to keep the failure audit below.
+                # The wait returns a failed delete instead of raising, so raise here to reach the
+                # failure audit below.
                 if settled.get("failed"):
                     raise RuntimeError(settled.get("err") or f"the daemon did not delete {victim}")
             pruned.append(victim)
@@ -431,7 +422,7 @@ async def _run_one_guarded(
             label=f"settle {name}",
         )
     except Exception as exc:  # noqa: BLE001
-        # Completion is unverifiable, so the slot is HELD. The name is derived from the slot, so a
+        # Completion is unverifiable, so the slot is held. The name is derived from the slot, so a
         # retry either finds the snapshot already there or takes it; either way there is one.
         return RunOutcome(
             result="failed", error=f"could not confirm the snapshot settled: {exc}"
@@ -456,12 +447,11 @@ async def _run_one_guarded(
 def _classify_create_failure(
     schedule: Any, name: str, pruned: List[str], error: str
 ) -> RunOutcome:
-    """A refused duplicate is this slot already done, not a failure.
+    """A refused duplicate means this slot is already done.
 
-    important: the daemon reports it asynchronously as the operation's error, never as an HTTP
-    status, so nothing above this can see it. Recognising it is what makes a worker that died after
-    the daemon created the snapshot, but before its row was written, idempotent rather than a
-    source of second copies.
+    The daemon reports it asynchronously as the operation's error, never as an HTTP status.
+    Recognising it keeps a retry idempotent when a worker died after the daemon created the
+    snapshot but before the run was recorded.
     """
     if _ALREADY_EXISTS in (error or "").lower():
         _invalidate_snapshot_views(schedule)

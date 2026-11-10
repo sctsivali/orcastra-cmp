@@ -1,17 +1,13 @@
-"""Driving a guest's desktop through the exec path that already exists.
+"""Driving a guest's desktop through LXD exec, the same mechanism `exec_instance` uses.
 
-Every call goes out as `exec_instance`, which means it inherits, rather than re-implements: the
-argv-only contract, the bounded output streams, the privilege drop to a session user, the audit
-record that stores the exact command, and the capability gate on top. A click is literally
-`["xdotool","mousemove","677","568","mousemove","--sync","678","568","click","1"]` in the audit
-index a year later.
+Each action runs as an argv list through pylxd `execute`, or `guest_output.run_recorded` for large
+output, with bounded output streams. The proxy route in front gates each call by capability and
+audits the action, its coordinate and the length of any typed text.
 
-important: the bounded stream is constructed HERE with its own cap rather than borrowing exec's.
-`_BoundedStream` already takes a `limit`; `EXEC_OUTPUT_LIMIT` is only its default. A screenshot is
-several hundred kilobytes of base64 against a 256 KiB default, so borrowing it would silently
-return truncated base64, and truncated base64 is a corrupt image in front of a vision model. That
-is the worst failure mode available here, so truncation is a hard error on the capture path rather
-than the reported success it is for a command's output.
+important: the output caps are this module's own, never exec's. `_BoundedStream` takes a `limit`;
+`EXEC_OUTPUT_LIMIT` (256 KiB) is only its default. A screenshot is several hundred kilobytes of
+base64, and truncated base64 is a corrupt image in front of a vision model, so truncation is a hard
+error on the capture path instead of the reported success it is for a command's output.
 """
 
 import base64
@@ -69,10 +65,10 @@ class GuestExecProvider:
     ) -> Tuple[str, str, int, bool]:
         """For output the streaming path cannot deliver intact.
 
-        important: a screenshot is always tens to hundreds of kilobytes, which is well past the
-        point where pylxd's `execute` starts dropping frames without saying so. `guest_output`
-        explains the race and the measurements. Nothing is written inside the guest either way:
-        LXD records to a file on its own host, which is then read and deleted there.
+        important: a screenshot is tens to hundreds of kilobytes, well past the point where pylxd's
+        `execute` drops frames without saying so (`guest_output` explains the race). Nothing is
+        written inside the guest: LXD records to a file on its own host, which is then read and
+        deleted there.
         """
         return run_recorded(
             self._instance,
@@ -101,9 +97,8 @@ class GuestExecProvider:
             environment=environment or None,
             user=user,
             stdin_payload=stdin,
-            # important: same reason exec_instance passes it. Frames stay bytes, so the cap counts
-            # bytes and a capture cannot raise inside pylxd's unguarded utf-8 decode on its way
-            # through. A screenshot is the most binary thing this surface will ever carry.
+            # important: as in exec_instance, frames stay bytes, so the cap counts bytes and binary
+            # output cannot raise inside pylxd's unguarded utf-8 decode.
             decode=False,
         )
         exit_code = getattr(result, "exit_code", 0)
@@ -150,8 +145,8 @@ class GuestExecProvider:
             timeout=DESKTOP_SCREENSHOT_TIMEOUT,
         )
         if truncated:
-            # Inverting exec's contract deliberately. A truncated command output is a reported
-            # success; a truncated image is bytes that will decode to garbage or not at all.
+            # Unlike exec, truncation fails here: a truncated command output is a reported success,
+            # but a truncated image decodes to garbage or not at all.
             return ActionResult(
                 ok=False, action=action.name, error_code="desktop_capture_truncated",
                 detail=(
@@ -187,8 +182,8 @@ class GuestExecProvider:
             max_visual_tokens=DESKTOP_MAX_VISUAL_TOKENS,
         )
         if not allowed:
-            # Refusing beats returning it: a computer-use tool result over the model's limits is
-            # rejected with a validation error the operator cannot diagnose from the far side.
+            # Refused here: a computer-use tool result over the model's limits is rejected with a
+            # validation error the operator cannot diagnose from the far side.
             return ActionResult(
                 ok=False, action=action.name, error_code="desktop_display_too_large", detail=why
             )
@@ -206,7 +201,7 @@ class GuestExecProvider:
 
     def _cursor_position(self, report: ProbeReport) -> ActionResult:
         if report.session_type != "x11" or report.input_tool != "xdotool":
-            # Wayland has no unprivileged way to ask. Saying so beats inventing a coordinate.
+            # Wayland has no unprivileged way to ask.
             return ActionResult(
                 ok=False, action="cursor_position", error_code="desktop_unsupported",
                 detail="the pointer position can only be read on an X11 session",
@@ -236,9 +231,8 @@ class GuestExecProvider:
             return ActionResult(
                 ok=False, action="clipboard_read", error_code="desktop_unsupported", detail=str(exc)
             )
-        # Recorded too: a clipboard holding a pasted document is exactly the size that goes
-        # missing on the streaming path, and losing half of it silently would be worse than
-        # failing.
+        # Recorded too: a clipboard holding a pasted document is large enough to lose frames on
+        # the streaming path.
         stdout, stderr, exit_code, truncated = self._run_recorded(
             argv, stdout_limit=DESKTOP_STDOUT_LIMIT, environment=report.environment or None
         )
@@ -247,9 +241,8 @@ class GuestExecProvider:
                 ok=False, action="clipboard_read", error_code="desktop_action_failed",
                 detail=(stderr.strip() or f"clipboard read exited {exit_code}")[:400],
             )
-        # note: the contents are returned to the caller and never logged, at any level. This is a
-        # channel for whatever the user last copied, and an operator debugging a failure must not
-        # end up with it in the log index.
+        # important: the contents go to the caller and are never logged, at any level; they are
+        # whatever the user last copied.
         return ActionResult(
             ok=True, action="clipboard_read",
             extra={"text": stdout, "truncated": truncated, "bytes": len(stdout.encode("utf-8"))},
@@ -307,12 +300,10 @@ class GuestExecProvider:
             ), None
         if action.name == "type":
             # important: argv is visible in the guest's process table to every user on that
-            # machine, and the first thing an agent types at a login prompt is a password. So
-            # stdin wherever the tool supports it: xdotool only when the probe actually proved
-            # `--file` works, and wtype unconditionally, which accepts a trailing "-".
-            #
-            # ydotool is the remaining argv path. It is the last-resort injector, chosen only when
-            # wtype is absent, and it has no stdin form.
+            # machine, and an agent at a login prompt types a password. So stdin wherever the tool
+            # supports it: xdotool when the probe proved `--file` works, and wtype always (a
+            # trailing "-"). ydotool, the last-resort injector chosen only when wtype is absent,
+            # has no stdin form and stays on argv.
             use_stdin = tool == "wtype" or (tool == "xdotool" and report.supports_type_file)
             argv = chains.type_chain(session, tool, use_stdin=use_stdin, text=action.text)
             return argv, (action.text if use_stdin else None)

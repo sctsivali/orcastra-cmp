@@ -1,16 +1,15 @@
 """The action vocabulary, and the validation that turns model-supplied arguments into one.
 
-Names follow the computer-use toolset a model has already been trained on, because matching the
-convention it expects is free accuracy. Three deviate deliberately, and each deviation is a
-resource decision rather than a stylistic one:
+Names follow the computer-use toolset models are trained on, since matching the convention they
+expect improves accuracy. Three differ from it, each to bound a resource or protect a secret:
 
-  wait      served on the event loop, never reaching the guest. A wait that occupies a pool
-            thread is a self-inflicted denial of service: ten concurrent five-second waits would
-            hold the whole desktop pool doing nothing.
-  hold_key  capped far below the published 300s. `run_blocking` frees the CALLER on timeout and
-            not the thread, so a 300s hold pins a worker for 300s with no way to reclaim it.
-  type      the text travels on stdin, not argv, because argv is visible in the guest's process
-            table to every user on it, and the first thing an agent types at a login prompt is a
+  wait      served on the event loop and never sent to the guest. A wait on a pool thread would
+            let ten concurrent five-second waits hold the whole desktop pool doing nothing.
+  hold_key  the caller is answered within the desktop_input budget (DESKTOP_ACTION_TIMEOUT), but
+            `run_blocking` frees the caller on timeout and not the thread, so a hold keeps its
+            desktop worker for its full duration. `duration` has no upper bound here.
+  type      the text travels on stdin where the tool allows it, because argv is visible in the
+            guest's process table to every user on it, and an agent at a login prompt types a
             password.
 """
 
@@ -27,10 +26,9 @@ __all__ = ["ACTIONS", "CAPTURE_ACTIONS", "CLIPBOARD_ACTIONS", "INPUT_ACTIONS", "
 # Actions that read the screen. They cost desktop.view.
 CAPTURE_ACTIONS: Set[str] = {"screenshot", "zoom", "cursor_position"}
 
-# Reading the clipboard is its own capability, not part of viewing. It is the highest-yield
-# exfiltration primitive on this surface: one call returns whatever the user last copied, which in
-# practice is disproportionately passwords and tokens. Separating it means a kiosk monitor that
-# may watch a screen has not thereby been granted the clipboard.
+# Reading the clipboard is its own capability, separate from viewing: one call returns whatever
+# the user last copied, often passwords and tokens. A kiosk monitor allowed to watch a screen is
+# not thereby granted the clipboard.
 CLIPBOARD_ACTIONS: Set[str] = {"clipboard_read"}
 
 # Actions that touch the guest. They cost desktop.input, which is a strictly larger power than
@@ -108,9 +106,8 @@ def _bounded_int(params: Dict[str, Any], field: str, default: int, low: int, hig
     value = params.get(field, default)
     if isinstance(value, bool) or not isinstance(value, int):
         raise HTTPException(status_code=400, detail=f"params.{field} must be an integer")
-    # Clamped rather than refused: a model asking to scroll 20 means "a lot", and refusing the
-    # call teaches it nothing while costing a round trip. A coordinate is different and is
-    # refused, because a wrong one clicks the wrong thing.
+    # Clamped instead of refused: a model asking to scroll 20 means "a lot", and a refusal only
+    # costs a round trip. A bad coordinate is refused, because it would click the wrong thing.
     return max(low, min(high, value))
 
 

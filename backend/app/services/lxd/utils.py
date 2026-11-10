@@ -1,7 +1,4 @@
-"""
-Utility functions for LXD operations.
-Includes helpers for parsing status, extracting IPs, and finding instances.
-"""
+"""Helpers for LXD calls: status parsing, IP extraction, instance lookup, operation waits."""
 
 import ipaddress
 import logging
@@ -58,11 +55,9 @@ def is_display_address(addr: Dict[str, Any]) -> bool:
     """
     Whether one address from an instance's network state belongs in an IP column.
 
-    important: the loopback used to sit beside the real address on every running instance,
-    because one collector walked `lo` and kept every inet address. Skipping `lo` by name is
-    not enough either (a loopback address can live on another interface), so the address
-    itself decides: reachable from outside the instance, so not loopback, not link-local,
-    and not scope "local".
+    Skipping `lo` by name is not enough (a loopback address can live on another interface),
+    so the address itself decides: reachable from outside the instance, so not loopback, not
+    link-local, and not scope "local" or "link".
     """
     address = addr.get("address") or ""
     family = addr.get("family")
@@ -122,7 +117,7 @@ def find_instance_in_projects(
     """
     # important: `name` is the caller's, so an empty, `.` or `..` name is refused with 400 before any
     # request, the project list included (core/lxd_segment.py). requests folds a dot segment out of
-    # the path, and `..` read LXD's server root, whose config the one-instance read answered as an instance.
+    # the path, so `..` would read LXD's server root and answer its config as an instance.
     lxd_segment(name, what="Instance name")
     if project:
         project_names = [project]
@@ -140,16 +135,13 @@ def find_instance_in_projects(
     if project_filter is not None:
         project_names = [name for name in project_names if project_filter(name)]
 
-    # Search in each project
     for project_name in project_names:
         try:
-            # Try to get instance from this project using API directly
+            # The raw API, so the request names this project.
             response = client.api.instances[lxd_segment(name, what="Instance name")].get(params={'project': project_name})
             
-            # If successful, create instance object from the response
             instance_data = response.json()['metadata']
             
-            # Create a wrapper class with the data we need
             instance = InstanceWrapper(instance_data, client, project_name)
             logger.debug(f"Found instance '{name}' in project '{project_name}'")
             return instance, project_name
@@ -168,9 +160,9 @@ def find_instance_in_projects(
                 continue
             raise
         except RuntimeError as exc:
-            # Some pylxd-compatible adapters expose an absent record as a bare runtime
-            # ``not found``. Keep that legacy shape searchable without restoring the old broad
-            # catch that swallowed socket timeouts and misreported an outage as a missing VM.
+            # Some pylxd-compatible adapters raise a bare RuntimeError("not found") for an
+            # absent record. Only that exact message counts as absent: a broader catch would
+            # swallow socket timeouts and report an outage as a missing VM.
             if str(exc).strip().lower() == "not found":
                 logger.debug("Instance '%s' not in project '%s'", name, project_name)
                 continue
@@ -186,8 +178,7 @@ def find_instance_in_projects(
 OPERATION_WAIT_SLICE_SECONDS = 5
 # The pooled client reads for 8 s. A daemon without storage_and_network_operations (LXD 5.21)
 # finishes a network, ACL or pool write before it answers, and an OVN network create on a
-# three-member cluster ran past those 8 s: the console reported "Failed to create network"
-# while the daemon created it. A write is sent with a read timeout that outlives it.
+# clustered host can take longer, so a write is sent with a read timeout that outlives it.
 WRITE_CONNECT_TIMEOUT_SECONDS = 5
 
 
@@ -247,10 +238,9 @@ def wait_for_lxd_operation(
                 wait_response = wait_endpoint.get(params={"timeout": slice_seconds, **scope})
             except pylxd_exceptions.LXDAPIException as exc:
                 # important: LXD answers an elapsed wait timeout with an error body, "context
-                # deadline exceeded", in the same shape as a failed request, while the operation
-                # keeps running. Read the operation itself before believing the error: a device
-                # write on a clustered OVN instance takes longer than one slice and was reported
-                # as refused while the cluster applied it.
+                # deadline exceeded", shaped like a failed request, while the operation keeps
+                # running. Read the operation itself before believing the error: a device write
+                # on a clustered OVN instance can take longer than one slice.
                 wait_response = _operation_record(operation, exc, scope)
             remaining -= slice_seconds
             status = _operation_status(wait_response)
@@ -283,7 +273,7 @@ def _operation_record(
 
 
 class _SyntheticResponse:
-    """An LXD-shaped error body for a deadline of our own, so callers see one exception type."""
+    """An LXD-shaped error body for a local deadline, so callers see one exception type."""
 
     status_code = 200
 
@@ -303,10 +293,7 @@ def _operation_status(wait_response: object) -> Optional[str]:
 
 
 class InstanceWrapper:
-    """
-    Wrapper class for LXD instance that works across projects.
-    Provides a unified interface for instance operations.
-    """
+    """An LXD instance bound to the project it was found in, with pylxd-like operations."""
     
     def __init__(self, data, client, project):
         self._data = data
@@ -314,8 +301,8 @@ class InstanceWrapper:
         self._project = project
         # important: the project the instance was found in, under the name the VMInfo
         # conversion reads. Without it every wrapper-backed read (the single instance GET,
-        # start, stop, restart) reported `default` for an instance in any other project, and
-        # the detail dialog then sent its device writes to the wrong project.
+        # start, stop, restart) would report `default`, and the detail dialog would send its
+        # device writes to the wrong project.
         self.project = project
         self.name = data.get('name', '')
         self.status = data.get('status', 'Unknown')
@@ -327,20 +314,16 @@ class InstanceWrapper:
         self.type = data.get('type', 'container')
         self.config = data.get('config', {})
         self.expanded_config = data.get('expanded_config')
-        # note: carried through so a root disk size chosen at create time is readable back.
-        # The LXD instance payload always includes both; missing means an older LXD.
+        # Carried so a root disk size chosen at create time reads back. The LXD instance
+        # payload always includes both; a missing key means an older LXD.
         self.devices = data.get('devices', {})
         self.expanded_devices = data.get('expanded_devices', {})
         self.profiles = data.get('profiles', [])
-        # note: carried for the same reason as devices above. Every single-instance read builds
-        # its VMInfo from this wrapper and read `location` off it with a getattr default, so the
-        # cluster member was None on every detail while the list payload, which reads the LXD
-        # response directly, had it right. On a clustered target the dialog therefore showed the
-        # real member from the row and then blanked it when the detail arrived.
+        # Every single-instance read builds its VMInfo from this wrapper, so without `location`
+        # the cluster member would read None on every detail while the list payload has it.
         self.location = data.get('location')
     
     def start(self, wait=True):
-        """Start the instance."""
         response = self._client.api.instances[safe_segment(self.name)].state.put(
             json={'action': 'start'},
             params={'project': self._project}
@@ -349,7 +332,6 @@ class InstanceWrapper:
             wait_for_lxd_operation(self._client, response)
     
     def stop(self, force=False, wait=True, timeout=30):
-        """Stop the instance."""
         response = self._client.api.instances[safe_segment(self.name)].state.put(
             json={'action': 'stop', 'force': force, 'timeout': timeout},
             params={'project': self._project}
@@ -358,7 +340,6 @@ class InstanceWrapper:
             wait_for_lxd_operation(self._client, response, timeout=timeout)
     
     def restart(self, force=False, wait=True, timeout=30):
-        """Restart the instance."""
         response = self._client.api.instances[safe_segment(self.name)].state.put(
             json={'action': 'restart', 'force': force, 'timeout': timeout},
             params={'project': self._project}
@@ -367,36 +348,31 @@ class InstanceWrapper:
             wait_for_lxd_operation(self._client, response, timeout=timeout)
     
     def delete(self, wait=True):
-        """Delete the instance."""
         response = self._client.api.instances[safe_segment(self.name)].delete(params={'project': self._project})
         if wait:
             wait_for_lxd_operation(self._client, response)
     
     def sync(self):
-        """Sync instance data from LXD."""
+        """Re-read the instance from LXD and refresh its status fields."""
         response = self._client.api.instances[safe_segment(self.name)].get(params={'project': self._project})
         self._data = response.json()['metadata']
         self.status = self._data.get('status', 'Unknown')
         self.status_code = self._data.get('status_code', 0)
     
     def state(self):
-        """Get instance state including metrics."""
+        """The instance's state: CPU, memory, disk, network and processes."""
         response = self._client.api.instances[safe_segment(self.name)].state.get(params={'project': self._project})
         state_data = response.json()['metadata']
         
-        # Create a simple object to hold state data
         return StateWrapper(state_data)
 
 
 class StateWrapper:
-    """
-    Wrapper class for instance state data.
-    """
+    """Instance state data with pylxd-like attributes."""
     
     def __init__(self, data):
-        # Preserve which keys LXD actually sent while keeping the legacy fallback attributes
-        # below. Resource and address consumers historically expect `{}` and `0`; metrics also
-        # needs to know that an omitted field is unavailable rather than a real empty/zero value.
+        # Remember which keys LXD sent: resource and address consumers expect the `{}` and `0`
+        # defaults below, while metrics must tell an omitted field from a real empty or zero value.
         self._present_fields = frozenset(data)
         self.cpu = data.get('cpu', {})
         self.memory = data.get('memory', {})
@@ -415,15 +391,11 @@ class StateWrapper:
 def jsonable_lxd(value: Any) -> Any:
     """Recursively convert a pylxd model into something FastAPI can serialise.
 
-    important: pylxd returns dict SUBCLASSES (``model.AttributeDict``) and slot-based objects.
-    Pydantic's serialiser does not recognise either, and the failure happens AFTER the handler
-    returns, while the response is being rendered, so the handler's own try/except never sees
-    it. The caller gets a bare 500 with `PydanticSerializationError: Unable to serialize unknown
-    type` in the log and nothing useful in the body.
-
-    Found live on `GET /networks/{name}/state`, which returned `pylxd.models.network.NetworkState`
-    straight out of `network.state()`. `routers/storage_pools.py` already carries a
-    single-purpose version of this for `StorageResources`, so this is the shared form.
+    pylxd returns attribute objects (``model.AttributeDict``) and slot-based models (ex;
+    `network.state()` returns `pylxd.models.network.NetworkState`). Pydantic's serialiser
+    recognises neither, and the failure happens after the handler returns, while the response is
+    rendered, so the handler's own try/except never sees it: the caller gets a bare 500 and the
+    log a `PydanticSerializationError`.
     """
     if isinstance(value, dict):
         return {k: jsonable_lxd(v) for k, v in value.items()}

@@ -1,14 +1,12 @@
 """What an add-on can ask about itself, using its own credential.
 
-One endpoint, and it is the reconcile backstop. An add-on that missed an event, or that wants to
-know whether its reach changed, polls this rather than assuming the grant it was given at install
-time is still the grant it holds.
+One endpoint, the reconcile backstop: an add-on that missed an event, or wants to know whether its
+reach changed, polls it instead of assuming its install-time grant still holds.
 
-important: exempt from a capability gate, for the same reason `/whoami` is. Gating it on
-`inventory.read` would make the one call that diagnoses a credential unavailable to exactly the
-credentials that need diagnosing, such as an installation whose single capability is
-`storage.upload`. It grants no access and reports only what the presenting installation already
-holds.
+important: exempt from a capability gate, like `/whoami`. Gating it on `inventory.read` would make
+the call that diagnoses a credential unavailable to the credentials that need it, ex; an
+installation whose only capability is `storage.upload`. It grants no access and reports only what
+the presenting installation holds.
 """
 
 import logging
@@ -57,8 +55,8 @@ async def describe_self(
     ).scalar_one_or_none()
 
     if install is None:
-        # A perfectly valid integration key that is not an installation. Say so plainly rather
-        # than 404, which would read as "this endpoint does not exist".
+        # A valid integration key that is not an installation. A 404 would read as "this
+        # endpoint does not exist".
         return {
             "installed": False,
             "reason": "This credential is an integration key, not an add-on installation.",
@@ -97,13 +95,8 @@ async def describe_self(
         "granted_scope": list(install.granted_scope or []),
         "settings": resolved,
         "credential_generation": install.credential_generation,
-        # important: the credential's own expiry, reported by the one endpoint every page of the
-        # public documentation tells an add-on to poll. It was absent, so the first signal that a
-        # credential was about to lapse was a 401 in production, which is precisely the failure
-        # `expiry_state` was written to prevent. `whoami` already answered this, under a different
-        # name, on a route no extensions page recommends.
-        #
-        # `never` is a real answer, not a missing one: a key with no expiry is a supported state.
+        # The credential's own expiry, so an add-on polling this endpoint sees a lapse coming
+        # before it meets a 401. `never` is a valid state: a key with no expiry is supported.
         "credential": {
             "expires_at": api_key.get("expires_at"),
             "expires_in_days": days_remaining(api_key.get("expires_at")),

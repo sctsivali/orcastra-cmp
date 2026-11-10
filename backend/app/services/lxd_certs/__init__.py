@@ -1,9 +1,7 @@
 """LXD certificate management, split by responsibility.
 
-``lxd_cert_manager`` reached 744 lines doing four separable jobs: shared vocabulary, Vault
-storage, connectivity probing, and trust establishment. Each is a mixin here, composed back into
-one ``LXDCertificateManager`` by the module that always held it, so all fourteen import sites and
-the public surface are unchanged.
+Shared vocabulary, Vault storage, connectivity probing and trust establishment each live in their
+own module. ``app.services.lxd_cert_manager`` composes the mixins into ``LXDCertificateManager``.
 """
 
 from .connectivity import ConnectivityMixin

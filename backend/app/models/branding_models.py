@@ -35,11 +35,11 @@ class DeploymentBranding(Base):
 
 
 class OrganizationPreferencesRetired(Base):
-    """An organization_preferences row migration 045 took out of the way, kept so its downgrade can put it back.
+    """An organization_preferences row migration 045 moved aside, kept so its downgrade can restore it.
 
-    Two kinds: an empty `{}` row (a reset, which now deletes the row so the organization inherits),
-    and the one-time copy provisioning used to make of the seller's branding into a buyer, which
-    the live link replaces. Nothing reads this table at runtime.
+    Two kinds: an empty `{}` row (a reset deletes the row instead, so the organization inherits),
+    and a one-time copy of the seller's branding into a buyer made at provisioning, which the live
+    provider link replaces. Nothing reads this table at runtime.
     """
 
     __tablename__ = "organization_preferences_retired"

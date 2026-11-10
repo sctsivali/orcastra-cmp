@@ -1,22 +1,10 @@
 """The safety copy a restore takes first, and the three ways it refuses.
 
-A third refusal beside `snapshot_ownership_gate` and `snapshot_billing_gate`, in its own module for
-the same reason those are: it decides whether an action may proceed and says why not, and the
-restore handler is easier to read when that decision is not inlined in it.
-
-Two defects this module exists to have fixed, both of which the restore path carried:
-
-**The operation was never waited on.** The create's operation id was discarded, so only a
-SYNCHRONOUS failure aborted anything. A daemon that accepted the POST and then failed the operation
-was never observed, and the restore went ahead on top of a safety copy that did not exist. The
-comment beside that code claimed the opposite. This is the exact "accepted is not done" failure the
-snapshot surface was built to refuse, and it had it.
-
-**It did not count against the cap.** `assert_capacity` was called only on the create path, so
-restoring twice silently occupied two of the five operator slots and the next manual snapshot was
-refused with a message about the operator's own snapshots. The lock key here is deliberately the one
-the create path takes: a restore and a create contend for the same five slots and have the same
-read-then-act window.
+Beside `snapshot_ownership_gate` and `snapshot_billing_gate`, this decides whether a restore may
+proceed and says why not, which keeps that decision out of the restore handler. The create
+operation is waited on, so a daemon that accepts the POST and then fails the operation stops the
+restore instead of letting it run without a safety copy. The copy counts against the operator
+snapshot cap under the create path's lock key, so a restore and a create contend for one slot set.
 """
 
 import logging
@@ -52,21 +40,18 @@ async def take_safety_snapshot(
 ) -> Optional[str]:
     """Take the pre-restore copy, or refuse the restore. Returns its name, or None if not wanted.
 
-    Raises rather than returning a verdict, because every caller would raise on every refusal and a
-    return value nobody can ignore is the same thing with an extra step.
+    Raises HTTPException on every refusal instead of returning a verdict, since every caller would
+    raise on it anyway.
     """
     if not wanted:
         return None
 
     name = snapshots_service.build_safety_snapshot_name(instance_name)
 
-    # Held across the read and the create, so two concurrent restores cannot both see four slots.
-    #
-    # important: `rebuild_lock` registers a waiter and `release_lock` is what drops the entry once
-    # the last one leaves. Taking the lock without the matching release leaves one dict entry per
-    # (host, project, instance) alive for the life of the worker, which is the accumulation the
-    # module's own docstring promises does not happen. Paired in a `finally` for the same reason
-    # the create path does it: every refusal below raises out of this block.
+    # Held across the read and the create, so two concurrent restores cannot both take the last
+    # free slot.
+    # important: every `rebuild_lock` needs its `release_lock` (in `finally`, since every refusal
+    # below raises), or one entry per (host, project, instance) stays alive for the worker's life.
     lock_key = f"snapshot-create:{host}/{project}/{instance_name}"
     lock = rebuild_lock(lock_key)
     try:
@@ -86,9 +71,9 @@ async def take_safety_snapshot(
                     error_message="safety_snapshot_capacity_exhausted",
                     details={"operator_snapshots": held},
                 )
-                # The affordance is named rather than left to be inferred, the same shape
-                # the two sibling gates use. Nothing has happened yet, so re-sending without
-                # a safety copy is a real choice rather than a dare.
+                # The way forward is named in the body, the same shape the two sibling gates
+                # use. Nothing has happened yet, so re-sending without a safety copy is the
+                # operator's informed choice.
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail={
@@ -119,9 +104,9 @@ async def take_safety_snapshot(
     finally:
         release_lock(lock_key)
 
-    # important: left in place on every refusal below. Deleting it would be a second call on a
-    # failure path that can itself fail, and it carries its own `expires_at`, so LXD prunes it
-    # unaided. The same reasoning the feature doc records for a stranded migration operation.
+    # The safety copy is left in place on every refusal below. Deleting it would be a
+    # second call on a failure path that can itself fail, and it carries its own `expires_at`, so
+    # LXD prunes it unaided.
     if outcome.get("failed"):
         audit(
             result="failure",
@@ -138,8 +123,8 @@ async def take_safety_snapshot(
         )
 
     if not outcome.get("settled"):
-        # Nothing failed. The copy is still being written, and restoring over it is what LXD itself
-        # answers 409 for, so refuse it here coherently: the operator's action is to wait and retry.
+        # Nothing failed, but the copy is still being written and LXD answers 409 to a restore over
+        # it. Refuse here with the same status: the operator waits and retries.
         audit(
             result="denied",
             error_message="safety_snapshot_unsettled",

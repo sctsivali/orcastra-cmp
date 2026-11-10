@@ -143,7 +143,7 @@ async def clone_target_profiles(
         executor.read_project, target_client, project=job.target_project, label="migration.clone_target_project"
     )
     # important: a profile write to a project without its own profiles lands in the default
-    # project's, which every project on the cluster may share (security review).
+    # project's, which every project on the cluster may share.
     if not project_policy.features_enabled(target_project, "profiles") or not project_policy.created_by_job(
         target_project, job.job_id
     ):

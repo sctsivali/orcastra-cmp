@@ -1,17 +1,14 @@
 """Which registration of a cluster id is the live one, so a key grant can be bound to it.
 
-A cluster id is free text, and once deregistered it can be registered again, possibly by another
-organization. A grant that matched by id alone would then reach the new cluster. Each registration
-gets a `registration_id`; a grant stores the one it was given for, and matches only while that
-registration is active (services/cluster_generations.py).
+A cluster id is free text and can be registered again after deregistration, possibly by another
+organization, so a grant matched by id alone would reach the new cluster. Each registration gets a
+`registration_id`; a grant stores the one it was given for and matches only while that registration
+is active (services/cluster_generations.py).
 
-**Postgres, not the Vault record.** Deregistration deletes the Vault record best effort, and a
-registration merges over whatever record is left, so an id stored there could outlive its cluster.
-The generation is ended here, in a transaction the deregistration must commit before it deletes
-anything.
-
-**`legacy`** marks a registration adopted from before generations existed. Grants written before
-then carry no stamp, and match only a legacy registration; once that one ends, they match nothing.
+The generation lives in Postgres because deregistration deletes the Vault record best effort and a
+registration merges over whatever is left there. It is ended here, in a transaction the
+deregistration commits before it deletes anything. `legacy` marks a registration adopted from
+before generations existed: unstamped grants match only a legacy one, and nothing once it ends.
 """
 
 from datetime import datetime, timezone
@@ -28,7 +25,7 @@ def _now() -> datetime:
 class ClusterRegistration(Base):
     __tablename__ = "cluster_registrations"
 
-    # note: Integer on SQLite only, where nothing but INTEGER PRIMARY KEY autoincrements; the
+    # Integer on SQLite only, where nothing but INTEGER PRIMARY KEY autoincrements; the
     # hermetic tests run these rows there. PostgreSQL gets the BIGINT the migration creates.
     id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     cluster_id = Column(String(255), nullable=False, index=True)
@@ -51,9 +48,9 @@ class ClusterRegistration(Base):
 class ClusterRegistrationAdoption(Base):
     """One row once every cluster registered before generations has a legacy registration.
 
-    important: while it is missing, an id with no registration row is treated as it was before
-    generations (its unstamped grants still match), and only the startup backfill may adopt one.
-    Once it exists, adoption is closed for good: an id with no active row matches no grant.
+    important: while it is missing, an id with no registration row is treated as legacy (its
+    unstamped grants still match), and only the startup backfill may adopt one. Once it exists,
+    adoption is closed for good: an id with no active row matches no grant.
     """
 
     __tablename__ = "cluster_registration_adoption"

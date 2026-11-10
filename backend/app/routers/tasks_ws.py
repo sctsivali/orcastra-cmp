@@ -1,11 +1,11 @@
 """WebSocket feed behind the task panel: one socket per tab, fleet scope, deltas only.
 
-Mirrors `routers/events.py` line for line where it matters: the bearer token travels as the
-`token` query parameter, an unauthenticated socket closes 1008, the scope is resolved once
-with `set_org_scope_for_ws` and re-read every `SCOPE_REFRESH_S`, every frame is judged under
-the subscriber's captured context BEFORE it is queued and again under the refreshed scope
+Follows `routers/events.py`: the caller is identified by `ws_user` (a ticket from
+POST /ws-tickets), an unauthenticated socket closes 1008, the scope is resolved once with
+`set_org_scope_for_ws` and re-read every `SCOPE_REFRESH_S`, and every frame is judged under
+the subscriber's captured context before it is queued and again under the refreshed scope
 before it is sent. Rows are presented (`present.task_row` / `log_row`) after the second
-judgement, with the field policy of the caller's tier.
+check, with the field policy of the caller's tier.
 
 Frames (server to client; the client sends nothing):
   {"type": "hello", "server_time": iso, "follower_active": bool}
@@ -81,7 +81,7 @@ async def tasks_websocket(
     """Stream task and cluster-log deltas in the caller's scope. Opened with a ticket from
     POST /ws-tickets; closes with 4401 when the session ends."""
     settings = get_settings()
-    # important: gated on auth_enabled ALONE; ws_user refuses a misconfigured server itself.
+    # important: gate on auth_enabled alone; ws_user itself refuses a misconfigured server.
     if settings.auth_enabled and user is None:
         await websocket.close(code=1008, reason="Authentication required")
         return
@@ -91,8 +91,8 @@ async def tasks_websocket(
 
     await websocket.accept()
     tailer = get_task_feed_tailer()
-    # The tailer judges every frame under a copy of THIS task's context, taken now, so the
-    # scope resolved above is what decides whether a frame is queued for this subscriber.
+    # The tailer judges every frame under a copy of this task's context, taken now, so the
+    # scope resolved above decides whether a frame is queued for this subscriber.
     queue = await tailer.subscribe(accept=partial(feed_frame_is_visible, caller_email=caller_email))
     user_id = user.user_id if user else "anonymous"
     logger.info(f"[tasks] feed connected user={user_id}")

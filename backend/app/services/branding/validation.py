@@ -1,9 +1,9 @@
 """What a branding write may contain: shapes, sizes and image types, checked before anything is stored.
 
-Branding used to be stored as whatever JSON the editor sent. It is shown to every member of an
-organization and, for the deployment default, to anyone who opens the sign-in page, so it is
-input like any other: unknown keys are dropped, text is capped and stripped of control
-characters, colours must be colours, and an image must be what it says it is.
+Branding is shown to every member of an organization and, for the deployment default, to anyone
+who opens the sign-in page, so it is input like any other: unknown keys are dropped, text is
+capped and stripped of control characters, colours must be colours, and an image must be what it
+says it is.
 
 An image is a `data:` URI (the editor's upload), an `https://` URL on Cloudinary (the one remote
 image host next.config.js allows), or a path on this site. An SVG is accepted: it is shown through
@@ -31,7 +31,7 @@ LOGO_TYPES = ("image/png", "image/jpeg", "image/webp", "image/svg+xml")
 FAVICON_TYPES = ("image/png", "image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon")
 THEMES = ("light", "dark", "system")
 # Whether cards show their illustration (frontend components/illustrations). Absent means the
-# frontend default, hide (owner decision 2026-11-09): shown only once someone chooses show.
+# frontend default, hide: shown only once someone chooses show.
 ILLUSTRATIONS = ("show", "hide")
 LOGO_COLORS = ("auto", "black", "white")
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -91,9 +91,9 @@ def _image(field: str, value: Any, *, types: Tuple[str, ...], limit: int) -> Opt
         if declared != actual and not (declared in ("image/x-icon", "image/vnd.microsoft.icon") and actual == "image/x-icon"):
             raise BrandingInvalid(f"{field} says {declared} but holds {actual}")
         return value
-    # important: a plain character set, not just a leading "/". "/\\evil.example/x" resolves to
-    # another host in a browser, and "/x), url(https://evil.example/y" breaks out of the CSS url()
-    # the landing page builds (security review 2026-10-27). No quotes, brackets, backslashes or
+    # important: every character must come from a plain set; a leading "/" alone lets
+    # "/\\evil.example/x" resolve to another host in a browser, and "/x), url(https://evil.example/y"
+    # break out of the CSS url() the landing page builds. No quotes, parentheses, backslashes or
     # spaces in either form.
     if len(value) <= 512 and _SITE_PATH.match(value):
         return value

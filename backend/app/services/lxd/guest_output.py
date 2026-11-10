@@ -1,29 +1,14 @@
-"""Running a guest command whose output is too big for the streaming exec path to deliver intact.
+"""Running a guest command through LXD's recorded output instead of the streaming exec socket.
 
-important: this exists because pylxd's `Instance.execute` silently loses output above roughly
-12 KiB, and "silently" is the part that matters. Measured against LXD 5.21.7 on a live cluster:
+important: pylxd's `Instance.execute` can lose output above roughly 12 KiB without saying so. On
+LXD 5.21.7, 16000 bytes of output came back as 0 and 16384 as 8192, with `exit_code` 0 and
+`truncated` false. The cause is a race in pylxd (`models/instance.py`): `execute` calls
+`finish_soon()` once the operation reports a return code, the next binary frame marks the socket
+finished in `_CommandWebsocketClient.received_message`, and frames still in flight are dropped.
 
-    12000 bytes asked for -> 12000 returned
-    16000 bytes asked for -> 0 returned
-    16384 bytes asked for -> 8192 returned
-
-with `exit_code` 0 and the bounded stream's `truncated` flag FALSE in every case, so a caller is
-told the command succeeded and handed a short or empty result with nothing to indicate loss.
-
-The cause is a race in pylxd (`models/instance.py`). `execute` waits for the operation to report a
-return code, then calls `finish_soon()` on the stdout and stderr sockets. In
-`_CommandWebsocketClient.received_message`, the FIRST binary frame that arrives once `finish_off`
-is set marks the socket `finished`, and `execute` then stops the manager. Any frame still in
-flight behind it is dropped. Below about 12 KiB the output has already arrived by the time the
-command exits, so the race never opens.
-
-The way around it is not to stream at all. LXD's own `record-output` writes stdout and stderr to
-files on the LXD HOST and hands back their paths, which can then be read with an ordinary bounded
-HTTP GET. Nothing is written inside the guest, which keeps the property the capture path depends
-on, and the log is deleted afterwards on the host where the delete is ours to make.
-
-The cost is three round trips instead of one, so this is for the calls that need it rather than
-for exec in general.
+LXD's `record-output` writes stdout and stderr to files on the LXD host and returns their paths,
+which are read with a bounded GET and then deleted. Nothing is written inside the guest. It costs
+three round trips instead of one; `guest_exec` uses it for every call without stdin or cwd.
 """
 
 import logging
@@ -38,9 +23,8 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["RecordedResult", "run_recorded"]
 
-# stderr is diagnostics: a marker line and whatever a tool complained about. A guest that writes
-# megabytes there is misbehaving, and reading it all would be the memory hole this module exists
-# to avoid on the other stream.
+# stderr carries diagnostics, so it gets a fixed cap of its own. A guest writing megabytes there
+# is misbehaving, and reading it all would hold that much in the worker's memory.
 _STDERR_LIMIT = 64 * 1024
 
 
@@ -118,8 +102,8 @@ def run_recorded(
     started = inst.api.exec.post(json=body, timeout=(3, int(timeout) + 5)).json()
     operation_id = started["operation"].rsplit("/", 1)[-1]
 
-    # The socket window has to outlast the command's own budget, or the wait expires on a path
-    # that does not know the work survived. Same rule the proxy's `_client_for` already applies.
+    # The socket window has to outlast the command's own budget, or the wait expires while the
+    # command is still running. The proxy's `_client_for` applies the same rule.
     inst.client.api.operations[safe_segment(operation_id)].wait.get(timeout=(3, int(timeout) + 10))
     operation = inst.client.api.operations[safe_segment(operation_id)].get(timeout=(3, 15)).json()["metadata"]
 
@@ -143,8 +127,7 @@ def run_recorded(
         if stderr_name:
             stderr_bytes, _ = _fetch_log(inst, stderr_name, _STDERR_LIMIT)
     finally:
-        # Always, including on a failed read: the log is on the host and nothing else will clean
-        # it up. LXD does not expire these on its own.
+        # Always, including on a failed read: LXD does not expire these logs on its own.
         for name in (stdout_name, stderr_name):
             if name:
                 _discard_log(inst, name)

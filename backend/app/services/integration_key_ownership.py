@@ -1,36 +1,21 @@
 """Which integration keys own an OrcaHub organization, and how an Administrator moves it.
 
-A synced organization is owned by a set of integration keys (app.services.organization_owners);
-`organizations.api_key_id` is its primary, the key OrcaHub callbacks use. Only an owner may sync it (`_upsert_synced_organizations`), write its members and tenant access policies
-(`_upsert_synced_members`, `sync_policies_from_external`) and provision tenant access for it
-(`provision_tenant_access`). An organization whose owner is NULL is claimable by any key that
-pushes or provisions it. That binding is what stops one integration rewriting another's
-organizations, and it holds only while the owner key keeps working.
+An organization is owned by a set of keys (app.services.organization_owners), with
+`organizations.api_key_id` as the primary that OrcaHub callbacks use. Only an owner may sync it,
+write its members and policies, and provision tenant access for it. `api_key_id` is written only by
+the claim paths (sync upsert, provisioning, callback refresh), the Administrator transfer below and
+an add-on credential's rotation. It is never set back to NULL: a NULL owner is claimable by
+whichever key pushes or provisions the organization next.
 
-The writers of `api_key_id` are the three claim paths (the sync upsert, provisioning and the
-dashboard's refresh from a key's callback), the Administrator transfer below, and the carry an
-add-on credential's rotation makes to its new key (carry_owned_organizations). There is no
-release: an owner is replaced by another key, never set back to NULL, because a NULL owner is
-open to whichever key names the organization next.
+An organization whose owner key stops working can no longer sync, update members or provision, so
+a key that owns an active OrcaHub organization is not revoked, deleted or stripped of a capability
+it syncs with, for any caller, an Administrator included. Rotating the secret keeps the key id, so
+it stops a leaked secret without freezing anything. An add-on credential carries its organizations
+to its new credential on rotation and cannot be uninstalled while it owns any; when the reconcile
+sweep revokes one that must stop, it records the organizations left frozen.
 
-An add-on credential may hold org.sync, so it can own organizations too. Its rotation carries
-them to the new credential in the same commit as the installation row, uninstalling it is refused
-while it owns any (suspending the add-on is the way to stop it at once), and the reconcile sweep,
-which still revokes a credential that must stop, records the organizations that revocation
-leaves frozen.
-
-Nothing used to move an owner. Revoking or deleting the owner key left its organizations bound to
-a key that can never authenticate again, so their sync, member updates and provisioning stopped
-for good, and the only way out was SQL against production. `transfer_owner` is that way out, as
-an audited Administrator action, and `refuse_if_key_owns_organizations` stops the key routes from
-creating the state in the first place: a key that owns an active OrcaHub organization is not
-revoked, deleted or stripped of a capability it syncs with, for any caller, an Administrator
-included. Rotating its secret keeps the key id, so it is the way to stop a leaked secret without
-freezing anything.
-
-Concurrency: a decision about one key's ownership runs inside `serialize_key_ownership` for that
-key, and the key is read and judged inside it, so two decisions about the same key never
-interleave and a check cannot go stale before the write it allowed.
+Each decision about one key runs inside `serialize_key_ownership`, with the key read and judged
+inside it, so a check cannot go stale before the write it allowed.
 """
 
 import asyncio
@@ -111,11 +96,10 @@ def _owned_filter(key_ids: Iterable[str]) -> List[Any]:
 async def owned_organizations(db: AsyncSession, key_id: str) -> List[Organization]:
     """The active OrcaHub organizations this key owns, by slug.
 
-    note: not `claimed_organization_count` in integration_cluster_rebind. That one counts every
-    organization carrying the key, inactive and of any source, because it decides whether a push
-    may rebind a cluster, and an inactive organization is still a party the key serves there. This
-    one answers what stops working when the key ends: only an active OrcaHub organization is synced
-    and provisioned, so only one of those is frozen by losing its owner.
+    This answers what stops working when the key ends: only an active OrcaHub organization is
+    synced and provisioned. `claimed_organization_count` in integration_cluster_rebind counts every
+    organization carrying the key instead, since an inactive one is still a party the key serves
+    when a push rebinds a cluster.
     """
     if not key_id:
         return []
@@ -126,20 +110,13 @@ async def owned_organizations(db: AsyncSession, key_id: str) -> List[Organizatio
 async def keys_whose_home_the_user_partners(db: AsyncSession, email: str, key_ids: Iterable[str]) -> Set[str]:
     """Of these keys, the ones whose home organization this user holds a current partner row in.
 
-    The home is the one cluster_parties proves by a sale (home_partner_keys): the oldest organization
-    the key's sync created, holding a cluster one of its own partners registered that the key sold on.
-    A key whose home cannot be proven that way, one nobody has bought through yet included, has no home
-    here, so only an Administrator acts for it.
-
-    important: never a partner row in a buyer organization, and never created_by. OrcaHub makes every
-    organization's founder a PARTNER, and provisioning stamps each buyer organization with the key's
-    minter as created_by, so either would let a minter who left the seller and then bought from it act
-    for the seller's key through their own buyer organization.
-
-    important: no grace before the first sale. "Not sold yet" could only be read from the provisioning
-    bindings that exist now, and deregistering a cluster deletes them, so a key whose seller
-    organization and sales were gone looked unsold again and handed its oldest remaining synced
-    organization, a buyer whose founder is a partner, the seller's key. This fails closed instead.
+    The home is what cluster_parties.home_partner_keys proves by a sale: the oldest organization the
+    key's sync created, holding a cluster its own partner registered that the key sold on. A key with
+    no proven home, an unsold one included, is left to an Administrator. No grace before a first sale:
+    "unsold" can only be read from provisioning bindings, which deregistering deletes, so a buyer
+    could become the home. A buyer's partner rows and created_by never count either: OrcaHub makes
+    every founder a PARTNER, and provisioning stamps each buyer with the key's minter as created_by,
+    so either would let a minter who left the seller and bought from it act for the seller's key.
     """
     from app.services.cluster_parties import home_partner_keys
 
@@ -153,9 +130,9 @@ async def partners_the_home_organization(db: AsyncSession, key_id: str, email: s
     """None when the key owns no active OrcaHub organization, else whether this user holds a current
     partner row in the key's home organization (keys_whose_home_the_user_partners).
 
-    important: a secret rotation asks this of every caller but an Administrator, the key's creator
-    included. A fresh secret for such a key is the sync, the member writes and the provisioning of
-    every organization it owns, buyers included, so only the seller's current partners may take one.
+    A secret rotation asks this of every caller but an Administrator, the key's creator included. A
+    fresh secret for such a key is the sync, the member writes and the provisioning of every
+    organization it owns, buyers included, so only the seller's current partners may take one.
     """
     if not await owned_organizations(db, key_id):
         return None
@@ -326,22 +303,17 @@ async def refuse_if_key_owns_organizations(
     """409 when the key is the only able owner of an active OrcaHub organization, 503 when that cannot
     be read; otherwise the organizations it co-owns, for apply_owner_handoffs.
 
-    `withdrawn` names the SYNC_CAPABILITIES a capability edit would take away, for its message.
-    `read_metadata(key_id)` reads another owner key's metadata uncached ((metadata, failure) as
-    integrations._read_key_metadata_blocking answers); without it, every other owner is unreadable.
-
+    `withdrawn` is the SYNC_CAPABILITIES a capability edit removes. `read_metadata(key_id)` returns
+    another owner's uncached (metadata, failure); without it every other owner is unreadable.
     An organization another owner can still sync (active, holding SYNC_CAPABILITIES, an OrcaHub key)
-    does not stop this key ending; one where every other owner is unreadable refuses with 503, since
-    allowing it might freeze the organization. The caller has already authorized the key (so an id
-    outside the caller's reach is still 404), holds serialize_key_ownership(key_id) and
-    organization_owners.serialize_org_owners over owned_org_ids_to_lock, and has written nothing yet.
-    There is no Administrator bypass.
+    does not stop this key ending; one where every other owner is unreadable is a 503, since
+    allowing it might freeze the organization. There is no Administrator bypass.
 
-    note: a caller who is not an Administrator sees only the slugs of organizations they belong to;
-    the rest are counted, in the answer and in its audit record alike.
-
-    important: the 503 detail is a fixed sentence. The exception text of a database failure names
-    the database, and this answer reaches the browser.
+    important: the caller has already authorized the key (an id outside its reach is still 404),
+    holds serialize_key_ownership(key_id) and serialize_org_owners over owned_org_ids_to_lock, and
+    has written nothing yet. A non-Administrator sees only the slugs of their own organizations; the
+    rest are counted. The 503 detail is fixed: a database error's text names the database, and this
+    answer reaches the browser.
     """
     try:
         owned = await owned_organizations(db, key_id)
@@ -397,7 +369,7 @@ async def refuse_if_key_owns_organizations(
         "remedies": remedies,
     }
     if co_owner:
-        # note: the organizations another owner keeps serving, which would not have stopped this key
+        # Organizations another owner keeps serving; these would not have stopped this key.
         detail["co_owned_organization_count"] = len(handoffs)
     # important: the same slugs the caller was shown. A refusal's record is visible to the caller who
     # triggered it, so naming the hidden organizations there would undo hiding them in the answer.
@@ -444,7 +416,7 @@ async def apply_owner_handoffs(
         def able(other: str, verdicts: Dict[str, bool] = handoff.able) -> Optional[bool]:
             return verdicts.get(other)
 
-        # important: answered, never raised as a 500. The refusal above was decided on the same locked
+        # important: answer 409 or 503, never a 500. The refusal above was decided on the same locked
         # rows, so this is not expected; every caller runs it before its Vault write, so nothing is
         # written when it does happen.
         try:
@@ -495,10 +467,10 @@ async def carry_owned_organizations(
 ) -> List[Tuple[int, str, Optional[str]]]:
     """Move every organization one key owns to another. The caller holds the lock and commits.
 
-    For an add-on credential's rotation: the new key takes the old one's place in the owner set of
-    every organization it is in, in the same commit as the installation row, so the add-on keeps
-    syncing them, and keeps the primary where the old key held it. Every organization moves, active or
-    not, because the old key is being retired and one left on it could never be synced again. Returns
+    For an add-on credential's rotation: the new key takes the outgoing key's place in the owner set
+    of every organization it is in, in the same commit as the installation row, so the add-on keeps
+    syncing them, and keeps the primary where the outgoing key held it. Every organization moves,
+    active or not, because one left on the outgoing key could never be synced again. Returns
     (id, slug, external_id) of each one moved. The writes are organization_owners.carry.
     """
     if not from_key_id or not to_key_id or from_key_id == to_key_id:
@@ -555,8 +527,8 @@ def owner_key_refusal(
     OrcaHub key holding SYNC_CAPABILITIES (a legacy key without a capability list holds every one),
     and not an add-on credential, which its installation owns and rotates.
 
-    note: an add-on credential is named before its state. Its app_type is automation, so the
-    later test would call it "not an OrcaHub connection", which is true and says less.
+    An add-on credential is named before its state. Its app_type is automation, so the later test
+    would call it "not an OrcaHub connection", which is true but says less.
     """
     if failure == "unknown":
         return 503, "target_key_unverifiable", (
@@ -623,8 +595,8 @@ def _advisory_key(key_id: str) -> int:
 
 
 def _local_lock(key_id: str) -> asyncio.Lock:
-    # note: an asyncio lock belongs to one event loop, so it is keyed by the loop as well. Only
-    # SQLite and light test sessions take this path; PostgreSQL serializes across workers below.
+    # An asyncio lock belongs to one event loop, so it is keyed by the loop as well. Only SQLite
+    # and light test sessions take this path; PostgreSQL serializes across workers below.
     key = (id(asyncio.get_running_loop()), key_id)
     with _local_locks_guard:
         return _local_locks.setdefault(key, asyncio.Lock())
@@ -666,11 +638,11 @@ async def transfer_owner(
     The caller holds serialize_key_ownership(to_key_id), has decided the key may own it, and
     commits. The row is read FOR UPDATE, so a sync or a second transfer of the same organization
     waits for this one, and the primary it reports is the one this write replaced. A transfer replaces
-    the whole owner set (organization_owners.replace_owners), so every co-owner leaves with the old
-    primary; an organization the key already solely owns is left unchanged.
+    the whole owner set (organization_owners.replace_owners), so every co-owner leaves with the
+    previous primary; an organization the key already solely owns is left unchanged.
     """
-    # note: populate_existing, because the caller may already hold this row from an earlier read in
-    # the same session, and the owner reported has to be the one the lock saw.
+    # populate_existing: the caller may already hold this row from an earlier read in the same
+    # session, and the owner reported has to be the one the lock saw.
     org = (await db.execute(
         select(Organization)
         .where(Organization.id == organization_id)

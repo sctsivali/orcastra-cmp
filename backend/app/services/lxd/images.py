@@ -1,6 +1,5 @@
 """
-Image management operations.
-Handles listing and managing LXD images.
+LXD image reads and deletes, against the image store each project reads.
 """
 
 import asyncio
@@ -109,8 +108,7 @@ class ImageManager:
     
     @staticmethod
     def _image_or_none(client: Any, fingerprint: str, owner: str) -> Optional[Dict[str, Any]]:
-        """One image's record from the store `owner` holds, or None when it has no such
-        fingerprint.
+        """One image's record from the store `owner` holds, or None when it lacks the image.
 
         important: blocking. Callers on the event loop must reach this through run_blocking.
         """
@@ -131,9 +129,8 @@ class ImageManager:
     def _client(self, host: str) -> Any:
         client = self._get_client_with_reconnect(host)
         if client is None:
-            # important: returning nothing here is what made a dead cluster look like a
-            # cluster with no images. The router cannot label what it cannot see, and the
-            # single-host endpoint already turns this into a 503.
+            # important: raise instead of returning nothing, or a dead cluster reads as a
+            # cluster with no images. The single-host endpoint turns this into a 503.
             logger.warning(f"Could not connect to {host} for images")
             raise LXDConnectionError(f"Could not connect to {host}")
         return client
@@ -171,9 +168,8 @@ class ImageManager:
     def delete_image(self, host: str, fingerprint: str, project: Optional[str] = None) -> bool:
         """Delete an image from the store `project` reads. False when it was already gone.
 
-        important: blocking, and waited on so a failure surfaces here rather than as a
-        silently rejected background operation. The caller maps the daemon's error text onto
-        a status; this layer does not decide policy.
+        important: blocking. The operation is waited on so its failure surfaces here; the
+        caller maps the daemon's error text onto a status.
         """
         client = self._client(host)
         owner = resolve_owner(client, "images", project)
@@ -190,8 +186,8 @@ class ImageManager:
     def _list_images_sync(self, host: str, project: Optional[str]) -> ImageStoreListing:
         client = self._client(host)
         if project:
-            # The store the project really reads: its own when it isolates images, else
-            # default. Resolved here so the browser never has to know the feature flag.
+            # The store the project reads: its own when it isolates images, else default.
+            # Resolved here so the browser never has to know the feature flag.
             owner: Optional[str] = resolve_owner(client, "images", project)
             rows, complete = list_in_project(client, "images", owner), True
         else:

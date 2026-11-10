@@ -589,8 +589,8 @@ async def admit_untouched_run(
 ) -> None:
     """`_admit_worker_run` for a job that changed nothing yet: a refusal ends the job cleanly.
 
-    note: for example a dir-pool target that filled up after approval now needs a consent the
-    operator never gave. Waiting cannot fix that, and manual recovery would hold the slot.
+    ex; a dir-pool target that filled up after approval now needs a consent the operator never
+    gave. Waiting cannot fix that, and manual recovery would hold the slot.
     """
     try:
         await _admit_worker_run(job, worker_id, source_client, report)

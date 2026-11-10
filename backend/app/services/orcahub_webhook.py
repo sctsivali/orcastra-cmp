@@ -1,13 +1,11 @@
-"""
-OrcaHub Event Webhook (emitter)
+"""Push resource lifecycle events from Orcastra to OrcaHub as they happen.
 
-Pushes resource lifecycle events from Orcastra to OrcaHub in real time so OrcaHub
-can release quota / surface out-of-band resources instantly instead of waiting for
-its periodic reconcile. Best-effort with bounded retry; OrcaHub's reconcile is the
-durability backstop, so a dropped event self-heals.
+OrcaHub can then release quota or show out-of-band resources without waiting for its periodic
+reconcile. Delivery is best effort with bounded retry; OrcaHub's reconcile is the durability
+backstop, so a dropped event is corrected there.
 
-Signed per-connection: reuses the API key secret OrcaHub already issued for this org
-(stored in Vault). Signature = HMAC-SHA256(secret, "{timestamp}.{body}").
+Each request is signed with the API key secret OrcaHub issued for the org (stored in Vault):
+signature = HMAC-SHA256(secret, "{timestamp}.{body}").
 """
 
 import asyncio
@@ -85,9 +83,9 @@ async def emit_orcahub_event_durable(
 ) -> int:
     """Deliver one retry-safe OrcaHub event from a durable caller.
 
-    The caller retains its outbox row until this returns. A per-organization UUID derived from
+    The caller retains its outbox row until the function returns. A per-organization UUID derived from
     the stable outbox id gives OrcaHub the same idempotency key after a partial delivery or worker
-    crash. Endpoint and signing credentials still come only from the stored integration.
+    crash. Endpoint and signing credentials come only from the stored integration.
 
     `reached_organizations`: the organizations a delete or a Migration Center job names as having
     held the project (services/orcahub_reach.py). An unreadable reach raises, so the caller retries.
@@ -142,7 +140,8 @@ async def _emit(event_type: str, cluster_id: str, project: Optional[str], name: 
                 creds = await _get_orcahub_credentials(org, owner_sets.get(org.id, []))
                 if not creds:
                     continue
-                # Stable per-org event id (idempotency key is global per source+eventId).
+                # One event id per org, reused by the retries below (OrcaHub's idempotency key is
+                # global per source and eventId).
                 event_id = str(uuid.uuid4())
                 payload = {
                     "eventId": event_id,

@@ -21,9 +21,9 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 MAX_LXD_BYTES = 512 * 1024
 MAX_INCUS_BYTES = 512 * 1024
-# The channel map lists every track for every architecture, about 200 entries today.
+# The channel map lists every track for every architecture, about 200 entries.
 MAX_ENTRIES = 5000
-# About 10 tracks are real today. The cap bounds what every GET /nodes compares against, so a
+# About 10 tracks exist. The cap bounds what every GET /nodes compares against, so a
 # hostile body (or a written Redis key) cannot make each request walk thousands of them.
 MAX_TRACKS = 64
 
@@ -33,8 +33,8 @@ _VERSION = re.compile(r"v?(\d{1,4})\.(\d{1,4})(?:\.(\d{1,4}))?(?:[-+~][0-9A-Za-z
 _TAG = re.compile(r"refs/tags/v(\d{1,4})\.(\d{1,4})\.(\d{1,4})")
 _TRACK = re.compile(r"[0-9A-Za-z.]{1,16}")
 _PREFERRED_ARCH = "amd64"
-# "latest" names whichever track is the default today (now the same build as "6"), so it says
-# nothing a numbered track does not, and would read as a track of its own.
+# "latest" names whichever track is the default, so it says nothing a numbered track does not,
+# and would read as a track of its own.
 _ALIAS_TRACKS = frozenset({"latest"})
 
 
@@ -115,8 +115,8 @@ def parse_lxd(body: bytes) -> Dict[str, Track]:
         candidate = Track(
             name=track,
             version=clean_version(version),
-            # important: dotted tracks (5.21, 5.0, 4.0) are LXD's LTS series; a bare major ("6")
-            # is the monthly feature series.
+            # Dotted tracks (5.21, 5.0, 4.0) are LXD's LTS series; a bare major ("6") is the
+            # monthly feature series.
             lts="." in track,
             channel=f"{track}/stable",
             released_at=_released_at(channel.get("released-at")),

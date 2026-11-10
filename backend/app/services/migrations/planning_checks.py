@@ -81,9 +81,9 @@ async def shared_policy_blockers(
     """Apply the shared-cluster write policy a Partner's direct create would face.
 
     important: when the job creates the target project, ``target_project_config`` is the exact
-    config the worker will create it with (the source clone). It must already pass the
-    Partner project-create policy and the isolation invariant, because the worker creates it
-    verbatim and the approval pins that config.
+    config the worker creates it with (the source clone). It must already pass the Partner
+    project-create policy and the isolation invariant: the worker creates it verbatim and the
+    approval pins that config.
     """
     if user is None:
         return []
@@ -212,9 +212,9 @@ async def project_job_inside(
 ) -> Optional[tuple[str, str]]:
     """(job_id, phase) of an active job that holds a lock in, or reads or writes, a project.
 
-    important: by its columns as well as its locks. A retained instance move keeps a lock on its
-    source only, yet its live target in the other project is still its rollback object (security
-    review, pass 2).
+    important: matched by its columns as well as its locks. A retained instance move keeps a
+    lock on its source only, yet its live target in the other project is still its rollback
+    object.
     """
     active = or_(MigrationJob.active_source_key.is_not(None), MigrationJob.active_target_key.is_not(None))
     by_lock = or_(
@@ -311,8 +311,8 @@ async def active_endpoint_blockers(
         scope, request.target.cluster_id, request.target.project, target_name
     )
     # important: a project relocation keeps project keys active through its retention, while
-    # its new project holds no lock. Any plan touching either project would otherwise make an
-    # object the relocation's rollback later deletes another job's (security review).
+    # its new project holds no lock. Without these keys another plan could take over an object
+    # the relocation's rollback later deletes.
     keys = {
         source_key,
         target_key,

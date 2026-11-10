@@ -36,8 +36,8 @@ REQUEST_SECONDS = 90.0
 READS_PER_MINUTE = 30
 WRITES_PER_MINUTE = 12
 PASSWORDS_PER_TEN_MINUTES = 5
-# note: a person's slots stay below the pool's four threads (runtime.POOL_WORKERS), so one tenant
-# whose guest stalls every call cannot hold every thread of a worker.
+# A person's slots stay below the pool's threads (runtime.POOL_WORKERS, 4 by default), so one
+# tenant whose guest stalls every call cannot hold every thread of a worker.
 SLOTS = {"instance": 2, "user": 2, "cluster": 8, "worker": 16}
 
 _slots: Dict[Tuple[str, ...], int] = Counter()

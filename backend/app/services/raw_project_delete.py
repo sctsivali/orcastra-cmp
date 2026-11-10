@@ -1,13 +1,11 @@
 """A project DELETE that arrives through the raw proxy, settled like every other project delete.
 
 OrcaHub removes a buyer's project at the end of its retention window with
-`POST /integrations/raw-proxy` `DELETE /1.0/projects/<name>`. The raw path sent that straight to
-LXD and only cleared caches, so the tenant's `auto:<project>` rule outlived the project and kept
-the cluster in the tenant's scope: the buyer still saw the cluster on Overview with no projects
-and no instances. The dashboard route and the structured proxy already delete through
-`services/project_deletion`, which revokes the rules once the project is known to be gone. This
-module lets the raw path use that same core: it recognises the request and classifies LXD's
-answer into the outcomes the core understands, keeping LXD's own answer for the caller.
+`POST /integrations/raw-proxy` `DELETE /1.0/projects/<name>`. Sent straight to LXD, the tenant's
+`auto:<project>` rule would outlive the project and keep the cluster in the tenant's scope. This
+module runs the raw path through `services/project_deletion`, like the dashboard route and the
+structured proxy: it recognises the request, classifies LXD's answer into the outcomes the core
+understands, and keeps LXD's own answer for the caller.
 """
 
 from __future__ import annotations
@@ -161,7 +159,7 @@ async def delete_through_core(
         )
 
     async def wait_operation(response: Any) -> None:
-        # note: the operation budget is the project service's own (lxd/project_delete.py), passed
+        # The operation budget is the project service's own (lxd/project_delete.py), passed
         # positionally because run_blocking keeps `timeout` for its own deadline.
         await run_blocking(
             wait_for_lxd_operation,

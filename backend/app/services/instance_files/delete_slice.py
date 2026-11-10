@@ -90,7 +90,7 @@ async def delete_path(
                             note_failure(folder)
                             continue
                         budget.hold(len(child))
-                        # note: a link is removed, never entered: readdir reports it as a link.
+                        # A link is removed, never entered: readdir reports it as a link.
                         if is_directory(item.attrs):
                             stack.append(child)
                         else:

@@ -1,4 +1,4 @@
-"""Billing-impact acknowledgement shared by acceptance and the mutation worker."""
+"""Billing-impact acknowledgement shared by migration planning and the mutation worker."""
 
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ def required_acknowledgements(
     if intent == "move" and strategy != "member_relocation":
         required.add("source-retention-understood")
     if strategy == "project_relocation":
-        # Finalize deletes the whole source project, not only its instances.
+        # Finalize deletes the whole source project along with its instances.
         required.add("source-project-deletion-understood")
     if external_cutover_required:
         required.add("external-cutover-owned")

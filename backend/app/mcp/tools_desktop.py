@@ -1,14 +1,11 @@
 """Seeing and driving a guest's graphical session.
 
-Six tools rather than one, split along the capability boundaries rather than by convenience. A
-single `desktop` tool with an `action` discriminator would be a smaller list and would mean the
-one thing the capability split exists to prevent: a host allow-rule, and an operator's grant,
-could not tell "look at this screen" apart from "type into it".
+Six tools, split along the capability boundaries. With a single `desktop` tool and an `action`
+discriminator, a host allow-rule and an operator's grant could not tell "look at this screen"
+apart from "type into it".
 
-note: the target is named by the caller, the same way every other `lxd_` tool names it. A
-single-target MCP server would be better served by holding that binding itself, but this one is
-reached by keys that span clusters, so hiding the target would mean guessing it. Every call
-re-checks the named target against the key's grant, so naming it is safe; it is only inconvenient.
+The caller names the target, as every `lxd_` tool does: keys here span clusters, so the server
+cannot hold that binding itself. Every call re-checks the named target against the key's grant.
 """
 
 from typing import Annotated, Any, Dict, List, Optional

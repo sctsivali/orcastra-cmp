@@ -1,17 +1,14 @@
 """Whether the caller behind a long-lived interactive socket still has an account.
 
-important: a terminal or console stays open long after the token that opened it expired. Every
-minute its socket asks Authentik, through the role reader the dashboard already trusts, whether
-the account still exists and is enabled; an account that is gone or disabled ends the session.
-Authentik not answering does not, because an identity provider outage must not cut every open
-shell at once. Readings are kept 55 seconds per account, so one check per minute per account
-reaches Authentik however many sessions it holds.
+important: a terminal or console outlives the token that opened it. Every minute its socket asks
+Authentik, through the trusted role reader, whether the account still exists and is enabled; a
+gone or disabled account ends the session. Authentik not answering does not, so an IdP outage
+cannot cut every open shell at once. Readings are cached 55 s per account, so one check per
+minute per account reaches Authentik however many sessions it holds.
 
-note: what the caller may reach (organization, grants, ownership) is read again from the
-database by the session guard. This answers whether the account is still live, and with which
-roles, so the guard can end a session whose caller was demoted: the ticket's groups are frozen at
-mint time, and checking scope with them would keep a demoted Admin an Admin for as long as the
-shell stays open.
+The session guard re-reads scope (organization, grants, ownership) from the database; this module
+supplies the current roles so a demoted caller's session ends. The ticket's groups are frozen at
+mint time and would keep a demoted Admin an Admin.
 """
 
 import time
@@ -46,8 +43,8 @@ async def _read(email: str) -> RoleReading:
 async def check_identity(user: AuthenticatedUser) -> IdentityCheck:
     email = (user.email or "").strip().lower()
     if not email:
-        # important: no email, no way to ask Authentik about this account, ever; a session that
-        # can never be re-checked ends instead of running unchecked (the mint refuses these too).
+        # important: without an email the account can never be re-checked, so the session ends
+        # rather than running unchecked (the mint refuses these too).
         return IdentityCheck(True, "email_missing")
     now = time.monotonic()
     cached = _readings.get(email)
@@ -59,7 +56,7 @@ async def check_identity(user: AuthenticatedUser) -> IdentityCheck:
     if reading.roles is None:
         return IdentityCheck(reading.reason in ENDED_REASONS, reading.reason)
     if not reading.has_role:
-        # note: an answer, not a failure: the account is live but every role group was removed.
+        # The account is live but every role group was removed.
         return IdentityCheck(True, "no_role_assigned")
     return IdentityCheck(False, "active", reading.roles)
 

@@ -71,7 +71,7 @@ class SharedClusterFindingSummary:
 
 @dataclass(frozen=True)
 class SharedClusterAuditReport:
-    """Sanitized audit verdict. Raw daemon records are deliberately not retained."""
+    """Sanitized audit verdict; raw daemon records are not retained."""
 
     cluster_id: str
     safe: bool
@@ -180,12 +180,13 @@ async def serialize_cluster_configuration(
 ) -> AsyncIterator[None]:
     """Serialize ownership changes with ownership-sensitive daemon writes.
 
-    PostgreSQL's transaction advisory lock remains held through the caller's commit or
-    rollback. SQLite and light-weight fake sessions use an in-process lock intended only for
-    tests; callers must keep the context open through their write or flush. Instance, profile,
-    and project routes that grant exclusive-owner capabilities must use this same context from
-    ownership policy resolution through the terminal daemon submission. That shared lock closes
-    the race where a write is admitted as exclusive while another request shares the cluster.
+    important: instance, profile and project routes that grant exclusive-owner capabilities
+    must hold this from ownership policy resolution through the final daemon submission, or a
+    write can be admitted as exclusive while another request shares the cluster.
+
+    PostgreSQL's transaction advisory lock stays held through the caller's commit or rollback.
+    SQLite and fake sessions use an in-process lock meant only for tests; callers must keep the
+    context open through their write or flush.
     """
 
     if _dialect_name(db) == "postgresql":
@@ -195,7 +196,7 @@ async def serialize_cluster_configuration(
                 {"lock_key": _advisory_key(cluster_id)},
             )
         else:
-            # note: lock_timeout bounds this one wait and is put back at once, so the writes the
+            # lock_timeout bounds this one wait and is put back at once, so the writes the
             # caller makes under the lock keep the session's own setting.
             previous = (await db.execute(text("SELECT current_setting('lock_timeout')"))).scalar()
             await db.execute(
@@ -238,7 +239,7 @@ async def serialize_cluster_share(
     db: AsyncSession,
     cluster_id: str,
 ) -> AsyncIterator[None]:
-    """Compatibility name for ownership-transition callers."""
+    """serialize_cluster_configuration with no wait limit, for ownership transitions."""
 
     async with serialize_cluster_configuration(db, cluster_id):
         yield
@@ -499,8 +500,8 @@ def _owner_identity(
 ) -> str:
     if organization_id is not None:
         return f"organization:{organization_id}"
-    # An unbound row is intentionally an owner identity, even if its historical record has no
-    # registrant. The row id prevents two ambiguous records from collapsing into one identity.
+    # An unbound row is an owner identity even when it has no registrant; the row id keeps two
+    # such rows from collapsing into one identity.
     return f"unbound:{registered_by or f'row:{row_id or 0}'}"
 
 

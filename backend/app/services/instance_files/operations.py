@@ -13,7 +13,7 @@ from .paths import MAX_PATH_BYTES, clean_name, from_guest, is_pseudo, is_safe_en
 from .sftp_client import Budget, BudgetSpent, SftpClient, is_directory, is_symlink
 from .uploads_temp import is_expired_temp, is_upload_temp
 
-# The interface renders 20,000 rows without strain; a directory past that is a dump, not a listing.
+# The interface renders 20,000 rows comfortably; a listing stops there and is marked truncated.
 MAX_LIST_ENTRIES = 20_000
 # Names are guest-controlled, so count their bytes too: 20,000 entries of 8 KiB each is 160 MB.
 MAX_LIST_BYTES = 16 * 1024 * 1024
@@ -192,7 +192,7 @@ async def make_directory(guest: SftpClient, path: str, *, parents: bool = False)
             if not (parents and failure.code == "already_exists" and folder != path):
                 raise
             continue
-        # note: LXD's MKDIR ignores the mode it is given (0750 arrived as 0755 in the lab).
+        # LXD's MKDIR ignores the mode it is given (0750 arrives as 0755), so the mode is set here.
         await _inherit_owner(guest, raw, to_guest(folder.rsplit("/", 1)[0] or "/"), mode=0o755)
     return await stat_path(guest, path)
 

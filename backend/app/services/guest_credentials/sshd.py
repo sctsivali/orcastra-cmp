@@ -1,11 +1,10 @@
 """The guest's SSH server, as read: installed, running, its effective global settings, its host keys.
 
-Read only by design. The values come from `sshd -G` (or `-T` where -G is missing), never from
-parsing config files, because
-first-match-wins across `sshd_config.d/` (Ubuntu's 50-cloud-init.conf before 60-cloudimg-settings
-.conf) makes the file a person would read the wrong answer. Both print the global values: a
-`Match` block can still change them for a user or address, and the panel says so. When neither can
-run the answer is "unknown", never a guess.
+Read only. The values come from `sshd -G` (or `-T` where -G is missing), never from parsing
+config files: first-match-wins across `sshd_config.d/` (Ubuntu's 50-cloud-init.conf before
+60-cloudimg-settings.conf) makes the file a person would read give the wrong answer. Both print
+the global values; a `Match` block can still change them for a user or address, and the panel
+says so. When neither can run the answer is "unknown", never a guess.
 
 Addresses come from LXD's view of the instance and carry a label. Nothing here tests whether a
 person's own machine can reach the guest: a private address works only inside that network.

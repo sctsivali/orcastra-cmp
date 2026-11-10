@@ -1,17 +1,15 @@
 """Client certificates this dashboard stopped using, until their LXD trust entries are gone.
 
 Every renew, regenerate, cancel and replaced pending certificate leaves a trust entry on the
-cluster that nothing used to remove; one host carried about twenty-five of them. A row here is the
-dashboard's own record that it superseded a certificate it issued for one cluster, which is the
-only evidence that makes removing that entry safe. Entries this table never saw are not ours to
-judge and are never touched.
+cluster. A row here records that the dashboard superseded a certificate it issued for one cluster,
+which is what makes removing that entry safe. Entries this table never saw are never touched.
 
-**One row per (cluster, fingerprint).** The unique constraint, not a read-then-write, is what stops
-two workers recording the same certificate twice.
+One row per (cluster, fingerprint): the unique constraint stops two workers recording the same
+certificate twice.
 
-**`due_at` is when to try, not when it was superseded.** The sweep pushes it forward while the
-cluster does not yet trust the current certificate, so the grace period starts once removal is
-safe rather than when the record was written.
+`due_at` is when to try, not when the certificate was superseded. The sweep pushes it forward
+while the cluster does not yet trust the current certificate, so the grace period starts once
+removal is safe.
 """
 
 from datetime import datetime, timezone
@@ -51,14 +49,13 @@ def _now() -> datetime:
 class LxdTrustCleanup(Base):
     __tablename__ = "lxd_trust_cleanup"
 
-    # note: Integer on SQLite only, where nothing but INTEGER PRIMARY KEY autoincrements; the
-    # hermetic tests run these rows there. PostgreSQL gets the BIGINT the migration creates.
+    # Integer on SQLite only, where nothing but INTEGER PRIMARY KEY autoincrements; the hermetic
+    # tests run these rows there. PostgreSQL gets the BIGINT the migration creates.
     id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     cluster_id = Column(String(255), nullable=False, index=True)
     fingerprint = Column(String(64), nullable=False, comment="LXD form: lowercase sha256 of the DER")
-    # note: the column comment stays as revision 039 created it. `register` was added to the
-    # reasons after 039 was applied, and an applied revision is never edited; the column is free
-    # text, so the comment is documentation and not a constraint.
+    # The column comment matches what revision 039 created and omits `register`; applied
+    # revisions are not edited. The column is free text, so the comment does not constrain it.
     reason = Column(
         String(24),
         nullable=False,

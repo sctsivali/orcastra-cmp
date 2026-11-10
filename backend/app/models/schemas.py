@@ -1,6 +1,5 @@
 """
-Pydantic models for Orcastra CMP API.
-Defines request/response schemas for VMs and operations.
+Pydantic request and response models for the Orcastra API.
 """
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
@@ -10,10 +9,10 @@ from datetime import datetime, timezone
 import re
 from urllib.parse import urlparse
 
-# note: ClusterStatus lives in cluster_status.py beside derive_status, the one function
-# allowed to produce it. Re-exported here so existing imports from this module still work.
 from app.core.url_safety import normalize_endpoint
 from app.core.lxd_names import LXD_NAME_PATTERN, POLICY_CONFIG_KEYS
+# ClusterStatus lives in cluster_status.py beside derive_status, the only function that may
+# produce it. Re-exported here for imports from this module.
 from app.models.cluster_status import (  # noqa: F401
     AvailabilityReason,
     ClusterStatus,
@@ -27,9 +26,8 @@ from app.models.instance_metrics import InstanceMetrics  # noqa: F401
 class ResourceUsage(BaseModel):
     """What the cluster reports for one running instance, straight from its state endpoint.
 
-    important: every field here is named after the LXD key it carries, because the two that
-    were not spent this model's whole life describing something they never held. A percentage
-    needs two samples over time and lives on InstanceMetrics instead.
+    Each field is named after the LXD key it carries. A percentage needs two samples over time,
+    so it lives on InstanceMetrics.
     """
     cpu_time_ns: Optional[int] = Field(
         None, description="Cumulative CPU time consumed since the instance started, in nanoseconds"
@@ -99,10 +97,6 @@ class VMInfo(BaseModel):
     host_endpoint: Optional[str] = Field(
         None, description="LXD endpoint of the instance's cluster; null for Tenant callers"
     )
-    # note: LXD reports which cluster member an instance sits on, and this model dropped it, so
-    # the members page could count instances per member and never list them. That is why its
-    # per-member drill-down rendered "Instance Details Unavailable" for everyone, and why the
-    # comment there blamed a missing API that was in fact already being read server-side.
     location: Optional[str] = Field(
         None,
         description=(
@@ -139,10 +133,10 @@ class VMInfo(BaseModel):
     effective_memory_limit: Optional[str] = Field(None, exclude=True)
     effective_limits_known: bool = Field(False, exclude=True)
     expanded_devices_known: bool = Field(False, exclude=True)
-    # note: excluded from every dump, so neither the wire nor a cached list carries it. The
-    # monitoring sweep reads it straight off a fresh recursion=2 list to sample CPU and network
-    # rates without a second state request per instance; `live_state_read_at` is when the list
-    # read happened, the only honest sample time for those counters.
+    # Excluded from every dump, so neither the wire nor a cached list carries it. The monitoring
+    # sweep reads it off a fresh recursion=2 list to sample CPU and network rates without a second
+    # state request per instance; `live_state_read_at` is when that list was read, which is the
+    # sample time for those counters.
     live_state: Optional[Dict[str, Any]] = Field(None, exclude=True)
     live_state_read_at: Optional[float] = Field(None, exclude=True)
     profiles: List[str] = Field(default_factory=list, description="Applied profiles")
@@ -157,8 +151,8 @@ class VMInfo(BaseModel):
 class FanoutReachability(BaseModel):
     """What a fan-out list could not read, cluster by cluster.
 
-    important: every field has a default. A payload cached by the previous build carries none
-    of them, and a required field would fail every cached read until its TTL expired.
+    Every field has a default: a payload cached by an earlier build may carry none of them, and
+    a required field would fail every cached read until its TTL expired.
     """
     unreachable_nodes: List[str] = Field(
         default_factory=list,
@@ -298,17 +292,13 @@ class VMCreateRequest(BaseModel):
         """Refuse the four LXD snapshot-schedule keys on the console's own create paths.
 
         important: `snapshots.schedule` is the single key `services/lxd/snapshots.py` derives
-        `externally_managed` from. An instance created carrying one is immediately treated as owned
-        by the metered product sold upstream, so the operator's own create, restore, delete and copy
-        on it are refused behind a billing acknowledgement, and every override writes a high
-        severity audit row. Nothing in this console was meant to set that, and until this refusal
-        existed anyone who could create an instance could.
+        `externally_managed` from. An instance created with it is treated as owned by the metered
+        upstream product, so the operator's own snapshot create, restore and delete on it, and a
+        copy of it, are refused behind a billing acknowledgement, and every override writes a high
+        severity audit row.
 
-        Deliberately on this model rather than only on InstanceCreateRequest. The note in that
-        subclass about leaving this one untouched is about keeping `image` required for
-        `POST /vms`; it is not a reason to leave that route's `config` open. The API key surface the
-        upstream product actually writes those keys through constructs neither model, so refusing
-        here reaches both console routes and no integration.
+        On this model, not only InstanceCreateRequest, so both console create routes refuse the
+        keys. The API key surface the upstream product writes them through constructs neither model.
         """
         present = [key for key in POLICY_CONFIG_KEYS if key in (self.config or {})]
         if present:
@@ -322,9 +312,8 @@ class VMCreateRequest(BaseModel):
 class InstanceCreateRequest(VMCreateRequest):
     """Request body for the dashboard's ``POST /instances``.
 
-    Extends VMCreateRequest with a blank-VM ("no OS") source. VMCreateRequest
-    itself is left untouched because Orcahub's ``POST /vms`` depends on it -- in
-    particular `image` stays required there, and only relaxes to optional here.
+    Extends VMCreateRequest with a blank-VM ("no OS") source. `image` stays required on
+    VMCreateRequest, which ``POST /vms`` uses, and is optional only here.
     """
 
     # Optional so a blank VM can be created without one; enforced in _check_source.
@@ -398,7 +387,7 @@ class InstanceCreatePreflightIssue(BaseModel):
 
 
 class InstanceCreateEffectiveSummary(BaseModel):
-    """Safe effective state used to explain what the daemon will receive."""
+    """Safe effective state that explains what the daemon will receive."""
 
     profiles: List[str] = Field(default_factory=list)
     nic_names: List[str] = Field(default_factory=list)
@@ -449,21 +438,13 @@ class ImageInfo(BaseModel):
     size: int = Field(..., description="Image size in bytes")
     upload_date: Optional[datetime] = Field(None, description="Upload timestamp")
     public: bool = Field(default=False, description="Whether image is public")
-    # important: a fallback, not a claim about the image. `services/lxd/images.py` always
-    # passes the daemon's own value, so this fires only if LXD reports an image without a
-    # type. It stays optional-with-a-default rather than required on purpose: a required
-    # field here would turn one malformed image into a 500 for the entire list, which this
-    # codebase has already been bitten by on a shared response model.
-    # The value must match SEED_TYPE_FALLBACK in
-    # frontend/src/components/instance-create/prefill.ts, which decides the type a row action
-    # seeds into the create form. It used to say "virtual-machine" while that side said
-    # "container", so the same unknown had two opposite answers.
+    # important: a fallback only. `services/lxd/images.py` always passes the daemon's value, so
+    # this applies when LXD reports an image without a type. A required field would turn one
+    # malformed image into a 500 for the whole list. The value must match SEED_TYPE_FALLBACK in
+    # frontend/src/components/instance-create/prefill.ts, the type a row action seeds.
     type: str = Field(default="container", description="Image type")
-    # important: cached and auto_update are the two questions an operator asks of an image
-    # list, and the frontend has been reading both since the Flags column was written. They
-    # were never on this model, and response_model strips anything not declared, so the facet
-    # could only ever offer "Public" and the other two values never appeared. Adding them here
-    # is what makes that column tell the truth.
+    # important: the image list's Flags column reads `cached` and `auto_update`, and
+    # response_model strips anything not declared here.
     cached: bool = Field(default=False, description="Whether the image was pulled from a remote")
     auto_update: bool = Field(default=False, description="Whether the image auto-updates from its source")
     created_at: Optional[datetime] = Field(None, description="Creation timestamp")
@@ -518,7 +499,7 @@ class RemoteImageInfo(BaseModel):
     architecture: str = ""
     type: str = ""  # container | virtual-machine
     alias: str = Field("", description="Alias to pull by (e.g. ubuntu/24.04)")
-    source: str = ""  # e.g. Custom, Ubuntu
+    source: str = ""  # ex; Custom, Ubuntu
     server: str = ""  # remote server URL to pull from
     fingerprint: str = ""  # LXD image fingerprint (for cached detection)
     engines: List[str] = Field(default_factory=lambda: ["lxd"], description="Engines that can pull this image: lxd, incus")
@@ -547,10 +528,8 @@ class GPUNvidiaInfo(BaseModel):
     nvrm_version: Optional[str] = Field(None, description="NVRM driver version")
     brand: Optional[str] = Field(None, description="Brand name (for example, 'GeForce', 'Quadro')")
     model: Optional[str] = Field(None, description="Model name")
-    # important: exclude=True, not deleted. A GPU UUID is a per-device serial and this model
-    # rides GET /nodes, which the ungated Technologies page reads, so it must not reach a
-    # Tenant's browser. gpu_model.py builds its card-match keys from the raw LXD dict rather
-    # than from this model, so dropping it from the response costs the matcher nothing.
+    # important: a GPU UUID is a per-device serial, and this model rides GET /nodes, which a
+    # Tenant can read, so it is never serialized. gpu_model.py matches cards on the raw LXD dict.
     uuid: Optional[str] = Field(None, description="GPU UUID; internal only, never serialized", exclude=True)
     architecture: Optional[str] = Field(None, description="Architecture generation")
     card_name: Optional[str] = Field(None, description="Card device name (for example, 'nvidia0')")
@@ -575,30 +554,25 @@ class GPUMdevProfile(BaseModel):
 
 class GPUCardInfo(BaseModel):
     """Detailed GPU card information from LXD resources."""
-    # Core identification
     index: int = Field(0, description="Position in the reported card list, not a device selector")
     id: Optional[int] = Field(None, description="DRM card id: the value LXD accepts as a gpu device 'id'")
     driver: Optional[str] = Field(None, description="Kernel driver (for example, 'nvidia', 'i915', 'amdgpu')")
     driver_version: Optional[str] = Field(None, description="Driver version")
     pci_address: Optional[str] = Field(None, description="PCI address (for example, '0000:00:02.0')")
     usb_address: Optional[str] = Field(None, description="USB address for USB GPUs")
-    
-    # Vendor/Product info
+
     vendor: Optional[str] = Field(None, description="Vendor name (for example, 'NVIDIA Corporation')")
     vendor_id: Optional[str] = Field(None, description="PCI vendor ID (for example, '10de')")
     product: Optional[str] = Field(None, description="Product name (for example, 'GeForce RTX 3080')")
     product_id: Optional[str] = Field(None, description="PCI product ID")
-    
-    # System topology
+
     numa_node: Optional[int] = Field(None, description="NUMA node number")
-    
-    # Usage status
+
     in_use: bool = Field(False, description="Whether this GPU is currently in use by an instance")
     used_by: Optional[str] = Field(None, description="Instance name using this GPU (if in use)")
 
-    # Classification (compute vs display; integrated/unified-memory) for accurate, sellable counts.
-    # A Tegra/Jetson iGPU enumerates TWO DRM cards (display controller + compute), so only the
-    # compute card is allocatable capacity.
+    # Classification: compute or display, integrated or discrete. A Tegra/Jetson iGPU enumerates
+    # two DRM cards (display controller and compute); only the compute card is allocatable.
     gpu_class: str = Field("unknown", description="'compute' | 'integrated' | 'display' | 'unknown'")
     is_compute: bool = Field(False, description="True for a compute-capable (sellable) GPU")
     is_integrated: bool = Field(False, description="True when the GPU shares system Memory; orthogonal to gpu_class")
@@ -607,16 +581,12 @@ class GPUCardInfo(BaseModel):
     memory_total: Optional[int] = Field(None, description="GPU memory in bytes (for integrated GPUs, equals system Memory)")
     memory_shared: bool = Field(False, description="True when GPU memory is unified/shared with system Memory")
 
-    # DRM info
     drm: Optional[GPUDRMInfo] = Field(None, description="Direct Rendering Manager info")
-    
-    # NVIDIA-specific info
+
     nvidia: Optional[GPUNvidiaInfo] = Field(None, description="NVIDIA-specific information")
-    
-    # SR-IOV info
+
     sriov: Optional[GPUSRIOVInfo] = Field(None, description="SR-IOV information")
-    
-    # Mdev profiles
+
     mdev_profiles: List[GPUMdevProfile] = Field(default_factory=list, description="Available mdev profiles for vGPU")
 
 
@@ -628,15 +598,11 @@ class GpuCardListResponse(BaseModel):
     total: int = Field(0, description="Total cards detected")
     compute_total: int = Field(0, description="Cards that count as compute capacity")
 
-# ========== Detected hardware (Technologies page) ==========
-# Every model below is an allowlist, and every one forbids extra keys. GET /1.0/resources
-# carries asset identifiers next to the facts worth showing: system UUID and serial, chassis and
-# motherboard serials, disk serial, WWN and device path, and a MAC address per NIC port. The
-# Technologies page has no role gate and is reachable by Tenant, so none of that may leave the
-# backend. extra="forbid" means a future LXD release that adds a new identifier cannot be
-# carried by accident: it has to be named here first.
-#
-# Built in exactly one place, services/lxd/hardware.py:build_hardware_profile.
+# Detected hardware (Technologies page). Every model below is an allowlist with extra="forbid".
+# GET /1.0/resources carries asset identifiers (system UUID and serial, chassis, board and disk
+# serials, WWN, device path, NIC MAC addresses) and the page is open to Tenants, so none of them
+# may leave the backend; a new identifier from a future LXD release has to be named here first.
+# Built only by services/lxd/hardware.py:build_hardware_profile.
 
 
 class FirmwareInfo(BaseModel):
@@ -648,7 +614,7 @@ class FirmwareInfo(BaseModel):
 
 
 class ChassisInfo(BaseModel):
-    """Enclosure description. The chassis serial is deliberately absent."""
+    """Enclosure description, without the chassis serial."""
     model_config = ConfigDict(extra="forbid")
     vendor: Optional[str] = Field(None, description="Chassis vendor")
     type: Optional[str] = Field(None, description="Chassis type (ex; 'Rack Mount Chassis')")
@@ -656,7 +622,7 @@ class ChassisInfo(BaseModel):
 
 
 class MotherboardInfo(BaseModel):
-    """Mainboard description. The board serial is deliberately absent."""
+    """Mainboard description, without the board serial."""
     model_config = ConfigDict(extra="forbid")
     vendor: Optional[str] = Field(None, description="Motherboard vendor")
     product: Optional[str] = Field(None, description="Motherboard product name")
@@ -666,11 +632,9 @@ class MotherboardInfo(BaseModel):
 class SystemInfo(BaseModel):
     """The machine itself.
 
-    Absent entirely rather than blank in two cases: the node omits the section (nested
-    containers report no DMI), and a MicroCloud fold where members disagree. Neither may render
-    as a row of empty values on a page that shows detected facts only.
-
-    System UUID, serial and SKU have no field here and never reach the client.
+    Absent rather than blank when the node omits the section (nested containers report no DMI)
+    or when MicroCloud members disagree. System UUID, serial and SKU have no field here and never
+    reach the client.
     """
     model_config = ConfigDict(extra="forbid")
     vendor: Optional[str] = Field(None, description="System vendor (ex; 'Dell Inc.')")
@@ -719,7 +683,7 @@ class MemoryTopology(BaseModel):
 
 
 class NetworkPortInfo(BaseModel):
-    """One NIC port. The MAC address is dropped in the backend, not hidden in the UI."""
+    """One NIC port. The MAC address is dropped in the backend."""
     model_config = ConfigDict(extra="forbid")
     id: Optional[str] = Field(None, description="Interface name (ex; 'eno1')")
     port: Optional[int] = Field(None, description="Port number on the card")
@@ -769,13 +733,9 @@ class StorageDeviceInfo(BaseModel):
 class HardwareProfile(BaseModel):
     """Detected hardware for one host, or for one whole MicroCloud cluster.
 
-    Nothing here is defaulted to a plausible value. A page that shows detected facts only must
-    show nothing rather than a guess, so an unreported architecture is an empty list and an
-    unreported system block is None.
-
-    GPU cards are deliberately not repeated here. NodeResources.gpu_cards already carries them
-    from the canonical inventory in services/lxd/gpu.py, and two sources for one fact is how the
-    GPU counts came to disagree in the first place.
+    Nothing is defaulted to a plausible value: an unreported architecture is an empty list and
+    an unreported system block is None. GPU cards are not repeated here; NodeResources.gpu_cards
+    carries them from the inventory in services/lxd/gpu.py.
     """
     model_config = ConfigDict(extra="forbid")
     scope: str = Field("node", description="'node' for one host, 'cluster' when folded over MicroCloud members")
@@ -812,9 +772,8 @@ class NodeResources(BaseModel):
     gpu_vendors: List[str] = Field(default_factory=list, description="Vendors of the compute GPUs")
     gpu_models: List[str] = Field(default_factory=list, description="Models of the compute GPUs")
     gpu_utilization_supported: bool = Field(False, description="LXD reports allocation only; there is no GPU telemetry")
-    # important: on a clustered host `storage_total` is usable capacity, with a shared backing
-    # store counted once rather than per member. `storage_raw_total` keeps the per-member sum
-    # so no reader loses the figure it had, exactly as gpu_cards_total sits beside gpu_total.
+    # On a clustered host `storage_total` is usable capacity, with a shared backing store
+    # counted once rather than per member. `storage_raw_total` keeps the per-member sum.
     # On a standalone host the two are equal. See services/lxd/storage_model.py.
     storage_total: int = Field(0, description="Usable storage in bytes: a shared pool counted once")
     storage_used: int = Field(0, description="Used storage in bytes, on the same basis as storage_total")
@@ -822,9 +781,8 @@ class NodeResources(BaseModel):
     storage_raw_total: int = Field(0, description="Every member's every pool added up. Overstates a cluster with shared storage; kept so no reader loses the number it had")
     storage_raw_used: int = Field(0, description="Used, on the raw basis")
     storage_pools: List[Dict[str, Any]] = Field(default_factory=list, description="Storage pools info. Each row carries its scope (shared or local) and the members it was read from")
-    # important: a partial read must not answer 200 with a smaller number. A clustered host
-    # reporting zero storage was indistinguishable from one with no storage, which is the
-    # defect MemberResources gained the same pair for.
+    # important: a partial read must not pass for a smaller measurement. `degraded` marks the
+    # affected numbers as floors, so a cluster that lost its storage read is not shown as empty.
     degraded: bool = Field(False, description="At least one part of this read did not come back, so the affected numbers are floors rather than measurements")
     degraded_parts: List[str] = Field(default_factory=list, description="Which parts were lost: 'storage', 'storage:<pool>'")
     hardware: Optional[HardwareProfile] = Field(None, description="Detected hardware, identifier-stripped. None when the Cluster did not answer, which must not look like an empty profile")
@@ -889,9 +847,8 @@ class MemberResources(BaseModel):
         ),
     )
     collected_at: Optional[datetime] = Field(None, description="When this sample was read off the cluster. None means unknown, which a client must not render as \"now\"")
-    # important: a partial read used to answer 200 with zeroes, which is not a degraded answer
-    # but a wrong one: storage_total=0 renders as "0 B / 0 B" and drops the pools card entirely,
-    # so an operator reads "this member has no storage". These two say which numbers are floors.
+    # These two say which numbers are floors. A zero from a partial read would render as
+    # "0 B / 0 B" and read as a member with no storage.
     degraded: bool = Field(False, description="At least one part of this read did not come back, so the affected numbers are floors rather than measurements")
     degraded_parts: List[str] = Field(default_factory=list, description="Which parts were lost: 'storage', 'storage:<pool>', 'instances'")
 
@@ -1006,13 +963,12 @@ class NodeStatus(BaseModel):
     @computed_field
     @property
     def gpus(self) -> Optional[int]:
-        """Total GPU cards (computed from resources)."""
-        # note: compute GPUs, not detected cards. gpu_cards_total carries the card count.
+        """Compute GPUs; resources.gpu_cards_total carries the detected card count."""
         return self.resources.gpu_total if self.resources else None
 
 
 class NodesStatusResponse(BaseModel):
-    """Response for registered Cluster status checks; wire names remain unchanged."""
+    """Response for registered Cluster status checks."""
     nodes: List[NodeStatus]
     all_connected: bool
     collected_at: Optional[datetime] = Field(None, description="When this fan-out was built. Per-node sample times live on NodeResources.collected_at; this one also covers nodes that never answered and so carry no resources at all")
@@ -1021,8 +977,7 @@ class NodesStatusResponse(BaseModel):
 class ClusterAvailability(BaseModel):
     """One row for a cluster picker: can an operator act on this cluster right now, and if not why.
 
-    Deliberately carries no resources, no GPU inventory and no environment. This is a dropdown's
-    payload; /nodes stays the endpoint for hardware detail.
+    Carries no resources, GPU inventory or environment; /nodes serves hardware detail.
     """
     name: str = Field(..., description="Cluster id. The exact value a create request sends as its node")
     display_name: str = Field(..., description="Label to show; falls back to the id")
@@ -1051,8 +1006,8 @@ class ClusterAvailability(BaseModel):
 class ClusterAvailabilityResponse(BaseModel):
     """Availability of every cluster in the caller's org scope.
 
-    important: a cluster that did not answer is present with status=offline, never omitted. An
-    operator who cannot find a cluster in this list concludes it was deregistered.
+    A cluster that did not answer is listed with status=offline, never omitted, so it does not
+    look deregistered.
     """
     clusters: List[ClusterAvailability]
     online_count: int
@@ -1066,14 +1021,9 @@ class ClusterAvailabilityResponse(BaseModel):
 class AvailableCluster(BaseModel):
     """One row in the cluster picker that scopes an API key.
 
-    Field names predate this model and are kept: `id` is the cluster id a grant stores, `name`
-    is what an operator sees, `server_type` is the hypervisor family. What is new is the state,
-    which the picker had no way to show.
-
-    important: `status` is Optional and null means "we could not establish reachability", which
-    is not the same claim as offline. A client renders a null as no marking at all. Painting a
-    healthy fleet dead because one probe was slow is the worse failure, so the type has to be
-    able to say "unknown" without borrowing a real status to do it.
+    `id` is the cluster id a grant stores, `name` is what an operator sees, `server_type` is the
+    hypervisor family. A null `status` means reachability could not be established, which is not
+    the same as offline; a client renders it with no marking.
     """
     id: str = Field(..., description="Cluster id. The exact value a grant stores as cluster_id")
     name: str = Field(..., description="Display name; falls back to the id")
@@ -1094,7 +1044,7 @@ class AvailableCluster(BaseModel):
     @computed_field
     @property
     def available(self) -> Optional[bool]:
-        """Tri-state on purpose: True, False, or null when there is no status to judge."""
+        """True, False, or null when there is no status to judge."""
         if self.status is None:
             return None
         return self.status == ClusterStatus.ONLINE
@@ -1103,15 +1053,14 @@ class AvailableCluster(BaseModel):
 class AvailableClustersResponse(BaseModel):
     """Clusters an API key may be scoped to.
 
-    important: every cluster in the caller's org scope is listed, whatever its state. Dropping
-    the ones that are not answering is how a grant becomes invisible on the edit form, and an
-    invisible grant is one nobody can revoke.
+    Every cluster in the caller's org scope is listed, whatever its state, so a grant on an
+    unreachable cluster stays visible and revocable.
     """
     clusters: List[AvailableCluster]
 
 
 class NodeUpdateRequest(BaseModel):
-    """Request body for updating Cluster metadata; the legacy class name is retained."""
+    """Request body for updating Cluster metadata."""
     display_name: str = Field(..., min_length=1, description="Display name for the Cluster")
 
     class Config:
@@ -1123,7 +1072,7 @@ class NodeUpdateRequest(BaseModel):
 
 
 class NodeUpdateResponse(BaseModel):
-    """Response after a Cluster metadata update; wire names remain unchanged."""
+    """Response after a Cluster metadata update."""
     success: bool
     message: str
     node_name: str
@@ -1261,17 +1210,13 @@ class ProjectUpdateResponse(BaseModel):
     project: Optional[ProjectInfo] = None
 
 
-# Cluster Registration Models for Vault Integration
-
-
-
 # ========== Geo Location Models ==========
 
 class GeoLocation(BaseModel):
     """Geographic location information for a registered Cluster.
 
-    Also the shape stored locations are read back into, so it carries no constraint a location
-    saved before the constraint existed could fail. Input is checked by GeoLocationInput.
+    Also the shape stored locations are read back into, so it carries no constraint an older
+    stored location could fail. GeoLocationInput checks input.
     """
     region_id: str = Field(..., description="Region identifier (for example, 'id-3174' for Kota Administrasi Jakarta Selatan or 'c-sg' for Singapore). An id made of 'c-' and a lowercase ISO code stands for that whole country.")
     region_name: str = Field(..., description="Region display name (for example, 'Jakarta')")
@@ -1329,7 +1274,6 @@ class ClusterRegisterRequest(BaseModel):
     endpoint: str = Field(..., min_length=1, description="LXD API endpoint (for example, https://192.168.10.187:8443)")
     zone: Optional[str] = Field(None, description="Geographical or logical zone (legacy, use location instead)")
     merchant_id: Optional[str] = Field(None, description="Merchant/organization identifier")
-    # New geo location fields
     location: Optional[GeoLocationInput] = Field(None, description="Geographic location information")
 
     @field_validator("endpoint")
@@ -1337,20 +1281,15 @@ class ClusterRegisterRequest(BaseModel):
     def validate_endpoint(cls, v: str) -> str:
         """Validate endpoint is a proper URL with valid scheme, host, and format."""
         v = v.strip()
-        # Reject obviously invalid characters
         if re.search(r'[,\s<>{}|\\^`]', v):
             raise ValueError("Endpoint contains invalid characters (commas, spaces, etc.)")
         parsed = urlparse(v)
-        # Enforce http/https scheme
         if parsed.scheme not in ("http", "https"):
             raise ValueError("Endpoint must use http:// or https:// scheme")
-        # Validate hostname exists
         if not parsed.hostname:
             raise ValueError("Endpoint must include a valid hostname or IP address")
-        # Validate hostname characters (no commas, unicode, etc.)
         if not re.match(r'^[a-zA-Z0-9.\-]+$', parsed.hostname):
             raise ValueError("Endpoint hostname contains invalid characters")
-        # Validate IP address octets if hostname is an IP
         ip_match = re.match(r'^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$', parsed.hostname)
         if ip_match:
             octets = [int(ip_match.group(i)) for i in range(1, 5)]
@@ -1627,8 +1566,7 @@ class ClusterMonitoringMetrics(BaseModel):
             "never cached as offline for it"
         ),
     )
-    
-    # CPU Metrics
+
     cpu_total: Optional[int] = Field(0, description="Hardware threads")
     cpu_used: Optional[int] = Field(0, description="vCPUs allocated to running instances; may exceed cpu_total")
     cpu_usage_percent: Optional[float] = Field(0.0, description="Allocation as a percentage of threads; above 100 the Cluster is over-committed")
@@ -1652,22 +1590,19 @@ class ClusterMonitoringMetrics(BaseModel):
     cpu_reporting_instances: int = Field(
         0, description="Running instances whose CPU reading went into cpu_busy_threads"
     )
-    
-    # Memory Metrics
+
     memory_total_bytes: Optional[int] = Field(0, description="Total memory in bytes")
     memory_used_bytes: Optional[int] = Field(0, description="Used memory in bytes")
     memory_usage_percent: Optional[float] = Field(
         None, description="Memory usage percentage; None when the Cluster reported no memory total, as an offline one never does"
     )
-    
-    # Storage Metrics
+
     storage_total_bytes: Optional[int] = Field(0, description="Total storage in bytes")
     storage_used_bytes: Optional[int] = Field(0, description="Used storage in bytes")
     storage_usage_percent: Optional[float] = Field(
         None, description="Storage usage percentage; None when the Cluster reported no storage total"
     )
-    
-    # GPU Metrics
+
     gpu_total: Optional[int] = Field(0, description="Compute GPUs on this Cluster")
     gpu_used: Optional[int] = Field(0, description="Compute GPUs allocated to running instances")
     gpu_available: Optional[int] = Field(0, description="Compute GPUs free on this Cluster")
@@ -1676,8 +1611,7 @@ class ClusterMonitoringMetrics(BaseModel):
     gpu_display_total: Optional[int] = Field(0, description="Display-only controllers detected, for example a server's onboard VGA")
     gpu_models: List[str] = Field(default_factory=list, description="Models of the compute GPUs")
     gpu_utilization_supported: Optional[bool] = Field(False, description="LXD reports allocation only; there is no GPU telemetry")
-    
-    # Instance counts
+
     instance_count: int = Field(0, description="Total instances on this Cluster")
     running_instances: int = Field(0, description="Running instances on this Cluster")
     container_count: int = Field(0, description="Containers on this Cluster")
@@ -1717,8 +1651,8 @@ class InstanceMonitoringSummary(BaseModel):
         ),
     )
     memory_limit_bytes: int = Field(0, description="Memory limit in bytes")
-    # note: whether the instance's own config caps it. False means cpu_vcpus and
-    # memory_limit_bytes are the host's size, not a limit; None means not known.
+    # False means cpu_vcpus and memory_limit_bytes are the host's size, not a limit; None means
+    # not known.
     cpu_limit_set: Optional[bool] = Field(None, description="Whether limits.cpu caps this instance")
     memory_limit_set: Optional[bool] = Field(None, description="Whether limits.memory caps this instance")
     disk_usage_bytes: int = Field(0, description="Total disk usage in bytes")
@@ -1736,10 +1670,9 @@ class StoragePoolMetrics(BaseModel):
     """Metrics for a storage pool."""
     name: str = Field(..., description="Pool name")
     node: str = Field(..., description="Registered cluster this pool was read through")
-    # important: on a clustered host `node` is the cluster, not the machine holding the disk.
-    # Every row used to carry the cluster name and nothing else, so three members each with a
-    # pool called `local` were indistinguishable. `members` names where the bytes are and
-    # `scope` says whether the row was counted once for the whole cluster or summed per member.
+    # On a clustered host `node` is the cluster, not the machine holding the disk. `members`
+    # names where the bytes are and `scope` says whether the row was counted once for the whole
+    # cluster or summed per member.
     members: List[str] = Field(default_factory=list, description="Cluster members this pool was read from. A standalone host lists one entry, its own registered name")
     scope: Optional[str] = Field(None, description="'shared' when one backing store serves every member and the row is counted once, 'local' when per-member pools were summed. A standalone host reports 'local' for a local driver, its one member being itself")
     driver: str = Field(..., description="Storage driver")
@@ -1792,7 +1725,6 @@ class MonitoringDashboardResponse(BaseModel):
     """Complete monitoring dashboard response."""
     timestamp: datetime = Field(..., description="Response timestamp")
     
-    # Cluster Overview
     total_nodes: int = Field(0, description="Total registered Clusters")
     online_nodes: int = Field(0, description="Online Cluster count")
     inactive_nodes: int = Field(0, description="Inactive Cluster count")
@@ -1807,7 +1739,6 @@ class MonitoringDashboardResponse(BaseModel):
         None, description="Clusters in the caller's scope, reporting or not. None on a body cached by an older release"
     )
     
-    # Instance Overview
     total_instances: int = Field(0, description="Total instances")
     running_instances: int = Field(0, description="Running instances")
     stopped_instances: int = Field(0, description="Stopped instances")
@@ -1815,12 +1746,11 @@ class MonitoringDashboardResponse(BaseModel):
     container_count: int = Field(0, description="Container count")
     vm_count: int = Field(0, description="Virtual machine count")
     
-    # Aggregated Resource Metrics
     total_cpu: Optional[int] = Field(0, description="Total hardware threads across all Clusters")
     used_cpu: Optional[int] = Field(0, description="vCPUs allocated across all Clusters")
     cpu_usage_percent: Optional[float] = Field(0.0, description="CPU allocation percentage")
     
-    # CPU utilisation (from the instances' own counters)
+    # CPU utilisation, from the instances' own counters.
     realtime_cpu_percent: Optional[float] = Field(
         0.0, description="Deprecated alias of cpu_busy_percent, 0.0 while it is None"
     )
@@ -1846,7 +1776,6 @@ class MonitoringDashboardResponse(BaseModel):
         None, description="Overall memory usage percentage; None when no Cluster reported a memory total"
     )
     
-    # Real-time memory usage (from instance metrics)
     realtime_memory_bytes: Optional[int] = Field(
         0,
         description=(
@@ -1870,13 +1799,10 @@ class MonitoringDashboardResponse(BaseModel):
     total_gpu_integrated_cards: Optional[int] = Field(0, description="Integrated graphics among total_gpu_cards: attachable, not capacity")
     used_gpu: Optional[int] = Field(0, description="Used GPUs")
     
-    # Detailed Per-Node Metrics
     nodes: List[ClusterMonitoringMetrics] = Field(default_factory=list, description="Per-Cluster metrics")
     
-    # Storage Pools
     storage_pools: List[StoragePoolMetrics] = Field(default_factory=list, description="Storage pool details")
     
-    # Top Consumers
     consumers: List[InstanceMonitoringSummary] = Field(
         default_factory=list,
         description=(
@@ -1887,15 +1813,13 @@ class MonitoringDashboardResponse(BaseModel):
     top_cpu_consumers: List[InstanceMonitoringSummary] = Field(default_factory=list, description="Deprecated: top 20 by busy vCPUs; use consumers")
     top_memory_consumers: List[InstanceMonitoringSummary] = Field(default_factory=list, description="Deprecated: top 20 by memory; use consumers")
     
-    # Warnings Summary
     warnings: Optional[WarningsSummary] = Field(None, description="Warnings summary")
     
-    # Collection Metadata
     collection_time_ms: float = Field(0, description="Time taken to collect metrics in ms")
 
 
 # ============================================
-# Tag System Schemas (Enterprise-Grade)
+# Tag System Schemas
 # ============================================
 
 class TagCategoryBase(BaseModel):
@@ -2081,36 +2005,31 @@ class TagStatsResponse(BaseModel):
 
 class ExtendedHardwareInfo(BaseModel):
     """Extended hardware information for regions summary."""
-    # CPU details
     cpu_total: int = Field(0, description="Total hardware threads")
     cpu_sockets: int = Field(0, description="Number of CPU sockets")
     cpu_architecture: str = Field("x86_64", description="CPU architecture")
     cpu_vendor: Optional[str] = Field(None, description="CPU vendor (Intel, AMD, Apple, ARM)")
     cpu_model: Optional[str] = Field(None, description="CPU model name")
     
-    # Memory
     memory_total: int = Field(0, description="Total memory in bytes")
     memory_used: int = Field(0, description="Used memory in bytes")
     
-    # GPU
     gpu_total: int = Field(0, description="Compute GPUs (sellable; excludes display-only DRM cards)")
     gpu_cards_total: int = Field(0, description="Total DRM/GPU cards detected (incl. display controllers)")
     gpu_integrated_total: int = Field(0, description="Integrated graphics cards: attachable, not capacity")
     gpu_vendors: List[str] = Field(default_factory=list, description="Vendors of the compute GPUs")
     gpu_models: List[str] = Field(default_factory=list, description="Models of the compute GPUs")
     
-    # Storage
     storage_total: int = Field(0, description="Total storage in bytes")
     storage_used: int = Field(0, description="Used storage in bytes")
     storage_types: List[str] = Field(default_factory=list, description="Storage types (NVMe, SATA, SSD)")
     storage_drivers: List[str] = Field(default_factory=list, description="Storage drivers (zfs, btrfs, ceph)")
     
-    # Network
     network_interfaces: List[str] = Field(default_factory=list, description="Network interfaces")
 
 
 class RegionNodeInfo(BaseModel):
-    """Registered Cluster information within a region; wire names remain unchanged."""
+    """Registered Cluster information within a region."""
     cluster_id: str
     display_name: str
     status: ClusterStatus
@@ -2136,19 +2055,16 @@ class RegionSummary(BaseModel):
     facility_name: Optional[str] = Field(None, description="Data center or facility name")
     facility_provider: Optional[str] = Field(None, description="Facility provider/operator")
     
-    # Aggregated stats
     node_count: int = Field(0, description="Number of registered Clusters in this region")
     instance_count: int = Field(0, description="Total instances across all Clusters")
     instance_running: int = Field(0, description="Running instances")
     
-    # Hardware summary
     hardware: Optional[ExtendedHardwareInfo] = Field(
         None,
         description="Sum over the clusters whose hardware was read; None when none was, and "
         "always for a Tenant",
     )
     
-    # Node details
     nodes: List[RegionNodeInfo] = Field(default_factory=list)
 
 
@@ -2157,7 +2073,7 @@ class RegionsOverviewResponse(BaseModel):
     regions: List[RegionSummary] = Field(default_factory=list)
     total_nodes: int = Field(0)
     total_instances: int = Field(0)
-    # note: the hardware totals are None for a Tenant, not 0. Zero would claim an empty fleet.
+    # A Tenant gets None for the hardware totals; 0 would claim an empty fleet.
     total_cpu: Optional[int] = Field(0)
     total_memory: Optional[int] = Field(0)
     total_storage: Optional[int] = Field(0)
@@ -2210,17 +2126,14 @@ class SnapshotInfo(BaseModel):
     size: Optional[int] = Field(None, description="Size in bytes where the storage driver reports it")
     architecture: Optional[str] = Field(None, description="Instance architecture at capture time")
     operator_managed: bool = Field(False, description="True when Orcastra created it, identified by the ops- prefix")
-    # important: the service stamps this on every row, and a model without the field drops it
-    # silently. "Nobody asked the cluster for a size" and "the cluster was asked and reported
-    # none" are different facts, and the console renders them differently; losing the flag here
-    # would make this route the one surface that cannot tell them apart.
+    # important: declared so the flag the service stamps on every row survives the response
+    # model. "Not measured" and "measured, none reported" render differently in the console.
     size_measured: Optional[bool] = Field(
         None,
         description="Whether the size was actually read from the cluster, as opposed to not measured",
     )
-    # important: must be present on THIS route as well as the fleet one. The console decides
-    # which gate a destructive action faces from this field, and degrades closed when it is
-    # absent, so a per-instance listing without it disables every row on the detail tab.
+    # important: the console picks the gate for a destructive action from `origin` and degrades
+    # closed when it is absent, so without it every row on the instance's snapshot tab is disabled.
     origin: Optional[str] = Field(
         None,
         description=(
@@ -2240,10 +2153,9 @@ class SnapshotCreateRequest(BaseModel):
     host: str = Field(..., description="Cluster the instance lives on")
     project: str = Field("default", description="LXD project the instance lives in")
     label: str = Field(..., min_length=1, max_length=48, description="Short human label, folded into the generated ops- name")
-    # note: mirrors DEFAULT_EXPIRY_DAYS and MAX_EXPIRY_DAYS in services/lxd/snapshots.py, which
-    # is the source of truth. Not imported: this module is loaded early and pulling the LXD service
-    # package in from here inverts the dependency. test_an_operator_snapshot_carries_its_own_expiry
-    # asserts the two agree, so a change to one that skips the other fails rather than drifts.
+    # Mirrors DEFAULT_EXPIRY_DAYS and MAX_EXPIRY_DAYS in services/lxd/snapshots.py, the source of
+    # truth. Not imported: this module loads early, and importing the LXD service package here
+    # inverts the dependency. test_an_operator_snapshot_carries_its_own_expiry asserts they agree.
     expiry_days: int = Field(
         7,
         ge=1,
@@ -2289,9 +2201,8 @@ class SnapshotCreateResponse(SnapshotActionResponse):
     def require_operation_for_pending_snapshot(self):
         """A pending result must give the caller an operation it can correlate.
 
-        A synchronous LXD response legitimately has no operation id, but it is already complete.
-        Pending without an id is an unverifiable acceptance and must never satisfy this public
-        response contract.
+        A synchronous LXD response has no operation id but is already complete. A pending result
+        without one could never be verified.
         """
         if self.status == "pending" and not self.operation_id:
             raise ValueError("operation_id is required when snapshot creation is pending")

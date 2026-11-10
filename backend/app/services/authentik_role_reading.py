@@ -1,21 +1,14 @@
 """A user's current role, as the dashboard's RBAC resolves it, read from Authentik, or unknown.
 
-get_user_role_groups answers an empty set for a user search that did not answer 200 and for an
-email the search did not return, and it keeps only the three role_* names. Its member-sync callers
-read that as "holds no role group", which is safe for a grant. A caller that refuses something to
-an Admin cannot read it that way: an expired token, a 429 or a proxy 502 made an Admin look like a
-partner, and so did an Admin whose group is one of the aliases rbac.py maps to Admin.
-
-Here each of these is an explicit unknown (roles None, with a reason):
-  * the user search or the detail read failing, timing out or answering anything but 200
-  * a body that is not the expected shape, or a result page that does not hold every match
-  * an email no account carries, or one that two accounts carry
-  * an account Authentik has disabled
-Otherwise the account's groups go through rbac.roles_for_group_names, the resolver a request's
-groups claim goes through, so an Admin through any alias group is an Admin.
-
-note: the email matches case-insensitively, like _find_user_pk. Authentik does not make an email
-unique, so two accounts carrying it in any case are ambiguous rather than "the first one".
+get_user_role_groups reads a failed search or a missing email as an empty set and keeps only the
+three role_* names: safe for member sync's grants, not for a caller that refuses something to an
+Admin, where a failed read (expired token, 429, proxy 502), or an Admin through an alias group
+rbac.py maps to Admin, would look like a Partner. Here each of these is an explicit unknown (roles
+None, with a reason): a search or detail read that fails, times out or answers anything but 200; a
+body of the wrong shape or a result page that does not hold every match; an email no account
+carries, or that two accounts carry in any case; a disabled account. Otherwise the groups go through
+rbac.roles_for_group_names, the resolver a request's groups claim goes through. The email matches
+case-insensitively, like _find_user_pk.
 """
 
 import logging
@@ -46,8 +39,8 @@ class CurrentRoleReader(Protocol):
     async def read_current_roles(self, user_email: str) -> RoleReading: ...
 
 
-# Readings that are an answer about the account, not a failure to get one. Two accounts carrying
-# the email is one too: the identity is no longer pinned to one person.
+# Readings that answer for the account rather than report a failed read. Two accounts carrying
+# the email is one: the identity does not name a single person.
 ENDED_REASONS = frozenset({"user_not_found", "user_inactive", "email_ambiguous"})
 
 
@@ -87,7 +80,7 @@ async def find_account(
     """Find the single account carrying `email`, strictly. Shared by the role read and the removal."""
     wanted = (email or "").strip().lower()
     if not wanted:
-        # note: an empty search lists every account, and one with no email would match it.
+        # An empty search lists every account, and one with no email would match it.
         return AccountLookup(None, "email_missing")
 
     search = await client.get(f"{api_url}/core/users/", params={"search": email.strip()}, headers=dict(headers))
@@ -99,7 +92,7 @@ async def find_account(
         return AccountLookup(None, "user_search_unreadable")
     pagination = page.get("pagination") if page else None
     count = pagination.get("count") if isinstance(pagination, dict) else None
-    # important: a second account with this email on a page not returned would go unseen
+    # important: a second account with this email on a page not returned would go unseen.
     if not _is_count(count) or count != len(results):
         return AccountLookup(None, "user_search_incomplete")
 
@@ -130,7 +123,7 @@ async def _read(
         return unknown_role("user_detail_failed")
     record = _json_object(detail)
     if record and record.get("is_active") is False:
-        # note: a disabled account keeps its groups; it holds no role while disabled.
+        # A disabled account keeps its groups; it holds no role while disabled.
         return unknown_role("user_inactive")
     groups = record.get("groups_obj") if record else None
     if not isinstance(groups, list):

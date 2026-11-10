@@ -1,7 +1,6 @@
 """Live metrics for one running instance, as served to the instance dialog and console bar.
 
-note: re-exported from app.models.schemas so existing imports keep working. It lives here so
-the metrics contract can grow without growing schemas.py.
+Re-exported from app.models.schemas, so either import path works.
 """
 
 from datetime import datetime, timezone
@@ -38,8 +37,8 @@ class InstanceMetrics(BaseModel):
     sample_window_seconds: Optional[float] = Field(
         None, description="Length of the window behind the CPU and network rates"
     )
-    # note: whether the instance's own config caps it. False means cpu_effective_vcpus and
-    # memory_total_bytes are the host's size, not a limit; None means not known.
+    # False means cpu_effective_vcpus and memory_total_bytes are the host's size because no
+    # limit applies; None means unknown.
     cpu_limit_set: Optional[bool] = Field(None, description="Whether limits.cpu caps this instance")
     memory_limit_set: Optional[bool] = Field(None, description="Whether limits.memory caps this instance")
     memory_used_bytes: int = Field(0, description="Memory currently used in bytes")

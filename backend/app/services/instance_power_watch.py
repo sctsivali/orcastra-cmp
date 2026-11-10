@@ -1,15 +1,14 @@
 """Tells an interactive console when its instance powered down.
 
-important: LXD does not end a serial console operation when a VM's QEMU process exits. After a
-restart the console's websocket stayed open and kept answering pings, while the new boot went to
-a new QEMU process nobody was attached to, so the page said "Connected" over a console that never
-printed again. The SPICE sockets do drop, but as a bare connection loss. LXD's lifecycle events
-say what happened: instance-shutdown (graceful) or instance-stopped (forced) as the old process
-goes, for a restart from the API, a forced restart and `reboot` inside the guest alike (measured
-2026-10-30 on LXD 5.21). The console relay ends on either and closes with 1012; the browser
-reconnects once the instance runs again.
+LXD does not end a serial console operation when a VM's QEMU process exits. After a restart the
+console websocket stays open and keeps answering pings while the new boot goes to a new QEMU
+process with nothing attached, so the page would show "Connected" over a silent console. The SPICE
+sockets do drop, but only as a bare connection loss. LXD's lifecycle events say what happened:
+instance-shutdown (graceful) or instance-stopped (forced) as the exiting process goes, for an API
+restart, a forced restart and `reboot` inside the guest alike (LXD 5.21). The console relay ends on
+either and closes with 1012; the browser reconnects once the instance runs again.
 
-instance-restarted and instance-started are not reasons: they arrive once the new process is up,
+instance-restarted and instance-started are not used: they arrive once the new process is up,
 possibly after the browser already attached to it.
 """
 

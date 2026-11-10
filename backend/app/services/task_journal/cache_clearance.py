@@ -1,24 +1,17 @@
 """Clear the console's list caches when a cluster reports a change made outside the console.
 
 A change made on the cluster itself (the `lxc` CLI, the LXD UI, another client) passes no route
-and no settle waiter, so the cached lists kept the old state until their TTL. The elected journal
-follower starts one `CacheClearance`. It holds its own firehose subscription per registered
-cluster, maps each lifecycle action to the cache families it changes, and clears a family at most
-once per interval: at once on the leading edge, and once more on a trailing edge so the last
-event of a burst still clears.
+and no settle waiter, so cached lists would keep the previous state until their TTL. The elected
+journal follower starts one `CacheClearance`: a firehose subscription per registered cluster
+(except TASK_JOURNAL_EXCLUDE_CLUSTERS, registered read-only for inspection and left to converge on
+the TTL), each lifecycle action mapped to the cache families it changes, and at most one clear per
+family per interval (`Coalescer`).
 
-note: clusters in TASK_JOURNAL_EXCLUDE_CLUSTERS are not followed here either. They are, by that
-setting's own description, clusters registered read-only for inspection (a partner's production
-cluster in a development deployment); holding an always-on event stream open to one is a
-decision for its owner, not a side effect of a cache. Their lists converge on the TTL.
-
-important: independent of the journal writer. A database stall must not delay a clear, so nothing
-here reads or writes the database. The dashboard's identities come from its certificate alone,
-so a frame from a superseded certificate still in its grace period counts as external and
-clears, which is the safe direction.
-
-important: every clear runs on this module's single thread. `delete_pattern` walks Redis with a
-sync SCAN, and on the event loop it would stall every request this worker serves.
+important: nothing here may read or write the database, so a database stall cannot delay a clear,
+and every clear runs on this module's single thread, because `delete_pattern` walks Redis with a
+sync SCAN that would stall the loop. Identities come from the dashboard's certificate alone, so a
+frame from a superseded certificate still in its grace period counts as external and clears, the
+safe direction.
 """
 
 from __future__ import annotations
@@ -49,9 +42,9 @@ STORAGE_POOLS = "storage_pools"
 PROFILES = "profiles"
 PROJECTS = "projects"
 
-# note: the instance lists are the fast tier, everything else the slow one. The frontend hides a
-# deleted row for DELETED_EVENT_GRACE_MS (lib/instance-reconciliation.ts), which must cover the
-# lists' interval.
+# The instance lists are the fast tier, everything else the slow one. The frontend hides a deleted
+# row for DELETED_EVENT_GRACE_MS (lib/instance-reconciliation.ts), which must cover the lists'
+# interval.
 LISTS_INTERVAL_S = 10.0
 FAMILY_INTERVAL_S = 30.0
 REGISTRY_INTERVAL_S = 30.0
@@ -61,9 +54,9 @@ STOP_FLUSH_S = 5.0
 _INSTANCE_TIER = (INSTANCE_LISTS, INSTANCES)
 
 # Lifecycle actions, named as in LXD's shared/api/event_lifecycle.go, mapped to the cache families
-# they change. Anything absent is ignored, on purpose for exec, console, file, log, metadata,
-# backup, image-retrieved, cluster-* and warning-*.
-# note: LXD reports a snapshot restore as `instance-restored`; `instance-snapshot-restored` is the
+# they change. Unlisted actions are ignored, including exec, console, file, log, metadata, backup,
+# image-retrieved, cluster-* and warning-*.
+# LXD reports a snapshot restore as `instance-restored`; `instance-snapshot-restored` is the
 # journal vocabulary's name for it (vocabulary.LIFECYCLE_TO_ACTION) and is kept so both agree.
 ACTION_FAMILIES: Dict[str, Tuple[str, ...]] = {
     "instance-created": _INSTANCE_TIER,
@@ -79,7 +72,7 @@ ACTION_FAMILIES: Dict[str, Tuple[str, ...]] = {
     "instance-snapshot-created": (SNAPSHOTS,),
     "instance-snapshot-deleted": (SNAPSHOTS,),
     "instance-snapshot-restored": (SNAPSHOTS,),
-    # A restore rewrites the instance itself (state, config), not only its snapshot list.
+    # A restore also rewrites the instance itself (state, config).
     "instance-restored": (INSTANCE_LISTS, SNAPSHOTS),
     "image-created": (IMAGES,),
     "image-deleted": (IMAGES,),
@@ -149,7 +142,7 @@ def _describe(host: str, frame: Mapping[str, Any]) -> str:
 def is_dashboard_request(requestor: Any, dashboard: FrozenSet[str]) -> bool:
     """True only for a TLS requestor that is one of this dashboard's own identities.
 
-    note: requestor_kind also answers "system" for a frame without a requestor block. That one is
+    requestor_kind also answers "system" for a frame without a requestor block; that frame is
     unknown here, and unknown clears.
     """
     return isinstance(requestor, Mapping) and requestor_kind(requestor, dashboard)[0] == "system"
@@ -311,9 +304,9 @@ class CacheClearance:
         return self._coalescer.pending()
 
     def _submit(self, family: str) -> None:
-        # note: at most one clear per family queued or running. With Redis down each clear blocks
-        # the thread for its socket timeouts, and an unbounded queue of them would only grow; a
-        # note while one runs asks for exactly one more after it, which covers what it missed.
+        # At most one clear per family queued or running. With Redis down each clear blocks the
+        # thread for its socket timeouts, so an unbounded queue would only grow; a note while one
+        # runs asks for exactly one more after it, which covers what it missed.
         if family in self._running:
             self._again.add(family)
             return
@@ -333,8 +326,8 @@ class CacheClearance:
             self._submit(family)
 
     def _run_clear(self, family: str) -> None:
-        # note: one line per clear, and clears are coalesced (at most every 10 s or 30 s per
-        # family), so this says what keeps a list cold without flooding the log.
+        # One log line per clear. Clears are coalesced (at most every 10 s or 30 s per family), so
+        # this shows what keeps a list cold without flooding the log.
         trigger = self._triggers.pop(family, "marked dirty")
         noted = self._noted.pop(family, 0)
         try:

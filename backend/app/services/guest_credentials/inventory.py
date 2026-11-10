@@ -1,8 +1,8 @@
 """What the inventory script printed, as facts about the guest and the accounts a person logs in with.
 
 Local accounts only, read from /etc/passwd and the shadow summary, never from `getent`: a directory
-entry (LDAP, SSSD) can shadow a local one, and chpasswd and usermod change the local files. An
-account the panel lists is therefore an account the panel's changes actually reach.
+entry (LDAP, SSSD) can shadow a local one, and chpasswd and usermod change the local files. Every
+account the panel lists is one its changes reach.
 
 Everything here is guest output and untrusted: every field is validated, a malformed line is
 dropped, and nothing guest-written is put in a log.

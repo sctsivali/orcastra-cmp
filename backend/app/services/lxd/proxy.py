@@ -1,12 +1,9 @@
-"""
-Runtime for the external (OrcaHub) LXD proxy endpoints.
+"""Runtime settings and thread pools for the external LXD proxy endpoints.
 
-The proxy reaches into ``client.api.session`` directly, which bypasses pylxd's ``_APINode``
-and therefore bypasses the timeout ``_APINode`` injects into every call. This module
-re-applies that timeout explicitly at the call site, and owns a dedicated thread pool so
-externally triggered traffic can never pin the pools the dashboard's own requests use.
-
-All tunables are env-overridable so an incident can be mitigated without a rebuild.
+The proxy calls ``client.api.session`` directly, which bypasses pylxd's ``_APINode`` and the
+timeout it injects into every call, so this module applies that timeout at the call site. It
+also owns dedicated thread pools, so externally triggered traffic cannot pin the pools the
+dashboard's own requests use. Every tunable can be overridden from the environment.
 """
 
 import logging
@@ -37,10 +34,9 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-# important: OrcaHub traffic gets its own pool. Sharing the loop's default executor would put
-# it where FastAPI runs sync route handlers, and sharing _blocking_executor would put it where
-# the dashboard's own LXD fan-outs run. Either lets an external caller starve the operator
-# console. The thread_name_prefix means the next thread dump names the pool.
+# important: external proxy traffic gets its own pool. The loop's default executor runs FastAPI's
+# sync route handlers and _blocking_executor runs the dashboard's own LXD fan-outs; sharing either
+# lets an external caller starve the operator console.
 PROXY_POOL_WORKERS = _env_int("ORCASTRA_PROXY_POOL_WORKERS", 8)
 PROXY_MAX_IN_FLIGHT = _env_int("ORCASTRA_PROXY_MAX_IN_FLIGHT", PROXY_POOL_WORKERS * 4)
 
@@ -48,51 +44,45 @@ proxy_executor = ThreadPoolExecutor(
     max_workers=PROXY_POOL_WORKERS, thread_name_prefix="integrations_proxy"
 )
 
-# note: API key validation gets its own pool. Sharing proxy_executor would mean a saturated
-# proxy pool also blocks authentication for every other external endpoint, including the
-# image upload surface, which has nothing to do with the cluster that went silent.
+# API key validation gets its own pool, so a saturated proxy pool cannot block authentication
+# for every other external endpoint, image uploads included.
 AUTH_POOL_WORKERS = _env_int("ORCASTRA_AUTH_POOL_WORKERS", 4)
 auth_executor = ThreadPoolExecutor(
     max_workers=AUTH_POOL_WORKERS, thread_name_prefix="integrations_auth"
 )
 
-# Deliberately below the ~16s worst case of a single Vault call (timeout (2,3) with
-# Retry(total=2) is 3 attempts plus backoff). A healthy Vault answers in tens of
-# milliseconds, so waiting out its retries only converts a Vault blip into a loop stall.
+# Below the ~16s worst case of a single Vault call (timeout (2,3) with Retry(total=2) is 3
+# attempts plus backoff). A healthy Vault answers in tens of milliseconds; waiting out its
+# retries only turns a Vault blip into a loop stall.
 VALIDATE_KEY_TIMEOUT = _env_float("ORCASTRA_VALIDATE_KEY_TIMEOUT", 8.0)
 
 # How long validated key metadata may be served from process memory. A revoked key keeps
 # working for at most this long unless it is evicted explicitly, which revoke_api_key does.
 API_KEY_CACHE_TTL = _env_float("ORCASTRA_API_KEY_CACHE_TTL", 30.0)
 
-# last_used_at only needs minute-level resolution. Writing it per request costs 2 Vault reads
-# plus a write, and the write invalidates the read cache for that exact path, so the next
-# request is guaranteed a cache miss. That is a self-inflicted permanent-miss loop.
+# last_used_at only needs minute-level resolution. A per-request write costs 2 Vault reads plus
+# a write, and the write invalidates the read cache for that path, so every request would miss.
 LAST_USED_WRITE_INTERVAL = _env_float("ORCASTRA_LAST_USED_WRITE_INTERVAL", 300.0)
 
-# Wall-clock caps. These bound how long the CALLER waits. The socket timeout below is what
-# actually frees the worker thread, and with read retries disabled it is the primary bound
-# (~connect + read). These caps are the backstop for everything else in the call path.
+# Wall-clock caps on how long the caller waits. The socket timeout (socket_timeout_for) is what
+# frees the worker thread; with read retries disabled it is the primary bound (about connect +
+# read). These caps back up everything else in the call path.
 RAW_PROXY_TIMEOUT = _env_float("ORCASTRA_RAW_PROXY_TIMEOUT", 20.0)
 PROXY_CONNECT_TIMEOUT = _env_float("ORCASTRA_PROXY_CONNECT_TIMEOUT", 15.0)
 PROXY_OP_TIMEOUT = _env_float("ORCASTRA_PROXY_OP_TIMEOUT", 60.0)
 
-# An exec holds a proxy worker for its whole run, so it gets its own budget rather than borrowing
-# the operation one. Deliberately short: a command that needs longer than this is a job, not a
-# request, and should be started by the caller in a way that survives the connection.
+# An exec holds a worker for its whole run, so it has its own budget. Kept short: a command that
+# needs longer is a job, which the caller should start in a way that survives the connection.
 EXEC_TIMEOUT = _env_float("ORCASTRA_EXEC_TIMEOUT", 30.0)
 
-# Per stream. Nothing on this surface capped a response before, and exec output is caller-chosen:
-# `cat /dev/urandom` would otherwise stream until the timeout with the whole buffer held in the
-# worker's memory. The response says when it truncated.
+# Per stream. Exec output is caller-chosen: `cat /dev/urandom` would otherwise stream until the
+# timeout with the whole buffer held in the worker's memory. The response says when it truncated.
 EXEC_OUTPUT_LIMIT = _env_int("ORCASTRA_EXEC_OUTPUT_LIMIT", 256 * 1024)
 
-# important: exec gets its own pool, small and separate. run_blocking's own contract says the
-# worker thread keeps running after the caller gives up, until fn's per-attempt socket timeout
-# fires (core/blocking.py), and pylxd's exec polls its operation over a websocket with no such
-# bound. So a runaway command holds a thread until it ends, and on the shared proxy pool eight of
-# them would take every read, every raw proxy call and every fan-out with them. On its own pool
-# the blast radius of a runaway exec is other execs. Same reasoning that gave auth its own pool.
+# important: exec gets its own small pool. A worker keeps running after the caller gives up
+# until its socket timeout fires (core/blocking.py), and pylxd's exec polls over a websocket with
+# no such bound, so a runaway command holds a thread until it ends. On the shared proxy pool
+# eight of them would block every read, raw proxy call and fan-out; here only other execs wait.
 EXEC_POOL_WORKERS = _env_int("ORCASTRA_EXEC_POOL_WORKERS", 4)
 EXEC_MAX_IN_FLIGHT = _env_int("ORCASTRA_EXEC_MAX_IN_FLIGHT", EXEC_POOL_WORKERS)
 
@@ -100,21 +90,20 @@ exec_executor = ThreadPoolExecutor(
     max_workers=EXEC_POOL_WORKERS, thread_name_prefix="integrations_exec"
 )
 
-# stdin exists so a caller does not have to stuff data into argv, which is worse for quoting and
-# worse for the audit record. It is not a file upload; that is what instance.files is for.
+# stdin spares a caller stuffing data into argv, which is worse for quoting and for the audit
+# record. File uploads go through instance.files.
 EXEC_STDIN_LIMIT = _env_int("ORCASTRA_EXEC_STDIN_LIMIT", 64 * 1024)
 
-# File transfer inside a guest. Shares the exec pool and the exec timeout, because it is the same
-# kind of act against the same guest and splitting the budget would only mean two ways to hold a
-# worker.
+# File transfer inside a guest. Shares the exec pool and the exec timeout: it is the same kind of
+# act against the same guest.
 #
-# important: the read cap is enforced as chunks ARRIVE, for the same reason exec's is. pylxd's
-# FilesManager.get is `return response.content`, which buffers the whole body with no bound
-# (pylxd/models/instance.py), so `get_file` on /dev/zero or a 40 GiB image would grow a worker's
-# memory until it died. The bounded reader in guest_files.py is why this surface does not call it.
+# important: the read cap is enforced as chunks arrive. pylxd's FilesManager.get is
+# `return response.content`, which buffers the whole body with no bound
+# (pylxd/models/instance.py), so `get_file` on /dev/zero would grow a worker's memory until it
+# died. guest_files.py reads through a bounded reader instead.
 #
-# Larger than EXEC_OUTPUT_LIMIT because a file has a legitimate reason to be big and a command's
-# stdout usually does not. Still bounded, and the response says when it truncated.
+# Larger than EXEC_OUTPUT_LIMIT: a file has a legitimate reason to be big and a command's stdout
+# usually does not. The response says when it truncated.
 FILE_READ_LIMIT = _env_int("ORCASTRA_FILE_READ_LIMIT", 4 * 1024 * 1024)
 
 # What a caller may push in. Bounded separately from the read: a write is caller-chosen in a way a
@@ -135,8 +124,8 @@ ALLOWED_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 def socket_timeout_for(client: Any) -> Tuple[int, int]:
     """Per-attempt (connect, read) the pooled pylxd client was built with.
 
-    Reused rather than hardcoded so proxy traffic behaves identically to every other LXD call
-    and self-corrects if the pool timeout is ever retuned.
+    Read from the client, not hardcoded, so proxy traffic follows the same timeout as every other
+    LXD call.
     """
     configured = getattr(getattr(client, "api", None), "_timeout", None)
     if isinstance(configured, (tuple, list)) and len(configured) == 2:
@@ -153,17 +142,14 @@ def raw_request(
 ) -> requests.Response:
     """Blocking half of raw_proxy. Only ever runs on proxy_executor, never on the event loop.
 
-    important: redirects are not followed. `requests` follows them by default and does not remove
-    dot segments from a path, so a caller-supplied `..` reached LXD, whose Go mux cleans the path
-    and answers 301, and the client then followed that redirect to a location outside `/1.0` with
-    the cluster's mTLS client certificate attached. Refusing to follow means the caller sees the
-    301 and the credential never travels anywhere it was not authorised to go. Nothing in this
-    proxy has a legitimate need for a redirect: every path is a direct LXD API endpoint.
+    important: redirects are never followed. `requests` does not remove dot segments from a
+    path, so a caller-supplied `..` reaches LXD, whose Go mux cleans the path and answers 301;
+    following it would send the cluster's mTLS client certificate to a location outside `/1.0`.
+    Every path here is a direct LXD API endpoint, so no call needs a redirect.
 
-    note: `timeout=` is spelled out on every call rather than collapsed into a **kwargs dict.
-    `tests/test_no_untimed_http_calls.py` reads these statements with the AST and cannot see
-    through a dict, so folding them would silently retire a ratchet that exists to stop an
-    untimed call from parking a worker forever.
+    `timeout=` is spelled out on every call rather than passed through a **kwargs dict:
+    `tests/test_no_untimed_http_calls.py` reads these calls with the AST and cannot see through
+    a dict.
     """
     if method == "GET":
         return session.get(url, verify=False, timeout=timeout, allow_redirects=False)

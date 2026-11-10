@@ -1,21 +1,15 @@
 """Instance snapshot endpoints (dashboard, JWT).
 
-Operator rollback points, not the tenant snapshot product. OrcaHub sells snapshots as a metered
-per-GB service and drives them through `/integrations/raw-proxy`; this surface exists for the
-different job of an operator taking a restore point before risky maintenance, which previously
-meant leaving the console and running `lxc snapshot` over SSH.
-
-Three rules follow from that split and are load-bearing:
+Operator rollback points taken before risky maintenance. The tenant snapshot product is separate:
+OrcaHub meters it per GB and drives it through `/integrations/raw-proxy`. Three rules follow:
 
 * Everything created here is named `ops-...` and carries an LXD `expires_at`, so LXD prunes it
-  whether or not this service is running, and so the snapshot is identifiable as operator work
-  by anyone reading the cluster.
+  without this service and anyone reading the cluster can tell it is operator work.
 * `snapshots.schedule` and `snapshots.expiry` are read and never written. They are OrcaHub's
-  retention mechanism for a schedule a tenant pays for, and a write here would leave its ledger
-  disagreeing with the cluster.
-* A source carrying an external schedule is badged and the caller warned, but not blocked.
-  Refusing does not prevent the snapshot, it moves it back to an SSH session where neither
-  product can see it.
+  retention for a schedule a tenant pays for; a write here would leave its ledger disagreeing
+  with the cluster.
+* A source with an external schedule is badged and the caller warned, but not blocked. A refusal
+  would only move the snapshot to an SSH session that neither product can see.
 """
 import logging
 from contextlib import asynccontextmanager
@@ -127,11 +121,8 @@ def _invalidate_snapshot_views(host: str, project: str, instance_name: str) -> N
     the next read measures one holder instead of every holder on every cluster.
     """
     cache = get_cache_manager()
-    # Keep each family as an independent call. Cache implementations have always accepted a
-    # single family, and several integrations provide that narrow protocol rather than the
-    # concrete CacheManager. The production manager supports varargs, but relying on that detail
-    # turned an otherwise correct snapshot response into a 500 after LXD had already accepted the
-    # mutation.
+    # important: one family per call. Some cache implementations accept a single family only, and
+    # a failure here turns a mutation LXD already accepted into a 500.
     cache.invalidate_resource_cache("snapshots_fleet")
     cache.invalidate_resource_cache("storage_pool_resources")
     fleet_sizes.forget_holder(cache, host, project, instance_name)
@@ -145,11 +136,11 @@ def _invalidate_after_restore(host: str, project: str, instance_name: str) -> No
 
 
 def _blocking(fn, *args, label: str, **kwargs):
-    """Every LXD call here goes off the event loop on the shared proxy pool.
+    """Run an LXD call off the event loop on the shared proxy pool.
 
-    important: the pooled client's own socket timeout is what actually frees the worker
-    thread. run_blocking only frees the caller, so a call without a bounded socket read
-    would leak the thread even though the request returned promptly.
+    important: only the pooled client's socket timeout frees the worker thread. run_blocking
+    frees the caller, so a call without a bounded socket read leaks the thread after the
+    request has returned.
     """
     return run_blocking(
         fn,
@@ -165,9 +156,9 @@ def _blocking(fn, *args, label: str, **kwargs):
 def _assert_snapshot_surface_enabled() -> None:
     """Refuse a tenant outright while this deployment has not enabled tenant snapshots.
 
-    Split from _enforce_snapshot_access because the two halves answer different questions and the
-    fleet read needs only this one. Asking the scope-specific half there would 403 a tenant who
-    holds grants on two of five clusters, when the right answer is those two clusters' rows.
+    Separate from _enforce_snapshot_access because the fleet read needs only this half. The
+    scope-specific half would 403 a tenant with grants on two of five clusters, who should get
+    those two clusters' rows.
     """
     if not tenant_acl_active():
         return
@@ -188,13 +179,11 @@ def _enforce_snapshot_access(
     """Authorize a snapshot action for the current caller.
 
     A no-op for Admin and Partner, who carry no tenant ACL. For a tenant the `snapshot`
-    permission is honoured only when its own flag is on: the permission has been granted by
-    OrcaHub's sync for a long time while nothing enforced it, so a large number of live grants
-    would otherwise have activated the moment this shipped.
+    permission is honoured only when its own flag is on: OrcaHub's sync grants it widely, so
+    without the flag every existing grant would take effect at once.
 
-    important: called before the try in every handler. Raised inside one, the 403 is swallowed
-    by the generic except and re-raised as a 500, which reads as a broken server rather than a
-    refusal.
+    important: call it before the handler's try. Raised inside one, the 403 is caught by the
+    generic except and re-raised as a 500.
     """
     scoped_project = verify_project_access(host, project)
     verify_tenant_permission(host, scoped_project, instance_name, "view")
@@ -210,15 +199,13 @@ def _enforce_snapshot_access(
 def _validated_target(snapshot_name: str) -> str:
     """Refuse a name that cannot safely become a request path, and return the validated form.
 
-    important: input validation only. It used to carry the ownership rule too, which is what
-    refused an operator their own hand-taken snapshot; ownership is now `_gate_ownership`. pylxd
-    interpolates the name into the LXD URL with no escaping (`_APINode.__getitem__`), so this
-    applies to every class, not only the ones the console owns.
+    Input validation only; ownership is `_gate_ownership`. pylxd interpolates the name into the
+    LXD URL with no escaping (`_APINode.__getitem__`), so this applies to every snapshot class,
+    including ones the console does not own.
 
-    important: the RETURN VALUE is what the caller must use. The validator normalises before it
-    checks, so discarding it meant a name was approved in one form and sent to the daemon in
-    another: `" ops-target "` was validated as `ops-target` and then addressed with its spaces
-    intact, which is a 404 on a snapshot that exists.
+    important: callers must use the return value. The validator normalises before it checks, so
+    `" ops-target "` is approved as `ops-target`; sending the raw name, spaces intact, is a 404 on
+    a snapshot that exists.
     """
     try:
         return snapshots_service.assert_snapshot_name(snapshot_name)
@@ -245,11 +232,10 @@ def _gate_ownership(
     acknowledged_upstream: bool = False,
     reason: Optional[str] = None,
 ) -> Optional[str]:
-    """Ownership decision plus the audit the refusal owes.
+    """Apply the ownership gate and record a refusal.
 
-    important: a denial here used to be invisible. `_gate_billing` records `result="denied"` and
-    this one raised straight through, so the most alert-worthy refusal on the surface left no
-    trace. Same wrapper shape, for the same reason.
+    A denial is audited with `result="denied"`, like `_gate_billing`: it is the most alert-worthy
+    refusal on this surface.
     """
     origin = snapshots_service.classify_snapshot_origin(snapshot_name)
     try:
@@ -275,8 +261,8 @@ def _gate_ownership(
 async def _read_root_pool_driver(client, instance_name: str, project: str) -> Optional[str]:
     """The root disk's storage driver, or None when it cannot be read.
 
-    note: unknown proceeds as before. The daemon's own refusal is reported (wait_for_operation reads
-    a failed operation back), at the cost of the safety copy staying behind.
+    An unknown driver does not block the restore. The daemon's own refusal is still reported
+    (wait_for_operation reads a failed operation back), but the safety copy stays behind.
     """
     try:
         return await _blocking(
@@ -299,8 +285,8 @@ def _gate_restore_plan(
     project: str,
 ) -> None:
     """Refuse, before the safety copy is written, a restore the storage cannot perform."""
-    # note: the refusal reaches the caller, so a Tenant's withholds the pool's driver; the audit
-    # below is the operator's record and keeps it.
+    # The refusal reaches the caller, so a Tenant's leaves out the pool's driver. The audit below
+    # is the operator's record and keeps it.
     plan = restore_plan.plan_restore(
         driver, existing, snapshot_name, name_driver=caller_tier() != "tenant"
     )
@@ -359,9 +345,8 @@ def _gate_billing(
 ) -> Optional[str]:
     """Apply the billing gate and record a refusal.
 
-    important: a refusal is audited. Being stopped on a billing-linked instance is the event most
-    worth alerting on, and it used to travel out through `except HTTPException: raise` leaving no
-    trace anywhere.
+    A refusal on a billing-linked instance is the event most worth alerting on, so it is audited
+    before the HTTPException propagates.
     """
     try:
         return enforce_billing_impact(
@@ -382,7 +367,7 @@ def _gate_billing(
 
 
 async def _settle(client, operation_id: Optional[str], project: str) -> Dict[str, Any]:
-    """Wait briefly for an LXD operation so the response describes reality.
+    """Wait briefly for an LXD operation so the response reports its real outcome.
 
     A snapshot on a copy-on-write pool settles in well under a second. On a `dir` pool it is a
     full copy and may not settle at all inside this window, which is reported as unsettled
@@ -447,9 +432,8 @@ def _raise_create_outcome_unknown(
 def _create_refused(exc: BaseException) -> bool:
     """LXD answered the POST itself and said no: a 4xx, or its restricted-project sentence.
 
-    note: LXD sends that sentence as a 500 (measured on nuc2, 2026-10-24), from a check it runs
-    before any operation exists, so the status alone cannot tell it from a failure mid-way. Every
-    other 5xx stays an unknown outcome.
+    LXD sends that sentence as a 500, from a check it runs before any operation exists, so the
+    status alone cannot tell it from a failure mid-way. Every other 5xx stays an unknown outcome.
     """
     if not isinstance(exc, LXDAPIException):
         return False
@@ -463,12 +447,11 @@ def _raise_create_refused(
     snapshot_name: str,
     exc: LXDAPIException,
 ) -> None:
-    """409 for a create LXD answered with a 4xx: it refused, so nothing was created.
+    """409 for a create LXD refused outright (see `_create_refused`), so nothing was created.
 
-    note: a project created restricted (every Partner project on a shared cluster) blocks
-    snapshots unless restricted.snapshots allows them, and LXD says so in one sentence. Reported
-    as an unknown outcome, it told the operator to go and check for a snapshot that could not
-    exist and blocked the retry.
+    A restricted project (every Partner project on a shared cluster) blocks snapshots unless
+    restricted.snapshots allows them. Reporting that as an unknown outcome would send the
+    operator looking for a snapshot that cannot exist and block the retry.
     """
     reason = str(exc)
     if _RESTRICTED_SNAPSHOTS in reason.lower():
@@ -562,12 +545,11 @@ async def create_snapshot(
     snapshot_name = snapshots_service.build_operator_snapshot_name(body.label)
     expires_at = snapshots_service.default_expiry(body.expiry_days)
 
-    # important: the cap is read from the cluster and then acted on, which is two round trips.
-    # Without this lock, concurrent creates for one instance all read the same pre-cap count and
-    # all proceed. Scoped to one worker process like every lock in this codebase, so under
-    # WEB_CONCURRENCY=4 the bound is the cap plus three rather than the cap exactly. That is a
-    # guardrail against accumulation, not a security boundary, and each snapshot carries its own
-    # expires_at, so LXD prunes the overshoot without help.
+    # important: the cap is read from the cluster and then acted on in a second round trip.
+    # Without this lock, concurrent creates for one instance all read the same count and all
+    # proceed. The lock is per worker process, so under WEB_CONCURRENCY=4 the bound is the cap
+    # plus three. It limits accumulation and is no security boundary; each snapshot carries its
+    # own expires_at, so LXD prunes any overshoot.
     lock_key = f"snapshot-create:{body.host}/{body.project}/{instance_name}"
     lock = rebuild_lock(lock_key)
     create_started = False
@@ -583,9 +565,9 @@ async def create_snapshot(
                     body.project,
                     label="snapshots.capacity",
                 )
-                # From this point onward a transport exception cannot prove whether LXD received
-                # the POST. The safe answer is "outcome unknown", never a retryable ordinary
-                # host failure that might make the caller create a duplicate.
+                # From here a transport exception cannot prove whether LXD received the POST, so
+                # it is reported as an unknown outcome. A retryable host failure could make the
+                # caller create a duplicate.
                 create_started = True
                 operation_id = await _blocking(
                     snapshots_service.create_instance_snapshot,
@@ -605,9 +587,8 @@ async def create_snapshot(
             except HTTPException:
                 raise
             except snapshots_service.LXDOperationUnreadable as exc:
-                # The daemon took the work and told us nothing we can wait on. That is an upstream
-                # problem, not a bad request, and reporting success would be the exact failure this
-                # surface exists to avoid.
+                # The daemon accepted the work but returned nothing to wait on. That is an upstream
+                # failure with an unknown outcome; reporting success could hide a missing snapshot.
                 _raise_create_outcome_unknown(
                     instance_name, body.host, body.project, snapshot_name, exc
                 )
@@ -635,8 +616,8 @@ async def create_snapshot(
         release_lock(lock_key)
 
     if outcome.get("failed"):
-        # The daemon refused after accepting the request. Reporting 201 here would be the exact
-        # defect this feature exists to avoid: a control that says it worked and did not.
+        # The daemon refused after accepting the request; a 201 would report a snapshot that does
+        # not exist.
         failure_detail = sanitize_error(str(outcome.get("err") or "unknown error"))
         _audit(
             "instance.snapshot.create", instance_name, body.host, body.project,
@@ -675,9 +656,9 @@ async def create_snapshot(
         )
     if completed:
         # important: snapshot.created asserts that the resource exists. A pending operation can
-        # still fail, so announcing it here would create an upstream ledger entry for something
-        # the cluster never produced. OrcaHub's reconciliation sweep discovers a pending create
-        # later if it does finish.
+        # still fail, and announcing it would create an upstream ledger entry for a snapshot the
+        # cluster never produced. OrcaHub's reconciliation sweep finds a pending create that
+        # finishes later.
         schedule_orcahub_event(
             event_type="snapshot.created",
             cluster_id=body.host,
@@ -685,14 +666,13 @@ async def create_snapshot(
             resource_type="SNAPSHOT",
             name=snapshot_name,
         )
-    # The fleet listing is cached for 30s. Without this an operator acts on a snapshot and
-    # the row is still absent when the page refreshes, which reads as a control that did
-    # nothing. Cleared on every accepted path: pending work can appear during the next read,
-    # while a refused operation never reaches this point and changed no listing.
+    # The fleet listing is cached; clear it so the new row shows on the next refresh. Every
+    # accepted path clears, since pending work can appear during the next read. A refused
+    # operation never reaches this point.
     _invalidate_snapshot_views(body.host, body.project, instance_name)
     if not completed:
         response.status_code = 202
-        # a `dir` pool can copy for minutes: clear again when LXD settles the write
+        # A `dir` pool can copy for minutes; clear again when LXD settles the write.
         invalidate_when_settled(
             lambda: client, operation_id, body.project,
             lambda: _invalidate_snapshot_views(body.host, body.project, instance_name),
@@ -749,10 +729,9 @@ async def delete_snapshot(
     project = _enforce_snapshot_access(host, project, instance_name)
     await _assert_snapshot_source_is_writable(host, project, instance_name)
 
-    # important: name safety, then ownership, both before a client is opened. Everything
-    # decidable from the request alone is decided before anything touches the cluster, which is
-    # what keeps a refusal free of round trips and stops an acknowledgement bought on one gate
-    # from being spent on another.
+    # important: name safety, then ownership, both before a client is opened. Checks that need
+    # only the request run before anything touches the cluster, so a refusal costs no round trip
+    # and an acknowledgement given for one gate cannot pass another.
     snapshot_name = _validated_target(snapshot_name)
     _gate_ownership(
         snapshot_name, "delete", instance_name, host, project,
@@ -762,10 +741,8 @@ async def delete_snapshot(
     )
 
     client = await _client(lxd_service, host)
-    # Deleting lowers the storage the external schedule is measured on rather than raising it,
-    # so this is the gentlest of the three actions. It is gated anyway: the rule an operator
-    # has to hold is "anything on a billing-linked instance is acknowledged", and a rule with
-    # an exception is one people have to remember the shape of.
+    # Deleting lowers the billed storage, but it is gated like create and restore so the rule has
+    # no exception: every action on a billing-linked instance needs an acknowledgement.
     policy = await _read_policy(client, instance_name, project)
     justification = _gate_billing(
         policy, "delete", instance_name, host, project,
@@ -790,8 +767,8 @@ async def delete_snapshot(
     except HTTPException:
         raise
     except snapshots_service.LXDOperationUnreadable as exc:
-        # The daemon took the work and told us nothing we can wait on. Upstream problem, not a bad
-        # request, and reporting success would be the exact failure this surface exists to avoid.
+        # The daemon accepted the work but returned nothing to wait on: an upstream failure,
+        # never reported as success.
         _invalidate_snapshot_views(host, project, instance_name)
         raise HTTPException(status_code=502, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
@@ -839,9 +816,8 @@ async def delete_snapshot(
         resource_type="SNAPSHOT",
         name=snapshot_name,
     )
-    # The fleet listing is cached for 30s. Without this an operator acts on a snapshot and
-    # the row is still there when the page refreshes, which reads as a control that did
-    # nothing. Cleared only on the success path: a refused operation changed no listing.
+    # The fleet listing is cached; clear it so the deleted row is gone on the next refresh. A
+    # refused operation never reaches this point.
     _invalidate_snapshot_views(host, project, instance_name)
     if not outcome.get("settled"):
         invalidate_when_settled(
@@ -889,10 +865,9 @@ async def restore_snapshot(
             status_code=422, detail="Confirmation name does not match the instance name"
         )
 
-    # Name safety, then ownership, both before a client is opened and long before anything is
-    # written. Restore already types the INSTANCE name above, which is the confirmation the
-    # hand-taken class needs; the gate below asks for the snapshot's name only on delete, where
-    # what an operator gets wrong is which row they clicked.
+    # Name safety, then ownership, both before a client is opened. The typed instance name above
+    # is the confirmation a hand-taken snapshot needs; the gate asks for the snapshot's own name
+    # only on delete, where the likely mistake is clicking the wrong row.
     snapshot_name = _validated_target(snapshot_name)
     _gate_ownership(
         snapshot_name, "restore", instance_name, body.host, body.project,
@@ -902,8 +877,8 @@ async def restore_snapshot(
     )
 
     client = await _client(lxd_service, body.host)
-    # Gated before the safety snapshot, not after: a refused restore must not leave a snapshot
-    # behind on a source whose storage someone else is billed for.
+    # Gated before the safety snapshot, so a refused restore leaves no snapshot behind on a source
+    # whose storage someone else is billed for.
     policy = await _read_policy(client, instance_name, body.project)
     justification = _gate_billing(
         policy, "restore", instance_name, body.host, body.project,
@@ -913,10 +888,9 @@ async def restore_snapshot(
     safety_name: Optional[str] = None
     try:
         async with _guard_snapshot_source(body.host, body.project, instance_name):
-            # important: the target has to exist before anything is written. Restoring a name
-            # that is not on the instance fails at the daemon, and because the safety copy was
-            # taken first it left a snapshot behind on a billed source for a restore that never
-            # ran.
+            # important: check that the target exists before anything is written. Otherwise the
+            # safety copy is taken, the daemon refuses the restore, and the copy stays behind on
+            # a billed source.
             existing = await _blocking(
                 snapshots_service.list_instance_snapshots,
                 client,
@@ -935,9 +909,7 @@ async def restore_snapshot(
                 instance_name=instance_name, host=body.host, project=body.project,
             )
 
-            # Its own module beside the ownership and billing gates, because it is a third
-            # refusal with the same shape: it decides whether the action may proceed and says
-            # why not.
+            # Takes the pre-restore copy, or refuses the restore when it cannot.
             safety_name = await take_safety_snapshot(
                 client,
                 instance_name=instance_name,
@@ -972,8 +944,8 @@ async def restore_snapshot(
     except HTTPException:
         raise
     except snapshots_service.LXDOperationUnreadable as exc:
-        # The daemon took the work and told us nothing we can wait on. Upstream problem, not a bad
-        # request, and reporting success would be the exact failure this surface exists to avoid.
+        # The daemon accepted the work but returned nothing to wait on: an upstream failure,
+        # never reported as success.
         _invalidate_after_restore(body.host, body.project, instance_name)
         raise HTTPException(status_code=502, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
@@ -1022,10 +994,8 @@ async def restore_snapshot(
             "restore", instance_name, body.host, body.project, policy, justification,
             user.email or user.user_id,
         )
-    # The fleet listing is cached for 30s. Without this an operator acts on a snapshot and
-    # the row is still there when the page refreshes, which reads as a control that did
-    # nothing. Cleared only on the success path: a refused operation changed no listing.
-    # A rollback rewrites the instance, so the deltas its snapshots report move with it.
+    # A rollback rewrites the instance, so every instance view and the sizes its snapshots
+    # report change with it.
     _invalidate_after_restore(body.host, body.project, instance_name)
     if not outcome.get("settled"):
         invalidate_when_settled(

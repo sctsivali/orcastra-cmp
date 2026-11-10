@@ -1,16 +1,14 @@
 """Monitoring history on a Redis sorted set: one member per point, scored by its timestamp.
 
-important: each scope's history used to be one JSON string, read and rewritten whole on every
-append (3 to 7 MB for the admin scope) and parsed on the event loop by every chart read. A sorted
-set takes one member per append and trims by score, and a window read fetches only the points
-inside the window. Decoding, validation and encoding run on this module's executors, and an
-encoded body is reused until the selection's version changes.
+A sorted set takes one member per append and trims by score, and a window read fetches only the
+points inside the window. Decoding, validation and encoding run on this module's executors, off
+the event loop, and an encoded body is reused until the selection's version changes.
 
-note: every write goes through one script that adds a point only when its timestamp is not stored
-yet, so the previous release's string key (imported once per scope) and the Postgres copy of the
-admin scope merge at any time without duplicating a point. Reads and writes use separate
-executors, so a burst of chart reads can never refuse the collector's write. The keys live under
-orcastra:monitoring_history:, which the cache-clear endpoint already deletes.
+Every write goes through one script that adds a point only when its timestamp is not stored yet,
+so the legacy string key (imported once per scope) and the Postgres copy of the admin scope merge
+at any time without duplicating a point. Reads and writes use separate executors, so a burst of
+chart reads can never refuse the collector's write. The keys live under
+orcastra:monitoring_history:, which the cache-clear endpoint deletes.
 """
 
 import json
@@ -326,7 +324,7 @@ def needs_hydrate(read: HistoryRead, *, now_ms: Optional[int] = None) -> bool:
 
 
 def _claim(cache: Any, key: str, seconds: int) -> bool:
-    """SET NX EX on Redis; without Redis the same rule held per process."""
+    """SET NX EX on Redis; without Redis the same rule holds per process."""
     client = _redis(cache)
     if client is not None:
         return bool(client.set(key, "1", nx=True, ex=seconds))

@@ -1,8 +1,7 @@
-"""
-How a node's resource picture is assembled.
+"""How a node's resource picture is assembled.
 
-Single-host resources and MicroCloud cluster aggregation both end up as one NodeResources,
-built here so a new field can never be added to one path and forgotten on another.
+Single-host resources and the aggregate of a clustered host both end up as one NodeResources,
+built here so a new field cannot be added to one path and forgotten on the other.
 """
 
 import logging
@@ -25,14 +24,13 @@ logger = logging.getLogger(__name__)
 def build_node_resources(resources_data: Dict[str, Any], gpu: GpuInventory) -> NodeResources:
     """Build NodeResources for one host from a resource dict and its GPU inventory.
 
-    important: the only place NodeResources is constructed for a node. Three separate call
-    sites used to build it by hand and two of them quietly omitted gpu_cards_total, so the
-    node view reported zero detected cards on hardware that had two.
+    important: NodeResources is built only in this module, so no path can omit a field such
+    as gpu_cards_total and report it as its default.
     """
     cpu_total = resources_data.get("cpu_total", 0)
     memory_total = resources_data.get("memory_total", 0)
-    # cpu_used comes from the dict when the read carried it: with cpu_available clamped at
-    # zero on an over-committed host, total minus available would say 80 for 307.
+    # cpu_used comes from the dict when the read carried it: cpu_available is clamped at zero
+    # on an over-committed host, so total minus available would under-report the allocation.
     cpu_used = resources_data.get("cpu_used", cpu_total - resources_data.get("cpu_available", 0))
     return NodeResources(
         cpu_total=cpu_total,
@@ -57,18 +55,17 @@ def build_node_resources(resources_data: Dict[str, Any], gpu: GpuInventory) -> N
         gpu_models=gpu.models,
         gpu_utilization_supported=gpu.utilization_supported,
         storage_total=resources_data.get("storage_total", 0),
-        # note: derived when absent rather than defaulted to zero, so a dict built by hand
-        # cannot report a full pool as unused. Every reader of storage_used is entitled to
-        # assume it agrees with total and available.
+        # Derived when absent rather than defaulted to zero, so a hand-built dict cannot
+        # report a full pool as unused; readers assume storage_used agrees with total and
+        # available.
         storage_used=resources_data.get(
             "storage_used",
             resources_data.get("storage_total", 0)
             - resources_data.get("storage_available", 0),
         ),
         storage_available=resources_data.get("storage_available", 0),
-        # On a standalone host usable and raw are the same number. Falling back to the usable
-        # figure rather than to zero keeps that true for any caller that builds the dict by
-        # hand, instead of reporting a cluster with no raw total.
+        # On a standalone host usable and raw are the same number, so the fallback is the
+        # usable figure rather than zero.
         storage_raw_total=resources_data.get(
             "storage_raw_total", resources_data.get("storage_total", 0)
         ),
@@ -84,8 +81,8 @@ def build_node_resources(resources_data: Dict[str, Any], gpu: GpuInventory) -> N
         degraded=resources_data.get("degraded", False),
         degraded_parts=resources_data.get("degraded_parts", []),
         hardware=resources_data.get("hardware"),
-        # note: carried, never minted here. This function runs on the cached path too, and a
-        # datetime.now() at this line would stamp a 60s-old body as current.
+        # Carried, never taken here: this also runs on the cached path, where datetime.now()
+        # would stamp a 60s-old body as current.
         collected_at=resources_data.get("collected_at"),
     )
 
@@ -99,14 +96,10 @@ def resources_for_host(
 ) -> NodeResources:
     """What this host has, whether it is one machine or a cluster of them.
 
-    important: the one place that decision is made. It used to be made twice and only one of
-    them aggregated, so GET /nodes reported a MicroCloud's whole capacity while
-    GET /nodes/<name>/resources reported the coordinator member's share of it. The node detail
-    dialog reads the list row first and the per-node endpoint once a tab is opened, so the
-    numbers visibly shrank on the second render: 28 cores on the card, 8 in the Storage tab.
-
-    A failed aggregation falls back to this host's own reading rather than to nothing, which is
-    the same contract check_node_status has always had.
+    important: the one place that decision is made, so GET /nodes and
+    GET /nodes/<name>/resources report the same capacity for a clustered host. A failed
+    aggregation falls back to this host's own reading rather than to nothing, as
+    check_node_status does.
     """
     if clustered:
         aggregated = aggregate_microcloud_resources(
@@ -126,22 +119,13 @@ def aggregate_microcloud_resources(
     node_name: str,
     base_resources: Dict[str, Any],
 ) -> Optional[NodeResources]:
-    """
-    Aggregate resources from all cluster members.
-    Returns NodeResources with total resources from all members.
+    """Sum every online member's resources into one cached NodeResources, or None.
 
-    This method queries each cluster member and sums up their individual resources
-    to give a complete picture of the entire cluster's capacity.
-
-    note: the name says MicroCloud but the behaviour never did. The gate below is
-    `server_clustered`, so this serves any clustered LXD or Incus host, which is how the
-    caller now selects it. The name and the cache prefix are kept because renaming them
-    buys nothing and would invalidate every cached entry.
-
-    Results are cached to minimize API calls to cluster members.
+    The name says MicroCloud, but the gate is `server_clustered`, so this serves any clustered
+    LXD or Incus host. The name and the cache prefix stay because renaming the prefix would
+    invalidate every cached entry.
     """
     try:
-        # Try to get from cache first
         from app.core.cache import (
             CAPACITY_GENERATION_KIND,
             MICROCLOUD_RESOURCES_CACHE_PREFIX,
@@ -166,7 +150,6 @@ def aggregate_microcloud_resources(
         
         logger.info(f"Cache MISS for MicroCloud resources: {node_name}, aggregating from members")
         
-        # Check if node is clustered
         host_info = client.host_info
         environment = host_info.get("environment", {})
         is_clustered = environment.get("server_clustered", False)
@@ -175,7 +158,6 @@ def aggregate_microcloud_resources(
             logger.warning(f"{node_name} is not clustered, cannot aggregate resources")
             return None
         
-        # Get cluster members using LXD API
         try:
             if members_read_failed(cache, node_name):
                 logger.debug(f"Members of {node_name} failed to answer recently; using the connected member")
@@ -197,7 +179,6 @@ def aggregate_microcloud_resources(
                 logger.warning(f"No cluster members found for {node_name}")
                 return None
             
-            # Filter only online members
             online_members = [m for m in members_data if isinstance(m, dict) and m.get("status") == "Online"]
             
             if not online_members:
@@ -206,7 +187,6 @@ def aggregate_microcloud_resources(
             
             logger.info(f"Found {len(online_members)} online members in MicroCloud cluster {node_name}")
             
-            # Initialize aggregated counters
             total_cpu_threads = 0
             total_cpu_used = 0
             total_cpu_sockets = 0
@@ -216,10 +196,8 @@ def aggregate_microcloud_resources(
             # One profile per member, folded after the loop. A cluster row must not present
             # one member's motherboard as the cluster's.
             member_hardware = []
-            # important: an aggregate is only as fresh as its stalest input, so this
-            # collects every member's read time and folds with min() below. Stamping
-            # now() here would report a cluster as current on the strength of whichever
-            # member happened to answer last.
+            # important: an aggregate is only as fresh as its stalest input, so every
+            # member's read time is collected and folded with min() below.
             member_read_times = []
             # Per-member pool readings, folded once at the end so a shared backing store is
             # counted once rather than per member. See services/lxd/storage_model.py.
@@ -228,9 +206,7 @@ def aggregate_microcloud_resources(
             
             successful_members = 0
 
-            # important: fetched once for the whole cluster. The per-member loop used to
-            # call instances.all() twice per member, so a ten-member cluster made twenty
-            # identical round trips to build one number.
+            # Read once for the whole cluster; the member loop below filters it by location.
             try:
                 # important: recursion=1, never pylxd's default of 0. At recursion=0 the
                 # daemon returns URL strings and pylxd builds Instance objects carrying only a
@@ -239,23 +215,21 @@ def aggregate_microcloud_resources(
                 # at the call site and scales with the whole cluster.
                 cluster_instances, instances_complete = list_instance_records(client)
                 if not instances_complete:
-                    # A partial read is not a smaller cluster. Saying so keeps a half-answer
-                    # from being published as the whole truth.
+                    # A partial read is not a smaller cluster, so the part is marked degraded.
                     degraded_parts.append("instances")
             except Exception as inst_err:
                 logger.debug(f"Could not list instances for {node_name}: {inst_err}")
                 cluster_instances = []
-                # important: an empty list here is indistinguishable from a genuinely idle
-                # cluster, so every derived number (cpu_used, gpu_used, gpu_available) reports
-                # the whole fleet as free capacity, which is the one direction a capacity
-                # figure must never be wrong in. Mark it lost instead.
+                # important: an empty list is indistinguishable from an idle cluster, so every
+                # derived number (cpu_used, gpu_used, gpu_available) would report the whole
+                # cluster as free capacity. Mark the part degraded instead.
                 degraded_parts.append("instances")
             
-            # Get current server name to identify which member we're connected to
+            # The member this client is connected to.
             _current_server = environment.get("server_name", "")
             
-            # important: read side by side and folded here in the members' order, so the totals
-            # and card indices match the one-at-a-time loop this replaced (see member_reads.py).
+            # important: read side by side and folded here in the members' order, so totals and
+            # card indices do not depend on which member answers first (see member_reads.py).
             member_names = [member.get("server_name", "unknown") for member in online_members]
             for read in read_members(client, node_name, member_names):
                 member_name = read.name
@@ -266,11 +240,9 @@ def aggregate_microcloud_resources(
                     member_read_times.append(read.read_at)
                     member_resources = read.resources
 
-                    # Extract CPU resources
                     cpu_info = member_resources.get("cpu", {})
                     member_cpu_total = cpu_info.get("total", 0)
 
-                    # Extract memory resources
                     memory_info = member_resources.get("memory", {})
                     member_memory_total = memory_info.get("total", 0)
                     member_memory_used = memory_info.get("used", 0)
@@ -286,36 +258,32 @@ def aggregate_microcloud_resources(
                     )
                     member_gpu_total = member_gpu_inv.gpu_total
                     member_gpu_used = member_gpu_inv.gpu_used
-                    # Card indices stay unique across the cluster
+                    # Card indices stay unique across the cluster.
                     base_index = len(cluster_gpu.cards)
                     for card in member_gpu_inv.cards:
                         card.index = base_index + card.index
 
-                    # important: pool space is NOT in the /1.0/resources body. This used to
-                    # read `storage.pools`, a key LXD does not send, so every clustered host
-                    # reported zero storage and no test looked. The real block is
-                    # `storage.disks`, which is physical media: raw device capacity double
-                    # counts a mirror and counts disks belonging to no pool. Space exists
-                    # only at /1.0/storage-pools/<pool>/resources?target=<member>, so it is
-                    # read per member, through the same leaves the member panel uses.
+                    # important: pool space is not in the /1.0/resources body. Its
+                    # `storage.disks` block is physical media, which double counts a mirror
+                    # and includes disks that belong to no pool. Space exists only at
+                    # /1.0/storage-pools/<pool>/resources?target=<member>, read per member
+                    # through the same leaves the member panel uses.
                     pool_readings.extend(read.pools)
                     degraded_parts.extend(read.degraded)
 
-                    # For CPU sockets, we'll sum them up (each member has its own sockets)
+                    # Sockets are summed: each member has its own.
                     cpu_sockets_data = cpu_info.get("sockets", [])
                     cpu_sockets = len(cpu_sockets_data) if isinstance(cpu_sockets_data, list) else 0
 
-                    # CPU allocation of the running instances placed on this member, from
-                    # the cluster-wide list fetched once above (one counter for every
-                    # read: cpu_allocation; the inline parser here read the instance-local
-                    # config and counted a profile-inherited limit as one core).
+                    # CPU allocation of the running instances placed on this member, from the
+                    # cluster-wide list above, counted by cpu_allocation (profile-inherited
+                    # limits included).
                     member_cpu_used = 0
                     try:
                         member_cpu_used = allocated_cpu(cluster_instances, member=member_name).cores
                     except Exception as usage_err:
                         logger.debug(f"Could not calculate usage for member {member_name}: {usage_err}")
 
-                    # Aggregate totals
                     cluster_gpu = cluster_gpu.merge(member_gpu_inv)
                     total_cpu_threads += member_cpu_total
                     total_cpu_used += member_cpu_used
@@ -351,7 +319,6 @@ def aggregate_microcloud_resources(
                     ", ".join(storage.unknown_drivers),
                 )
             
-            # Create aggregated NodeResources
             aggregated = NodeResources(
                 cpu_total=total_cpu_threads,
                 cpu_used=total_cpu_used,
@@ -396,7 +363,7 @@ def aggregate_microcloud_resources(
                 f"{cluster_gpu.gpu_cards_total} cards (used={cluster_gpu.gpu_used})"
             )
             
-            # Cache the aggregated result
+            # Cached only when capacity did not change during the read.
             if (
                 get_resource_list_generation(cache, CAPACITY_GENERATION_KIND)
                 == capacity_generation

@@ -1,15 +1,12 @@
 """The definition a migrated instance is created with, and the state it must read back as.
 
-A copy or staged move recreates the instance on the target from an explicit definition: profile
-names, local config, and local devices. The instance's effective state there is the target
-profiles merged with that local definition, so it is not enough to send the source's local
-definition and hope the target profiles match. This module computes:
-
-* the local definition to send, pinning locally whatever the target profiles would get wrong
-  (root pool and size, NIC networks, config values) and masking profile devices the source did
-  not have with a ``none`` device;
-* the effective config and devices the target must read back with;
-* one contract hash the plan approves and the worker re-derives before it submits anything.
+A copy or staged move recreates the instance on the target from profile names, local config and
+local devices; its effective state there is the target profiles merged with that definition, so
+the source's local definition alone does not reproduce it. This module computes the local
+definition to send (pinning whatever the target profiles would get wrong: root pool and size, NIC
+networks, config values; masking profile devices the source lacked with a ``none`` device), the
+effective config and devices the target must read back with, and one contract hash the plan
+approves and the worker re-derives before it submits anything.
 
 Everything here is pure. Daemon reads happen in ``target_admission``.
 """

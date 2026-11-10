@@ -1,10 +1,9 @@
 """
-Break-Glass Router
+Break-glass grants: least-privilege admin access to tenant consoles and terminals.
 
-Least-privilege admin access to tenant console/terminal: an admin justifies a
-time-boxed grant for a specific cluster, every grant and use is audited, and the
-affected tenant can see it. Reads are open to all roles (tenants get an accountability
-view of grants on their own clusters); writes are admin-only.
+An admin justifies a time-boxed grant for one cluster, every grant and use is audited, and
+the affected organization can see it. Listing grants is open to every role as an
+accountability view of the caller's own clusters; the pre-flight check and writes are admin only.
 """
 
 from typing import Optional
@@ -29,8 +28,6 @@ activity_logger = get_activity_logger()
 
 class GrantCreateRequest(BaseModel):
     cluster_id: str = Field(..., min_length=1, description="Target cluster (LXD host key)")
-    # note: naming a key makes this a grant FOR that integration rather than for the caller.
-    # Omitted, the caller grants themselves, which is the original behaviour.
     api_key_id: Optional[str] = Field(
         None,
         max_length=255,
@@ -46,8 +43,7 @@ class GrantCreateRequest(BaseModel):
 
 class GrantResponse(BaseModel):
     id: int
-    # Optional because exactly one grantee is set. A key grant has no person on this field, and
-    # declaring it non-optional meant such a row could not be serialized back even if one existed.
+    # Exactly one grantee is set: a key grant has no person here.
     admin_email: Optional[str] = None
     api_key_id: Optional[str] = None
     cluster_id: str
@@ -88,13 +84,11 @@ async def check_access(
     user: AuthenticatedUser = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    """Non-mutating: lets the UI prompt for a grant before opening console/terminal.
+    """Report whether a break-glass grant is needed before opening a console or terminal.
 
-    important: Admin-gated to match `create_grant` below. Break-glass is an admin mechanism,
-    and the response names the organisation that owns an arbitrary cluster, so under
-    `require_tenant()` any authenticated user could map the whole fleet to its owners. The UI
-    fails this check open (`break-glass-store.ts:38-41`) and relies on the connect-time gate,
-    so a non-admin getting 403 here loses nothing it was entitled to.
+    Non-mutating. Admin only, like creating a grant: the response names the organization that
+    owns the cluster, so a wider gate would let any user map the fleet to its owners. The console
+    fails this check open and relies on the gate applied when the session connects.
     """
     return await break_glass_service.inspect_access(user, cluster_id, db)
 
@@ -105,11 +99,9 @@ async def create_grant(
     user: AuthenticatedUser = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    # important: the cluster's current certificate fingerprint is pinned onto a key grant.
-    # `cluster_id` is a free-text Vault key with no foreign key, so a cluster deleted and
-    # re-registered under a different owner matches an old grant by string alone. For a human
-    # that is a session somebody is watching; for an unattended key it is hands on a stranger's
-    # keyboard for as long as the grant lasts.
+    # important: a key grant pins the cluster's current certificate fingerprint. `cluster_id` is a
+    # free-text Vault key, so a cluster deleted and registered again under another owner would
+    # match an old grant by name and give an unattended key that owner's instances.
     fingerprint = (
         await break_glass_service.cluster_fingerprint(body.cluster_id)
         if body.api_key_id
@@ -154,9 +146,9 @@ async def list_grants(
     view of grants on clusters in their own organization scope (nothing from other orgs).
     """
     is_admin = get_highest_role(resolve_roles(user)) == Role.ADMIN
-    # important: the REQUEST-scoped set org_scope_dependency enforces (narrowed by a Tenant's
-    # ACL), never a fresh get_user_allowed_clusters(), as console.py's session list learned. None
-    # for an Admin; an empty set matches nothing (security review 2026-11-05, finding 6).
+    # important: the request-scoped set org_scope_dependency enforces (narrowed by a Tenant's
+    # ACL), never a fresh get_user_allowed_clusters(). None for an Admin; an empty set matches
+    # nothing.
     allowed = get_current_allowed_clusters()
     # On a cluster several organizations hold, only the grants aimed at the caller's own, or at
     # the whole cluster (no target organization).

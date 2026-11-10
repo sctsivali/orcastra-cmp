@@ -1,11 +1,10 @@
-"""Serving the add-on API document, without turning the internal one back on.
+"""The add-on API document and its viewer.
 
-`main.py` keeps `openapi_url` at None in production and this router does not change that. What it
-adds is a second, curated document describing only the API-key surface, plus one renderer for it.
+`main.py` keeps `openapi_url` at None in production and this router does not change that. It
+serves a second, curated document describing only the API-key surface, plus one renderer for it.
 
-Unauthenticated on purpose: an integrator needs the specification before they hold a credential,
-and the document names no internal route. Gated by a setting so an operator who disagrees can
-switch it off.
+Unauthenticated: an integrator needs the specification before holding a credential, and the
+document names no internal route. A setting turns it off.
 """
 
 import logging
@@ -63,9 +62,9 @@ async def public_docs(request: Request) -> Response:
     if not (settings.public_openapi_enabled and settings.public_docs_ui_enabled):
         raise HTTPException(status_code=404, detail="Not Found")
 
-    # note: "Try it out" here can do nothing a credential could not already do. Every capability
-    # gate, the per-cluster grant, the path rules and the per-key rate limit apply exactly as
-    # they do to any other caller, because this is the same API.
+    # "Try it out" here can do nothing a credential could not already do: every capability gate,
+    # the per-cluster grant, the path rules and the per-key rate limit apply as they do to any
+    # other caller of the same API.
     return get_swagger_ui_html(
         openapi_url=f"{settings.api_prefix}/openapi.public.json",
         title="Orcastra Add-on API",

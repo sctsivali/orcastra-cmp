@@ -2,12 +2,11 @@
 
 LXD identifies a TLS client by the lowercase hex SHA-256 of the certificate's DER bytes. That is
 the FINGERPRINT column of `lxc config trust list` (which shows its first 12 characters), the key of
-`/1.0/certificates/{fingerprint}`, and the `requestor` of an operation. The certificate page used to
-print the same digest as colon-separated uppercase pairs, which no operator could match against the
-trust list without retyping it.
+`/1.0/certificates/{fingerprint}`, and the `requestor` of an operation. Showing the same form lets
+an operator match it against the trust list as is.
 
-note: stdlib only, and in core rather than services/lxd_certs, because importing that package runs
-its __init__, which reaches services/lxd and from there lxd_service. connection.py needs this helper
+Stdlib only, and in core rather than services/lxd_certs, because importing that package runs its
+__init__, which reaches services/lxd and from there lxd_service. connection.py needs this helper
 and would otherwise import itself in a cycle.
 """
 
@@ -48,7 +47,7 @@ def lxd_fingerprint(pem: str) -> str:
 def is_lxd_fingerprint(value: object) -> bool:
     """True only for a full 64 character lowercase fingerprint.
 
-    important: LXD resolves `/1.0/certificates/{fp}` by PREFIX, so a short or truncated value sent
+    important: LXD resolves `/1.0/certificates/{fp}` by prefix, so a short or truncated value sent
     to a DELETE can match a different entry. Anything that removes trust checks this first.
     """
     return isinstance(value, str) and bool(_LXD_FINGERPRINT.match(value))

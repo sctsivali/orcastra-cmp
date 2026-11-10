@@ -1,15 +1,14 @@
 """Remember, for a minute, a storage pool whose resources read fails.
 
-A broken pool does not fail fast. On the dev fleet one ZFS pool on blitzkrieg whose dataset is
-gone makes LXD answer `GET /1.0/storage-pools/<pool>/resources` with an error after 3.07 s, every
-time, and three readers ask for it on every build: the node status behind /nodes, monitoring and
-the OrcaHub totals, the regions overview, and the pool resources list. That one pool was most of
-blitzkrieg's 4 s status read.
+A broken pool does not fail fast: a ZFS pool whose dataset is gone makes LXD answer
+`GET /1.0/storage-pools/<pool>/resources` with an error after about 3 s, every time, and the
+fleet readers (node status, the regions overview, the pool resources list) ask for it on every
+build.
 
-A failed read is now remembered per worker for FAILURE_TTL_S and the next read of the same pool
+A failed read is remembered per worker for FAILURE_TTL_S, and the next read of the same pool
 fails at once with the same consequence a real failure has (the pool is left out and the reading
 is marked degraded), so each reader keeps its own handling. A successful read is never cached:
-pool usage stays live, and any success clears the memory.
+pool usage stays current, and any success clears the memory.
 """
 
 from __future__ import annotations

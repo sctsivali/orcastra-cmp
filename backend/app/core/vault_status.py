@@ -1,29 +1,15 @@
-"""Whether the last read of the cluster registry actually reached Vault.
+"""Whether the last read of the cluster registry reached Vault.
 
-A sealed Vault answers 503 to LIST. `LXDCertificateManager.list_clusters` catches that and
-returns an empty list, which is indistinguishable from a Vault that genuinely holds no
-clusters. Startup then logs "Found 0 registered clusters in Vault", "Connected 0/0 clusters"
-and "started successfully", hands that empty list to `sync_registered_clusters`, and the
-deployment presents as healthy and empty. Observed in the field, that state can persist for
-weeks and only surface because something happens to restart the process.
+A sealed Vault answers 503 to LIST and `LXDCertificateManager.list_clusters` returns an empty
+list, which looks like a Vault holding no clusters. Many callers rely on it returning a list, so
+"Vault said zero" versus "Vault did not answer" is recorded here for the two callers that care:
+startup, which must not overwrite the registered-cluster whitelist with an empty set it never
+received, and `/health`, which reports it without changing its status code.
 
-Thirteen callers depend on `list_clusters` returning a list rather than raising, so the fix is
-not to change what it returns. It is to make the difference between "Vault said zero" and
-"Vault did not answer" recordable, so the two callers that must care can ask:
-
-  * startup, which must not overwrite the registered-cluster whitelist with an empty set it
-    never actually received, and
-  * `/health`, which reports the condition without changing its status code.
-
-Named mark_readable/mark_unreadable rather than record_success/record_failure on purpose.
-`record_failure` means the cluster circuit breaker everywhere else in this codebase, and
-`test_storage_faults_never_trip_the_breaker` matches on that name across the whole tree, so
-reusing it here made a Vault bookkeeping call look like an unguarded breaker trip.
-
-Module-level and lock-guarded, the same shape as `services/lxd/health.py`, because it is read
-from request handlers and written from a thread pool. Per process: with WEB_CONCURRENCY=4 each
-worker records what it saw, which is correct, since a worker that never reached Vault is the
-one whose whitelist is wrong.
+Per process, since a worker that never reached Vault is the one whose whitelist is wrong;
+lock-guarded like `services/lxd/health.py` (read from handlers, written from a thread pool).
+The names avoid `record_failure`, the breaker's call that
+`test_storage_faults_never_trip_the_breaker` matches.
 """
 
 import re
@@ -31,12 +17,11 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
-# How long a lost LIST is served from the last known copy before Vault is asked again.
+# How long a failed LIST is served from the last known copy before Vault is asked again.
 # Threads (the metrics sweep, run_blocking, to_thread) re-probe after RETRY_HOLD_SECONDS, so a
-# burst costs one round trip rather than one each. A caller on the event loop waits
-# LOOP_RETRY_HOLD_SECONDS: the sweep probes every 30 s from a thread and refreshes the
-# failure time, so during an outage a request never pays the LIST budget on the loop, and if
-# the sweep is not running a request probes at most once every two minutes.
+# burst costs one round trip. A caller on the event loop waits LOOP_RETRY_HOLD_SECONDS: the
+# sweep probes every 30 s from a thread and refreshes the failure time, so during an outage a
+# request does not pay the LIST budget on the loop.
 RETRY_HOLD_SECONDS = 15.0
 LOOP_RETRY_HOLD_SECONDS = 120.0
 

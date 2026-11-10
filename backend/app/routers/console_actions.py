@@ -1,11 +1,11 @@
-"""The console toolbar's actions, recorded: a key combination sent to a guest, a screenshot taken.
+"""Audit records for console toolbar actions: a key combination sent to a guest, a screenshot.
 
-The keys themselves travel over the SPICE socket, which the backend relays without reading. So the
-browser reports each toolbar action here, after the fact and fire-and-forget, and this route writes
-the audit record. Typing on a real keyboard is not recorded, and the documentation says so.
+The keys travel over the SPICE socket, which the backend relays without reading, so the browser
+reports each toolbar action here after the fact (fire-and-forget). Typing on a real keyboard is not
+recorded.
 
-Only a caller who may open the console of this instance can record against it, and a caller is held
-to a per-minute budget so the route cannot be used to flood the audit trail.
+Only a caller who may open this instance's console can record against it, and each caller has a
+per-minute budget so the route cannot flood the audit trail.
 """
 
 from __future__ import annotations

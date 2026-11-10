@@ -1,26 +1,20 @@
-"""The bounds a schedule is held to, in one leaf module.
+"""The bounds a schedule is held to, in one leaf module that imports nothing.
 
-Here rather than on the ORM model because the request schemas need them too, and importing the
-model for two integers drags the database engine into a module whose only job is the wire shape.
-Here rather than in services/lxd/snapshots.py because that package is what models/schemas.py
-deliberately does not import.
-
-Nothing in this file imports anything.
+Not on the ORM model, because the request schemas need them too and importing the model would
+pull the database engine into the wire-shape module. Not in services/lxd/snapshots.py, which
+models/schemas.py does not import.
 """
 
-# Strictly below MAX_OPS_SNAPSHOTS_PER_INSTANCE, which is 5. The two remaining slots are the
-# operator's own headroom, reserved by arithmetic rather than by policy: a schedule whose ceiling is
-# the instance's ceiling starves the manual snapshot an operator takes before maintenance, which is
-# the thing the whole surface exists for. A test asserts the relationship rather than the number.
+# Strictly below MAX_OPS_SNAPSHOTS_PER_INSTANCE (5): the remaining slots keep room for the manual
+# snapshot an operator takes before maintenance. A test pins the relationship between the two.
 MAX_SCHEDULE_KEEP_LAST = 3
 
-# 63 minus "ops-", minus a 16-character stamp, minus the joining dash. Two labels sharing their
-# first 42 characters would render to one name, so the bound is on the label rather than on the
-# result, where it would be discovered as a collision instead of refused as an input.
+# The slug room in `ops-<slug>-<stamp>`: 63 minus "ops-", minus a 16-character stamp, minus the
+# joining dash. Bounded on the label, so a longer one is refused instead of colliding when cut.
 MAX_SCHEDULE_LABEL = 42
 
-# Mirrors MAX_EXPIRY_DAYS / DEFAULT_EXPIRY_DAYS in services/lxd/snapshots.py, which remains the
-# source of truth for the snapshot itself. A test asserts the two agree.
+# Mirrors MAX_EXPIRY_DAYS / DEFAULT_EXPIRY_DAYS in services/lxd/snapshots.py, the source of truth
+# for the snapshot itself. A test asserts the two agree.
 MAX_SCHEDULE_EXPIRY_DAYS = 7
 DEFAULT_SCHEDULE_EXPIRY_DAYS = 7
 

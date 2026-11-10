@@ -1,19 +1,15 @@
 """Where an LXD call came from and how long it took, for the operator log.
 
-A cold fleet read costs 5 to 27 s on dev, and before this module the log could not say which
-cluster or which call spent it: the access log has one latency per request, and a connect
-failure line said nothing about whether a request or the background healer paid for the dial.
-Two signals answer that:
+The access log's one latency per request cannot say which cluster or call spent it, or whether a
+request or the background healer paid for a dial. So a slow LXD request (at or above
+ORCASTRA_LXD_SLOW_MS, 1000 ms by default) logs one INFO line with the cluster, method, path,
+listing parameters, status and time to the response headers, and a connect attempt adds
+`lxd_dial` (cluster, origin, ms, outcome) to the line it already writes, so dials can be counted
+by who paid for them.
 
-- a slow LXD request (at or above ORCASTRA_LXD_SLOW_MS, 1000 ms by default) logs one INFO line
-  naming the cluster, the method, the path and its listing parameters, the status and the time to
-  the response headers;
-- a connect attempt carries `lxd_dial` (cluster, origin, ms, outcome) on the line it already
-  writes, so dials can be counted by who paid for them.
-
-important: both carry fixed vocabularies and the cluster id only, never an endpoint, a host or an
-exception's text. The origin comes from the worker thread's name because a bare run_in_executor
-does not carry the request context into the thread.
+important: both carry fixed vocabularies and the cluster id only, never an endpoint, a host or
+an exception's text. The origin comes from the thread name: a bare run_in_executor does not
+carry the request context into the thread.
 """
 
 from __future__ import annotations
@@ -46,7 +42,7 @@ def slow_request_ms() -> int:
 
 
 def origin() -> str:
-    """`healer`, `breaker_sync`, `monitoring`, or `request` for everything a caller waits on."""
+    """The background origin `_ORIGINS` names, or `request` for everything a caller waits on."""
     name = threading.current_thread().name
     for prefix, label in _ORIGINS:
         if name.startswith(prefix):

@@ -1,13 +1,10 @@
 """
-API Router for Log Archive & Compliance operations.
+Log archive and compliance endpoints over OpenSearch.
 
-Provides endpoints for managing OpenSearch log archive:
-- Archive health overview
-- Snapshot listing, creation, deletion, restore
-- Index ISM status monitoring
-- Snapshot repository verification
-
-All endpoints require OPENSEARCH_ARCHIVE_ENABLED=true.
+Archive health, snapshot list, create, delete and restore,
+index ISM status and repository verification. Admin only;
+every endpoint answers 503 unless
+OPENSEARCH_ARCHIVE_ENABLED=true.
 """
 
 from fastapi import APIRouter, HTTPException, Query, Depends
@@ -32,8 +29,6 @@ router = APIRouter(
     dependencies=[Depends(require_admin())],
 )
 
-
-# -- Response Models --
 
 class ArchiveOverviewResponse(BaseModel):
     """Archive system overview."""
@@ -102,8 +97,6 @@ class MessageResponse(BaseModel):
     details: Dict[str, Any] = {}
 
 
-# -- Dependency --
-
 def _get_service() -> ArchiveService:
     """Get the archive service, raising 503 if not enabled."""
     try:
@@ -115,8 +108,6 @@ def _get_service() -> ArchiveService:
         )
 
 
-# -- Endpoints ---
-
 @router.get(
     "/status",
     response_model=ArchiveOverviewResponse,
@@ -125,7 +116,6 @@ def _get_service() -> ArchiveService:
 )
 async def get_archive_status():
     """Get archive health overview."""
-    # log audit view access
     activity_logger.log_activity(
         action="audit.view",
         target_type="archive",

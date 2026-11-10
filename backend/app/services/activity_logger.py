@@ -1,9 +1,7 @@
-"""
-Activity Logger Service
-Provides audit/activity logging for sensitive operations.
+"""Audit logging for sensitive operations.
 
-Activity logs are written to stdout in structured JSON format,
-collected by Fluent Bit, and stored in OpenSearch orcastra-audit-* indices.
+Records are written to stdout as structured JSON, collected by Fluent Bit and stored in the
+OpenSearch orcastra-audit-* indices.
 """
 
 import logging
@@ -26,11 +24,7 @@ from app.services.activity_catalogue import (  # noqa: F401 - public re-exports
 
 
 class ActivityLogger:
-    """
-    Activity/Audit logger for Orcastra.
-    
-    Logs sensitive operations in structured JSON format.
-    """
+    """Writes audit records as structured JSON on the `orcastra.audit` logger."""
     
     def __init__(self, service_name: str = "orcastra-backend", version: str = "0.0.0"):
         self.service_name = service_name
@@ -57,23 +51,17 @@ class ActivityLogger:
         actor_user_id: Optional[str] = None,
         event_id: Optional[str] = None,
     ) -> str:
-        """
-        Log an activity/audit event.
-        """
-        # Generate event ID
+        """Write one audit record and return its event id. A failure is always high severity."""
         event_id = event_id or generate_event_id()
         
-        # Get request context
         ctx = get_request_context()
         request_id = ctx.request_id if ctx else get_request_id()
         
-        # Determine category and severity
         category = ACTION_CATEGORIES.get(action, EventCategory.LXD_INFRA)
         severity = EventSeverity.HIGH if action in HIGH_SEVERITY_ACTIONS else EventSeverity.MEDIUM
         if result == "failure":
             severity = EventSeverity.HIGH
         
-        # Build audit log entry
         actor = ctx.get_actor() if ctx else {
             "user_id": None,
             "user_type": None,
@@ -107,9 +95,9 @@ class ActivityLogger:
                 # owning tenant org of the target resource (accountability: who was acted upon)
                 "organization_id": target_organization_id,
                 "organization_slug": target_organization_slug,
-                # Explicit ambiguity/unbound state prevents the async task journal from
-                # backfilling a shared cluster's first organization as though it owned the
-                # target project. Legacy callers omit this and retain the historical fallback.
+                # An explicit ambiguous or unbound state keeps the task journal from
+                # backfilling a shared cluster's first organization as the owner of the
+                # target project. Callers that omit it get that fallback.
                 "organization_resolution": target_organization_resolution,
             },
             "result": result,
@@ -123,7 +111,6 @@ class ActivityLogger:
             } if any([duration_ms, before_state, after_state]) else None,
         }
         
-        # Log with appropriate level
         log_level = logging.WARNING if result == "failure" else logging.INFO
         self.logger.log(
             log_level,
@@ -151,20 +138,17 @@ class ActivityLogger:
             "password", "secret", "token", "api_key", "private_key",
             "client_secret", "trust_password", "credential"
         }
-        # important: substring matching against `api_key` also catches `api_key_id`, which is the
-        # PUBLIC half of the credential: it is returned in create and validate responses and
-        # rendered on the key card. Redacting it removed the only actor an API-key action has,
-        # so a record of what a key did could not say which key. The secret never travels in
-        # details at all; it is verified and discarded in validate_api_key.
+        # important: substring matching against `api_key` also catches `api_key_id`, the public
+        # half of the credential (returned by create and validate, shown on the key card).
+        # Redacting it would remove the only actor an API-key action has. The secret never
+        # travels in details; validate_api_key verifies and discards it.
         public_keys = {"api_key_id"}
 
         sanitized = {}
         for key, value in details.items():
             key_lower = key.lower()
-            # note: the allowlist exempts a name from REDACTION, not from the recursion below.
-            # Placing it first would have let a dict under an allowlisted name pass through
-            # unsanitised, and the allowlist is meant to say "this identifier is public", not
-            # "stop looking".
+            # The allowlist exempts a name from redaction, not from the recursion below: a dict
+            # under an allowlisted name is still sanitised.
             public = key_lower in public_keys
             if isinstance(value, dict):
                 sanitized[key] = self._sanitize_details(value)
@@ -186,9 +170,7 @@ class ActivityLogger:
         target_id: str,
         **kwargs
     ):
-        """
-        Context manager for logging activities with automatic timing.
-        """
+        """Context manager that logs the activity with its duration when it exits."""
         return ActivityLogContext(self, action, target_type, target_id, **kwargs)
 
 

@@ -1,19 +1,16 @@
 """What an LXD client key (My Keys) may grant.
 
 A My Keys record is a real LXD client certificate with its private key. An `admin` key is
-provisioned server-scope, so it reaches every project on the cluster, and a `standard` key is
-operator on the one project it names. Minting checked the cluster only, so a partner held to a
-project bound could mint an operator key for another organization's project, or a server key on a
-cluster another party holds (live on dev 2026-11-01, harness rc4hf2-23 R-28). Who may download or
-delete a record is routers/my_keys._owned_by_caller.
+server-scope (every project); a `standard` key is operator on the one project it names, so minting
+checks the caller's project bound as well as the cluster. Download and delete rights are
+routers/my_keys._owned_by_caller.
 
-important: the key talks to LXD directly, so nothing the dashboard enforces on its own writes
-(services/instance_security_policy, the safe allowlist on a shared cluster) applies to it. On a
-cluster another party holds, operator on the `default` project, which a project bound always leaves
-visible, lets the key create a privileged container with a host disk on that party's host. There a
-standard key may name only a project the caller's own organizations' policies name, and only once
-LXD itself isolates that project (restricted, own features), which is checked against the live
-project before the identity is created.
+important: the key talks to LXD directly, so no dashboard write policy (instance_security_policy,
+the shared-cluster safe allowlist) applies to it. On a cluster another party holds, operator on
+`default` (always visible under a project bound) can create a privileged container with a host
+disk on that party's host. There a standard key may name only a project its caller's own
+organizations' policies name, and only once the live LXD project is isolated (restricted, own
+features), checked before the identity is created.
 """
 
 from dataclasses import dataclass
@@ -61,9 +58,10 @@ async def authorize_new_key(
 ) -> KeyTarget:
     """Authorize what a new key grants and return where to provision it.
 
-    important: before any certificate is generated or any LXD call is made. A server key needs the
-    whole cluster (core.whole_cluster_access), a standard key needs its project inside the bound,
-    and on a cluster another party holds also a project of the caller's own (module docstring).
+    important: call this before any certificate is generated or any LXD call is made. A server
+    key needs the whole cluster (core.whole_cluster_access), a standard key needs its project
+    inside the bound, and on a cluster another party holds also a project of the caller's own
+    (module docstring).
     """
     # important: a key can be valid for years and LXD knows nothing of a paid term, so a cluster the
     # caller reaches only through a purchase gets no direct key at all, as it gets no API key grant.

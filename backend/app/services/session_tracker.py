@@ -1,25 +1,16 @@
 """
-Console/Terminal Session Tracker - live session intelligence.
+Console/terminal session tracker: duration, per-session bandwidth and rates,
+connection status, who is connected, and protocol type.
 
-Tracks WebSocket console/terminal sessions: duration, per-session bandwidth,
-download/upload rate, connection status, who is connected, and protocol type.
-
-Architecture:
-- The owning worker holds the authoritative SessionInfo. Byte counters are mutated at
-  frame rate by the proxy, so they must stay in-process and must never touch Redis
-  per frame.
+- The owning worker holds the authoritative SessionInfo. The proxy updates byte
+  counters at frame rate, so they stay in-process and never touch Redis per frame.
 - A publisher loop shares this worker's live sessions through session_registry, so a
-  poll answered by any worker sees the whole fleet. See session_registry.py for why
-  that is necessary at all (short version: the WebSocket pins to one of four uvicorn
-  workers, the REST poll does not).
-- Disconnected sessions are cleaned up after a TTL.
+  poll answered by any worker sees every session (see session_registry.py).
+- Disconnected sessions are cleaned up after CLEANUP_TTL.
 
-important: the publisher is deliberately per-worker and NOT leased, unlike the metrics
-collector. The collector reads a fact that is identical from any worker, so doing it
-four times is duplication. This reports a fact only this worker holds, because the
-socket is pinned here, so leasing it would silence three quarters of the truth and
-reproduce the exact bug the registry exists to fix. The inconsistency between the two
-loops is the correct state.
+important: the publisher runs on every worker and is not leased, unlike the metrics
+collector. The collector reads a fact any worker can read; this reports sessions only
+this worker holds, because their sockets are pinned here, so a lease would hide them.
 """
 
 import time
@@ -38,8 +29,8 @@ from app.services.session_registry import get_session_registry
 
 logger = logging.getLogger(__name__)
 
-# re-exported so existing importers (routers/console.py, routers/terminal.py) keep
-# working against the tracker module rather than reaching for the model module.
+# The model types are re-exported for importers of this module (routers/console.py,
+# routers/terminal.py).
 __all__ = [
     "BandwidthSample",
     "SessionInfo",
@@ -53,8 +44,7 @@ __all__ = [
 
 # important: asyncio only holds a weak reference to a running task, so a bare
 # create_task() can be garbage collected mid-flight and the work silently never
-# happens. Keep a strong reference until it finishes. Same defect this module's
-# audit writes had.
+# happens. Keep a strong reference until it finishes.
 _background: Set[asyncio.Task] = set()
 
 
@@ -75,19 +65,14 @@ def dedupe_sessions(sessions: List[SessionInfo]) -> List[SessionInfo]:
     """
     Collapse the same connection seen more than once, keeping the newest.
 
-    Needed because register()'s stale-duplicate close only scans the local dict. A
-    reconnect that lands on a different worker leaves the old worker's entry alive,
-    and nothing noticed while reads only ever saw one worker. Now that reads see all
-    of them, the operator would get two rows for one terminal. Not theoretical: both
-    LXD sockets run with ping_interval=None, so closing a laptop lid leaves the old
-    proxy up until the browser's close finally arrives.
+    register() closes a stale duplicate only in the local dict, so a reconnect that
+    lands on another worker leaves the old worker's entry alive. Both LXD sockets run
+    with ping_interval=None, so a closed laptop lid leaves the old proxy up until the
+    browser's close arrives. The key is exactly the tuple register() matches on.
 
-    The key is exactly the tuple register() matches on, so the two cannot disagree.
-
-    note: the protocol is part of it. A console window keeps its Graphics, Text and Serial tabs
-    connected side by side, so a shell and a display on one instance are two live sessions, not
-    a reconnect of one. Without the protocol each suppressed the other: the list showed one, and
-    the suppressed one later lost its disconnect audit row when the cleanup loop dropped it.
+    The protocol is part of the key: a console window keeps its Graphics, Text and Serial tabs
+    connected side by side, so a shell and a display on one instance are two live sessions, each
+    with its own disconnect audit row.
     """
     newest: Dict[Tuple[str, str, str, SessionProtocol], SessionInfo] = {}
     passthrough: List[SessionInfo] = []
@@ -106,14 +91,13 @@ def dedupe_sessions(sessions: List[SessionInfo]) -> List[SessionInfo]:
 
 class SessionTracker:
     """
-    Global in-memory session store.
+    Per-worker in-memory session store, used from the event loop thread only.
 
-    Thread-safe for asyncio (single-threaded event loop).
     Stale disconnected sessions are cleaned up periodically.
     """
 
-    # how long to keep disconnected sessions before cleanup (seconds)
-    CLEANUP_TTL = 300  # 5 minutes
+    # Seconds a disconnected session is kept before cleanup.
+    CLEANUP_TTL = 300
 
     def __init__(self) -> None:
         self._sessions: Dict[str, SessionInfo] = {}
@@ -168,7 +152,6 @@ class SessionTracker:
             f"Session tracked: {session_id[:12]}... "
             f"({protocol.value}) {instance_name}@{host} user={user_id}"
         )
-        # Fire audit log (non-blocking)
         fire_and_forget_connect(
             session_id=session_id,
             instance_name=instance_name,
@@ -182,9 +165,8 @@ class SessionTracker:
             target_org_slug=target_org_slug,
             break_glass_grant_id=break_glass_grant_id,
         )
-        # stays synchronous: it is called from the WebSocket hot path and already uses
-        # the house fire-and-forget pattern for the audit write. Waking the publisher
-        # gets the session shared immediately without making this async.
+        # register() stays synchronous for the WebSocket hot path; waking the publisher
+        # shares the session at once.
         self.notify_change()
         return session
 
@@ -202,7 +184,6 @@ class SessionTracker:
                 f"duration={session.duration_seconds:.1f}s "
                 f"dl={session.bytes_downloaded} ul={session.bytes_uploaded}"
             )
-            # Fire audit log (non-blocking)
             fire_and_forget_disconnect(
                 session_id=session_id,
                 instance_name=session.instance_name,
@@ -219,21 +200,18 @@ class SessionTracker:
                 target_org_slug=session.target_org_slug,
                 break_glass_grant_id=session.break_glass_grant_id,
             )
-            # Drop it from the shared view now. Without this the row would linger on
-            # other workers until it went stale, so closing a terminal would leave it
-            # listed for seconds. The staleness window is the backstop, not the path.
+            # Drop it from the shared view now; otherwise other workers keep listing a
+            # closed terminal until its snapshot goes stale.
             _spawn(get_session_registry().remove(session_id))
             self.notify_change()
 
     def live_sessions(self) -> List[SessionInfo]:
         """
-        This worker's sessions that have not disconnected.
+        This worker's sessions that have not disconnected: the single "is it live" rule.
 
-        Single source of the "is it live" rule. The publisher MUST go through this
-        rather than walking _sessions directly: unregister() only MARKS a session
-        disconnected and leaves the object in place for CLEANUP_TTL, so a publisher
-        iterating the raw dict would re-write the field it had just deleted, one
-        heartbeat later, for five minutes. A session that ended would keep coming back.
+        important: the publisher must use this instead of _sessions. unregister() only marks
+        a session disconnected and keeps it for CLEANUP_TTL, so publishing the raw dict
+        would re-write the field just removed and an ended session would come back.
         """
         return [s for s in self._sessions.values() if s.status != SessionStatus.DISCONNECTED]
 
@@ -246,10 +224,10 @@ class SessionTracker:
         """
         This worker's active sessions only.
 
-        important: user_email=None means "no user filter" here, which is why the HTTP
-        layer must establish who the caller is before it calls anything. A token with
-        no email claim used to reach this with None and get back every session on the
-        worker, across tenants. Callers that represent a user go through list_active().
+        important: user_email=None means "no user filter", so a token with no email
+        claim would get every session on the worker, across tenants. The HTTP layer
+        must establish who the caller is first; callers that represent a user go
+        through list_active().
         """
         result = []
         for s in self.live_sessions():
@@ -270,10 +248,9 @@ class SessionTracker:
         """
         Every live session on every worker, local copies winning.
 
-        Local-first is not just an optimisation: our own SessionInfo has frame-current
-        byte counters, while a snapshot is at best one heartbeat old. It also means the
-        owning worker still answers correctly when Redis is away, which is what makes
-        the degraded path fall out instead of needing a special case.
+        A local SessionInfo has frame-current byte counters, while a snapshot is at
+        best one heartbeat old, and the owning worker still answers correctly when
+        Redis is away.
         """
         merged: Dict[str, SessionInfo] = {s.session_id: s for s in self.live_sessions()}
 
@@ -354,12 +331,11 @@ class SessionTracker:
         """
         Ask the publisher to write now rather than at the next beat.
 
-        Lifecycle edges need this. A console registers as CONNECTING and only reaches
-        CONNECTED after two LXD connects with 10s and 15s timeouts, so waiting for a
-        timer would show the session late, and an ended session would linger.
-
-        note: Event.set() is not thread-safe, which is fine here because every caller
-        (register, mark_connected, unregister) runs on the event loop thread.
+        A console registers as CONNECTING and only reaches CONNECTED after two LXD
+        connects with 10s and 15s timeouts, so waiting for a timer would show the
+        session late, and an ended session would linger. Event.set() is not
+        thread-safe; every caller (register, mark_connected, unregister) runs on the
+        event loop thread.
         """
         if self._publish_event is not None:
             self._publish_event.set()
@@ -382,9 +358,9 @@ class SessionTracker:
         """
         Share this worker's live sessions, on a beat or whenever one changes.
 
-        note: the try sits INSIDE the while on purpose. Wrapping the loop instead means
-        the first transient error ends the beat permanently and the whole fleet quietly
-        reverts to per-worker views, which is the bug this exists to fix, now silent.
+        important: the try stays inside the while. Wrapping the loop instead, the first
+        transient error would end the beat for good and every worker would silently
+        fall back to its own view.
         """
         from app.core.config import get_settings
         settings = get_settings()
@@ -430,7 +406,7 @@ class SessionTracker:
         """Periodically remove stale disconnected sessions."""
         while True:
             try:
-                await asyncio.sleep(60)  # check every minute
+                await asyncio.sleep(60)
                 now = time.time()
                 stale_ids = [
                     sid for sid, s in self._sessions.items()
@@ -454,7 +430,6 @@ class SessionTracker:
             self._cleanup_task = None
 
 
-# Singleton instance
 _tracker: Optional[SessionTracker] = None
 
 

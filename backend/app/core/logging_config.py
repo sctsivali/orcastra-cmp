@@ -1,7 +1,4 @@
-"""
-Logging Configuration Module
-Provides structured JSON logging for Orcastra CMP.
-"""
+"""Structured JSON logging: app, access and audit records, routed by Fluent Bit on `log_type`."""
 
 import json
 import logging
@@ -17,9 +14,7 @@ from app.core.error_sanitizer import redact_query_secrets
 
 
 class StructuredJsonFormatter(logging.Formatter):
-    """
-    JSON formatter for structured logging.
-    """
+    """JSON formatter for app logs; access and audit records keep their pre-formatted fields."""
     
     def __init__(self, service_name: str = "orcastra-backend", version: str = "0.0.0"):
         super().__init__()
@@ -27,30 +22,25 @@ class StructuredJsonFormatter(logging.Formatter):
         self.version = version
     
     def format(self, record: logging.LogRecord) -> str:
-        """Format log record as JSON."""
         # Import here to avoid circular imports
         from app.core.request_context import get_request_context
         
-        # Check for specialized log types (access/audit logs)
-        # These have pre-formatted data with log_type field for Fluent Bit routing
+        # Access and audit records arrive pre-formatted, with the log_type Fluent Bit routes on.
         if hasattr(record, "access_log_data"):
-            # Access logs - output directly with log_type for routing
             log_entry = record.access_log_data.copy()
             log_entry["service"] = self.service_name
             log_entry["version"] = self.version
             return json.dumps(log_entry, default=str, ensure_ascii=False)
         
         if hasattr(record, "audit_log_data"):
-            # Audit logs - output directly with log_type for routing
             log_entry = record.audit_log_data.copy()
             log_entry["service"] = self.service_name
             log_entry["version"] = self.version
             return json.dumps(log_entry, default=str, ensure_ascii=False)
         
-        # Standard application logs
         log_entry: Dict[str, Any] = {
             "@timestamp": datetime.now(timezone.utc).isoformat(),
-            "log_type": "app",  # Mark as app log for Fluent Bit routing
+            "log_type": "app",
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -58,14 +48,12 @@ class StructuredJsonFormatter(logging.Formatter):
             "version": self.version,
         }
         
-        # Add request context if available
         ctx = get_request_context()
         if ctx:
             log_entry["request_id"] = ctx.request_id
             if ctx.user_id:
                 log_entry["user_id"] = ctx.user_id
         
-        # Add source location for debug/error logs
         if record.levelno >= logging.WARNING:
             log_entry["source"] = {
                 "file": record.pathname,
@@ -73,7 +61,6 @@ class StructuredJsonFormatter(logging.Formatter):
                 "function": record.funcName,
             }
         
-        # Add exception info if present
         if record.exc_info:
             log_entry["exception"] = {
                 "type": record.exc_info[0].__name__ if record.exc_info[0] else None,
@@ -81,11 +68,10 @@ class StructuredJsonFormatter(logging.Formatter):
                 "traceback": traceback.format_exception(*record.exc_info) if record.exc_info[0] else None,
             }
         
-        # Add any extra fields from the record
         if hasattr(record, "extra_fields"):
             log_entry.update(record.extra_fields)
 
-        # Add dedup count if present (from LogDeduplicationFilter)
+        # Set by LogDeduplicationFilter.
         if hasattr(record, "dedup_count") and record.dedup_count > 1:
             log_entry["dedup_count"] = record.dedup_count
 
@@ -93,10 +79,7 @@ class StructuredJsonFormatter(logging.Formatter):
 
 
 class AccessLogFormatter(logging.Formatter):
-    """
-    Specialized formatter for HTTP access logs.
-    Outputs in the exact format expected by orcastra-access-* index.
-    """
+    """HTTP access log formatter, in the shape the orcastra-access-* index expects."""
     
     def __init__(self, service_name: str = "orcastra-backend", version: str = "0.0.0"):
         super().__init__()
@@ -104,8 +87,6 @@ class AccessLogFormatter(logging.Formatter):
         self.version = version
     
     def format(self, record: logging.LogRecord) -> str:
-        """Format access log record as JSON."""
-        # Access logs should have access_log_data attribute
         if hasattr(record, "access_log_data"):
             log_entry = record.access_log_data
             log_entry["service"] = self.service_name
@@ -123,10 +104,7 @@ class AccessLogFormatter(logging.Formatter):
 
 
 class AuditLogFormatter(logging.Formatter):
-    """
-    Specialized formatter for audit/activity logs.
-    Outputs in the exact format expected by orcastra-audit-* index.
-    """
+    """Audit log formatter, in the shape the orcastra-audit-* index expects."""
     
     def __init__(self, service_name: str = "orcastra-backend", version: str = "0.0.0"):
         super().__init__()
@@ -134,8 +112,6 @@ class AuditLogFormatter(logging.Formatter):
         self.version = version
     
     def format(self, record: logging.LogRecord) -> str:
-        """Format audit log record as JSON."""
-        # Audit logs should have audit_log_data attribute
         if hasattr(record, "audit_log_data"):
             log_entry = record.audit_log_data
             log_entry["service"] = self.service_name
@@ -153,19 +129,12 @@ class AuditLogFormatter(logging.Formatter):
 
 
 class LogDeduplicationFilter(logging.Filter):
-    """
-    In-memory log deduplication filter for app logs.
+    """Suppresses repeats of an app log message within a time window.
 
-    Identical log messages (same logger + level + message) within a
-    configurable time window are suppressed and replaced with a single
-    entry carrying a ``count`` field when the window expires or a new
-    unique message arrives.
-
-    Only applies to **app logs** - access and audit logs pass through
-    unmodified (they have their own dedup via event_id / request_id
-    at the OpenSearch level).
-
-    Thread-safe via a lock protecting the internal state.
+    A message seen again (same logger, level and text) inside the window is dropped. The first
+    occurrence after the window expires carries ``dedup_count``, the number seen in the window
+    that ended. Access and audit records pass through; OpenSearch deduplicates them by event_id
+    or request_id.
     """
 
     def __init__(self, window_seconds: float = 60.0, name: str = ""):
@@ -178,7 +147,6 @@ class LogDeduplicationFilter(logging.Filter):
         self._flushed: Dict[tuple, bool] = {}
 
     def filter(self, record: logging.LogRecord) -> bool:
-        # never deduplicate access or audit logs
         if hasattr(record, "access_log_data") or hasattr(record, "audit_log_data"):
             return True
 
@@ -186,43 +154,35 @@ class LogDeduplicationFilter(logging.Filter):
         now = time.time()
 
         with self._lock:
-            # check if window expired for this key - flush summary
             if key in self._first_seen:
                 elapsed = now - self._first_seen[key]
                 if elapsed >= self._window:
-                    # window expired: emit summary if count > 1
                     count = self._counts.get(key, 1)
                     if count > 1 and not self._flushed.get(key, False):
                         record.dedup_count = count
-                    # reset tracking
                     self._counts[key] = 1
                     self._first_seen[key] = now
                     self._flushed[key] = True
                     return True
 
-                # within window
                 self._counts[key] = self._counts.get(key, 0) + 1
                 count = self._counts[key]
 
                 if count == 1:
-                    # first occurrence - let it through
                     self._flushed[key] = False
                     return True
                 elif count == 2:
-                    # second occurrence - suppress but flag first will need summary
                     return False
                 else:
-                    # 3+ occurrences - suppress
                     return False
             else:
-                # brand-new message
                 self._counts[key] = 1
                 self._first_seen[key] = now
                 self._flushed[key] = False
                 return True
 
     def flush_pending(self) -> None:
-        """Force-flush any pending dedup summaries (call on shutdown)."""
+        """Log a summary line for every run still suppressed. Call on shutdown."""
         with self._lock:
             for key, count in list(self._counts.items()):
                 if count > 1 and not self._flushed.get(key, False):
@@ -277,18 +237,13 @@ def setup_logging(
     log_level: str = "INFO",
     json_logs: bool = True,
 ) -> None:
-    """
-    Configure application logging with structured JSON output.
-    """
-    # Get root logger
+    """Configure root logging: one stdout handler, JSON by default, with the dedup filter."""
     root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
     
-    # Remove existing handlers
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
     
-    # Create stdout handler
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setLevel(logging.DEBUG)
     
@@ -304,7 +259,6 @@ def setup_logging(
     
     root_logger.addHandler(stdout_handler)
     
-    # Add dedup filter for app logs (NOT access/audit - those pass through)
     try:
         dedup_window = float(os.environ.get("LOG_DEDUP_WINDOW_SECONDS", "60"))
     except (ValueError, TypeError):
@@ -312,7 +266,7 @@ def setup_logging(
     dedup_filter = LogDeduplicationFilter(window_seconds=dedup_window)
     stdout_handler.addFilter(dedup_filter)
     
-    # Set specific log levels for noisy libraries
+    # Quieten noisy libraries.
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.error").setLevel(logging.INFO)
     install_query_secret_filter()
@@ -322,18 +276,14 @@ def setup_logging(
     logging.getLogger("websockets").setLevel(logging.WARNING)
 
 
-# Access log logger - separate logger for access logs
 access_logger = logging.getLogger("orcastra.access")
 
-# Audit log logger - separate logger for audit logs  
 audit_logger = logging.getLogger("orcastra.audit")
 
 
 def get_access_logger() -> logging.Logger:
-    """Get the access log logger."""
     return access_logger
 
 
 def get_audit_logger() -> logging.Logger:
-    """Get the audit log logger."""
     return audit_logger

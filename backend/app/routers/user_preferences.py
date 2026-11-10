@@ -1,10 +1,8 @@
-"""
-User preferences: the theme each user chose (light, dark or system), and the image proxy the
-branding editor uses.
+"""User preferences: each user's theme (light, dark or system), and the branding editor's image proxy.
 
 Branding is not per user. It belongs to an organization, its provider or the deployment
-(services/branding/), and a personal row keeps only the theme. Keyed by the OIDC subject of the
-validated token, never by a header.
+(services/branding/), and a personal row keeps only the theme. Rows are keyed by the OIDC subject
+of the validated token.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -55,12 +53,10 @@ class BrandingSettings(BaseModel):
     footerText: str = "© {YEAR} ORCASTRA"
 
 
-# important: these values are the product defaults, and they must match
-# frontend/src/types/personalization.ts, the CSS seeds in frontend/src/app/globals.css and
-# get_default_settings() below. This is the copy a user with no stored row actually receives,
-# so a drift here is not a styling nit: the API hands out one colour while the stylesheet
-# paints another until the row is written. scripts/checks/check-personalization-defaults.mjs
-# reads this file and fails the build when the copies disagree.
+# important: the product defaults. They must match frontend/src/types/personalization.ts, the
+# CSS seeds in frontend/src/app/globals.css and get_default_settings() below. A user with no
+# stored row receives these, so drift means the API hands out one colour while the stylesheet
+# paints another. scripts/checks/check-personalization-defaults.mjs fails when the copies differ.
 DEFAULT_ACCENT_COLOR = "#8467e4"
 DEFAULT_SIDEBAR_BG_COLOR = "#321f6f"
 DEFAULT_SIDEBAR_TEXT_COLOR = "#f8fafc"
@@ -158,9 +154,8 @@ def _personal_view(user_prefs: UserPreferences) -> Dict[str, Any]:
 
 
 # important: identity comes from the validated JWT principal, never from a request
-# header. These endpoints used to key on X-User-ID, which any authenticated caller
-# could set to somebody else's subject and so read, overwrite or delete another
-# user's preferences. The header is now ignored entirely.
+# value; otherwise any caller could read, overwrite or delete another user's
+# preferences.
 def current_identity(user: AuthenticatedUser) -> tuple[str, Optional[str]]:
     if not user or not user.user_id:
         raise HTTPException(status_code=401, detail="Authentication required.")
@@ -182,16 +177,9 @@ async def get_user_preferences(
     db: AsyncSession = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated()),
 ) -> Dict[str, Any]:
-    """
-    Get personalization settings for the current user.
+    """The source of truth for the user's preferences; the frontend reads it at sign-in."""
     
-    This endpoint is the source of truth for user preferences.
-    Frontend should always fetch from here on login to ensure
-    cross-browser synchronization.
-    """
-    
-    # Set cache-control headers to prevent browser/proxy caching
-    # This ensures fresh data is always fetched from the database
+    # No browser or proxy caching: every read comes from the database.
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, private"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
@@ -201,7 +189,6 @@ async def get_user_preferences(
     logger.info(f"Fetching preferences for user {x_user_id}")
     
     try:
-        # Query user preferences
         result = await db.execute(
             select(UserPreferences).where(UserPreferences.user_id == x_user_id)
         )
@@ -212,7 +199,6 @@ async def get_user_preferences(
             logger.info(f"Returning saved preferences for user {x_user_id}, lastModified: {settings['lastModified']}")
             return settings
         else:
-            # No saved preferences, return defaults
             logger.info(f"No preferences found for user {x_user_id}, returning defaults")
             return get_default_settings()
             
@@ -238,10 +224,9 @@ async def update_user_preferences(
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, private"
     x_user_id, x_user_email = current_identity(user)
     # important: only the theme is kept. Branding belongs to an organization or to the deployment
-    # (services/branding/); a personal row used to hold a full copy of it, which the fallback then
-    # handed to everyone in the owner's organization. `theme: null` clears the choice, so the
-    # organization's default theme applies again. Other keys a client sends are ignored, and keys
-    # an older build stored are left in place for a rollback to read.
+    # (services/branding/); a personal copy would be handed to everyone in the owner's
+    # organization. `theme: null` clears the choice, so the organization's default theme applies.
+    # Other keys a client sends are ignored; keys already stored stay in place for a rollback.
     if "theme" not in settings:
         raise HTTPException(status_code=422, detail="Only the theme is stored per user; send {\"theme\": ...}.")
     theme = settings.get("theme")
@@ -295,14 +280,8 @@ async def reset_user_preferences(
     user: AuthenticatedUser = Depends(require_authenticated()),
     _: None = Depends(check_read_only_mode),
 ) -> Dict[str, str]:
-    """
-    Reset personalization settings to defaults.
+    """Delete the user's stored preferences, so the defaults apply."""
     
-    Deletes the user's preferences from the database,
-    effectively resetting all customizations to system defaults.
-    """
-    
-    # Set cache-control headers
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, private"
     
     x_user_id, x_user_email = current_identity(user)
@@ -334,10 +313,8 @@ async def reset_user_preferences(
 # Image Proxy - fetch cross-origin images server-side
 # ============================================
 
-# note: the private-range list and the URL check that used to live here were a second, older
-# copy of core/url_safety.py. It had drifted: no 0.0.0.0/8, no fe80::/10, no scheme check, and
-# it missed every IPv4-mapped IPv6 form. Two copies of an SSRF filter guarantees one goes
-# stale, so this surface now uses the same guarded client as every other outbound fetch.
+# important: no SSRF filter of its own. This proxy uses the guarded client (core/safe_http.py,
+# core/url_safety.py) like every other outbound fetch, so there is one filter to keep current.
 
 
 class ProxyImageRequest(BaseModel):

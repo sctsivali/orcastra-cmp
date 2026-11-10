@@ -1,8 +1,4 @@
-"""
-API Router for Monitoring operations.
-Provides endpoints for real-time cluster and instance metrics monitoring.
-Based on LXD metrics API specification: CPU, memory, disk, network, processes.
-"""
+"""Monitoring: the fleet dashboard, per-cluster metrics, metrics history and the push feed."""
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Response, WebSocket, WebSocketDisconnect
 from typing import Annotated, Optional, List, Dict, Any
@@ -67,15 +63,15 @@ _MONITORING_CACHE_KIND = "monitoring"
 
 
 def _resource_generation(cache: Any, kind: str) -> Optional[str]:
-    """Read a resource generation, allowing deliberately minimal cache test doubles."""
+    """The resource list generation token, or None from a cache that keeps none (a stub)."""
     read = getattr(cache, "resource_list_generation", None)
     return read(kind) if callable(read) else None
 
 def _share(used: float, total: float) -> Optional[float]:
     """`used` as a percentage of `total`, or None when nothing reported a total.
 
-    important: never 0 for 0/0. A gauge reading 0.0% over a total of zero tells an operator the
-    fleet is idle when no cluster reported its capacity at all.
+    Never 0 for 0/0: a gauge reading 0.0% over a total of zero tells an operator the fleet is idle
+    when no cluster reported its capacity at all.
     """
     return round(used / total * 100, 2) if total > 0 else None
 
@@ -86,10 +82,9 @@ router = APIRouter(
     dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
 )
 
-# Separate router for WebSocket endpoints, because router-level HTTP auth
-# dependencies (HTTPBearer) break WebSocket upgrade requests because
-# browsers cannot send Authorization headers during the WS handshake.
-# Auth is handled inside the handler via ws_user("monitoring") (a single-use ?ticket=).
+# WebSocket endpoints get their own router: the HTTP auth dependencies (HTTPBearer)
+# break the upgrade, since browsers cannot send an Authorization header in the
+# handshake. The handler authenticates with ws_user("monitoring") (a single-use ?ticket=).
 ws_router = APIRouter(
     prefix="/monitoring",
     tags=["Monitoring"],
@@ -99,42 +94,26 @@ ws_router = APIRouter(
 _last_history_store_times: Dict[str, float] = {}
 
 
-# note: node status is NOT collected here. This module used to carry its own copy of the
-# per-node check and its own fan-out, and the copy did not consult the circuit breaker, so it
-# never set `reachable` and could not tell a host that refused our certificate from one that
-# never answered. That is what forced the status ladder below to guess from the error text.
-# LXDService.check_nodes_status_async is the same fan-out /nodes uses, so the dashboard and the
-# node pickers now answer from one implementation.
-#
-# note: nor is per-instance CPU. A second sampler lived here with its own per-worker baselines,
-# its own `int(limits.cpu)` divisor and a first sample of 0.0, so Top Consumers and the instance
-# dialog disagreed about the same instance. Usage now comes from services/monitoring_usage.py,
-# which reads the state the fleet list already carries through the dialog's own sampler.
+# Node status has no private copy here: read_fleet (services/monitoring_sweep.py) runs the same
+# per-node check /nodes uses (LXDService.check_node_status), which consults the circuit breaker
+# and sets `reachable`, so the dashboard and the node pickers answer from one implementation.
+# Per-instance CPU is not sampled here either: usage comes from services/monitoring_usage.py,
+# through the instance dialog's own sampler, so Top Consumers and the dialog agree.
 
 
-# Cache key for the dashboard response, scoped so partner users never read admin-cached data.
-#
-# important: this lives in Redis, not in module state. It used to be a pair of plain dicts, so
-# with WEB_CONCURRENCY=4 there were four independent 35s snapshots and the background collector
-# only ever warmed the worker it happened to run in. An operator refreshing the page hopped
-# workers and watched the numbers jump backwards. Worse, each worker saw a request only about
-# every 40s under a 10s client poll, past its own 35s TTL, so the cache missed nearly every time
-# and each miss paid a full node fan-out.
-#
-# note: Redis here runs allkeys-lru at 256mb, so an entry can be evicted before its TTL under
-# memory pressure. That is survivable precisely because these keys are few (one per scope) and
-# hot; do not split this into one key per cluster.
-# note: v2 since the body gained nullable CPU fields. During a rolling deploy an older worker
-# must never parse a body it cannot validate, and the v1 entries simply expire.
-# v3: the body moved into the stale-while-revalidate envelope (core/cache_envelope.py).
+# Cache key for the dashboard response, scoped so a partner never reads an admin's entry.
+# important: kept in Redis so every worker serves the snapshot the collector warmed. Redis runs
+# allkeys-lru, which is survivable only because these keys are few (one per scope) and hot; do
+# not split this per cluster. Bump the version when the body changes shape, so an older worker
+# in a rolling deploy never parses a body it cannot validate.
 MONITORING_DASHBOARD_CACHE_KEY = "monitoring:dashboard:v3"
 _DASHBOARD_CACHE_TTL = 35
 # The scope the background collector refreshes: admins and the collector itself.
 COLLECTED_SCOPE_KEY = "dashboard:scope=all"
 # important: the collected scope's entry outlives a whole collection cycle (the sweep plus the
 # 30 s pause) and a leader being replaced in the middle of one, so collector followers relaying
-# it and admins reading it always find it. At 35 s it expired every cycle, and each follower then
-# swept the whole fleet itself.
+# it and admins reading it always find it. Expiring within a cycle would make each follower
+# sweep the whole fleet itself.
 COLLECTED_DASHBOARD_TTL = 120
 
 
@@ -153,9 +132,7 @@ def cached_dashboard() -> Optional[MonitoringDashboardResponse]:
         logger.warning("Ignoring an unreadable cached monitoring dashboard: %s", exc)
         return None
 
-# note: no herd lock here any more. swr.serve collapses arrivals per scope key on a miss or a
-# forced read, which is what the local lock was approximating with a pre-advanced timestamp that
-# pinned a stale body for 35s whenever a rebuild raised.
+# No herd lock here: swr.serve collapses arrivals per scope key on a miss or a forced read.
 
 
 @router.get(
@@ -168,14 +145,13 @@ async def get_monitoring_dashboard(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
 ):
+    """Aggregated metrics across the caller's clusters and instances.
+
+    Served from the scope's cache, which the background collector keeps warm; `fresh=true`
+    rebuilds it.
     """
-    Get comprehensive monitoring dashboard data.
-    Returns aggregated metrics across all clusters and instances.
-    Uses background collector caching (35s TTL) - cache is pre-warmed on startup.
-    Set fresh=true to bypass cache.
-    """
-    # Build a scope key so each org gets its own cached snapshot.
-    # note: scope_key keeps the "dashboard" base because _monitoring_history_key maps off it.
+    # One cached snapshot per org scope. The base stays "dashboard" because
+    # _monitoring_history_key maps off it.
     scope_key = get_scope_cache_key("dashboard")
     cache = get_cache_manager()
 
@@ -189,11 +165,11 @@ async def get_monitoring_dashboard(
         fleet = await read_fleet(lxd_service, timer)
         all_vms, connected_nodes = fleet.vms, fleet.connected
         node_statuses_list = fleet.statuses
-        # An unreadable registry with nothing known is not a fleet of zeros (issue #15). The
-        # background collector builds through here too, so it records no zero point either.
+        # An unreadable registry with nothing known is not a fleet of zeros. The background
+        # collector builds through here too, so it records no zero point either.
         require_known_registry([node.name for node in node_statuses_list])
         
-        # apply tenant ACL filtering
+        # Tenant ACL filtering.
         all_vms = [
             vm for vm in all_vms
             if check_tenant_permission(
@@ -204,7 +180,6 @@ async def get_monitoring_dashboard(
             )
         ]
         
-        # Calculate instance statistics
         total_instances = len(all_vms)
         running_instances = len([vm for vm in all_vms if vm.status.value == "Running"])
         stopped_instances = len([vm for vm in all_vms if vm.status.value == "Stopped"])
@@ -235,11 +210,10 @@ async def get_monitoring_dashboard(
         # cluster that sent no resources adds nothing, and the page has to say so.
         reporting_nodes = 0
 
-        # important: resources.py sets node_type only for a cluster that answered AND trusted us,
-        # so on the one path that shows a trust hint it is always None, and get_cli_command_prefix
-        # then defaults to lxc. An Incus cluster was told to run 'lxc config trust add' instead of
-        # 'incus config trust add-certificate'. Registration recorded the real type, so read it
-        # from there. Once, not per node: this is a file read behind the store.
+        # resources.py sets node_type only for a cluster that answered and trusted this client, so
+        # on the one path that shows a trust hint it is None, and get_cli_command_prefix would
+        # default to lxc and give an Incus operator the wrong command. Registration recorded the
+        # real type; read it once, not per node, since this is a file read behind the store.
         registered_types = {
             name: meta.get("type")
             for name, meta in get_node_metadata_store().get_all_node_metadata().items()
@@ -260,9 +234,8 @@ async def get_monitoring_dashboard(
                     used_cpu += resources.cpu_used
                     total_memory += resources.memory_total
                     used_memory += resources.memory_used
-                    # note: usable capacity, so a shared backing store behind a MicroCloud is
-                    # added once here rather than once per member. storage_raw_total holds the
-                    # per-member sum if a future panel wants to show the difference.
+                    # Usable capacity: a shared backing store behind a MicroCloud is added once,
+                    # not once per member. storage_raw_total holds the per-member sum.
                     total_storage += resources.storage_total
                     used_storage += resources.storage_used
                     total_gpu += resources.gpu_total
@@ -271,7 +244,6 @@ async def get_monitoring_dashboard(
                     total_gpu_integrated_cards += resources.gpu_integrated_total
                     used_gpu += resources.gpu_used
                     
-                    # Aggregate storage pools
                     for pool in resources.storage_pools:
                         storage_pools_list.append(StoragePoolMetrics(
                             name=pool.get("name", "unknown"),
@@ -287,7 +259,6 @@ async def get_monitoring_dashboard(
                             ) if pool.get("space_total", 0) > 0 else 0,
                         ))
                     
-                    # Create node metrics
                     inventory_missed = fleet.timed_out.get(node.name)
                     nodes_metrics.append(ClusterMonitoringMetrics(
                         node_name=node.name,
@@ -330,9 +301,7 @@ async def get_monitoring_dashboard(
             else:
                 inactive_nodes += 1
                 # important: `reachable` is the discriminator, never the wording of `error`.
-                # This block used to substring-match the error text and emitted "pending_trust",
-                # a value that is in no enum, so a host that was simply powered off read as a
-                # certificate problem and sent an operator to rotate a cert on a dead machine.
+                # Matching the error text reads a powered-off host as a certificate problem.
                 # derive_status is the one mapping; see models/cluster_status.py.
                 status, _reason_code, message = derive_status(
                     connected=node.connected,
@@ -342,14 +311,13 @@ async def get_monitoring_dashboard(
                 )
                 cluster_status = status.value
                 if status is ClusterStatus.NOT_AUTHORIZED:
-                    # The CLI hint belongs to this state alone. It was previously attached to
-                    # unreachable hosts too, which is the half that wasted the operator's time.
+                    # The CLI hint belongs to this state alone; an unreachable host needs no
+                    # trust command.
                     node_type = node.node_type or registered_types.get(node.name)
                     cli_prefix = get_cli_command_prefix(node_type)
                     trust_subcmd = get_trust_add_subcommand(node_type)
-                    # note: written out rather than appended to `message`, whose last sentence is
-                    # already a generic "Add trust on the cluster." Appending produced that
-                    # instruction twice in one line.
+                    # Written out rather than appended to `message`, whose last sentence is
+                    # already a generic "Add trust on the cluster."
                     auth_detail = f" (auth={node.auth})" if node.auth else ""
                     status_message = (
                         f"Cluster answered but rejected our certificate.{auth_detail} "
@@ -374,10 +342,9 @@ async def get_monitoring_dashboard(
                     storage_total_bytes=0,
                     storage_used_bytes=0,
                     storage_usage_percent=None,
-                    # important: an offline node contributes zero GPU, exactly as it
-                    # contributes zero CPU and memory above. Do not "fix" this into a
-                    # remembered number: the fleet total must only count hardware we can
-                    # currently see, and a stale count reads as available capacity.
+                    # important: an offline node contributes zero GPU, as it contributes
+                    # zero CPU and memory above. A remembered count would read as available
+                    # capacity; the fleet total counts only hardware that answered.
                     gpu_total=0,
                     gpu_used=0,
                     gpu_available=0,
@@ -386,7 +353,7 @@ async def get_monitoring_dashboard(
                     running_instances=0,
                 ))
         
-        # Calculate overall percentages
+        # A tenant sees no storage pools.
         if tenant_acl_active():
             storage_pools_list = []
 
@@ -482,19 +449,17 @@ async def get_monitoring_dashboard(
             collection_time_ms=round(elapsed_time * 1000, 2),
         )
         
-        # Store metrics in history for charts (append to rolling buffer).
-        # Each org scope gets its own history stream so charts render without exposing
-        # global/background collector data; a tenant scope writes none (see below).
-        # note: not when no cluster answered. That dashboard is all zeros, the same misreading
-        # the cache below refuses to keep, and as a point it drew the fleet idling at zero.
-        # note: the slot id differs from the previous string store's, so a release still writing
-        # that store during a rolling deploy never takes this store's slot.
+        # Append a point to the scope's history for the charts. Each org scope has its own
+        # stream, so charts render without exposing the collector's global data. Not when no
+        # cluster answered: that dashboard is all zeros, the misreading the cache below refuses.
+        # The slot id differs from the legacy string store's, so an older release writing that
+        # store during a rolling deploy never takes this store's slot.
         history_key = _monitoring_history_key(scope_key)
         history_started = time.monotonic()
         history_written = False
-        # note: never for a tenant scope. A point carries each host's memory, storage and GPU,
-        # which a tenant may not read, and GET /history refuses it anyway (owner decision
-        # 2026-10-26); writing them would only keep host figures at rest under its key.
+        # important: never for a tenant scope. A point carries each host's memory, storage and
+        # GPU, which a tenant may not read, and GET /history refuses it anyway; writing them
+        # would only keep host figures at rest under its key.
         if (
             connected_nodes
             and not tenant_acl_active()
@@ -508,9 +473,8 @@ async def get_monitoring_dashboard(
                     nodes_metrics,
                     usages,
                     fleet_cpu_percent=fleet_cpu.busy_percent,
-                    # note: a history point keeps 0.0 for a missing total, as it always has. Its
-                    # Postgres column is NOT NULL and the chart reads a number; only the gauges
-                    # learned to say "Unavailable".
+                    # A history point keeps 0.0 for a missing total: its Postgres column is
+                    # NOT NULL and the chart reads a number. Only the gauges say "Unavailable".
                     memory_usage_percent=memory_usage_percent if memory_usage_percent is not None else 0.0,
                     storage_usage_percent=storage_usage_percent if storage_usage_percent is not None else 0.0,
                     running_instances=running_instances,
@@ -536,13 +500,11 @@ async def get_monitoring_dashboard(
             memory=memory_counts,
         )
         
-        # important: a dashboard built while no cluster answered is all zeros, and
-        # zeros on a monitoring surface read as a healthy idle fleet rather than an
-        # unreachable one. Caching that pins the misreading for the TTL, and a
-        # fresh=true bypass would let an operator replace real data with it. Leaving
-        # the previous entry in place means they keep seeing stale-but-true numbers
-        # and the next request retries. A change during the read is refused by swr.serve
-        # through the monitoring generation.
+        # important: a dashboard built while no cluster answered is all zeros, which
+        # reads as a healthy idle fleet. Caching it would pin that for the TTL, and a
+        # fresh=true bypass would replace real data with it; the previous entry stays,
+        # stale but true, and the next request retries. A change during the read is
+        # refused by swr.serve through the monitoring generation.
         if not connected_nodes:
             logger.warning("Not caching monitoring dashboard: no cluster answered")
         return Built(
@@ -551,9 +513,9 @@ async def get_monitoring_dashboard(
             fresh_for=_dashboard_ttl(scope_key) if connected_nodes else None,
         )
 
-    # note: the collector rebuilds through here with fresh=True every cycle. swr.serve reads the
-    # cache before any lock, so a reader never waits behind that rebuild; only a real miss or
-    # another forced read collapses onto it.
+    # The collector rebuilds through here with fresh=True every cycle. swr.serve reads the cache
+    # before any lock, so a reader never waits behind that rebuild; only a real miss or another
+    # forced read collapses onto it.
     try:
         served = await swr.serve(
             cache=cache,
@@ -567,7 +529,7 @@ async def get_monitoring_dashboard(
             served.as_model(MonitoringDashboardResponse), caller_tier()
         )
 
-    # note: nothing to unwind on the error paths. A failed rebuild writes nothing and the next
+    # Nothing to unwind on the error paths: a failed rebuild writes nothing, and the next
     # arrival takes the ordinary miss path.
     except HTTPException:
         raise
@@ -589,14 +551,13 @@ async def get_node_metrics(
     node_name: str,
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
-    # important: one cluster's hardware and load. Partner and above, as GET /nodes; a Tenant
-    # monitors its instances, not the hosts (owner decision 2026-10-26).
+    # important: one cluster's hardware and load: Partner and above, as GET /nodes. A Tenant
+    # monitors its instances, not the hosts.
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Get detailed metrics for a specific registered Cluster. Cached for 30 seconds."""
     verify_cluster_access(node_name)
     
-    # check cache first
     cache = get_cache_manager()
     cache_key = get_scope_cache_key(f"monitoring:node:{node_name}")
     cached = None if fresh else cache.get("api_responses", cache_key)
@@ -605,9 +566,9 @@ async def get_node_metrics(
     monitoring_generation = _resource_generation(cache, _MONITORING_CACHE_KIND)
 
     try:
-        # run node status + this cluster's instances in parallel to eliminate waterfall
-        # important: this cluster's instances only. The fleet read failed as a whole when any
-        # other cluster timed out, which answered 500 here for a cluster that was fine.
+        # Node status and this cluster's instances, in parallel.
+        # important: this cluster's instances only. A fleet read fails as a whole when any other
+        # cluster times out, which would answer 500 here for a cluster that is fine.
         node_statuses_task = lxd_service.check_nodes_status_async()
         vms_task = lxd_service.list_node_instances(node_name)
         node_statuses_list, all_vms = await asyncio.gather(node_statuses_task, vms_task)
@@ -617,9 +578,7 @@ async def get_node_metrics(
             raise HTTPException(status_code=404, detail=f"Cluster '{node_name}' not found")
         
         if not node.connected:
-            # note: this endpoint used to omit the status entirely and answer null, so a caller
-            # asking about one node learned less than the dashboard already knew about it. Same
-            # derivation, so the two cannot disagree.
+            # The same derivation as the dashboard, so the two cannot disagree about this node.
             node_status, _reason, node_message = derive_status(
                 connected=node.connected,
                 reachable=node.reachable,
@@ -651,7 +610,7 @@ async def get_node_metrics(
         if not resources:
             raise HTTPException(status_code=500, detail="Cluster resources are not available")
         
-        # instance count already fetched in parallel above
+        # The tenant ACL applies to the instance count.
         node_instances = [
             vm for vm in all_vms
             if vm.host == node_name
@@ -690,7 +649,7 @@ async def get_node_metrics(
             running_instances=len([vm for vm in node_instances if vm.status.value == "Running"]),
         )
         
-        # cache for 30 seconds
+        # Cached only if no monitoring write landed during the read.
         if (
             _resource_generation(cache, _MONITORING_CACHE_KIND)
             == monitoring_generation
@@ -740,21 +699,17 @@ async def get_metrics_history(
     ] = None,
     lxd_service: LXDService = Depends(get_lxd_service),
     # important: the series are the hosts' load, which counts every other party's instances.
-    # Partner and above; a Tenant monitors its own instances (owner decision 2026-10-26).
+    # Partner and above; a Tenant monitors its own instances.
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """
-    Get historical metrics for graphing.
+    """Historical dashboard metrics for the caller's scope, for graphing.
 
     Data flow (hot -> cold):
       1. Redis sorted set per scope, one member per dashboard collection, trimmed to 24 hours
-      2. The previous release's string key, merged in once per scope
+      2. The legacy string key, merged in once per scope
       3. PostgreSQL (admin scope only, 7-day retention), merged in whenever the stored
          history starts well inside the 24 hours, such as after a Redis restart
       4. One scoped collection when the scope has no point at all yet
-
-    Each org/tenant ACL reads its own scoped stream. Admin/background history
-    is still persisted to PostgreSQL as the durable global stream.
     """
     cache = get_cache_manager()
     scope_key = get_scope_cache_key("dashboard")
@@ -784,7 +739,7 @@ async def get_metrics_history(
         raise HTTPException(
             status_code=503, detail="Monitoring history is busy. The chart retries on its next refresh."
         )
-    # note: the body is already the List[MetricsHistoryPoint] JSON, encoded off the event loop.
+    # The body is already the List[MetricsHistoryPoint] JSON, encoded off the event loop.
     return Response(content=stored.body, media_type="application/json")
 
 
@@ -793,11 +748,7 @@ async def monitoring_websocket(
     ws: WebSocket,
     user: Optional[Any] = Depends(ws_user("monitoring")),
 ):
-    """
-    WebSocket endpoint for real-time monitoring push.
-    Clients connect here to receive dashboard updates pushed by the
-    background metrics collector, eliminating the need for polling.
-    The server sends JSON-serialized MonitoringDashboardResponse on each cycle.
+    """Real-time monitoring push: a MonitoringDashboardResponse as JSON on each collector cycle.
 
     Opened with a ticket from POST /ws-tickets (browsers cannot set Authorization headers on a
     WebSocket upgrade); closes with 4401 when the session ends. Admin only.

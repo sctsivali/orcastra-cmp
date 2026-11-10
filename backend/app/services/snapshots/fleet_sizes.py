@@ -1,18 +1,14 @@
 """The size phase of the fleet snapshot read: one GET per visible snapshot-holding instance.
 
-The bulk listing the fleet read is built on answers -1 for every snapshot, so the only way to
-put a byte count in the one column that tells an operator which snapshot is worth deleting is a
-second read per instance. This module runs that read AFTER the router's visibility filter, over
-the visible holders only, through a per-host cache, bounded per cluster and per fleet, against a
-deadline inside the request budget.
+The bulk listing answers -1 for every snapshot size, so a byte count needs a second read per
+instance. It runs after the router's visibility filter, over the visible holders only, through a
+per-host cache, bounded per cluster and per fleet, against a deadline inside the request budget.
 
-important: nothing here can mark a cluster unreachable. A failed size read, per holder or per
-cluster, leaves rows unmeasured and the cluster answered. The response counters say how far the
-phase got.
-
-important: every LXD read happens on a worker thread and every tenant decision has already been
-made on the event loop: the holders are derived from the rows that passed project_is_visible and
-check_tenant_permission, so an instance the caller cannot see is never read.
+important: nothing here can mark a cluster unreachable; a failed size read, per holder or per
+cluster, leaves rows unmeasured and the cluster answered (the response counters say how far the
+phase got). Every LXD read runs on a worker thread after the tenant decisions on the event loop:
+holders come from rows that passed project_is_visible and check_tenant_permission, so an instance
+the caller cannot see is never read.
 """
 
 import asyncio
@@ -39,20 +35,20 @@ SIZES_BUDGET = 24
 SIZES_MIN_WINDOW = 2
 SIZES_TTL = 600
 
-# Live size reads per request across every cluster. Five registered clusters at 30 holders
-# each; today the fleet holds about 20. Cache hits are free and do not count.
+# Live size reads per request across every cluster: five clusters at 30 holders each. Cache hits
+# do not count.
 MAX_SIZE_HOLDERS_FLEET = 150
 
-# important: deliberately NOT get_scope_cache_key. A size is a fact about the cluster, not about
-# who asked, and the map is only ever consulted for rows already past the visibility filter.
+# important: not get_scope_cache_key. A size is a fact about the cluster whoever asks, and the
+# map is only ever consulted for rows already past the visibility filter.
 #
-# important: deliberately outside the `snapshots_fleet:` prefix. Every list clear sweeps that
-# prefix (invalidate_resource_cache("snapshots_fleet"), invalidate_instance_cache), so while the
-# map lived there one snapshot write on any cluster made the next fleet read re-measure every
-# holder on every cluster: 48 holders and 6.8 s on dev. A snapshot write now forgets only its own
-# holder (forget_holder), and an entry records each snapshot's created_at, so a snapshot or an
-# instance created again under an old name is a miss rather than an old size. Deregistering a
-# cluster drops its map (cache.py invalidate_cluster_cache), since the id can be registered again.
+# important: outside the `snapshots_fleet:` prefix, which every list clear sweeps
+# (invalidate_resource_cache("snapshots_fleet"), invalidate_instance_cache); under it, one snapshot
+# write on any cluster would make the next fleet read re-measure every holder on every cluster. A
+# snapshot write forgets only its own holder (forget_holder), and an entry records each snapshot's
+# created_at, so a snapshot or an instance created again under an old name is a miss rather than an
+# old size. Deregistering a cluster drops its map (cache.py invalidate_cluster_cache), since the id
+# can be registered again.
 SIZES_KEY_PREFIX = SNAPSHOT_SIZES_KEY_PREFIX
 
 # Rows of one request grouped by (host, project, source_name), the identity the ACL decided on.
@@ -255,8 +251,8 @@ async def measure_visible_sizes(
     for host, result in zip(hosts, results):
         if isinstance(result, BaseException):
             # Logged with the traceback unless it is plain connectivity, so a defect in the
-            # size path cannot spend its life disguised as a slow cluster. Never re-raised:
-            # the listing already answered and sizes are the one thing this phase may lose.
+            # size path does not pass for a slow cluster. Never re-raised: the listing already
+            # answered and sizes are the one thing this phase may lose.
             connectivity = isinstance(
                 result, (LXDConnectionError, BlockingTimeout, BlockingPoolFull)
             )

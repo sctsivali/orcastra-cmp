@@ -1,22 +1,13 @@
 """The bridge between MCP's message loop and this deployment's API-key credential.
 
-MCP's spec-blessed authorization is OAuth 2.1. This deployment authenticates integrations with an
-HMAC-verified key pair in two headers, and the whole capability system is built on the metadata
-that check returns. The transport endpoint (`mount.py`) verifies the key once per HTTP request with
-the existing `validate_api_key`, and this middleware reads that verdict for every message, refuses
-the methods this server does not serve, and enforces the tool contract before the handler runs.
+MCP specifies OAuth 2.1; integrations here use an HMAC-verified key pair in two headers, with
+capabilities in the key's metadata. The transport endpoint (`mount.py`) verifies the key once per
+HTTP request. This middleware reads that verdict for every message, refuses unserved methods and
+enforces the tool contract before params validation, so a new tool cannot skip the gate.
 
-important: `validate_api_key` is called, not reimplemented, and it is called once. Its parameters
-carry `Header(...)` DEFAULTS, so invoking it with keyword arguments runs the identical body: the
-HMAC digest, the 30-second credential cache, the offload onto `auth_executor`, the revoked,
-inactive and expiry checks, and `consume_api_key_budget`. That last one is why it runs exactly
-once: the MCP surface inherits the per-key rate limit, and validating again here would charge
-every call twice.
-
-note: a middleware runs before params validation and wraps every inbound message, which is what
-makes this the right layer. The alternative is a check inside each tool function, and that is the
-shape `test_every_external_endpoint_declares_a_capability` exists to prevent on the REST side: a
-new tool that forgets it is reachable by any key that authenticates.
+important: `validate_api_key` runs exactly once, in `mount.py`, and is never reimplemented. Called
+with keyword arguments (its parameters carry `Header(...)` defaults) it runs the whole body,
+`consume_api_key_budget` included; validating again would charge the per-key budget twice.
 """
 
 import logging
@@ -62,14 +53,13 @@ _CURRENT_TOOL: ContextVar[Optional[str]] = ContextVar("mcp_current_tool", defaul
 
 # Every request method this server answers. Anything else is refused before the SDK sees it.
 #
-# important: an allow-list, not a refusal of the one method that hurt. SDK 2.2 registers
-# `subscriptions/listen` on every server, and on the 2026-07-28 wire it is served as an SSE stream
-# that pings every 15 s until the client hangs up, whatever `json_response` says. Nothing here
-# publishes to it, so every such stream held a connection slot for no function, and any key that
-# authenticated could open them, one capability-free key filling a worker's
-# `--limit-concurrency` within a minute. The next default handler an SDK release adds is refused
-# the same way rather than discovered the same way. The resource and prompt lists stay, empty,
-# because clients ask for them after the handshake and treat an error as a broken server.
+# important: an allow-list. SDK 2.2 registers `subscriptions/listen` on every server, and on
+# protocol revision `2026-07-28` it is served as an SSE stream that pings every 15 s until the
+# client hangs up, whatever `json_response` says. Nothing here publishes to it, so any
+# authenticated key could hold connection slots open until a worker's `--limit-concurrency` is
+# full. A default handler a later SDK release adds is refused the same way. The resource and
+# prompt lists stay, empty, because clients ask for them after the handshake and treat an error
+# as a broken server.
 SERVED_METHODS = frozenset({
     "initialize",
     "ping",
@@ -83,11 +73,7 @@ SERVED_METHODS = frozenset({
 
 # Notifications carry no request id and expect no reply, so there is no channel to refuse them
 # on. They are still authenticated: the endpoint verifies the credential before the manager sees
-# the message, so one that reaches here has already passed.
-#
-# `initialize` and `ping` used to be listed here as exempt as well, which meant an unauthenticated
-# caller received the server instructions and the whole capability advertisement. Authentication
-# now happens at the transport boundary for every method, so there is nothing to exempt.
+# any message, `initialize` and `ping` included, so nothing is exempt.
 
 
 def current_api_key() -> Dict[str, Any]:
@@ -105,9 +91,9 @@ def a_granted_project(cluster_id: str) -> str:
     """A project this key may name on `cluster_id`, for a call whose answer does not depend on it.
 
     `proxy_operation` and the inventory routes authorise the request's project before anything
-    else, so defaulting to `default` refused every key limited to other projects. Used where the
-    project only has to pass that check: listing projects (narrowed to the grant whichever is
-    named) and polling an operation (answered by the operation's own owner, not by `project`).
+    else, so a fixed `default` would be refused for every key limited to other projects. Used where
+    the project only has to pass that check: listing projects (narrowed to the grant whichever is
+    named) and polling an operation (answered by the operation's own owner whatever `project` is).
     """
     for grant in current_api_key().get("cluster_permissions") or []:
         if not isinstance(grant, dict) or grant.get("cluster_id") != cluster_id:
@@ -132,9 +118,8 @@ def credentials_from_headers(headers: Any) -> Tuple[Optional[str], Optional[str]
     when both are present, so a stale Bearer left in a config file cannot shadow an explicit
     credential the operator just set.
 
-    note: never a query parameter. The transport spec forbids an access token in the URI, and this
-    deployment's access log records full paths, so a token there would be written to the log index
-    on every call.
+    Never a query parameter: the transport spec forbids an access token in the URI, and the access
+    log records full paths, so a token there would be written to the log index on every call.
     """
     if headers is None:
         return None, None
@@ -146,7 +131,7 @@ def credentials_from_headers(headers: Any) -> Tuple[Optional[str], Optional[str]
     authorization = headers.get("authorization") or headers.get("Authorization") or ""
     if authorization.lower().startswith("bearer "):
         token = authorization[7:].strip()
-        # Split on the FIRST colon. An `oas_` secret contains none, so this is unambiguous, and
+        # Split on the first colon. An `oas_` secret contains none, so this is unambiguous, and
         # splitting on the last would corrupt any future secret that did.
         head, separator, tail = token.partition(":")
         if separator and head and tail:
@@ -157,7 +142,7 @@ def credentials_from_headers(headers: Any) -> Tuple[Optional[str], Optional[str]
 def _max_granted_level(api_key: Dict[str, Any]) -> int:
     """The strongest level this key holds on any cluster.
 
-    Used only to decide what to SHOW in tools/list. The real check is per-cluster and happens in
+    Used only to decide what to show in tools/list. The real check is per-cluster and happens in
     the handler, because a key may hold admin on one cluster and read on another.
     """
     grants = api_key.get("cluster_permissions") or []
@@ -172,9 +157,8 @@ def _max_granted_level(api_key: Dict[str, Any]) -> int:
 def _may_see(api_key: Dict[str, Any], tool_name: str) -> bool:
     """Whether a tool belongs in this key's tools/list.
 
-    Hiding is a convenience, never the boundary: every tool re-checks on call. The point is that a
-    read-only key is not shown `lxd_delete_project`, so the model does not plan around a tool it
-    will be refused.
+    Hiding is a convenience, never the boundary: every tool re-checks on call. A read-only key is
+    not shown `lxd_delete_project`, so the model does not plan around a tool it will be refused.
     """
     requirement = requirement_for(tool_name)
     if requirement is None:
@@ -197,7 +181,7 @@ def _holds_a_whole_cluster(api_key: Dict[str, Any], level: Optional[str]) -> boo
 
     A cluster-wide operation targets something no project contains, so `proxy_operation` refuses
     it to a key limited to named projects whatever its level. Without this a project-limited admin
-    key was shown six tools it could never use.
+    key would be shown cluster-wide tools it can never use.
     """
     needed = PERMISSION_LEVELS.get(level or "", 0)
     for grant in api_key.get("cluster_permissions") or []:
@@ -214,17 +198,14 @@ def _enforce_tool_call(
 ) -> Optional[CallToolResult]:
     """The gate, before the handler runs. Returns a refusal to send back, or None to proceed.
 
-    The per-cluster level and the project allow-list are NOT checked here. They are checked by the
-    handler this dispatches into, against the cluster named in the arguments, which is the only
-    place that knows which cluster it is. Duplicating them here would be a second implementation
-    of a rule that already has one.
+    The per-cluster level and the project allow-list are not checked here: the handler this
+    dispatches into checks them against the cluster named in the arguments, the only place that
+    knows which cluster it is.
 
-    important: a capability refusal takes the TOOL channel, not the protocol one. `errors.py`
-    states the rule ("this key may not do that" is something the model should read, stop on, and
-    report) and `dispatch.py` already follows it for the per-cluster 403. This site raised a
-    protocol error for the same class of answer, so whether a model could see why it was refused
-    depended on which of the two checks caught it first. An unknown tool stays a protocol error,
-    because that one really is malformed rather than refused.
+    A capability refusal takes the tool channel, as the per-cluster 403 does in `dispatch.py`
+    (`errors.py` states the rule), so the model can read why it was refused whichever check
+    caught it. An unknown tool stays a protocol error, because that request is malformed
+    rather than refused.
     """
     params = ctx.params or {}
     tool_name = params.get("name")
@@ -245,11 +226,9 @@ def _enforce_tool_call(
             assert_capability(api_key, requirement.capability)
         guest = requirement.guest_capability
         if guest is not None:
-            # important: the EXPLICIT variant. `assert_capability` reads an absent capabilities
-            # field as unrestricted, which is what keeps older integrations working and is the
-            # wrong answer for a power that reaches inside a guest. Most keys in this deployment
-            # are in that state, so the inheriting form here would hand guest access to nearly the
-            # whole fleet with nobody deciding it.
+            # important: the explicit variant. `assert_capability` reads an absent capabilities
+            # field as unrestricted, which keeps older integrations working but would hand guest
+            # access to every key that never declared capabilities.
             assert_explicit_capability(api_key, guest)
     except HTTPException as exc:
         logger.warning(
@@ -306,10 +285,10 @@ class ApiKeyMiddleware:
     def _authenticated_key(ctx: ServerRequestContext[Any, Any]) -> Optional[Dict[str, Any]]:
         """The key the endpoint already verified for this HTTP request.
 
-        important: this READS a result rather than producing one. `validate_api_key` spends the
-        per-key budget, so validating again here would charge every integration twice for one
-        call and halve its documented allowance. The transport attaches the HTTP request to every
-        message, which is what lets one verification cover a stateless server.
+        important: this reads the verdict and never validates again. `validate_api_key` spends
+        the per-key budget, so a second call would charge every integration twice for one call.
+        The transport attaches the HTTP request to every message, so one verification covers a
+        stateless server.
         """
         request = getattr(ctx, "request", None)
         scope = getattr(request, "scope", None)
@@ -322,10 +301,9 @@ class ApiKeyMiddleware:
     def _narrow_tool_list(result: Any, api_key: Dict[str, Any]) -> Any:
         """Drop tools this key cannot use from a tools/list reply.
 
-        note: `HandlerResult` is `BaseModel | dict | None`, and the SDK returns the dict form here,
-        so handling only the attribute form silently did nothing. That failure is invisible from
-        the outside: the list is merely wider than it should be, every tool still re-checks on
-        call, and nothing errors. The tests below are what caught it.
+        `HandlerResult` is `BaseModel | dict | None`, and the SDK returns the dict form here, so
+        both forms are handled. Missing one fails silently: the list is only wider than it should
+        be, since every tool still re-checks on call.
         """
         if isinstance(result, dict):
             tools = result.get("tools")

@@ -1,8 +1,6 @@
-"""
-JWT Authentication module using JWKS (JSON Web Key Set) validation.
+"""JWT authentication against the Authentik JWKS.
 
-Validates access tokens from Authentik OIDC provider by fetching
-the provider's public keys and verifying JWT signatures locally.
+Access tokens are verified locally with the provider's public keys.
 """
 
 import logging
@@ -18,16 +16,14 @@ from app.core.request_context import get_request_context
 
 logger = logging.getLogger(__name__)
 
-# reusable FastAPI security scheme
 oauth2_scheme = HTTPBearer(auto_error=False)
 
 
-# module-level singleton
 _jwks_client = JWKSClient()
 
 
 class AuthenticatedUser:
-    """Represents a validated user extracted from a JWT token."""
+    """A user built from the claims of a validated JWT."""
 
     def __init__(
         self,
@@ -60,24 +56,19 @@ class AuthenticatedUser:
 
 
 def validate_jwt(token: str, settings: Settings) -> AuthenticatedUser:
-    """
-    Validate a JWT access token against the Authentik JWKS.
-    Returns an AuthenticatedUser on success, raises HTTPException on failure.
+    """Validate a JWT access token against the Authentik JWKS.
+
+    Returns an AuthenticatedUser on success and raises HTTPException on failure.
     """
     signing_key = _jwks_client.get_signing_key(token, settings)
 
     try:
-        # build audience list - Authentik may issue tokens with client_id as audience
         audience = settings.authentik_audience or None
 
-        # important: `verify_aud` used to be `bool(audience)`, so leaving AUTHENTIK_AUDIENCE
-        # unset turned audience checking off silently. An issuer typically hosts several
-        # applications, and without this check any RS256 token that issuer minted for any of them
-        # is accepted here, with its `groups` claim driving RBAC. A user with a token for some
-        # low-value app on the same Authentik becomes whatever their groups say they are.
-        #
-        # Same rule as the missing issuer: a server that asks for authentication and cannot
-        # perform it properly refuses, rather than accepting a weaker proof without saying so.
+        # important: refuse when AUTHENTIK_AUDIENCE is unset. An issuer usually hosts several
+        # applications; without the audience check any RS256 token it minted for any of them
+        # passes here, and its `groups` claim drives RBAC. Same rule as a missing issuer: a
+        # server that asks for authentication and cannot perform it fully refuses.
         if not audience:
             logger.error(
                 "AUTH_ENABLED=true but AUTHENTIK_AUDIENCE is not configured; refusing rather "
@@ -88,9 +79,8 @@ def validate_jwt(token: str, settings: Settings) -> AuthenticatedUser:
                 detail="Authentication is enabled but not fully configured on this server",
             )
 
-        # important: no leeway made a host whose clock ran a few seconds ahead of Authentik's refuse
-        # a token the dashboard had just been handed ("Token has expired", or iat in the future),
-        # and a socket ticket minted with it came back 401. The skew is bounded in config (0..120).
+        # The leeway lets a host whose clock is a few seconds off Authentik's accept a token it
+        # was just handed (`exp`, `iat`). Bounded in config to 0..120 seconds.
         payload = jwt.decode(
             token,
             key=signing_key,
@@ -106,7 +96,7 @@ def validate_jwt(token: str, settings: Settings) -> AuthenticatedUser:
             },
         )
 
-        # extract user info from standard OIDC claims
+        # Standard OIDC claims.
         user_id = payload.get("email") or payload.get("sub", "")
         email = payload.get("email")
         name = payload.get("name") or payload.get("preferred_username")
@@ -156,21 +146,18 @@ async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(oauth2_scheme),
     settings: Settings = Depends(get_settings),
 ) -> Optional[AuthenticatedUser]:
-    """
-    FastAPI dependency that extracts and validates the current user from JWT.
+    """FastAPI dependency that validates the Bearer token and returns the current user.
 
-    - If AUTH_ENABLED=true: requires valid Bearer token, raises 401 otherwise
-    - If AUTH_ENABLED=false: returns None (dev mode / no auth)
+    With AUTH_ENABLED=false it returns None (dev mode). Otherwise a missing or invalid token is a
+    401, and a server without AUTHENTIK_ISSUER answers 503.
     """
     if not settings.auth_enabled:
         return None
 
     if not settings.authentik_issuer:
-        # important: this used to return None, and every RBAC dependency reads None as dev mode
-        # and fabricates a full Admin. A single missing or misspelled AUTHENTIK_ISSUER therefore
-        # turned an auth-enabled deployment into an open one for unauthenticated callers. A
-        # deployment that asks for auth and cannot verify it must refuse, not wave people
-        # through; 503 says the fault is the server's configuration, not the caller's token.
+        # important: never return None here; every RBAC dependency reads None as dev mode and
+        # grants a full Admin. A deployment that asks for auth and cannot verify it refuses, and
+        # 503 puts the fault on the server's configuration.
         logger.error(
             "AUTH_ENABLED=true but AUTHENTIK_ISSUER is not configured; refusing every request "
             "until it is set, rather than serving them unauthenticated"
@@ -192,13 +179,13 @@ async def get_current_user(
     await _jwks_client.ensure_keys(credentials.credentials, settings)
     user = validate_jwt(credentials.credentials, settings)
 
-    # attach user to request state for access by middleware/logging
-    # user_role is populated later by RBAC dependency (_populate_request_state)
+    # For middleware and logging. The RBAC dependency fills user_role later
+    # (_populate_request_state).
     request.state.user_id = user.user_id
     request.state.user_email = user.email
     request.state.user_groups = user.groups
     request.state.user_role = None
-    request.state.user_type = None  # alias for user_role, kept for compat
+    request.state.user_type = None  # Alias for user_role.
 
     ctx = get_request_context()
     if ctx is not None:
@@ -212,19 +199,16 @@ async def get_ws_user(
     websocket: "WebSocket",
     settings: Settings = Depends(get_settings),
 ) -> Optional[AuthenticatedUser]:
-    """
-    WebSocket-compatible auth dependency.
+    """WebSocket auth dependency; reads the token from the ``token`` query parameter.
 
-    Extracts token from the ``token`` query parameter
-    (WebSocket connections cannot use HTTP Authorization headers after upgrade).
-    Returns ``None`` when auth is disabled; validates JWT otherwise.
-    Does NOT close the socket for a bad token - callers decide how to handle ``None``.
+    A WebSocket cannot send an Authorization header after the upgrade. Returns ``None`` when auth
+    is disabled or the token is missing or invalid, and leaves the socket open for the caller to
+    decide. With auth enabled a caller must refuse on ``None`` (``settings.auth_enabled and user is
+    None``).
 
-    important: it DOES close the socket for a misconfigured server, and that asymmetry is the
-    whole point. `None` means "no authentication is expected here", which every caller reads as
-    permission to continue. Returning it for an auth-enabled server that cannot verify tokens
-    made one unset variable open the sockets to anyone, and the guards could not catch it because
-    they were gated on the same unset variable. See the matching branch in `get_current_user`.
+    important: a server that cannot verify tokens raises instead of returning ``None``, so a caller
+    gated on anything other than ``auth_enabled`` still cannot let an unverified socket through.
+    See the matching branch in `get_current_user`.
     """
 
     if not settings.auth_enabled:
@@ -251,9 +235,8 @@ async def get_ws_user(
         return user
     except HTTPException as exc:
         if exc.status_code >= 500:
-            # important: a server that cannot verify the token is not a refused token. Returning
-            # None closed the socket with 1008 (policy), which tells the client its credentials
-            # were rejected; 1011 says the fault is on this side and a retry may succeed.
+            # A server that could not verify the token closes with 1011: the fault is on this
+            # side and a retry may succeed. 1008 would tell the client its credentials were refused.
             logger.warning(f"WebSocket JWT validation could not run: {exc.detail}")
             raise WebSocketException(
                 code=status.WS_1011_INTERNAL_ERROR,

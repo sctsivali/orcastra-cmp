@@ -1,27 +1,23 @@
 """How an interactive socket (terminal, console) is refused or closed for a reason of access.
 
-important: a socket closed before accept() never reaches the browser as a close frame. uvicorn
-answers the upgrade with HTTP 403, the browser reports 1006 with no reason, and the page cannot
-tell an expired ticket from a dropped network, so nothing recovers. Every refusal here accepts
-first and then closes with a code and a reason token the page acts on (frontend/src/lib/ws-close.ts
-holds the same table; scripts/checks/check-ws-close-contract.mjs keeps the two equal).
+important: a socket closed before accept() never reaches the browser as a close frame; uvicorn
+answers the upgrade with HTTP 403 and the browser sees a bare 1006, so the page cannot tell an
+expired ticket from a dropped network. Every refusal here accepts first, then closes with a code
+and a reason token the page acts on (frontend/src/lib/ws-close.ts holds the same table;
+scripts/checks/check-ws-close-contract.mjs keeps the two equal).
 
-- 4401 AUTH: the caller could not be identified. auth_required (no ticket), ticket_invalid
+- 4401 AUTH, the caller could not be identified: auth_required (no ticket), ticket_invalid
   (unknown, spent, expired, unreadable or minted for another socket), session_ended (minted under
   a session that has ended), token_refused (an access token in the URL). The page refreshes its
   session and mints a new ticket, once.
-- 4403 FORBIDDEN: forbidden at connect; access_revoked:<detail> while open, with the detail one of
-  account_ended, role_changed, access_ended. Final.
+- 4403 FORBIDDEN: forbidden at connect, access_revoked:<detail> while open. Final.
 - 4428 BREAK_GLASS: break_glass_required at connect, break_glass_expired while open. Final.
-- 4423 FENCED: migration_fenced. Final until the move finishes.
-- 1011 SERVER: reauthorize_failed, upstream_unavailable, session_failed. Reconnecting may work.
-- 1008 POLICY: unknown_console_type, a request no page sends.
+- 4423 FENCED is final until the move finishes; after 1011 SERVER a reconnect may work; 1008
+  POLICY is a request no page sends.
 
-note: break-glass is 4428, not 4409: interactive_relay.py already ends a display another viewer
-took over with 4409, and the console treats that as "taken over".
-
-The relay's own endings (1000, 1011, 1012, 4404, 4409 in services/interactive_relay.py) keep their
-sentences as reasons; the page prints those.
+Break-glass is 4428 because the relay ends a display another viewer took over with 4409. The
+relay's own endings (services/interactive_relay.py) keep their sentences as reasons; the page
+prints those.
 """
 
 from __future__ import annotations

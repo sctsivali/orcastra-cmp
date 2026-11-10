@@ -1,7 +1,7 @@
 """Source-side instance checks for migration preflight: state, devices, in-flight operations.
 
-Split out of ``preflight_instance``. Readers and inventory errors still come from ``preflight``,
-looked up at call time so tests can replace them.
+Readers and inventory errors come from ``preflight``, looked up at call time so tests can
+replace them.
 """
 
 from __future__ import annotations
@@ -115,9 +115,9 @@ def _operation_instances(client: Any, raw_url: Any, default_project: str) -> Opt
 def active_instance_operations(client: Any, wanted: set[tuple[str, str]]) -> set[tuple[str, str]]:
     """Return which of the given (project, instance) pairs a non-terminal operation touches.
 
-    Daemon housekeeping tasks without instance resources are ignored on purpose: they do not
-    write the instances being migrated, and treating them as activity blocked every migration
-    on a host with a stuck background task.
+    Daemon housekeeping tasks without instance resources are ignored: they do not write the
+    instances being migrated, and counting them would block every migration on a host with a
+    stuck background task.
     """
     pf = _pf()
     extensions = pf._authoritative_extensions(client)

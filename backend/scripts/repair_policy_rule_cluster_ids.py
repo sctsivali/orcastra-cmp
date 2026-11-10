@@ -1,22 +1,16 @@
-"""Rewrite tenant policy rules that name a cluster under an id it is no longer registered by.
+"""Rewrite tenant policy rules that name a cluster by a superseded registration id.
 
 Deployment data, not schema: an Alembic migration would carry one installation's aliases into
-every other. Run inside the backend container (``make shell-backend``), dry-run by default:
+every other. The image does not ship ``scripts/``; feed the file to the running backend:
 
-    python scripts/repair_policy_rule_cluster_ids.py                 # list what would change
-    python scripts/repair_policy_rule_cluster_ids.py --apply         # rewrite in one transaction
-    python scripts/repair_policy_rule_cluster_ids.py --apply --check-registry
+    docker exec -i <backend> python - [--apply] < backend/scripts/repair_policy_rule_cluster_ids.py
 
-The mapping below is the dev installation's: three clusters were registered again under new
-ids after their first registration was removed, and the OrcaHub integration kept writing
-rules under the old spelling (it stored ``cluster_id`` verbatim until it started refusing an
-unregistered id). A rule whose ``cluster_id`` matches no registered cluster counts for
-nothing in ``get_visible_projects`` or the tenant ACL, so those rows were inert.
-
-A rewrite that would collide with a row the policy already holds for the new id merges the
-permissions into that row and deletes the stale one, so the unique constraint on
-``(policy_id, cluster_id, project_name, instance_name)`` cannot fire. The script is
-idempotent: a second run selects nothing.
+``MAPPING`` holds one installation's clusters registered again under new ids; rules naming the
+old id are inert (no match in ``get_visible_projects`` or the tenant ACL). A rewrite that
+collides with the policy's row for the new id merges the permissions into it and deletes the
+stale row, so the unique constraint on ``(policy_id, cluster_id, project_name, instance_name)``
+cannot fire. Dry run unless ``--apply``, which writes in one transaction; ``--check-registry``
+refuses a mapping target that is not a registered cluster. A second run selects nothing.
 """
 
 from __future__ import annotations

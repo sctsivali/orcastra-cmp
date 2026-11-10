@@ -5,9 +5,8 @@ the cluster lock, 3 + 15 s for the DELETE, 10 s for an operation if LXD answers 
 for the exact readback that settles a timed-out one. Getting a client can add its own validation
 read, and a reconnect more, so a slow cluster can still outlast the window; the browser then reads
 its own 504 as an unknown outcome and follows the project list, the same as for the route's 503.
-LXD took well over the pooled client's 8 s just after a project's last instance went (measured
-live, 2026-10-23), and with that budget the route answered 400 with the transport text, cluster
-address included.
+The DELETE gets more than the pooled client's 8 s read because LXD can take well over that just
+after a project's last instance is removed.
 """
 
 import logging
@@ -91,7 +90,7 @@ def _drop_cached_images(client: Any, name: str) -> bool:
 
 def delete_project_sync(client_for: ClientFor, host: str, name: str) -> None:
     """Send the DELETE; after it was sent, any failure but LXD's own refusal is unknown."""
-    # note: before the try: a `.` or `..` is the caller's 400, not an outcome to settle.
+    # Before the try, so a `.` or `..` is the caller's 400 rather than an outcome to settle.
     lxd_segment(name, what="Project name")
     phase = "connecting"
     try:
@@ -104,7 +103,7 @@ def delete_project_sync(client_for: ClientFor, host: str, name: str) -> None:
         except NotFound:
             raise
         except LXDAPIException as refusal:
-            # note: Incus counts the images it cached for an instance's create as use and refuses
+            # Incus counts the images it cached for an instance's create as use and refuses
             # the project; LXD 5.21 skips and removes them. Same outcome on both: when they are all
             # that is left, they go and the delete is sent once more.
             if NOT_EMPTY_REFUSAL not in str(refusal) or not _drop_cached_images(client, name):
@@ -117,9 +116,9 @@ def delete_project_sync(client_for: ClientFor, host: str, name: str) -> None:
         raise LXDProjectNotFoundError(name) from None
     except LXDAPIException as e:
         # important: LXD 5.21 sends the non-empty refusal as a plain error rather than a 400, so the
-        # status alone reads as ambiguous and a refusal came back as "may still finish".
+        # status alone reads as ambiguous and the refusal would be reported as "may still finish".
         if definitive_lxd_refusal(e, phase) or NOT_EMPTY_REFUSAL in str(e):
-            # LXD's own sentence, not transport text.
+            # The message is LXD's own sentence rather than transport text.
             raise LXDOperationError(f"Could not delete project: {e}") from e
         raise LXDOperationUnknownError("delete", name) from e
     except requests_exceptions.RequestException as e:

@@ -1,25 +1,17 @@
 """Per-second rates from cumulative counters, shared by every worker through Redis.
 
-Counters are the source of truth. A rate is derived once, over a window this module controls,
-and stored beside its baseline so every worker, viewer and surface reads the same figure.
+important: the baseline must not live in one process. A poll lands on whichever uvicorn worker
+takes it, so a per-process baseline would answer "calculating" once per worker, and a cold
+worker's first figure would average over however long since it last saw the instance.
 
-important: the baseline must not live in one process. The backend runs several uvicorn workers
-and a poll lands on whichever worker takes it, so a per-process baseline answered "calculating"
-once per worker and a cold worker's first figure averaged over however long it had been since
-that worker last saw the instance, hours included.
+`advance`, in order: no baseline, another epoch (restart, migration) or a baseline older than
+`max_age` reseeds and answers "calculating"; a sample older than the baseline or inside
+`min_window` of it (two tabs, a manual refresh) gets the stored window and keeps the baseline, so
+a millisecond window never shows a 0% or 800% spike; otherwise every counter present in both
+samples gets a rate, except one that went down (a reset).
 
-Rules, in the order `advance` applies them:
-  1. no baseline, another epoch (restart, migration) or a baseline older than `max_age`:
-     seed a new one and answer "calculating";
-  2. a sample older than the baseline, or one inside `min_window` of it: answer with the stored
-     window and leave the baseline where it is (two tabs, a manual refresh, a fleet sweep right
-     after a dialog poll), so a millisecond window can never turn into a 0% or 800% spike;
-  3. otherwise a rate for every counter present in both samples that did not go down. A counter
-     that went down was reset, so it gets no rate for this window.
-
-Writes are compare-and-set on the sample time, so a slow request can never replace a newer
-baseline with an older one. A request that loses that race still answers with its own rates,
-which are valid for its own window.
+Writes are compare-and-set on the sample time, so a slow request never replaces a newer
+baseline; a request that loses that race still answers with its own rates.
 """
 
 from __future__ import annotations
@@ -132,7 +124,7 @@ def advance(
     if gap > max_age:
         return RateReading("calculating"), seeded
     if gap < min_window:
-        # covers gap < 0 too: an older read arriving late never moves the baseline back
+        # Covers gap < 0 too: an older read arriving late never moves the baseline back.
         return stored.view(), None
     rates: Dict[str, float] = {}
     for key, current in counters.items():

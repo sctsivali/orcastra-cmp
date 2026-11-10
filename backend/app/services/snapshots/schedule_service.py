@@ -1,11 +1,9 @@
-"""Creating, editing and reading a schedule. The router stays thin so the rules stay readable.
+"""Creating, editing and reading a schedule, kept out of the router so the rules stay readable.
 
-The ownership rule is the load-bearing part, and it is the same for Admin as for Partner: a
-schedule may only be created against a cluster and project the actor's active organization still
-holds. Admin here is least-privilege plus break-glass rather than a god view, and a schedule is not
-a momentary act. One manual snapshot on a partner's cluster is a single attributable thing that
-expires in seven days; a schedule is an indefinite unattended write into someone else's hardware
-with no grant and no notice to its owner. Momentary actions may cross clusters. Standing
+A schedule may only be created against a cluster and project that an active organization of the
+actor still holds, for Admin as for Partner. A manual snapshot on another party's cluster is one
+attributable act that expires in seven days; a schedule is an indefinite unattended write with no
+grant and no notice to the cluster's owner. Momentary actions may cross clusters, standing
 commitments may not.
 """
 
@@ -23,8 +21,8 @@ from app.services.snapshots import recurrence, schedule_authority
 
 logger = logging.getLogger(__name__)
 
-# Reserved so an operator can always still take one by hand on an instance a schedule runs against.
-# Mirrors the reasoning behind MAX_SCHEDULE_KEEP_LAST rather than restating the number.
+# The per-instance cap. MAX_SCHEDULE_KEEP_LAST stays below it so an operator can always take a
+# snapshot by hand on an instance a schedule runs against.
 from app.services.lxd.snapshots import MAX_OPS_SNAPSHOTS_PER_INSTANCE, is_operator_snapshot
 
 
@@ -75,10 +73,9 @@ async def assert_actor_can_schedule_target(
 ) -> int:
     """Authorize the durable organization/project target before any LXD read.
 
-    Request-scoped ContextVars stop a Partner crossing a shared-cluster project boundary today.
-    This second, database-only proof is what the background worker can repeat months later. Admin
-    follows the same standing-commitment rule intentionally; the scheduler process never inherits
-    an Admin session's global visibility.
+    Request-scoped ContextVars stop a Partner crossing a shared-cluster project boundary at request
+    time; this database-only proof is the one the background worker repeats later. Admin follows
+    the same rule, because the scheduler never inherits an Admin session's global visibility.
     """
     organization_id = await schedule_authority.authorizing_organization_id(
         db,
@@ -103,11 +100,9 @@ async def assert_actor_can_schedule_target(
 def upstream_conflict(host: str, project: str, instance_name: str, policy: Dict[str, Any]):
     """The refusal when the metered product upstream already schedules this instance.
 
-    409, not 403, and the absence of an acknowledgement field is the signal. Every other refusal in
-    this family carries one naming the way through, and the console is built to grow the affordance
-    a refusal names. A 403 with no such field would read, to that console and to the next person
-    writing against it, as a gate whose acknowledgement they failed to find. This is a conflict in
-    the target's state, which no acknowledgement can resolve, so it says so.
+    A 409 with no acknowledgement field. Every other refusal in this family names an acknowledgement
+    the console can offer, and a 403 without one would read as a gate with a missing
+    acknowledgement. This is a conflict in the target's state that no acknowledgement resolves.
     """
     if not policy.get("externally_managed"):
         return None
@@ -137,8 +132,8 @@ def upstream_conflict(host: str, project: str, instance_name: str, policy: Dict[
 def capacity_conflict(instance_name: str, rows: List[Dict[str, Any]], keep_last: int):
     """Refuse a schedule that could not fit beside the snapshots already on the instance.
 
-    Refusing here beats a schedule that looks healthy and then fails silently at 03:00, which is
-    when nobody is watching and the operator learns about it from a missing restore point.
+    Refused at creation so the schedule does not look healthy and then fail unattended at its first
+    run.
     """
     held = [str(r.get("name")) for r in rows if is_operator_snapshot(str(r.get("name") or ""))]
     room = MAX_OPS_SNAPSHOTS_PER_INSTANCE - len(held)
@@ -196,8 +191,8 @@ async def insert_schedule(
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        # The unique constraint, not a read-then-write. Four workers make the check-then-insert
-        # race real, and the second schedule is what would blow the per-instance cap.
+        # The unique constraint decides: with four workers a check-then-insert can race, and a
+        # second schedule would break the per-instance cap.
         existing = await find_for_instance(db, body.host, body.project, body.instance_name)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -233,10 +228,10 @@ async def find_for_instance(
 async def get_owned(db: Any, schedule_id: int, actor_email: Optional[str]) -> SnapshotSchedule:
     """One schedule the current caller may manage.
 
-    An unknown id and an unauthorised one answer the same 404 on purpose, so the endpoint cannot be
-    used to learn which instances elsewhere on the fleet carry a schedule. This check uses the
-    current caller so an authorized colleague can pause, edit, or remove a schedule after its
-    creator leaves. The background runner separately rechecks the original owner before writing.
+    An unknown id and an unauthorised one both answer 404, so the endpoint cannot reveal which
+    instances elsewhere on the fleet carry a schedule. Authority is checked for the current caller,
+    so an authorized colleague can pause, edit or remove a schedule after its creator leaves; the
+    background runner rechecks the original owner before writing.
     """
     schedule = (
         await db.execute(select(SnapshotSchedule).where(SnapshotSchedule.id == schedule_id))
@@ -263,7 +258,7 @@ async def list_for_actor(
     project: Optional[str] = None,
     instance: Optional[str] = None,
 ) -> List[SnapshotSchedule]:
-    """Schedules the current caller may manage, never the original owner's stale visibility."""
+    """Schedules the current caller may manage, judged by the caller's authority."""
     stmt = select(SnapshotSchedule)
     if host:
         stmt = stmt.where(SnapshotSchedule.cluster_id == host)
@@ -302,7 +297,7 @@ def apply_update(schedule: SnapshotSchedule, body: Any, now: datetime) -> None:
         schedule.next_run_at = recurrence.next_slot_after(
             schedule.frequency, schedule.hour_utc, schedule.minute_utc, schedule.weekday, now
         )
-        # The old slot named a run of the old recurrence. Carrying it would name the next snapshot
-        # after a moment this schedule no longer has.
+        # A held slot belongs to the previous recurrence; keeping it would name the next snapshot
+        # after a slot the new recurrence does not have.
         schedule.due_slot = None
     schedule.updated_at = now

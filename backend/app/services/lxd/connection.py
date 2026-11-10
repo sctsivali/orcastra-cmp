@@ -1,6 +1,5 @@
 """
-LXD connection management.
-Handles client connections, pooling, and connection lifecycle.
+LXD client connections: pooling, certificate pinning, the reachability breaker and reconnects.
 """
 
 import logging
@@ -29,7 +28,7 @@ from .exceptions import (
 
 logger = logging.getLogger(__name__)
 
-# House default for LXD traffic, matching the value pylxd clients are constructed with below.
+# (connect, read) seconds, the timeout pylxd clients are constructed with below.
 DEFAULT_LXD_TIMEOUT: Tuple[int, int] = (3, 8)
 
 
@@ -43,13 +42,12 @@ def normalize_server_fingerprint(value: Optional[str]) -> str:
 def _read_retries_enabled() -> bool:
     """Whether a read timeout should be retried by the pooled adapter.
 
-    Off by default. Retrying a read timeout multiplies wall clock by the attempt count:
-    measured against a peer that accepts TCP then goes silent, Retry(total=3) turned an 8s
-    read timeout into 35s of thread time across 4 connections. A read timeout against LXD is
-    almost never transient in a way three more attempts would fix, and retrying a POST read
+    Off by default. Retrying a read timeout multiplies wall clock by the attempt count: against
+    a peer that accepts TCP then goes silent, Retry(total=3) turns an 8s read timeout into 35s
+    of thread time. A read timeout against LXD is rarely transient, and retrying a POST read
     timeout can execute an instance create twice.
 
-    Set ORCASTRA_LXD_RETRY_READ=true to restore the pre-fix behaviour without a rebuild.
+    Set ORCASTRA_LXD_RETRY_READ=true to enable read retries without a rebuild.
     """
     return os.environ.get("ORCASTRA_LXD_RETRY_READ", "false").strip().lower() in (
         "1",
@@ -61,12 +59,10 @@ def _read_retries_enabled() -> bool:
 class TimeoutHTTPAdapter(HTTPAdapter):
     """HTTPAdapter that applies a default timeout when the caller supplied none.
 
-    important: this is the single choke point that bounds every pylxd call in the process.
-    pylxd only injects its configured timeout when a call goes through client.api.<verb>
-    (_APINode.get does kwargs["timeout"] = kwargs.get("timeout", self._timeout)). Code that
-    reaches for client.api.session directly bypasses that entirely, and a bare requests
-    session has no default, so such a call blocks forever against a silent peer. Mounting
-    this adapter closes that hole for callers that have not been audited.
+    important: this bounds every pylxd call in the process. pylxd only injects its configured
+    timeout when a call goes through client.api.<verb> (_APINode.get does
+    kwargs["timeout"] = kwargs.get("timeout", self._timeout)). A call on client.api.session
+    directly has no default and would block forever against a silent peer.
     """
 
     def __init__(self, *args, default_timeout: Tuple[int, int] = DEFAULT_LXD_TIMEOUT, **kwargs):
@@ -82,10 +78,10 @@ class TimeoutHTTPAdapter(HTTPAdapter):
 class FingerprintHTTPAdapter(TimeoutHTTPAdapter):
     """Apply the registered server-certificate fingerprint on the real HTTP socket.
 
-    The separate enrollment probe prevents an obviously changed certificate from receiving the
-    client credential, but it cannot close the gap between that probe and the following request.
-    urllib3's ``assert_fingerprint`` performs the same comparison on every pooled connection and
-    therefore remains authoritative for the transport that carries the request itself.
+    The enrollment probe keeps an obviously changed certificate from receiving the client
+    credential, but cannot close the gap between that probe and the next request. urllib3's
+    ``assert_fingerprint`` repeats the comparison on every pooled connection, so it stays
+    authoritative for the transport that carries the request.
     """
 
     def __init__(self, *args, server_fingerprint: Optional[str] = None, **kwargs):
@@ -216,7 +212,7 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
     Manages LXD client connections with pooling and automatic reconnection.
     """
     
-    # Connection pool settings for parallel operations (Enterprise scale)
+    # Connection pool settings for parallel operations
     POOL_CONNECTIONS = 50   # Number of connection pools to cache
     POOL_MAXSIZE = 100      # Maximum connections per pool (> ThreadPoolExecutor workers)
     
@@ -225,28 +221,24 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
         self._clients: Dict[str, pylxd.Client] = {}
         # Track connection creation time (for logging only, not TTL)
         self._connection_times: Dict[str, float] = {}
-        # Store FULL connection info in memory (including cert content)
-        # This allows reconnection without hitting Vault repeatedly
+        # Full connection info, cert content included, so a reconnect does not read Vault again.
         # {"cluster_id": {"endpoint": str, "cert_content": str, "key_content": str, "verify": bool}}
         self._connection_info: Dict[str, Dict[str, str]] = {}
         # Track temp file paths for cleanup
         self._temp_cert_paths: Dict[str, Tuple[str, str]] = {}
-        # Vault-registered cluster whitelist - only these clusters
-        # should be visible via get_node_names(). Prevents stale or
-        # unregistered nodes from leaking into API responses.
+        # Vault-registered cluster whitelist. Only these clusters are visible through
+        # get_node_names(), so stale or unregistered nodes never reach API responses.
         self._registered_clusters: Optional[set] = None
         # Clusters this worker has tried to connect to since it started, whatever the outcome.
-        # A cluster in the whitelist but not here is one this worker has not caught up with
-        # yet (registered seconds ago, connected by the next healer tick); one that is here
-        # and still has no client is known to be down. The list routers cache a body that
-        # names a known-down cluster and refuse to cache one that names a cluster they have
-        # simply not tried, because the cache is shared by every worker.
+        # A whitelisted cluster missing here has not been tried yet (registered seconds ago,
+        # connected by the next healer tick); one here without a client is known to be down.
+        # The list routers cache a body naming a known-down cluster but never one naming an
+        # untried cluster, because the cache is shared by every worker.
         self._attempted: Set[str] = set()
         # (count, first_at) of tolerated read timeouts of the validation probe, per cluster.
         # See _validate_connection; cleared whenever the client is evicted or rebuilt.
         self._slow_validations: Dict[str, Tuple[int, float]] = {}
         
-        # Register cleanup on exit
         atexit.register(self._cleanup_all_temp_files)
         atexit.register(self._secure_cleanup_credentials)
     
@@ -259,8 +251,8 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
         cluster_id: Optional[str] = None,
     ) -> None:
         """
-        Configure pylxd client's session with larger connection pool.
-        This prevents 'Connection pool is full' warnings during parallel operations.
+        Mount the pooled, fingerprint-pinned adapter and the response guards on the session.
+        The larger pool prevents 'Connection pool is full' warnings during parallel operations.
         """
         try:
             # pylxd uses client.api.session internally
@@ -350,12 +342,10 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
         return session
     
     # A probe that times out on the read has completed TCP and TLS: the daemon is there and
-    # busy. One such probe used to evict the pooled client, and when the reconnect's own probe
-    # timed out as well the breaker tripped for 60 seconds, so a healthy MicroCloud under load
-    # flipped to "Could not reach" and back. A second read timeout at least
-    # SLOW_VALIDATION_SPACING seconds after the first still means a wedged daemon and takes
-    # the existing path; a burst of parallel callers hitting one slow moment counts as one.
-    # Connect, TLS and untrusted answers always take the existing path.
+    # busy, so the first such timeout keeps the pooled client. A second read timeout at least
+    # SLOW_VALIDATION_SPACING seconds after the first means a wedged daemon and fails
+    # validation; a burst of parallel callers hitting one slow moment counts as one. Connect,
+    # TLS and untrusted answers always fail validation.
     SLOW_VALIDATION_TOLERANCE = 2
     SLOW_VALIDATION_SPACING = 5.0
 
@@ -370,11 +360,10 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
                 auth_status = data.get("metadata", {}).get("auth", "")
                 if auth_status == "trusted":
                     # important: pylxd captures host_info once in __init__ and only rewrites it
-                    # inside authenticate(), and this pool never expires a client, so every
-                    # reader of client.host_info saw the server version, auth and environment
-                    # from whenever this worker first connected. We have just paid for a live
-                    # /1.0 read and were discarding the body after one field; keeping it costs
-                    # nothing and is exactly what pylxd does after authenticating.
+                    # inside authenticate(), and this pool never expires a client, so without
+                    # this every reader of client.host_info would see the server version, auth
+                    # and environment from the first connect. Refreshing it from this live /1.0
+                    # read is what pylxd does after authenticating.
                     metadata = data.get("metadata")
                     if metadata:
                         client.host_info = metadata
@@ -410,11 +399,8 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
         Write the cluster's certificate to disk for pylxd, at 0600.
 
         important: the path is a pure function of the cluster id, so concurrent callers converge
-        on one pair of files instead of each minting a randomly named pair. This used to call
-        mkstemp directly and record the result in the single slot below; whichever thread assigned
-        last won, and every earlier pair was orphaned with no path left to unlink it. Measured on
-        the dev stack that leaked 8940 files in 46 hours into a 256 MiB tmpfs, and the ENOSPC that
-        followed was reported to operators as "cluster offline". See cert_files for the mechanics.
+        on one pair of files. Randomly named pairs recorded in the single slot below would orphan
+        every pair but the last and fill the tmpfs. See cert_files for the mechanics.
         """
         cert_path, key_path = cert_files.materialize(cluster_id, cert_content, key_content)
         self._temp_cert_paths[cluster_id] = (cert_path, key_path)
@@ -426,12 +412,10 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
         Clean up temporary certificate files.
         Overwrites file content before deletion.
         """
-        # important: claim the entry atomically. This used to test membership, unlink the
-        # files, then `del`, and `_temp_cert_paths` is a plain dict with no lock while
-        # get_client runs in a thread pool. Two threads cleaning the same cluster both
-        # passed the test, and the loser raised KeyError from inside _auto_reconnect's own
-        # failure handler, so a cluster that merely could not be reached answered 500.
-        # pop is the entire fix: exactly one caller receives the paths.
+        # important: claim the entry atomically with pop. `_temp_cert_paths` is a plain dict
+        # with no lock and get_client runs in a thread pool, so a membership test followed by
+        # `del` lets two threads pass and the loser raise KeyError inside _auto_reconnect's
+        # failure handler (a 500 for an unreachable cluster). pop hands the paths to one caller.
         paths = self._temp_cert_paths.pop(cluster_id, None)
         if paths is None:
             return
@@ -474,16 +458,14 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
 
         Returns None when the cluster is currently tripped in the breaker, unless ``force``.
 
-        important: this is the second door into "connect me to this cluster", and it is the
-        expensive one (TLS handshake plus a verifying probe, and its callers usually paid a
-        Vault round trip to get here). Gating only get_client made things worse, not better:
-        callers fall back to this path when get_client returns None, so a fast None simply
-        routed every request into the costlier route. Measured, that took /health from 10.3s
-        to 20.1s. Both doors have to be gated or neither is.
+        important: this is the second way to connect to a cluster, and the expensive one (TLS
+        handshake plus a verifying probe, usually after a Vault read). Callers fall back here
+        when get_client returns None, so gating only get_client would route every request into
+        the costlier path. Both have to be gated or neither.
 
         ``force`` is for the flows that must reach a cluster the breaker considers dead:
-        registration, auth checks and certificate rotation. Those are the operations that fix
-        a broken cluster, so refusing them would make the breaker self-sealing.
+        registration, auth checks and certificate rotation. They repair a broken cluster, so
+        refusing them would make the breaker self-sealing.
         """
         self._attempted.add(cluster_id)
         if not force and health.is_tripped(cluster_id):
@@ -494,7 +476,7 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
             return None
         dial_started = time.monotonic()
         try:
-            # Store FULL connection info in memory (for auto-reconnect)
+            # Keep the full connection info for auto-reconnect
             self._connection_info[cluster_id] = {
                 "endpoint": endpoint,
                 "cert_content": cert_content,
@@ -502,16 +484,15 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
                 "verify": verify,
             }
             
-            # note: no unlink before the write. The path is stable per cluster and the write
-            # lands atomically, so removing it first would only open a window where a thread
-            # already inside a handshake finds no file at all.
+            # No unlink before the write. The path is stable per cluster and the write lands
+            # atomically, so removing it first would only open a window where a thread already
+            # inside a handshake finds no file at all.
             cert_path, key_path = self._create_temp_cert_files(cluster_id, cert_content, key_content)
 
             # important: BEFORE the client is built, so a substituted endpoint never receives the
-            # client certificate. LXD has no CA, so `verify=False` here is not a relaxed check,
-            # it is the absence of server authentication; the pin is what replaces it. Trust on
-            # first use, refuse on change. See services/lxd_certs/pinning.py for why this rather
-            # than requiring an operator to type the fingerprint at registration.
+            # client certificate. LXD has no CA, so `verify=False` means no server
+            # authentication at all; the pin replaces it: trust on first use, refuse on change.
+            # services/lxd_certs/pinning.py explains why the operator does not type a fingerprint.
             server_fingerprint = (
                 self._enforce_expected_certificate_pin(
                     cluster_id, endpoint, expected_server_fingerprint
@@ -559,7 +540,6 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
                 cluster_id=cluster_id,
             )
             
-            # Cache the client
             self._clients[cluster_id] = client
             self._connection_times[cluster_id] = time.time()
             self._slow_validations.pop(cluster_id, None)
@@ -592,41 +572,31 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
             self._connection_info.pop(cluster_id, None)
             raise
         except LXDAuthorizationError:
-            # Narrow on purpose. A plain LXDConnectionError escaping this block is a transport
-            # failure, and recording it as "unauthorized" would make an offline cluster read as
-            # Pending Trust on every surface for the whole breaker TTL.
-            # Raised above for an untrusted certificate, which is a real reachability failure:
-            # the peer answered and refused us, and it will keep refusing until someone rotates
-            # the cert. Recording it is what stops every later request paying the handshake.
+            # Raised above for an untrusted certificate: the peer answered and refused it, and
+            # keeps refusing until the certificate is rotated, so recording it spares later
+            # requests the handshake. Kept narrow: a transport failure recorded as unauthorized
+            # would show an offline cluster as Pending Trust for the breaker TTL.
             #
-            # important: drop the cached credentials too, exactly as the generic handler below
-            # does. Keeping them is not free: the background healer is gated on
-            # has_connection_info BEFORE it consults the breaker (metrics_collector), so a
-            # retained entry stops it ever reaching Vault, and the cluster can only recover if
-            # something else happens to call a force=True path. Evicting costs one Vault read on
-            # the next attempt and reopens the door that repairs this.
+            # important: drop the cached credentials too, as the generic handler below does. The
+            # background healer checks has_connection_info before the breaker (metrics_collector),
+            # so a retained entry stops it from ever reaching Vault. Evicting costs one Vault read.
             self._connection_info.pop(cluster_id, None)
             health.record_failure(
                 cluster_id, "certificate not trusted", kind=health.KIND_UNAUTHORIZED
             )
             raise
         except LXDLocalStorageError:
-            # important: deliberately above the generic handler and deliberately not recorded.
-            # The peer was never contacted, so record_failure here would mark a healthy cluster
-            # offline for the breaker TTL and suppress the retries that would prove otherwise.
-            # Under a full tmpfs that happened to every cluster at once, which is exactly how a
-            # backend disk problem came to be reported as a fleet outage.
+            # important: above the generic handler and not recorded. The peer was never
+            # contacted, so record_failure here would mark a healthy cluster offline for the
+            # breaker TTL, and a full tmpfs would read as a fleet-wide outage.
             logger.error(f"Cannot prepare TLS credentials for {cluster_id}: backend storage")
             raise
         except Exception as e:
             if cluster_id in self._connection_info:
                 del self._connection_info[cluster_id]
             health.record_failure(cluster_id, f"connect failed: {type(e).__name__}")
-            # important: WARNING, not ERROR. An offline cluster is expected operational
-            # noise and the severity is the signal: anything paging on ERROR would page
-            # for a host the operator already knows is down. Measured on the dev fleet,
-            # this one line produced most of 2383 ERROR records in 90 minutes. The router
-            # sites were moved for the same reason; this is where the volume actually is.
+            # Logged at WARNING: an offline cluster is expected operational noise, and anything
+            # alerting on ERROR would page for a host the operator already knows is down.
             logger.warning(
                 f"Failed to connect to cluster {cluster_id}: {e}",
                 extra=telemetry.dial_fields(cluster_id, dial_started, "offline"),
@@ -650,24 +620,18 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
         """
         Get cached LXD client for the specified cluster.
         
-        RECONNECTION LOGIC:
-        - If client exists and is valid, return it
-        - If validation fails, attempt auto-reconnect using stored credentials
-        - NO TTL-based refresh (connections persist indefinitely while valid)
+        Reconnection:
+        - If the client exists and validates, return it
+        - If validation fails, auto-reconnect using stored credentials
+        - No TTL-based refresh: connections persist while valid
 
         Returns None if the cluster is not in the current user's org scope, or if the cluster
         recently failed to connect.
         """
-        # org-scope filter: deny access to clusters outside user's org
-        #
-        # important: this used to be the one branch here that returned None with no log at all,
-        # while every other None is logged, at DEBUG for a tripped breaker and WARNING for a
-        # failed connect. Callers turn None into 503 "Could not connect", so an authorization
-        # decision arrived looking like an outage with nothing in the log to say otherwise, and
-        # an operator went to check a cluster that was fine. The status itself stays as it is:
-        # verify_cluster_access answers 403 first at every cluster-taking handler, which
-        # test_cluster_scope_ratchet.py keeps structural, so reaching here at all means a caller
-        # that skipped it and the log is what will name them.
+        # Org-scope filter: deny access to clusters outside the caller's org. Callers turn None
+        # into 503 "Could not connect", so the refusal is logged to tell it from an outage.
+        # verify_cluster_access answers 403 first at every cluster-taking handler
+        # (test_cluster_scope_ratchet.py), so reaching here means a caller skipped it.
         from app.core.org_scope import get_current_allowed_clusters
         allowed = get_current_allowed_clusters()
         if allowed is not None and cluster_id not in allowed:
@@ -676,14 +640,11 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
             )
             return None
 
-        # important: the breaker belongs HERE, at the one chokepoint every caller funnels
-        # through, not at individual call sites. This method is not a lookup: it revalidates
-        # with a live request and may rebuild the client, which costs seconds against an
-        # unreachable peer. Most callers are `async def` handlers that await it inline, so
-        # without this each request to a dead cluster parks a whole event loop. Measured on a
-        # fleet with one unreachable cluster, 12 concurrent requests pushed /health from 4ms
-        # to 10.3s, past the 5s container healthcheck timeout. Returning None early is already
-        # a contract every caller handles, so this needs no change at any of them.
+        # important: the breaker belongs here, at the chokepoint every caller goes through. This
+        # method revalidates with a live request and may rebuild the client, which costs seconds
+        # against an unreachable peer; most callers await it inline in `async def` handlers, so
+        # without this each request to a dead cluster stalls the event loop. Every caller
+        # already handles None.
         if health.is_tripped(cluster_id):
             logger.debug(
                 "Skipping %s: recently unreachable (%s)", cluster_id, health.get_reason(cluster_id)
@@ -692,7 +653,7 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
 
         # important: one read of the pool. Validation is a live round trip and the pool is shared by
         # every thread in this worker, so a concurrent cleanup_connection between a check and a
-        # second `self._clients[cluster_id]` raised KeyError on a client that had just answered.
+        # second `self._clients[cluster_id]` would raise KeyError on a client that just answered.
         pooled = self._clients.get(cluster_id)
         if pooled is not None and expected_server_fingerprint:
             cached_pin = _client_adapter_fingerprint(pooled)
@@ -708,11 +669,9 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
         if pooled is not None:
             if expected_server_fingerprint:
                 require_client_server_fingerprint(pooled, expected_server_fingerprint)
-            # Validate connection is still working
             if self._validate_connection(pooled, cluster_id):
                 return pooled
             else:
-                # Connection failed validation, try reconnect
                 logger.warning(f"Connection to {cluster_id} failed validation, reconnecting...")
                 self.cleanup_connection(cluster_id)
                 return (
@@ -724,7 +683,7 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
                     )
                 )
         else:
-            # Not in cache, try auto-reconnect if we have connection info
+            # Not pooled: reconnect from stored connection info, if any
             return (
                 self._auto_reconnect(cluster_id)
                 if expected_server_fingerprint is None
@@ -797,21 +756,17 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
         expected_server_fingerprint: Optional[str] = None,
     ) -> Optional[pylxd.Client]:
         """
-        Attempt to automatically reconnect using stored connection info.
-        
-        FLOW:
-        1. Check if connection info exists in memory
-        2. Use stored cert content to reconnect
-        3. Memory only, except one Vault read when the cluster refuses the held certificate
-           (see cert_rotation: it may have been rotated by another worker)
+        Reconnect using the connection info stored in memory.
+
+        Memory only, except one Vault read when the cluster refuses the held certificate
+        (see cert_rotation: another worker may have rotated it).
         """
         if cluster_id not in self._connection_info:
-            # important: do NOT trip the breaker here. An empty in-process cache is not evidence
-            # the cluster failed - it is the normal state for a cluster registered after this
-            # worker booted, or one whose info a previous connect error cleared. The repair is the
-            # Vault path in ensure_connection/the background healer, and both are gated by this
-            # same breaker, so tripping here seals the only doors that could reopen it. Genuine
-            # transport failures below still record.
+            # important: do NOT trip the breaker here. An empty in-process cache is the normal
+            # state for a cluster registered after this worker booted, or one whose info a connect
+            # error cleared. The repair is the Vault path in ensure_connection and the background
+            # healer, both gated by this breaker, so tripping here would block them. Transport
+            # failures below still record.
             logger.debug(f"No stored connection info for {cluster_id}, cannot auto-reconnect")
             return None
         
@@ -856,7 +811,7 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
             
             # Verify authentication. pylxd.Client() has just read /1.0 under the (3, 8)
             # budget and holds the body in host_info; a second probe under a tighter budget
-            # was one more chance for a busy daemon to look absent.
+            # would give a busy daemon one more chance to look absent.
             data = {"metadata": getattr(client, "host_info", None) or {}}
             if not data["metadata"]:
                 response = client.api.get(timeout=(3, 8))
@@ -865,39 +820,30 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
                 if data.get("metadata", {}).get("auth") != "trusted":
                     logger.warning(f"Reconnect failed: cert not trusted by {cluster_id}")
                     # A certificate rotated by another worker is one Vault read away; see
-                    # cert_rotation. Same certificate or no answer from Vault: unchanged below.
+                    # cert_rotation. Same certificate or no answer from Vault: recorded below.
                     rotated = self._try_rotated_certificate(
                         cluster_id, info, expected_server_fingerprint=expected_server_fingerprint
                     )
                     if rotated is not None:
                         return rotated
-                    # important: evict the cached credentials before recording. This method
-                    # rebuilds the client from the copy held in _connection_info, so leaving a
-                    # refused certificate there means every later attempt re-presents the same
-                    # bytes and is refused again. Measured on the dev fleet: 1351 of these
-                    # against 265 successful reconnects.
-                    #
-                    # Worse, it seals its own repair. The background healer checks
-                    # has_connection_info BEFORE the breaker (metrics_collector), so a retained
-                    # entry stops it reaching Vault at all, and ensure_connection is gated by the
-                    # breaker this line is about to trip. Two doors, both held shut by the entry
-                    # we are keeping. Dropping it leaves exactly one gate, the breaker's own TTL.
-                    #
-                    # pop rather than test-then-delete: these dicts are unsynchronised and
-                    # mutated from a thread pool. Same reason as _cleanup_temp_cert_files.
+                    # important: evict the cached credentials before recording. The client is
+                    # rebuilt from _connection_info, so a refused certificate left there is
+                    # re-presented and refused on every later attempt. It would also block the
+                    # repair: the background healer checks has_connection_info before the breaker
+                    # (metrics_collector), and ensure_connection is gated by the breaker tripped
+                    # below. pop, not test-then-delete: these dicts are mutated from a thread pool.
                     self._connection_info.pop(cluster_id, None)
-                    # note: recorded, not cleared. Five callers derive reachable from
+                    # Recorded rather than cleared. Callers derive reachability from
                     # KIND_UNAUTHORIZED, and clearing here would report a cluster that answered
-                    # and refused us as plain Offline. See test_connection_breaker's
+                    # and refused the certificate as plain Offline. See test_connection_breaker's
                     # test_a_generic_failure_never_downgrades_an_authorization_one.
                     health.record_failure(
                         cluster_id, "certificate not trusted", kind=health.KIND_UNAUTHORIZED
                     )
                     return None
 
-            # note: the boot path configures the session (pool size, retry policy, default
-            # timeout) and this path did not, so a worker that had reconnected once ran a
-            # different HTTP stack for the same cluster than its sibling.
+            # Same session setup as connect_with_vault_cert (pool size, retry policy, default
+            # timeout), so a reconnected client runs the same HTTP stack as a fresh one.
             self._configure_client_session(
                 client,
                 server_fingerprint,
@@ -933,8 +879,8 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
             raise
         except LXDLocalStorageError:
             # See connect_with_vault_cert: not the cluster's fault, so it must not be recorded
-            # against it. Raised rather than returned as None because None here reads downstream
-            # as "cluster unreachable", which is the misreport this whole path exists to stop.
+            # against it. Raised rather than returned as None because None reads downstream as
+            # "cluster unreachable".
             logger.error(f"Cannot prepare TLS credentials for {cluster_id}: backend storage")
             raise
         except Exception as e:
@@ -976,8 +922,8 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
     def register_cluster(self, cluster_id: str) -> None:
         """Add a single cluster to the registered whitelist.
 
-        note: None means "unfiltered" (the boot sync failed). Turning it into a one-element
-        set here would hide every other connected cluster in this worker.
+        None means "unfiltered" (the boot sync failed). Turning it into a one-element set here
+        would hide every other connected cluster in this worker.
         """
         if self._registered_clusters is not None:
             self._registered_clusters.add(cluster_id)
@@ -1002,7 +948,7 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
         return apply_cluster_filter(connected)
     
     def has_connection_info(self, cluster_id: str) -> bool:
-        """Check if we have stored connection info for a cluster."""
+        """True when this worker holds stored connection info for a cluster."""
         return cluster_id in self._connection_info
 
     def has_attempted(self, cluster_id: str) -> bool:
@@ -1033,7 +979,6 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
         """
         self.cleanup_connection(cluster_id)
         
-        # Remove from registered whitelist
         self.unregister_cluster(cluster_id)
         
         # Clear credentials from memory
@@ -1045,7 +990,6 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
                 info["key_content"] = ""
             del self._connection_info[cluster_id]
         
-        # Clean up temp files
         self._cleanup_temp_cert_files(cluster_id)
 
         # audit: connection removed

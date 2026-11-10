@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 _LINE = re.compile(r"^(?P<name>[A-Za-z_:][A-Za-z0-9_:]*)(?:\{(?P<labels>.*)\})?\s+(?P<value>\S+)(?:\s+\S+)?\s*$")
 # important: anchored on the start or a comma. Unanchored, a long run of name characters with
-# no `="` after it made findall rescan the run from every offset: quadratic, and 40 KB of text
-# from a hostile endpoint held a worker's GIL for over ten seconds.
+# no `="` after it makes findall rescan the run from every offset, which is quadratic: 40 KB of
+# text from a hostile endpoint can hold a worker's GIL for over ten seconds.
 _LABEL = re.compile(r'(?:^|,)\s*([A-Za-z_][A-Za-z0-9_]*)="((?:[^"\\]|\\.)*)"')
 # A real LXD line is under 300 characters; anything far longer is not one worth parsing.
 _MAX_LINE = 4096
@@ -32,7 +32,7 @@ _MAX_PROJECT = 256
 _INSTANCE_NAME = re.compile(LXD_NAME_PATTERN)
 _PREFIXES = ("lxd_", "incus_")
 
-# note: whole disks only. A partition repeats its disk's bytes (sda1 is part of sda), a loop
+# Whole disks only. A partition repeats its disk's bytes (sda1 is part of sda), a loop
 # device inside a guest is a snap mount, and dm-*, md* and zd* sit on top of a disk that is
 # also listed, so counting any of them adds the same bytes twice.
 _WHOLE_DISK = re.compile(r"(?:sd[a-z]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+|nvme\d+n\d+|mmcblk\d+)")
@@ -174,8 +174,8 @@ def parse_instance_series(text: str, *, project: str) -> Dict[str, InstanceSerie
 def parse_member_series(text: str) -> Dict[Tuple[str, str], InstanceSeries]:
     """Per-instance series of every project on a member, keyed by (project, name).
 
-    note: a scrape without `project` covers every project the member runs. A line without a
-    project label belongs to "default", which is where LXD reports it.
+    A scrape without `project` covers every project the member runs. A line without a project
+    label belongs to "default", which is where LXD reports it.
     """
     return _parse_series(text, None)
 
@@ -188,8 +188,9 @@ def honest_memory(series: InstanceSeries) -> Optional[Dict[str, Optional[int]]]:
 
     important: a container's are derived by LXD from its cgroup, and LXD 5.21 sets
     MemAvailable = MemFree + Cached, where Cached is every file page, shared memory and tmpfs
-    included. Those cannot be reclaimed, so a container holding 200 MiB in /dev/shm read as
-    2 MiB used. Only Cached - Shmem is reclaimable: used = (MemTotal - MemFree) - (Cached - Shmem).
+    included. Those cannot be reclaimed, so a container holding 200 MiB in /dev/shm would read
+    as 2 MiB used. Only Cached - Shmem is reclaimable:
+    used = (MemTotal - MemFree) - (Cached - Shmem).
     """
     total, available, free = series.mem_total, series.mem_available, series.mem_free
     cached, shmem = series.mem_cached, series.mem_shmem or 0.0

@@ -1,8 +1,7 @@
 """
-Organization Management Router
+Organizations, their members and their cluster bindings.
 
-CRUD for organizations, members, and cluster bindings.
-Scoped by RBAC: Admin sees all, Partner sees own, Tenant sees assigned.
+Scoped by RBAC: Admin sees all, Partner sees its own, Tenant sees the ones it belongs to.
 """
 
 import logging
@@ -84,11 +83,9 @@ class OrgResponse(BaseModel):
     is_active: bool
     member_count: int = 0
     cluster_count: int = 0
-    # Whether the CALLER belongs to this organization. An Admin's list is every active
-    # organization, and until now nothing in the payload told those apart from the caller's own,
-    # so the branding editor could not warn before writing to a customer's organization. Free to
-    # compute: Organization.members is lazy="selectin", so member_count already walks the same
-    # collection. Defaults false so an older client sees the conservative answer.
+    # Whether the caller belongs to this organization. An Admin's list holds every active
+    # organization, so the branding editor reads this to warn before writing to someone else's.
+    # Organization.members is lazy="selectin", so member_count already loads the same collection.
     is_member: bool = False
 
     class Config:
@@ -142,10 +139,10 @@ def _get_user_role(user: AuthenticatedUser) -> str:
 
 
 def _org_to_response(org, caller_email: Optional[str] = None, *, tenant: bool = False) -> OrgResponse:
-    """Convert ORM Organization to response model.
+    """Build the response for an organization.
 
     A tenant is not told who created the organization: on an OrcaHub buyer organization that is
-    the seller's key minter, an address the buyer has no business with.
+    the seller's key minter.
     """
     members = org.members or []
     return OrgResponse(
@@ -184,8 +181,8 @@ async def _guard_organization_write(
 async def _require_organization(svc: OrganizationService, org_id: int) -> None:
     """Raise 404 unless the organization exists.
 
-    note: an Admin runs every organization (user_runs_org reads no row for it), so nothing else
-    stopped a member or binding written into a deleted one, and the foreign key answered 500.
+    An Admin runs every organization (user_runs_org reads no row for it), so without this a member
+    or binding written into a missing organization would fail on the foreign key with a 500.
     """
     if await svc.get_organization(org_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
@@ -303,9 +300,8 @@ async def delete_organization(
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
     async with _guard_organization_write(db, org_id):
-        # important: migration records keep their organization (RESTRICT foreign keys), so an
-        # organization with any is refused up front with the reason. It used to reach the delete
-        # and answer 500 from the database's refusal.
+        # Migration records keep their organization (RESTRICT foreign keys), so an organization
+        # with any is refused up front with the reason instead of failing in the database.
         jobs, plans = await svc.migration_history(org_id)
         if jobs or plans:
             raise HTTPException(
@@ -353,8 +349,8 @@ async def list_members(
 
     members = await svc.list_members(org_id)
     if role == Role.TENANT.value:
-        # important: a tenant reads its own membership only. The full roster named every other
-        # buyer and the seller's staff on an OrcaHub organization.
+        # important: a tenant reads its own membership only. On an OrcaHub organization the full
+        # roster names every other buyer and the seller's staff.
         caller = (user.email or "").lower()
         members = [m for m in members if (m.user_email or "").lower() == caller]
     return [MemberResponse.model_validate(m) for m in members]
@@ -372,7 +368,7 @@ async def add_member(
     role = _get_user_role(user)
 
     async with _guard_organization_write(db, org_id):
-        # important: whoever runs the organization, not whoever can see it (a tenant row can).
+        # important: the caller must run the organization; a tenant row can see it too.
         if not await user_runs_org(db, org_id, user.email, role):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
         await _require_organization(svc, org_id)
@@ -455,8 +451,8 @@ async def list_cluster_bindings(
     clusters = await svc.list_clusters(org_id)
     if role == Role.TENANT.value:
         # important: a tenant sees only the bindings its own grants reach, the same scope every
-        # scoped route enforces, and not who registered them. A binding whose sale ended (or that
-        # serves another buyer) named a cluster the tenant can no longer use.
+        # scoped route enforces, and not who registered them. Otherwise a binding whose sale ended,
+        # or that serves another buyer, names a cluster the tenant cannot use.
         allowed = await org_scope.get_user_allowed_clusters(user, db)
         acl, _grants, _visible = await org_scope.get_tenant_scope(user, db)
         scope = org_scope._narrow_by_tenant_acl(allowed, acl) or set()
@@ -483,15 +479,12 @@ async def bind_cluster(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
     await _require_organization(svc, org_id)
 
-    # important: `user_has_access` checks the ORGANISATION, which is the caller's own. Nothing
-    # checked the CLUSTER, and org scope is derived from exactly the row this writes
-    # (org_scope._query_owned_clusters). A partner could therefore create an org, bind another
-    # tenant's cluster id to it, and gain full org scope over that cluster: instances, networks,
-    # storage, console and terminal, with break-glass treating it as owned rather than foreign.
-    #
-    # Same rule the API-key doors already apply: you may only grant what you already hold.
-    # Personally registered clusters count as owned, so the org-less partner bootstrap that
-    # reconcile_personal_clusters exists for still works.
+    # important: user_runs_org checks the organization, which is the caller's own, and org
+    # scope is derived from exactly the row this writes (org_scope._query_owned_clusters).
+    # Without a check on the cluster, a partner could bind another party's cluster id to its own
+    # organization and gain full org scope over it. As on the API-key routes, only what the
+    # caller already holds may be granted. Personally registered clusters count as owned, so
+    # the org-less partner bootstrap (reconcile_personal_clusters) still works.
     owned = await get_owned_clusters_ignoring_admin(user, db)
     if role != "admin":
         if body.cluster_id not in owned:
@@ -501,7 +494,7 @@ async def bind_cluster(
             )
         # important: a cluster reached only by purchase is the seller's. Bound here, the new row
         # would carry the buyer as registrant and outlive the purchase and its term
-        # (security review 2026-10-27, core/sale_term.py).
+        # (core/sale_term.py).
         if await reaches_only_by_purchase(db, user.email, body.cluster_id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -545,8 +538,9 @@ async def unbind_cluster(
     role = _get_user_role(user)
 
     async with _guard_cluster_write(db, cluster_id):
-        # important: whoever runs the organization. Seeing it is any member row, so a partner who
-        # only bought from another partner could otherwise unbind that partner's clusters.
+        # important: the caller must run the organization. Seeing it takes any member row, so a
+        # partner who only bought from another partner could otherwise unbind that partner's
+        # clusters.
         if not await user_runs_org(db, org_id, user.email, role):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
 

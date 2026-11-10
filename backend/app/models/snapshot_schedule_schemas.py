@@ -1,7 +1,7 @@
 """The wire shape of an operator snapshot schedule.
 
-Its own module rather than more of models/schemas.py, which is already past this project's
-500-line rule and is imported early enough that adding to it is how import cycles start.
+Kept out of models/schemas.py, which is large and imported early enough that additions there risk
+import cycles.
 """
 
 from typing import List, Literal, Optional
@@ -42,9 +42,8 @@ class _ScheduleShape(BaseModel):
         expiry_days = getattr(self, "expiry_days", None)
         if keep_last is None or expiry_days is None:
             return self
-        # important: the two bounds can contradict each other silently. Weekly, keeping 3, expiring
-        # after 7 days means the second snapshot is gone before the third is taken, so the schedule
-        # holds exactly one forever and nothing on screen says why.
+        # The two bounds can contradict each other. Weekly, keeping 3 and expiring after 7 days,
+        # each snapshot expires as the next is taken, so the schedule only ever holds one.
         span_hours = recurrence.period_hours(frequency) * keep_last
         if span_hours > expiry_days * 24:
             raise ValueError(
@@ -84,11 +83,11 @@ class SnapshotScheduleCreateRequest(_ScheduleShape):
 
 
 class SnapshotScheduleUpdateRequest(_ScheduleShape):
-    """Everything optional, but a recurrence is edited as a whole.
+    """Fields to change on a schedule. Omitted fields keep their value.
 
-    important: `frequency` carries the others. Editing the hour of a weekly schedule without
-    resending the weekday would leave the validator unable to see whether the pair is still
-    coherent, so the four recurrence fields move together or not at all.
+    A recurrence is edited as a whole: changing when a schedule runs means sending `frequency`,
+    `hour_utc` and `minute_utc` together, plus `weekday` for a weekly schedule, so the validator
+    can check the combination.
     """
 
     label: Optional[str] = Field(None, min_length=1, max_length=MAX_SCHEDULE_LABEL)
@@ -113,9 +112,8 @@ class SnapshotScheduleUpdateRequest(_ScheduleShape):
 class SnapshotScheduleInfo(BaseModel):
     """One schedule, as an operator sees it.
 
-    note: `state` is the stored active/paused, and a failing schedule is still active. The console
-    derives a third label from `consecutive_failures` rather than the API inventing a state the
-    database does not have, so a row cannot report a state its own columns contradict.
+    `state` is the stored active or paused state, and a failing schedule stays active. Read
+    `consecutive_failures` to tell a failing schedule apart.
     """
 
     id: int

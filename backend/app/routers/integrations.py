@@ -1,7 +1,6 @@
 """
-API Router for External Integrations.
-Provides endpoints for managing API keys, external app connections, and delegated access.
-Supports integration with Orcahub and other external applications (soon with Orcalens, Orcasonic, Orcaflux, other Orca product).
+API router for external integrations.
+Endpoints for managing API keys, external app connections (ex; OrcaHub) and delegated access.
 """
 
 import asyncio
@@ -278,13 +277,12 @@ router = APIRouter(
 )
 
 # External router: API key-authenticated endpoints for external apps (OrcaHub, etc.)
-# No JWT dependency - these endpoints authenticate via X-API-Key-ID/Secret headers or request body
+# No JWT dependency: these endpoints authenticate via X-API-Key-ID/Secret headers or request body
 external_router = APIRouter(
     prefix="/integrations",
     tags=["Integrations - External"],
 )
 
-# Vault path for integration data
 VAULT_INTEGRATIONS_PATH = "integrations"
 
 activity_logger = get_activity_logger()
@@ -295,18 +293,11 @@ activity_logger = get_activity_logger()
 # ============================================
 
 class ClusterPermission(BaseModel):
-    """Permission for a specific cluster, as it is STORED and as it is read back.
-
-    important: deliberately lenient, with no validators at all. Every stored grant is read back
-    straight into this model (`_key_info` does `APIKeyInfo(**metadata)` on raw Vault JSON, and
-    `/whoami` and `/validate` construct it from stored dicts), so a validator here does not guard
-    a boundary, it re-judges history. One legacy key with a shape a newer rule dislikes would
-    raise inside the list comprehension in `list_api_keys` and 500 the whole key list, hiding
-    every other key. `APIKeyInfo.app_type` above carries the same note for the same reason.
-
-    New grants are checked by `ClusterPermissionRequest` below, which is what every request model
-    uses. Tighten that one, never this one.
-    """
+    """Access a key holds on one cluster, as stored and as returned."""
+    # important: no validators here. Stored grants are read back into this model (`_key_info`
+    # builds `APIKeyInfo(**metadata)` from raw Vault JSON; `/whoami` and `/validate` build it from
+    # stored dicts), so a rule here would turn one legacy grant into a 500 for the whole key list.
+    # New grants are validated by `ClusterPermissionRequest`; tighten that one instead.
     model_config = {"extra": "allow"}
     
     cluster_id: str = Field(..., description="Cluster ID to grant access to")
@@ -322,27 +313,19 @@ class ClusterPermission(BaseModel):
 
 
 class ClusterPermissionRequest(ClusterPermission):
-    """A grant as it arrives from a client. Adds validators and no fields.
-
-    Adding no fields is load-bearing: `model_dump()` produces exactly the same keys as the base,
-    so what reaches Vault is byte-identical to what the lenient model would have written.
-    """
+    """Access granted to a key on one cluster, validated on the way in."""
+    # important: validators only, no fields, so `model_dump()` writes exactly the keys of the
+    # lenient base model to Vault.
 
     @field_validator("permissions")
     @classmethod
     def _reject_a_grant_that_grants_nothing(cls, value: List[str]) -> List[str]:
         """Refuse an empty or unrecognised grant at the boundary.
 
-        An empty list was accepted before and reached a ``max()`` over nothing, which surfaced as
-        HTTP 500. The runtime now answers 403 for it either way (app/core/api_key_permissions.py);
-        this is the second half, so the mistake is caught where it is made rather than on first
-        use. An unrecognised name is worth refusing for a different reason: at runtime it scores
-        as "read" rather than as nothing, so a typo silently becomes a read grant.
-
-        note: this lives on the request model, not on ClusterPermission. It sat on the base with a
-        docstring claiming stored keys never passed through it, which was not true: `_key_info`
-        builds `APIKeyInfo(**metadata)` from raw Vault JSON, so the rule ran over history and a
-        single legacy grant could 500 the entire key list.
+        The runtime answers 403 for an empty grant (app/core/api_key_permissions.py); this catches
+        the mistake where it is made. An unrecognised name scores as "read" at runtime, so a typo
+        would silently become a read grant. The rule lives on the request model because stored
+        grants are read back through ClusterPermission.
         """
         if not value:
             raise ValueError(
@@ -362,10 +345,9 @@ class ClusterPermissionRequest(ClusterPermission):
     def _normalise_the_project_allow_list(cls, value: List[str]) -> List[str]:
         """Trim, dedupe and charset-check the projects this grant names.
 
-        A project name that names nothing produces a key that authenticates, reads as scoped on
-        every screen, and is refused by every project-bounded call for the rest of its life. The
-        console now picks these from the cluster's real project list; this is the same guarantee
-        for anything that posts to the API directly.
+        A name that matches no project gives a key that every project-bounded call refuses. The
+        console picks names from the cluster's project list; this holds callers of the API to the
+        same rule.
         """
         return normalise_project_grant(value)
 
@@ -373,9 +355,9 @@ class ClusterPermissionRequest(ClusterPermission):
 class ExternalUserMapping(BaseModel):
     """Maps external user to Orcastra identity."""
     # important: this value is interpolated into a Vault KV path by save_user_mapping_to_vault.
-    # Unconstrained, `../../../../clusters/<id>` reached Vault, whose HTTP layer normalises the
-    # path, and the mapping JSON overwrote a cluster's stored certificate material. The charset
-    # is the boundary half of the fix; vault_client percent-encodes the segment as the other.
+    # Vault normalises the path, so `../../../../clusters/<id>` would let the mapping JSON
+    # overwrite a cluster's stored certificate material. The charset guards the boundary;
+    # vault_client also percent-encodes the segment.
     external_user_id: str = Field(
         ...,
         min_length=1,
@@ -387,9 +369,8 @@ class ExternalUserMapping(BaseModel):
     external_name: Optional[str] = Field(None, description="User display name")
     orcastra_identity_id: Optional[str] = Field(None, description="Mapped Orcastra identity ID")
     # Lenient like the rest of this model: `get_user_mappings_from_vault` builds it with
-    # `ExternalUserMapping(**data)` straight from stored JSON, and that call sits inside the same
-    # comprehension that builds the API-key list, so a rule applied here would 500 that list for
-    # a legacy mapping. `UserMappingRequest` is the boundary.
+    # `ExternalUserMapping(**data)` from stored JSON while the API-key list is built, so a rule
+    # here would 500 that list for a legacy mapping. `UserMappingRequest` is the boundary.
     permissions: List[ClusterPermission] = Field(
         default_factory=list,
         description="Per-cluster permissions for this user"
@@ -403,9 +384,8 @@ class APIKeyInfo(BaseModel):
     id: str = Field(..., description="Unique API key identifier")
     name: str = Field(..., description="Descriptive name for the API key")
     app_name: str = Field(..., description="Name of the connected application")
-    # note: deliberately an unconstrained str, unlike the create request. Keys already in Vault
-    # are read back straight into this model, so validating here would turn an unfamiliar stored
-    # value into a 500 on a list that used to render.
+    # Unconstrained, unlike the create request: stored keys are read back into this model, so a
+    # validator would turn an unfamiliar stored value into a 500 on the key list.
     app_type: str = Field(default="orcahub", description=f"Application type: {', '.join(APP_TYPES)}")
     capabilities: Optional[List[str]] = Field(
         default=None,
@@ -418,11 +398,9 @@ class APIKeyInfo(BaseModel):
     expires_at: Optional[str] = Field(None, description="Expiration timestamp")
     is_active: bool = Field(True, description="Whether the key is active")
     is_revoked: bool = Field(False, description="Whether the key has been revoked")
-    # note: derived from expires_at on every read, never stored. Expiry is a fact about a
-    # timestamp, so writing an is_expired flag would need a writer, and the only path that reads
-    # a key often enough to notice is the authentication hot path, where a Vault write does not
-    # belong. `expiry_state` is what the card renders; `is_expired` is the one an integration
-    # branches on.
+    # Derived from expires_at on every read, never stored, so the authentication hot path never
+    # has to write to Vault. `expiry_state` is what the card renders; `is_expired` is what an
+    # integration branches on.
     is_expired: bool = Field(False, description="Whether the key is past its expiration")
     expiry_state: str = Field(
         default="never",
@@ -434,13 +412,13 @@ class APIKeyInfo(BaseModel):
         description="Cluster access permissions"
     )
     user_mappings_count: int = Field(0, description="Number of mapped users")
-    # note: derived from the stored metadata on every read. An add-on installation owns its
-    # credential and rotates it itself, so the key card does not offer a secret rotation for one.
+    # Derived from the stored metadata on every read. An add-on installation owns and rotates its
+    # own credential, so the key card offers no secret rotation for one.
     is_add_on_credential: bool = Field(
         False, description="Whether an add-on installation issued this key and owns its grant"
     )
-    # note: filled from the database after the list cache, because what a key owns changes without
-    # the key changing. None means it could not be read, which is not the same as owning nothing.
+    # Filled from the database after the list cache, because what a key owns changes without the
+    # key changing. None means it could not be read, which differs from owning nothing.
     owned_organization_count: Optional[int] = Field(
         None, description="Active OrcaHub organizations this key owns, or null when it could not be read"
     )
@@ -490,9 +468,9 @@ class APIKeyCreateRequest(BaseModel):
     def _reject_an_unknown_application_type(cls, value: str) -> str:
         """Refuse a type the capability defaults cannot answer for.
 
-        The field used to accept any string because nothing read it. Now it seeds the key's
-        capabilities, so an unrecognised value would quietly produce a key that grants nothing.
-        Boundary-only, like ClusterPermission.permissions: stored keys never pass through here.
+        The type seeds the key's capabilities, so an unrecognised value would produce a key that
+        grants nothing. Boundary only, like ClusterPermissionRequest.permissions: stored keys never
+        pass through here.
         """
         if value not in APP_TYPES:
             raise ValueError(
@@ -507,10 +485,8 @@ class APIKeyCreateRequest(BaseModel):
     ) -> Optional[List[str]]:
         """Refuse an empty or unrecognised capability set at the boundary.
 
-        None is fine and means "use the type's defaults". An explicit empty list is not: it
-        produces a key that authenticates and can then do nothing, which is never what the
-        operator meant. An unrecognised name is refused for the same reason the permission
-        validator refuses one, so a typo is caught where it is made rather than on first use.
+        None means "use the type's defaults". An explicit empty list gives a key that authenticates
+        and can do nothing. An unrecognised name is refused so a typo is caught where it is made.
         """
         if value is None:
             return None
@@ -529,7 +505,7 @@ class APIKeyCreateRequest(BaseModel):
 
 
 class APIKeyCreateResponse(BaseModel):
-    """Response after creating an API key - includes the secret (shown only once)."""
+    """Response after creating an API key. Includes the secret, shown only once."""
     api_key: APIKeyInfo
     api_key_id: str = Field(..., description="The API Key ID (public, can be stored)")
     api_key_secret: str = Field(..., description="The API Key Secret (STORE SECURELY, shown only once)")
@@ -540,9 +516,7 @@ class APIKeyListResponse(BaseModel):
     total: int
     active: int
     revoked: int
-    # note: additive. `active` used to include expired keys, so the two numbers together used to
-    # be one number that was wrong; a client reading only `active` now gets the honest figure and
-    # one reading both can show the split.
+    # Expired keys are counted here, not in `active`.
     expired: int = 0
     keys: List[APIKeyInfo]
 
@@ -556,14 +530,11 @@ class APIKeyValidateRequest(BaseModel):
 class ServerIdentity(BaseModel):
     """Which build of this server answered.
 
-    Carried only on responses a credential has already unlocked. The version alone is public, on
-    `/health` and `/`; the commit and the build date are not, because f270eb0 took them off the
-    unauthenticated surface and that decision stands. An integrator holding a key is a different
-    caller from an anonymous one, and this is the call it already makes to prove it is connected.
+    Returned only after a credential is verified. The version alone is public on `/health` and
+    `/`; the commit and the build date are not.
 
-    important: self-reported. It says which build this deployment believes it is running, which is
-    what an operator needs to answer "which version is this partner on" without asking them. It is
-    not evidence the deployment is genuine, and nothing should be built on it as if it were.
+    Self-reported: it names the build this deployment believes it runs. It is not evidence that
+    the deployment is genuine.
     """
     version: Optional[str] = Field(
         default=None, description="Version label the image was built with, null if unstamped"
@@ -581,9 +552,8 @@ class APIKeyValidateResponse(BaseModel):
     valid: bool
     app_name: Optional[str] = None
     app_type: Optional[str] = None
-    # note: an integration could not previously find out when its own key lapses. Nothing warned
-    # before expiry, in the UI or the logs, so the first signal was a 401 in production. These two
-    # let an unattended caller check itself on the call it already makes to prove it is connected.
+    # Lets an unattended integration see when its own key lapses, on the call it already makes to
+    # prove it is connected.
     expires_at: Optional[str] = Field(
         default=None, description="When this key stops working, or null if it never does"
     )
@@ -596,13 +566,13 @@ class APIKeyValidateResponse(BaseModel):
         description="Granted capabilities, or null for a legacy key with unrestricted access",
     )
     cluster_permissions: List[ClusterPermission] = Field(default_factory=list)
-    # note: present only on the branches that verified a credential. A refusal carries null, so the
-    # build stays invisible to anyone who cannot already authenticate.
+    # Set only when a credential was verified. A refusal carries null, so the build stays hidden
+    # from anyone who cannot authenticate.
     server: Optional[ServerIdentity] = Field(
         default=None, description="Which build of this server answered"
     )
-    # note: like server, only on the branches that verified a credential. An integration reads this to
-    # learn which optional contracts this deployment speaks before it calls them.
+    # Like `server`, set only when a credential was verified. Names the optional contracts this
+    # deployment supports, so an integration can check before calling them.
     features: Optional[List[str]] = Field(
         default=None, description="Optional integration contracts this server supports, such as organization_owner_keys.v1"
     )
@@ -649,16 +619,14 @@ class SyncDataRequest(BaseModel):
     include_instances: bool = Field(False, description="Include instances (can be large)")
     include_projects: bool = Field(True, description="Include projects")
     cluster_ids: Optional[List[str]] = Field(None, description="Specific clusters to sync")
-    # Organization data pushed from external app (ex; OrcaHub)
-    # important: bounded. Each element costs a SELECT plus its own commit, and members also
-    # cost an Authentik call each, so an unbounded list is a single request that holds a worker
-    # and the connection pool for as long as it takes. No real push approaches these numbers.
+    # important: bounded. Each element costs a SELECT and its own commit, and each member also an
+    # Authentik call, so an unbounded list holds a worker and the connection pool for as long as
+    # it runs. No real push approaches these numbers.
     organizations: List[SyncOrganization] = Field(
         default_factory=list,
         max_length=1000,
         description="Organizations to sync from external app"
     )
-    # Callback URL for on-demand data pull
     app_url: Optional[str] = Field(None, description="External app base URL for callbacks")
 
     @field_validator("app_url")
@@ -666,20 +634,17 @@ class SyncDataRequest(BaseModel):
     def _refuse_a_callback_this_server_must_not_call(cls, value: Optional[str]) -> Optional[str]:
         """`app_url` is stored and then fetched by this server, so it is an SSRF sink.
 
-        Three separate outbound requests are built from it: the member push in
-        `orcahub_sync.push_members_to_orcahub`, which sends the key's own PLAINTEXT secret; the
-        organization pull in `refresh_organizations`, whose response is fed straight into
-        organization creation; and the lifecycle webhook, which sends a valid HMAC. Pointed at
-        169.254.169.254 or at this network's own Vault, each of those becomes a credential
-        delivery or an injection channel.
+        Three outbound requests use it: the member push in `orcahub_sync.push_members_to_orcahub`,
+        which sends the key's plaintext secret; the organization pull in `refresh_organizations`,
+        whose response feeds organization creation; and the lifecycle webhook, which carries a
+        valid HMAC. Pointed at 169.254.169.254 or an internal Vault, each would deliver a
+        credential or inject data. https is required because every one carries a credential.
 
-        The capability gate on this field answers "may you set it", never "is this value safe".
-        https is required because every one of those requests carries a credential.
+        The capability gate on this field decides who may set it, not whether the value is safe.
         """
         if value is None:
             return None
         return assert_url_is_fetchable(value, field="app_url", require_https=True)
-    # Member data pushed from external app (ex; OrcaHub)
     members: List[SyncMember] = Field(
         default_factory=list,
         max_length=5000,
@@ -721,9 +686,9 @@ class ProxyRequest(BaseModel):
     operation: str = Field(..., description="Operation type: list_instances, create_instance, etc.")
     project: str = Field(default="default", description="LXD project")
     params: Dict[str, Any] = Field(default_factory=dict, description="Operation parameters")
-    # note: the default keeps every existing caller synchronous. wait=false is for work that
-    # can outlive PROXY_OP_TIMEOUT, ex; a create that has to pull an image. It returns the LXD
-    # operation id immediately and the caller polls /integrations/operations/{id}.
+    # The default is synchronous. wait=false is for work that can outlive PROXY_OP_TIMEOUT, ex; a
+    # create that has to pull an image. It returns the LXD operation id immediately and the caller
+    # polls /integrations/operations/{id}.
     wait: bool = Field(
         default=True,
         description="Wait for the LXD operation to finish. False returns an operation id to poll.",
@@ -848,7 +813,7 @@ _RAW_FEATURE_FAMILIES = {
 
 
 def _raw_proxy_landing(request: RawProxyRequest, project: str, client: Any, endpoint: str):
-    """An async callable answering where a raw write really lands, or None when it is what the key
+    """An async callable answering where a raw write lands, or None when it lands where the key
     named. Only asked by refuse_key_default_operation once the cluster is held by another party."""
     method = request.method.upper()
     mutating = method in {"POST", "PUT", "PATCH", "DELETE"}
@@ -908,7 +873,7 @@ def _raw_party_bounded_project(api_key: Dict[str, Any], request: RawProxyRequest
 
     Only `POST /projects` (the body's name) and `DELETE /projects/<name>`. A change to a project's
     config, and anything below its address, keeps the project-limited rules: the browser lets a
-    Partner change only a project's description and limits (security review, 2026-11-06).
+    Partner change only a project's description and limits.
     """
     if not is_party_bounded(api_key, request.cluster_id) or method not in {"POST", "DELETE"}:
         return None
@@ -963,10 +928,9 @@ async def _refuse_an_unisolated_target(client: Any, cluster_id: str, projects: A
     """409 when a party-bounded key writes into, or names in a body, a project that shares
     `default`'s volumes, images, profiles or networks, as the browser refuses a Partner.
 
-    note: `default` is judged like any other project. The view-only rule usually refused it
-    already, but it counts a teammate's member row as the caller's side and this bound does not,
-    and the browser refuses a Partner's write into an unrestricted `default` on a shared cluster
-    (second security review of the key bound, 2026-11-06)."""
+    `default` is judged like any other project. The view-only rule counts a teammate's member row
+    as the caller's side and this bound does not, and the browser refuses a Partner's write into
+    an unrestricted `default` on a shared cluster."""
     names = [projects] if isinstance(projects, str) else list(projects)
     for name in sorted({n for n in names if n}):
         config = await run_blocking(
@@ -986,7 +950,7 @@ def _raw_proxy_default_reach(request: RawProxyRequest, ambient_project: str) -> 
     """The projects a raw request changes, or opens a guest session or file in, for the view-only
     `default` rule (services/key_default_view_only.py). Empty for a plain read.
 
-    note: a project's own address (`/projects/<name>`) names it; a cluster-wide write names none
+    A project's own address (`/projects/<name>`) names it; a cluster-wide write names none
     (for a key those need a `*` grant, _PROJECT_UNBOUNDABLE_PREFIXES); anything else lands in the
     request's project, or where _raw_proxy_landing says LXD keeps it. A body that names a project
     (a move into `default`, a copy out of it) adds that project too.
@@ -1047,14 +1011,13 @@ async def _assert_proxy_cluster_write_is_not_fenced(*, cluster_id: str) -> None:
 class ProxyResponse(BaseModel):
     """Response from proxied operation."""
     success: bool
-    # note: additive, and only set on failure. The endpoint answers 200 with success=false for
-    # a failure inside the cluster, so without a code an unattended caller has to read English
-    # to tell "give up, it is not there" from "retry, the cluster is down".
+    # Set only on failure. A failure inside the cluster answers 200 with success=false, and the
+    # code lets an unattended caller tell "it is not there" from "retry, the cluster is down"
+    # without parsing the message.
     error_code: Optional[str] = None
-    # important: the list_* operations return a list, not a mapping. Typed as Dict only, every
-    # one of them failed response validation and reported success:false, so this endpoint has
-    # never returned data for any operation. Widened rather than wrapped so the payload shape
-    # matches what the operation naturally produces.
+    # important: the list_* operations return a list. Typed as Dict alone, every one of them fails
+    # response validation and reports success:false. Widened rather than wrapped so the payload
+    # keeps the shape the operation produces.
     data: Optional[Union[Dict[str, Any], List[Any]]] = None
     error: Optional[str] = None
     operation_id: Optional[str] = None
@@ -1117,8 +1080,8 @@ API_KEY_STORE_UNAVAILABLE = "api_key_store_unavailable"
 def _vault_did_not_answer(exc: BaseException) -> bool:
     """True when Vault failed as a store (sealed, down, unreachable), never for "not there".
 
-    important: only Vault and transport errors count. A 404 is a missing key, a 4xx is a refusal
-    worth reporting as it is, and anything else is a fault of ours that stays a 500.
+    Only Vault and transport errors count. A 404 is a missing key, a 4xx is a refusal reported as
+    it is, and anything else is a server fault that stays a 500.
     """
     from app.core.vault_client import VaultClientError
 
@@ -1130,7 +1093,7 @@ def _vault_did_not_answer(exc: BaseException) -> bool:
     if status is None and isinstance(exc, VaultClientError):
         # important: no status and no transport error behind it is the client refusing the path
         # before any request (an empty or dot segment in a caller's key id). Counted as an outage,
-        # anyone could fake the 503 with `X-API-Key-ID: ..` (security review of 9d77f216).
+        # anyone could fake the 503 with `X-API-Key-ID: ..`.
         return isinstance(exc.__cause__ or exc.__context__, requests.RequestException)
     return status is None or status >= 500
 
@@ -1138,9 +1101,8 @@ def _vault_did_not_answer(exc: BaseException) -> bool:
 def _key_store_unavailable() -> HTTPException:
     """The 503 for a key read, list or write that Vault could not serve.
 
-    note: measured in the RC5 acceptance Vault window, a sealed Vault turned a valid key into
-    401 "Invalid API key" and the key list into 200 with nothing in it, while /clusters already
-    answered 503 for the same outage (core/registry_guard.py).
+    A sealed Vault must not read as a wrong key (401) or an empty key list (200). /clusters answers
+    503 for the same outage (core/registry_guard.py).
     """
     from app.core.registry_guard import RETRY_AFTER_SECONDS
 
@@ -1164,13 +1126,12 @@ def save_api_key_to_vault(
     """Save API key metadata, hash, and optionally raw secret to Vault."""
     metadata_saved = False
     try:
-        # Store metadata
         vault_client.vault_kv_put(
             f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
             metadata
         )
         metadata_saved = True
-        # Store secret hash (+ raw secret for callback auth)
+        # The raw secret is kept for callback auth.
         secret_payload: Dict[str, Any] = {"hash": secret_hash}
         if raw_secret:
             secret_payload["raw"] = raw_secret
@@ -1200,7 +1161,7 @@ def save_api_key_to_vault(
 def save_api_key_secret_to_vault(vault_client, key_id: str, secret_hash: str, raw_secret: str) -> None:
     """Replace a key's secret document and nothing else, which is all a rotation writes.
 
-    note: the grant is a separate document and stays untouched, so a rotation cannot drop the
+    The grant is a separate document and stays untouched, so a rotation cannot drop the
     `capabilities` field or any other part of it. The raw copy is what the OrcaHub callbacks sign
     with.
     """
@@ -1236,11 +1197,11 @@ def get_api_key_from_vault(vault_client, key_id: str, *, use_cache: bool = True)
 def _read_key_metadata_blocking(vault_client, key_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """A key's metadata document, or None and why: "missing" when Vault has no such key, else "unknown".
 
-    note: the metadata path only. Nothing that reports or checks an owner key needs the secret
-    document, and get_api_key_from_vault reads both.
+    The metadata path only: nothing that reports or checks an owner key needs the secret document,
+    and get_api_key_from_vault reads both.
 
-    note: use_cache=False. The metadata path is mirrored in the shared Vault cache, and a copy from
-    before a revoke would let a transfer hand an organization to a key that no longer works.
+    Read with use_cache=False. The metadata path is mirrored in the shared Vault cache, and a copy
+    from before a revoke would let a transfer hand an organization to a revoked key.
     """
     from app.core.vault_client import VaultClientError
 
@@ -1260,7 +1221,6 @@ def _read_key_metadata_blocking(vault_client, key_id: str) -> Tuple[Optional[Dic
 def list_api_keys_from_vault(vault_client) -> List[Dict[str, Any]]:
     """List all API key metadata from Vault."""
     try:
-        # List keys in the api_keys path
         response = vault_client.session.request(
             "LIST",
             f"{vault_client.vault_addr}/v1/secret/metadata/{VAULT_INTEGRATIONS_PATH}/api_keys",
@@ -1273,8 +1233,7 @@ def list_api_keys_from_vault(vault_client) -> List[Dict[str, Any]]:
         
         response.raise_for_status()
         keys = response.json().get("data", {}).get("keys", [])
-        
-        # Fetch metadata for each key
+
         all_metadata = []
         for key_id in keys:
             key_id = key_id.rstrip("/")
@@ -1296,8 +1255,8 @@ def list_api_keys_from_vault(vault_client) -> List[Dict[str, Any]]:
         return all_metadata
     except Exception as e:
         logger.warning(f"Failed to list API keys from Vault: {e}")
-        # important: an unanswered LIST is not an empty key store. It was answered as one, so a
-        # sealed Vault showed every operator zero keys.
+        # important: an unanswered LIST is not an empty key store. Answered as one, a sealed
+        # Vault shows every operator zero keys.
         if _vault_did_not_answer(e):
             raise _key_store_unavailable() from e
         return []
@@ -1306,8 +1265,8 @@ def list_api_keys_from_vault(vault_client) -> List[Dict[str, Any]]:
 def api_key_vault_records(vault_client, key_id: str) -> List[str]:
     """Every KV v2 metadata path under one API key, descriptor last.
 
-    note: the descriptor goes last so a delete that stops part way still leaves the key findable,
-    and retryable from the UI, rather than an orphaned secret nothing describes.
+    The descriptor goes last so a delete that stops part way still leaves the key findable, and
+    retryable from the UI, rather than an orphaned secret nothing describes.
     """
     base = f"secret/metadata/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}"
     try:
@@ -1321,9 +1280,8 @@ def delete_api_key_from_vault(vault_client, key_id: str) -> bool:
     """Delete an API key from Vault for good. True only when nothing of it can still be read.
 
     important: metadata deletes, not data deletes. A KV v2 data delete only marks the latest
-    version deleted, so a "deleted" key stayed in the LIST, its secret could still be undeleted
-    from version history, and every reconcile pass read each one back as a 404 (1286 of them,
-    about 17 audit lines a second, on the dev deployment). A policy without delete on
+    version deleted, so the key would stay in the LIST, its secret could be undeleted from version
+    history, and every reconcile pass would read it back as a 404. A policy without delete on
     secret/metadata falls back to the data delete, which at least stops the key working.
     """
     failed = []
@@ -1392,9 +1350,8 @@ def get_user_mappings_from_vault(vault_client, api_key_id: str) -> List[External
 # Process-local API key cache and last-used throttle.
 #
 # important: this stays in process memory and never reaches Redis. CacheManager writes
-# non-sensitive namespaces to Redis, and API key material has no business leaving the
-# process. Mirrors the module-level-lock-plus-dict pattern already used by
-# app/services/lxd/health.py.
+# non-sensitive namespaces to Redis, and API key material must not leave the process. Same
+# module-level lock plus dict pattern as app/services/lxd/health.py.
 _key_cache_lock = threading.Lock()
 # digest -> (cached_at_monotonic, key_id, metadata)
 _key_cache: Dict[str, tuple] = {}
@@ -1408,10 +1365,9 @@ def _api_key_digest(key_id: str, key_secret: str) -> str:
 
 
 # important: the metadata cache is per-process, so a revocation served by one uvicorn worker
-# would leave the key valid on the others until their own TTL expired (prod runs
-# WEB_CONCURRENCY=4). Revocations are therefore also published as a short-lived shared
-# tombstone, which every worker checks before trusting a local hit. Without Redis this falls
-# back to the per-process TTL, which is the pre-tombstone behaviour rather than a new hole.
+# would leave the key valid on the others until their own TTL expired. Revocations are also
+# published as a short-lived shared tombstone, which every worker checks before trusting a
+# local hit. Without Redis this falls back to the per-process TTL.
 _REVOKED_NS = "apikey_revoked"
 
 
@@ -1449,10 +1405,9 @@ def evict_api_key_cache(key_id: str) -> None:
     Also publishes a shared tombstone so the other workers drop their copies on the next use
     rather than honouring a revoked key until their own TTL runs out.
 
-    note: the tombstone outlives the cache TTL by the validation timeout. A validation already in
-    flight when this runs can still store the old metadata, or an old secret's digest, after the
-    local entries were dropped, and the tombstone is what makes the next hit on that entry go back
-    to Vault.
+    The tombstone outlives the cache TTL by the validation timeout. A validation already in flight
+    can still store stale metadata, or a replaced secret's digest, after the local entries were
+    dropped; the tombstone sends the next hit on that entry back to Vault.
     """
     with _key_cache_lock:
         for digest in [d for d, (_, kid, _m) in _key_cache.items() if kid == key_id]:
@@ -1469,10 +1424,11 @@ def evict_api_key_cache(key_id: str) -> None:
 def _schedule_last_used_update(key_id: str) -> None:
     """Record a key's use at most once per interval, without awaiting it.
 
-    Fire and forget on purpose: a request must never pay for, nor fail on, a bookkeeping field.
-    important: into api_key_usage, never the key document. Rewriting the whole document here, from
-    a cached read and without the key's lock, could put back a grant a cleanup had just removed,
-    an old `is_revoked`, or old capabilities.
+    Fire and forget: a request must never pay for, or fail on, a bookkeeping field.
+
+    important: writes to api_key_usage, never the key document. Rewriting the document from a
+    cached read and without the key's lock could restore a grant a cleanup had just removed, an
+    old `is_revoked`, or old capabilities.
     """
     now = time.monotonic()
     with _key_cache_lock:
@@ -1493,8 +1449,8 @@ def _fetch_cluster_info(cert_manager, cluster_id: str) -> List[Dict[str, Any]]:
     zone_name = location_data.get("region_name") or location_data.get("city") or None
     return [{
         "id": cluster_id,
-        # important: Vault stores `display_name` and `type`. Reading `name` and `server_type`,
-        # which nothing writes, answered every cluster as its raw id and as LXD.
+        # important: Vault stores `display_name` and `type`; nothing writes `name` or
+        # `server_type`, so reading those would answer every cluster as its raw id and as LXD.
         "name": lxd_status.resolve_display_name(cluster_id, metadata.get("display_name")),
         "endpoint": metadata.get("endpoint"),
         "server_type": server_type_name(metadata.get("type")),
@@ -1516,15 +1472,12 @@ def _fetch_cluster_info(cert_manager, cluster_id: str) -> List[Dict[str, Any]]:
 def _fetch_cluster_projects(lxd_service, cluster_id: str) -> List[Dict[str, Any]]:
     """Blocking half of the projects fan-out. Only ever runs on proxy_executor.
 
-    note: raises rather than returning empty for an unreachable cluster. _gather_per_cluster
-    records the reason and still answers with what the other clusters gave, which is the
-    contract the rest of the fan-out helpers already follow. Returning empty here made a dead
-    cluster and an empty cluster identical in the response.
+    Raises for an unreachable cluster rather than returning empty, so _gather_per_cluster records
+    the reason and a dead cluster never reads as an empty one.
     """
-    # note: connect_or_get_client, not get_client. This runs on proxy_executor, so the Vault
-    # fallback is off the loop already, and it is breaker-gated: a dead cluster in the fan-out
-    # still costs nothing after the first failure. Without it an API key read answered 503 on
-    # three workers out of four for a cluster registered after boot.
+    # connect_or_get_client: this runs on proxy_executor, so its Vault fallback is already off the
+    # loop, and it is breaker-gated, so a dead cluster costs nothing after the first failure.
+    # get_client alone would answer 503 for a cluster registered after this worker started.
     client = require_client(connect_or_get_client(lxd_service, cluster_id), cluster_id)
     return [
         {"name": p.name, "cluster_id": cluster_id, "description": p.description}
@@ -1536,8 +1489,8 @@ def _fetch_cluster_failover(lxd_service, cluster_id: str) -> List[Dict[str, Any]
     """Blocking half of the failover fan-out. Only ever runs on proxy_executor.
 
     important: a fresh GET /1.0, not the pooled client's `host_info`. That is read once when the
-    client connects and the pool keeps clients for hours, so an operator who turned healing off
-    would have been reported as still having it on. The raw body never leaves this function:
+    client connects and the pool keeps clients for hours, so turning healing off would still read
+    as on. The raw body never leaves this function:
     project_failover_config keeps numbers and one boolean, nothing that addresses the server.
     """
     client = require_client(connect_or_get_client(lxd_service, cluster_id), cluster_id)
@@ -1549,26 +1502,19 @@ def _fetch_cluster_failover(lxd_service, cluster_id: str) -> List[Dict[str, Any]
 def _fetch_cluster_instances(lxd_service, cluster_id: str) -> List[Dict[str, Any]]:
     """Blocking half of the instances fan-out. Only ever runs on proxy_executor.
 
-    important: this read ``client.instances.all()`` off the pooled client, which pylxd binds
-    to the default project. Every instance in every other project was therefore missing from
-    the answer entirely rather than merely unlabelled, and nothing in the response said so, so
-    an integration that provisions into its own project saw an empty fleet. The instance
-    manager's per-node fetch already walks every project with ``recursion=1`` and resolves
-    addresses for running instances, so this reuses it instead of growing a second copy that
-    would drift the same way.
+    important: reuses the instance manager's per-node fetch, which walks every project with
+    ``recursion=1`` and resolves addresses for running instances. ``client.instances.all()`` on
+    the pooled client is bound by pylxd to the default project and would silently leave out
+    every other project.
 
-    note: reusing it also inherits its reconnect path, which reads Vault for the cluster's
-    certificate and records a breaker failure when the cluster does not answer. That is a real
-    change of behaviour on the API-key surface, where the old read was an in-memory client plus
-    one call. It is the right trade: the breaker is already shared with the dashboard, which
-    reaches the same function through list_all_vms, and a cluster that genuinely will not answer
-    is what the breaker exists to record. The alternative is a second implementation that does
-    not reconnect, which is exactly the duplication that hid the default-project bug.
+    The fetch reconnects through Vault for the cluster's certificate and records a breaker
+    failure when the cluster does not answer; the dashboard shares that breaker through
+    list_all_vms.
     """
     vms, connected = lxd_service.instance_manager.fetch_node_instances(cluster_id)
     if not connected:
-        # The manager reports reachability separately from the result, and discarding it made
-        # an unreachable cluster indistinguishable from one holding no instances.
+        # The manager reports reachability separately from the result; ignoring it would make an
+        # unreachable cluster look like one holding no instances.
         raise HTTPException(status_code=503, detail=unreachable_detail(cluster_id))
     return [
         instance_summary(
@@ -1601,22 +1547,19 @@ def _fetch_instance_detail(
     """
     from app.services.lxd.utils import find_instance_in_projects
 
-    # note: connect_or_get_client, not get_client. This runs on proxy_executor, so the Vault
-    # fallback is off the loop already, and it is breaker-gated: a dead cluster in the fan-out
-    # still costs nothing after the first failure. Without it an API key read answered 503 on
-    # three workers out of four for a cluster registered after boot.
+    # connect_or_get_client: this runs on proxy_executor, so its Vault fallback is already off the
+    # loop, and it is breaker-gated, so a dead cluster costs nothing after the first failure.
+    # get_client alone would answer 503 for a cluster registered after this worker started.
     client = require_client(connect_or_get_client(lxd_service, cluster_id), cluster_id)
     # important: search only what the key may see. find_instance_in_projects with project=None
-    # lists every project on the cluster and then does one GET per project, so a miss cost
-    # 1 + N round trips on the shared proxy pool for a key that may be allowed to see one of
-    # them, and the caller chooses the name. Narrowing is both the cheap and the correct answer.
+    # lists every project on the cluster and then does one GET per project, so a miss for a
+    # caller-chosen name would cost 1 + N round trips on the shared proxy pool.
     search = [project] if project else sorted((granted or {}).get(cluster_id) or []) or [None]
     if search == [None]:
         search = _projects_holding(client, name)
-    # important: EVERY match, not the first. A name is unique per project, and stopping at the
-    # first hit returned one of two same-named instances in silence, so the 409 the caller
-    # documents for an ambiguous name never fired within one cluster and an agent could act on the
-    # instance it did not mean.
+    # important: collect every match. A name is unique per project only; stopping at the first
+    # hit would silently return one of two same-named instances, the documented 409 for an
+    # ambiguous name would never fire, and a caller could act on the wrong instance.
     details = []
     for candidate in search:
         instance, found_in = find_instance_in_projects(client, name, candidate)
@@ -1647,9 +1590,9 @@ def _fetch_instance_detail(
 def _projects_holding(client: Any, name: str) -> List[Optional[str]]:
     """Every project on the cluster holding an instance called `name`, for a key granted all.
 
-    One all-projects listing instead of a GET per project, which on a cluster with forty projects
-    was forty round trips for every miss. [None] when the listing fails, which falls back to the
-    first-match search rather than answering "not found" for a cluster that did not say.
+    One all-projects listing instead of a GET per project. [None] when the listing fails, which
+    falls back to the per-project search rather than answering "not found" for a cluster that did
+    not say.
     """
     from app.services.lxd.project_scope import list_across_projects
 
@@ -1662,19 +1605,15 @@ def _projects_holding(client: Any, name: str) -> List[Optional[str]]:
 
 
 class ClusterFanout(NamedTuple):
-    """What a fan-out actually returned, and what it could not reach.
+    """What a fan-out returned, and the clusters it could not reach.
 
-    important: the second half is not decoration. Every failure path below contributes an
-    empty list, so a fleet read over a tripped cluster used to come back short with a `total`
-    that looked authoritative. A caller polling for its own instances cannot distinguish that
-    from the instances having been deleted, which is the worst possible ambiguity to hand an
-    unattended agent. Reporting the clusters that did not answer makes a partial answer say so.
+    important: every failure path contributes an empty list, so without `unreachable` a read over
+    a tripped cluster would come back short with an authoritative-looking `total`, and a caller
+    polling for its own instances could not tell that from a delete.
 
-    note: this deliberately does not reuse the field name the dashboard routers report the same
-    idea under. Theirs is a `List[str]` of names, because a banner only has to say which nodes
-    are missing. This carries a reason per cluster, because an integration has to choose between
-    retrying and giving up. One name over two shapes would be worse for a client reading both
-    endpoints than two names are.
+    The dashboard routers report the same idea under another field name, as a `List[str]` of node
+    names for a banner. This carries a reason per cluster, so an integration can choose between
+    retrying and giving up.
     """
 
     items: List[Dict[str, Any]]
@@ -1690,19 +1629,15 @@ async def _gather_per_cluster(
 ) -> ClusterFanout:
     """Run a blocking per-cluster fetch across clusters concurrently and off the event loop.
 
-    important: this replaced a serial in-loop fan-out. With one silent cluster that shape
-    blocked the whole process for the sum of every cluster's timeout. Measured on dev before
-    the change, a single POST /integrations/sync held the loop for 35.7s, which is what made
-    /health spike to 11s. Now the cost is the slowest cluster, paid on a worker thread, and a
-    cluster the breaker has already tripped is skipped entirely. `skip_tripped=False` is for a
-    fetch that never contacts the cluster, where the breaker has nothing to save.
+    The cost is the slowest cluster, paid on a worker thread; a serial fan-out on the loop would
+    block the whole process for the sum of every cluster's timeout. A cluster the breaker has
+    tripped is skipped. `skip_tripped=False` is for a fetch that never contacts the cluster.
 
     important: every `unreachable` reason is sanitized. Raw exception text carries the Vault
     address, KV paths and certificate paths, and this body goes to an external key holder.
 
-    note: a grant can name an id no cluster is registered under any more. It is reported as
-    not registered without a fetch: looking it up only logged a Vault 404 per call, and the
-    /sync poll of a key holding two such ids did that every few minutes.
+    A grant can name an id no cluster is registered under any more. It is reported as not
+    registered without a fetch, which would only log a Vault 404 per call.
     """
     misses: List[Dict[str, str]] = []
     cluster_ids = list(cluster_ids)
@@ -1735,11 +1670,9 @@ async def _gather_per_cluster(
                 max_in_flight=PROXY_MAX_IN_FLIGHT,
             )
         except BlockingTimeout:
-            # important: deliberately does NOT trip the shared breaker. A bulk list timing
-            # out means "this cluster has a lot of data or is slow right now", which is not
-            # the same as "unreachable". Condemning it here would make every raw_proxy call
-            # for that cluster return 503 for a full TTL, so one large tenant could take its
-            # own proxy access down.
+            # important: never trip the shared breaker here. A bulk list timing out means the
+            # cluster is slow or holds a lot of data, not that it is unreachable; tripping would
+            # make every raw_proxy call for that cluster answer 503 for a full TTL.
             logger.warning(
                 f"sync: {label} for {cluster_id} timed out after {SYNC_CLUSTER_TIMEOUT}s; "
                 "returning partial results for this cluster"
@@ -1750,9 +1683,9 @@ async def _gather_per_cluster(
             return missed(cluster_id, "proxy pool saturated")
         except Exception as e:
             logger.warning(f"Could not get {label} for {cluster_id}: {e}")
-            # note: str(HTTPException) renders as "503: <detail>". The status is already
-            # implied by the row being in `unreachable`, and the doubled prefix made two
-            # clusters with the same cause read as two different failures.
+            # str(HTTPException) renders as "503: <detail>". The row being in `unreachable`
+            # already implies the status, and the prefix would make two clusters with the same
+            # cause read as two different failures.
             return missed(cluster_id, getattr(e, "detail", None) or str(e))
 
     batches = await asyncio.gather(*[one(c) for c in cluster_ids])
@@ -1762,24 +1695,15 @@ async def _gather_per_cluster(
 async def _assert_granted_projects_exist(
     lxd_service: LXDService, permissions: List[ClusterPermissionRequest]
 ) -> None:
-    """Refuse a grant that names a project no selected cluster has, when we can tell.
+    """Refuse a grant that names a project no selected cluster has, when that can be proven.
 
-    The charset rule upstream catches a malformed name. It cannot catch a well-formed one that
-    names nothing, which is the failure this whole feature exists to remove: the key
-    authenticates, reads as scoped on every screen, and is refused by every project-bounded call
-    for the rest of its life.
+    important: a name is refused only when every selected cluster answered and none reports it.
+    If one stayed silent the check is skipped: the name might live only there, and narrowing a
+    key during an outage must still work. Names are checked against the union of all selected
+    clusters; the console warns before submit about a project that lives on only some of them.
 
-    important: strict only where it can prove the negative. A name is refused when every cluster
-    this request names answered and none of them reports it. If even one stayed silent the check
-    is skipped, because the name might live only there, and because narrowing an over-broad key
-    is exactly what an operator does during an outage. Blocking that would be backwards.
-
-    important: the union across all selected clusters, not per cluster. The console fans one
-    projects list out to every selected cluster, so a project that lives on only some of them is
-    a deliberate, warned-about choice rather than an error. The console says so before submit.
-
-    The error names only what the caller sent. Echoing the cluster's real project list back would
-    let a partner enumerate another tenant's project names through a rejected write.
+    The error names only what the caller sent. Echoing the cluster's project list would let a
+    partner enumerate another tenant's project names through a rejected write.
     """
     wanted: Dict[str, set] = {}
     for grant in permissions:
@@ -1798,10 +1722,8 @@ async def _assert_granted_projects_exist(
     )
     silent = {miss.get("cluster_id") for miss in fanout.unreachable} & set(cluster_ids)
     if silent:
-        # Inconclusive is not guilty. A name this request wants might live only on the cluster
-        # that did not answer, and the console offers manual entry for exactly that case, so
-        # refusing here would turn an outage into an operator error on the one path built to
-        # survive it.
+        # A name this request wants might live only on the cluster that did not answer, and the
+        # console offers manual entry for that case, so an outage must not refuse the grant.
         logger.info(
             "Not checking project names for %s: %s did not answer",
             cluster_ids,
@@ -1825,8 +1747,8 @@ async def _assert_granted_projects_exist(
 def _validate_api_key_blocking(key_id: str, key_secret: str) -> Dict[str, Any]:
     """Every Vault round trip needed to validate a key. Only ever runs on auth_executor.
 
-    Was previously inline on the event loop: 6 to 7 blocking Vault calls per request, each
-    (2,3) with Retry(total=2), so a degraded Vault could park a worker for a minute or more.
+    That is 6 to 7 blocking Vault calls, each (2,3) with Retry(total=2); on the event loop a
+    degraded Vault could park a worker for a minute or more.
     """
     vault_client = get_vault_integrations_client()
     metadata, secret_hash = get_api_key_from_vault(vault_client, key_id)
@@ -1834,20 +1756,17 @@ def _validate_api_key_blocking(key_id: str, key_secret: str) -> Dict[str, Any]:
     if not verify_api_key_secret(key_secret, secret_hash):
         raise HTTPException(status_code=401, detail="Invalid API key secret")
 
-    # important: the recoverable copy of the secret exists for exactly one reason, which is that
-    # the outbound OrcaHub callbacks in services/orcahub_sync.py re-present it to the partner.
-    # Its only reader returns None unless the key carries `app_url`, so backfilling every key
-    # wrote plaintext credentials that nothing would ever read. That is the material
-    # `test_a_credential_path_is_never_cached_in_redis.py` exists about, stored one layer down.
-    # Keys without a callback base stay hash-only, which is what lets an issued credential
-    # honestly claim it.
+    # important: the recoverable copy of the secret exists only because the outbound OrcaHub
+    # callbacks in services/orcahub_sync.py re-present it to the partner, and its only reader
+    # returns None unless the key carries `app_url`. Keys without a callback base stay hash-only,
+    # so no plaintext credential is stored that nothing reads.
     if metadata.get("app_url"):
         try:
             secret_data = vault_client.vault_read(
                 f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret"
             )
-            # note: only for the hash just verified. A rotation between the two reads has already
-            # stored its own raw copy, and writing this one back would revive the old secret.
+            # Only for the hash just verified. A rotation between the two reads has already
+            # stored its own raw copy, and writing this one back would revive the replaced secret.
             if not secret_data.get("raw") and secret_data.get("hash") == secret_hash:
                 secret_data["raw"] = key_secret
                 vault_client.vault_kv_put(
@@ -1928,30 +1847,21 @@ async def _upsert_synced_organizations(
     add_on: bool = False,
 ) -> int:
     """
-    Persist organizations pushed from OrcaHub. Idempotent by design: this endpoint is
-    re-called on every sync (scheduled every ~5 min + manual), so it must never 500 on
-    a re-run and must never corrupt data.
+    Persist organizations pushed from OrcaHub. Idempotent: every sync calls it again.
 
-    Identity is (source='orcahub', external_id). `slug` is a separate UNIQUE column, and
-    OrcaHub itself enforces globally-unique org slugs, so an existing source='orcahub' row
-    that shares a slug IS the same logical org (its external_id churned via delete+recreate).
-
-    Two passes so a slug freed by a rename in this same batch is available before any insert:
-      Pass 1 - update every known identity in place (may free a renamed slug).
-      Pass 2 - for the rest: slug free -> insert; slug held by a source='orcahub' row whose
-               external_id is RETIRED (absent from this push) -> re-link it (the deleted
-               predecessor of an org that reused the slug); slug held by any still-live row
-               (a non-orcahub org, or an orcahub org still present in this push) -> skip +
-               warn, never overwrite another org's identity or re-parent its members.
-
-    Each org commits on its own, so one bad/conflicting row is skipped (degraded) instead of
-    aborting the whole sync. Returns count of synced organizations.
+    Identity is (source='orcahub', external_id). OrcaHub slugs are globally unique, so an orcahub
+    row sharing a slug is the same org whose external_id changed through delete and recreate.
+    Pass 1 updates known identities in place, freeing any renamed slug before Pass 2 handles the
+    rest: free slug -> insert; slug held by an orcahub row whose external_id is retired (absent from
+    this push) -> re-link it; slug held by a live row -> skip and warn, never taking another org's
+    identity or re-parenting its members.
+    Each org commits alone, so one conflict skips that row only. Returns the synced count.
     """
     synced = 0
     handled: set[str] = set()
-    # Identities present in THIS push. A slug-owning orcahub row whose external_id is still
-    # in this set is a live org we must not steal the slug from (only genuinely retired
-    # identities are safe to re-link).
+    # Identities present in this push. A slug-owning orcahub row whose external_id is still in
+    # this set is a live org whose slug must not be taken; only retired identities may be
+    # re-linked.
     incoming_ids = {o.id for o in organizations}
 
     # important: an add-on credential may first-claim an organization only while it is its
@@ -1978,7 +1888,7 @@ async def _upsert_synced_organizations(
     for org_data in organizations:
         async with (serialize_key_ownership(db, api_key_id) if add_on else nullcontext()):
             try:
-                # note: FOR UPDATE (PostgreSQL; SQLite omits it), so two keys claiming one unclaimed
+                # FOR UPDATE (PostgreSQL; SQLite omits it), so two keys claiming one unclaimed
                 # organization at once take turns: the second reads the first's claim and is refused,
                 # rather than both claiming it and the loser staying in its owner set unseen. A transfer
                 # reads the row the same way, so it waits for this sync or this sync waits for it.
@@ -1994,11 +1904,10 @@ async def _upsert_synced_organizations(
                 )).scalar_one_or_none()
                 if not existing:
                     continue
-                # important: `api_key_id` records which key synced an org, and the upsert wrote it
-                # without ever reading it, so any valid key could claim and rewrite an org another
-                # integration owned, including its members' roles. A key may only update what it
-                # already owns, or an org not yet claimed by one.
-                # note: any key in the owner set may sync it. Only an unclaimed org gets this key as its
+                # important: `api_key_id` records which key owns an org. A key may only update what
+                # it already owns, or an org not yet claimed; otherwise any valid key could rewrite
+                # an org another integration owns, including its members' roles.
+                # Any key in the owner set may sync it. Only an unclaimed org gets this key as its
                 # primary; an owned org keeps its primary, so a co-owner's push never moves the callbacks.
                 if existing.api_key_id and not await is_owner(db, existing, api_key_id):
                     logger.warning(
@@ -2061,16 +1970,14 @@ async def _upsert_synced_organizations(
                     and slug_owner.external_id not in incoming_ids
                     and (not slug_owner.api_key_id or await is_owner(db, slug_owner, api_key_id))
                 ):
-                    # The row's OrcaHub identity is RETIRED (its external_id is absent from this
+                    # The row's OrcaHub identity is retired (its external_id is absent from this
                     # push) and OrcaHub slugs are globally unique, so this row is the deleted
                     # predecessor of the incoming org that reused the slug. Re-link it in place.
                     #
-                    # important: the ownership term is load-bearing and was missing. Pass 1 refuses to
-                    # touch an organisation owned by another key, with a comment saying why; this
-                    # branch reassigns `api_key_id` outright, so without the same test any key could
-                    # take over another integration's organisation by pushing an org that merely
-                    # reused its slug with a fresh external_id. Owning it then passes every later
-                    # check, including the member sync that pushes roles into Authentik.
+                    # important: the ownership term matches Pass 1. This branch reassigns
+                    # `api_key_id`, so without it any key could take over another integration's
+                    # organisation by pushing an org that reused its slug with a fresh external_id,
+                    # and then pass every later check, including the member sync into Authentik.
                     if not slug_owner.api_key_id and await _replaced():
                         await _refuse_replaced(org_data)
                         continue
@@ -2081,17 +1988,16 @@ async def _upsert_synced_organizations(
                         slug_owner.api_key_id = api_key_id
                     slug_owner.is_active = True
                 else:
-                    # important: the slug is held by a row we must NOT steal - either a non-OrcaHub
-                    # org (ex; a partner's local org) or another OrcaHub org whose identity is still
-                    # live in this push (a Pass-1 rename that could not land yet). Overwriting it
-                    # would hijack that org and re-parent its members. Surface the clash and skip;
-                    # the next sync retries once the clash is resolved.
+                    # important: the slug is held by a live row: a non-OrcaHub org (ex; a partner's
+                    # local org) or another OrcaHub org still in this push (a Pass 1 rename that
+                    # could not land yet). Overwriting it would hijack that org and re-parent its
+                    # members. Log the clash and skip; the next sync retries once it is resolved.
                     logger.warning(
                         f"Skipped organization {org_data.id}: slug '{org_data.slug}' is held by a live "
                         f"{slug_owner.source} org (id={slug_owner.id}, external_id={slug_owner.external_id}); "
                         f"resolve the slug clash to sync it"
                     )
-                    # note: as in Pass 1, the row read FOR UPDATE is released before going on
+                    # As in Pass 1, the row read FOR UPDATE is released before going on.
                     await db.commit()
                     continue
 
@@ -2129,8 +2035,7 @@ async def _upsert_synced_members(
 
     for m in members:
         try:
-            # resolve external org UUID to local org id
-            # note: read afresh. A transfer or an owner leaving can land while a long member list is
+            # Read afresh. A transfer or an owner leaving can land while a long member list is
             # written, and the session keeps the primary it read first (is_owner trusts it).
             org = (await db.execute(
                 select(Organization).where(
@@ -2146,10 +2051,8 @@ async def _upsert_synced_members(
             # important: the org is resolved purely from the caller-supplied external id, so a
             # key that owns nothing could name another integration's org and rewrite its
             # members, which pushes a global Authentik role change for those emails. Same
-            # ownership rule as the organisation upsert above.
-            # important: strict for an unclaimed org too, like the policy sync. A key writes the
-            # members of an org only after its organisation push claimed it, which a normal sync
-            # does in the same request before this runs.
+            # ownership rule as the organisation upsert above, and strict for an unclaimed org
+            # too: a normal sync claims the org earlier in the same request.
             if not await is_owner(db, org, api_key_id):
                 logger.warning(
                     "Refusing member sync into organization %s: owned by api key %s, caller is %s",
@@ -2158,7 +2061,7 @@ async def _upsert_synced_members(
                 continue
 
             if m.action == "remove":
-                # remove membership (idempotent: an already-absent member is a no-op success)
+                # Idempotent: an already-absent member is a no-op success.
                 existing = (await db.execute(
                     select(OrganizationMember).where(
                         and_(
@@ -2175,7 +2078,6 @@ async def _upsert_synced_members(
                     # role belongs to the account, even after its last organization is gone.
                 continue
 
-            # upsert membership. map OrcaHub role → local member role.
             # Identity is (organization_id, user_email), so update-if-present / insert-else
             # is unambiguous. Per-member commit isolates a failing row from the rest.
             orcastra_role = stored_member_role(m.role)
@@ -2202,9 +2104,9 @@ async def _upsert_synced_members(
             synced += 1
             upserted_emails.add(m.email)
 
-            # push system role to Authentik
             # important: an integration may grant a role, never demote one or touch role_admin.
-            # sync_user_role removed every other role group, so any key could demote an Admin.
+            # sync_user_role removes every other role group, so through it any key could demote
+            # an Admin.
             try:
                 await apply_upsert_role(db, sync_svc, m.email, orcastra_role, api_key_id)
             except Exception as e:
@@ -2222,8 +2124,8 @@ async def _upsert_synced_members(
     # Backstop reconcile: now that these members are linked to their org, bind any
     # clusters they registered while org-less. Best-effort, idempotent, per member.
     # important: only the key's creator, and only into the one org this push lists and this key
-    # claims. Every pushed email used to rebind into its primary org, so a key could push another
-    # partner's email into its own org and take that partner's unbound clusters.
+    # claims. Otherwise a key could push another partner's email into its own org and take that
+    # partner's unbound clusters.
     for email in upserted_emails:
         try:
             await rebind_creator_clusters(
@@ -2237,7 +2139,7 @@ async def _upsert_synced_members(
 
 
 # Circuit breaker: no legitimate single sync removes anywhere near this many members. If a push
-# would remove more than this (ex; an OrcaHub-side query regression), abort the whole reconcile
+# would remove more than this (ex; an OrcaHub-side query bug), abort the whole reconcile
 # and alert rather than mass-revoke access.
 _RECONCILE_MAX_REMOVALS_PER_SYNC = 50
 
@@ -2250,25 +2152,16 @@ async def _reconcile_synced_members(
     dry_run: bool,
 ) -> int:
     """
-    Offboarding reconcile. OrcaHub is the source of truth and pushes a COMPLETE member roster per
-    org it syncs, but never an explicit member-remove, so a member who left an org is otherwise
-    never removed here and keeps org-scope access. For every org PRESENT in this push, remove the
-    OrganizationMember rows whose email is not in the pushed roster for that org.
+    Offboarding reconcile: for each org in this push, delete the OrganizationMember rows whose email
+    is not in its pushed roster. OrcaHub sends full rosters, never explicit removals, so a departed
+    member would otherwise keep org-scope access.
 
-    Destructive (deleting a member cuts org-scope access and CASCADEs their TenantPolicyAssignment),
-    so it is layered with guards:
-      - global: an empty members[] is "no data this push" -> skip.
-      - ownership: an org this key does not own, or one no key owns, is never pruned.
-      - per-org FLOOR: an org present in the push whose roster contribution is EMPTY is suspicious
-        (OrcaHub drops an emptied org from the push entirely, it never sends a bare org), so it is
-        skipped, never purged. This is the primary protection against a mass delete.
-      - CIRCUIT BREAKER: if total intended removals exceed _RECONCILE_MAX_REMOVALS_PER_SYNC, abort
-        the whole run and alert (delete nothing).
-      - dry_run: log intended removals without deleting (observe-only rollout).
-      - per-ROW isolation on the delete pass, so one bad row cannot block the rest.
-      - the account's baseline role remains after membership removal; org access does not.
-    Email matching is exact, consistent with the case-sensitive UNIQUE(org, user_email) and the
-    upsert write path. Returns the number of members actually removed (0 in dry-run).
+    important: destructive (cuts org-scope access, cascades to TenantPolicyAssignment). An empty
+    members[] skips the run; an org this key does not own, or no key owns, is never pruned; an org
+    present with an empty roster is skipped, never purged (OrcaHub drops an emptied org instead),
+    which is the main guard against a mass delete; more than _RECONCILE_MAX_REMOVALS_PER_SYNC
+    removals aborts with nothing deleted. The baseline role stays. Email match is exact, like
+    UNIQUE(org, user_email). Returns members removed, 0 in a dry run.
     """
     if not members:
         return 0
@@ -2295,8 +2188,8 @@ async def _reconcile_synced_members(
                 if str(m.organization_id) == str(org_data.id) and m.action != "remove"
             }
             if not desired_emails:
-                # important: never purge every member of an org from an empty roster - that is the
-                # catastrophic false-positive. A legitimately emptied org drops out of the push.
+                # important: never purge every member of an org from an empty roster. A
+                # legitimately emptied org drops out of the push instead.
                 logger.warning(
                     f"Reconcile: org {org.slug} is present in the push with an empty roster; "
                     f"skipping (not purging its members)"
@@ -2359,9 +2252,8 @@ async def validate_api_key(
     x_api_key_id: str = Header(..., alias="X-API-Key-ID"),
     x_api_key_secret: str = Header(..., alias="X-API-Key-Secret"),
     # important: trailing, and defaulted, so the header positions are unchanged. FastAPI injects a
-    # Response by annotation regardless of where it sits or whether it carries a default, while the
-    # tests that call this dependency directly keep passing two positional arguments. Putting it
-    # first silently shifted those calls by one and turned every such test into a 401.
+    # Response by annotation wherever it sits, and the tests that call this dependency directly
+    # pass the two headers positionally.
     response: Response = None,  # type: ignore[assignment]
 ) -> Dict[str, Any]:
     """
@@ -2397,36 +2289,27 @@ async def validate_api_key(
             raise
         _store_key_metadata(digest, x_api_key_id, metadata)
 
-    # note: state checks run on every request, cache hit or not, straight from in-memory
-    # metadata. They cost nothing and keep expiry exact even while the entry is cached.
+    # State checks run on every request, cache hit or not, straight from in-memory metadata.
+    # They cost nothing and keep expiry exact even while the entry is cached.
 
-    # Check if revoked
     if metadata.get("is_revoked", False):
         raise HTTPException(status_code=401, detail="API key has been revoked")
 
-    # Check if active
     if not metadata.get("is_active", True):
         raise HTTPException(status_code=401, detail="API key is not active")
 
-    # Check expiration
-    #
-    # important: this used to parse with `fromisoformat` and compare against a naive
-    # `datetime.utcnow()`, outside any try. An offset-bearing stored value raised TypeError and a
-    # malformed one raised ValueError, both of which left this as a 500 on every request the key
-    # made, including for a key whose expiry was years away. An empty string took the other
-    # branch entirely and was accepted. All four measured against the running deployment.
+    # important: is_expired reads every stored notation (naive, offset-bearing) and counts an
+    # unreadable value as expired, so a malformed expiry is a 401, never a 500 on every request.
     if is_expired(metadata.get("expires_at")):
         raise HTTPException(status_code=401, detail="API key has expired")
 
-    # note: after the secret verifies, never before. The key id is public, so counting it in the
-    # middleware would let anyone holding a victim's id spend that integration's budget with a
+    # important: after the secret verifies, never before. The key id is public, so counting it in
+    # the middleware would let anyone holding a victim's id spend that integration's budget with a
     # wrong secret. See consume_api_key_budget.
     allowed, budget = consume_api_key_budget_state(x_api_key_id)
     if budget is not None and response is not None:
-        # A caller could not previously learn its own limit: the ceiling is retuned per deployment
-        # and the refusal carried a fixed Retry-After, so an integrator was asked to guess a number
-        # the server already knew. Omitted entirely when the limiter is off or its store could not
-        # answer, because a budget we cannot compute must not be reported as one we can.
+        # Tells a caller its own limit, which is tuned per deployment. Omitted when the limiter is
+        # off or its store could not answer, so a budget that cannot be computed is never reported.
         response.headers["X-RateLimit-Limit"] = str(budget["limit"])
         response.headers["X-RateLimit-Remaining"] = str(budget["remaining"])
         response.headers["X-RateLimit-Reset"] = str(budget["reset"])
@@ -2450,17 +2333,14 @@ async def validate_api_key(
         )
 
     # important: an add-on's credential is an ordinary key pair, so every check above passes for
-    # one whose installation was suspended minutes ago. Suspend deliberately moves the row without
-    # touching the Vault key, which means nothing above can see it. Until this existed the button
-    # reported success, wrote an audit record and changed nothing, while the webhook dispatcher
-    # (the one place that does read `install.status`) stopped delivering. That combination is the
-    # worst shape available: an operator sees events stop and concludes the add-on is contained
-    # while it still holds full REST and MCP access.
+    # one whose installation is suspended: a suspend moves the installation row and leaves the
+    # Vault key alone. Without this check a suspended add-on stops receiving webhooks but keeps
+    # full REST and MCP access.
     #
     # Only install-issued credentials pay for this. The snapshot is cached per worker on the key's
-    # own TTL with a Redis tombstone, so the usual request costs no query, and a suspend lands on
-    # all four workers at once rather than on a timer. The session is opened lazily and acquires a
-    # connection only on a cache miss.
+    # own TTL with a Redis tombstone, so the usual request costs no query, and a suspend reaches
+    # every worker at once rather than on a timer. The session acquires a connection only on a
+    # cache miss.
     if metadata.get("extension_install_id") is not None:
         from app.core.database import async_session_maker
         from app.services.extension_scope import assert_install_is_live
@@ -2472,11 +2352,9 @@ async def validate_api_key(
             # A decision about the credential. ScopeRefused is one of these.
             raise
         except Exception as exc:  # noqa: BLE001
-            # important: this check put a database on the authentication path, where previously
-            # only Vault was. The MCP door already turns that into a 503; without this the same
-            # outage is a bare 500 on every REST endpoint an add-on credential touches. The Vault
-            # timeout a few lines above is modelled as 503 for exactly this reason, so matching it
-            # keeps one contract rather than two.
+            # important: a database outage on the authentication path answers 503, like the Vault
+            # timeout above and the MCP door, not a bare 500 on every REST endpoint an add-on
+            # credential touches.
             logger.warning(
                 "Installation check unavailable for key %s: %s", x_api_key_id, exc
             )
@@ -2486,8 +2364,8 @@ async def validate_api_key(
 
     metadata = await _bound_to_registrations(metadata)
     # important: after the cache, into a copy, like the registration binding above. A key a Partner
-    # created is held to its creator's projects on a cluster another party holds, so a `*` grant
-    # minted before that was refused no longer reaches the other party (services/key_party_bound.py).
+    # created is held to its creator's projects on a cluster another party holds, so a stored `*`
+    # grant does not reach the other party (services/key_party_bound.py).
     metadata = await narrow_to_party_bound(metadata)
     _schedule_last_used_update(x_api_key_id)
 
@@ -2527,13 +2405,12 @@ def require_capability(capability: str):
     """Authenticate the key, then refuse it unless it carries ``capability``.
 
     Every handler on `external_router` must depend on one of these rather than on
-    `validate_api_key` directly. Authentication alone used to be the whole gate, so a key issued
-    for one job could do every other job on this router; the capability is what separates them.
-    `tests/test_every_external_endpoint_declares_a_capability.py` is the ratchet that keeps a new
-    endpoint from quietly skipping it.
+    `validate_api_key` directly, so a key issued for one job cannot do every other job on this
+    router. `tests/test_every_external_endpoint_declares_a_capability.py` keeps a new endpoint
+    from skipping it.
 
-    note: FastAPI caches a dependency per request, so the nested `validate_api_key` still costs
-    exactly one Vault round trip even where a handler also takes the key for its own use.
+    FastAPI caches a dependency per request, so the nested `validate_api_key` still costs one
+    Vault round trip even where a handler also takes the key for its own use.
     """
     async def _dep(api_key: Dict[str, Any] = Depends(validate_api_key)) -> Dict[str, Any]:
         assert_capability(api_key, capability)
@@ -2547,19 +2424,13 @@ def require_capability(capability: str):
 
 
 def require_explicit_capability(capability: str):
-    """Like ``require_capability``, but a key issued before capabilities existed does NOT satisfy it.
+    """Like ``require_capability``, but a key issued before capabilities existed does not satisfy it.
 
-    important: the difference is the grandfather rule, and it is the whole reason this exists.
-    ``require_capability`` routes to ``assert_capability``, which reads a missing ``capabilities``
-    field as "unrestricted" so older integrations keep working. That is the right answer for a
-    power that existed when the key was issued. It is the wrong answer for one that did not: 17 of
-    the 22 keys in this deployment are legacy, so gating a new guest-reaching power with the
-    inheriting variant hands it to most of the fleet with nobody deciding it.
-
-    The guest-access path already had to solve this, and solved it by calling
-    ``assert_explicit_capability`` a second time inside the handler after the gate had run. That
-    works and is easy to forget, which is what this factory is for: a capability in
-    ``GUEST_ACCESS_CAPABILITIES`` gets the right semantics from the dependency alone.
+    important: ``assert_capability`` reads a missing ``capabilities`` field as unrestricted so
+    older integrations keep working. That suits a power that existed when the key was issued; for
+    a new guest-reaching power it would hand the power to every legacy key without anyone deciding
+    it. A capability in ``GUEST_ACCESS_CAPABILITIES`` gets the explicit check from this dependency
+    alone, without a second ``assert_explicit_capability`` call inside the handler.
     """
     async def _dep(api_key: Dict[str, Any] = Depends(validate_api_key)) -> Dict[str, Any]:
         assert_explicit_capability(api_key, capability)
@@ -2592,9 +2463,8 @@ async def create_api_key(
 
     # Multi-tenancy guard: a partner may only grant access to clusters they can see
     # (their org's or personally registered). Admin (allowed is None) is unrestricted.
-    # Reuses the request-scoped set already resolved by org_scope_dependency - no extra
-    # query - and shares the source the cluster picker uses, so it never rejects an
-    # option the UI offered.
+    # Uses the request-scoped set org_scope_dependency already resolved (no extra query),
+    # the same source the cluster picker uses, so it never rejects an option the UI offered.
     allowed = get_current_allowed_clusters()
     if allowed is not None:
         requested = {p.cluster_id for p in request.cluster_permissions}
@@ -2611,23 +2481,19 @@ async def create_api_key(
     # cluster. After the scope guard and before any cluster is read.
     await _refuse_a_grant_past_the_project_bound(db, _rbac.email, request.cluster_permissions)
 
-    # After the scope guard on purpose: this reaches the clusters, so it must never run for a
-    # cluster the caller was just told they may not touch.
+    # After the scope guard: this reaches the clusters, so it must never run for a cluster the
+    # caller was just told they may not touch.
     await _assert_granted_projects_exist(lxd_service, request.cluster_permissions)
 
     try:
-        # Generate key pair
         key_id, key_secret, secret_hash = generate_api_key_pair()
-        
-        # Calculate expiration
-        # note: aware, so the stored string carries an offset and stops being UTC by convention
-        # alone. Values already in Vault are naive and keep working, because parse_expiry reads a
-        # naive value as UTC, which is what every writer in this repo meant by it.
+
+        # Aware, so the stored string carries an offset. Naive values already in Vault keep
+        # working, because parse_expiry reads a naive value as UTC.
         created_at = now_utc()
         expires_at = None
-        # `is not None` rather than truthiness: `ge=1` makes 0 unreachable today, but the two
-        # spellings disagree the moment that constraint changes, and this is the line that
-        # decides whether a key ever expires.
+        # `is not None` rather than truthiness: `ge=1` makes 0 unreachable, but the two spellings
+        # would disagree if that constraint changed, and this decides whether a key ever expires.
         if request.expire_days is not None:
             expires_at = created_at + timedelta(days=request.expire_days)
         
@@ -2649,7 +2515,7 @@ async def create_api_key(
                 ),
             )
 
-        # Prepare metadata (include creator for org-level ownership)
+        # created_by records the creator for org-level ownership.
         metadata = {
             "id": key_id,
             "name": request.name,
@@ -2669,7 +2535,7 @@ async def create_api_key(
             ),
         }
         
-        # Save to Vault (include raw secret for callback authentication)
+        # The raw secret is kept for callback authentication.
         save_api_key_to_vault(vault_client, key_id, metadata, secret_hash, raw_secret=key_secret)
         
         # Clear all scoped cache variants
@@ -2721,9 +2587,9 @@ def _key_in_scope(
 ) -> bool:
     """Whether a key reaches one of the caller's clusters, or is the caller's own with none left.
 
-    note: the second half is for a key every grant of which is paused (its registrations ended).
-    It reaches no cluster, so no cluster scope admits it, and without this not even its creator
-    could revoke it, while its non-cluster capabilities (org.sync, say) still worked.
+    The second half is for a key every grant of which is paused (its registrations ended). It
+    reaches no cluster, so no cluster scope admits it; without this not even its creator could
+    revoke it while its non-cluster capabilities (ex; org.sync) still work.
     """
     if allowed is None:
         return True
@@ -2747,10 +2613,10 @@ def _read_api_key_metadata_blocking(key_id: str) -> Dict[str, Any]:
 async def _run_org_keys(db: AsyncSession, email: str) -> set[str]:
     """The integration keys on this user's side (cluster_parties.side_keys).
 
-    note: not "every key an organization they run carries". A buyer's founder holds a partner row
-    in a buyer organization that carries the seller's key, so that reading would hand the founder
-    the seller's key. A key counts through an organization the user created, or through the key's
-    home organization when the user is a partner there.
+    Not every key an organization they run carries: a buyer's founder holds a partner row in a
+    buyer organization that carries the seller's key, and must not get it. A key counts through an
+    organization the user created, or through the key's home organization when the user is a
+    partner there.
     """
     return await cluster_parties.run_org_keys(db, email)
 
@@ -2761,7 +2627,7 @@ def _key_clusters(
     """The clusters a key reaches, for deciding who manages it.
 
     important: only grants for a registration still active. A grant left from an ended
-    registration names an id another organization may hold now, and counting it made that
+    registration names an id another organization may hold now, and counting it would make that
     organization's partners managers of this key: able to list, revoke, delete and edit it.
     """
     return {str(c or "") for c in cluster_generations.reachable(metadata.get("cluster_permissions"), generations)}
@@ -2787,14 +2653,14 @@ async def _keys_the_caller_manages(
 ) -> List[Dict[str, Any]]:
     """The keys, out of ones already in the caller's cluster scope, that this user may manage.
 
-    important: cluster overlap alone let a Partner on a cluster bound to another organization read,
-    revoke and delete that organization's keys, which breaks its OrcaHub sync and provisioning. A
+    important: cluster overlap alone would let a Partner on a cluster bound to another organization
+    read, revoke and delete that organization's keys, breaking its OrcaHub sync and provisioning. A
     key granting a cluster another party holds is managed only by its creator, or by a caller the
     key is on the side of (_run_org_keys). An Admin, and a key whose clusters are all the caller's
-    own, keep the old rule.
+    own, keep the overlap rule.
 
-    note: "another party" is services/cluster_parties.py, decided by party. The partner project
-    bound in core/org_scope.py counts bindings instead; the module docstring says why the two differ.
+    "Another party" is services/cluster_parties.py, decided by party. The partner project bound in
+    core/org_scope.py counts bindings instead; that module's docstring says why the two differ.
     """
     from app.core.rbac import Role, get_highest_role, resolve_roles
 
@@ -2846,8 +2712,8 @@ async def _refuse_a_grant_past_the_project_bound(
 ) -> None:
     """A Partner may not hold a key reaching more of a cluster than they can see there.
 
-    important: asked when a key is minted, when its grant is edited, and when a Partner who did not
-    mint it rotates its secret (services.api_key_grant_bound.refuse_a_grant_past_the_project_bound,
+    Asked when a key is minted, when its grant is edited, and when a Partner who did not mint it
+    rotates its secret (services.api_key_grant_bound.refuse_a_grant_past_the_project_bound,
     which an add-on installation asks too).
     """
     await refuse_a_grant_past_the_project_bound(
@@ -2928,11 +2794,11 @@ async def _write_key_then_commit(
             await db.rollback()
             raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL) from None
     try:
-        # note: off the event loop. A delete is one Vault call per record under the key, each with
-        # its own timeout, and a degraded Vault would otherwise stall every request on the worker.
+        # Off the event loop. A delete is one Vault call per record under the key, each with its
+        # own timeout, and a degraded Vault would otherwise stall every request on the worker.
         await asyncio.to_thread(write)
     finally:
-        # note: also when the write raised. It may have landed before its reply was lost.
+        # Also when the write raised: it may have landed before its reply was lost.
         evict_api_key_cache(key_id)
     if not handed_off:
         return
@@ -2950,7 +2816,7 @@ async def _write_key_then_commit(
 async def _with_ownership(db: AsyncSession, user: AuthenticatedUser, keys: List[APIKeyInfo]) -> List[APIKeyInfo]:
     """Fill in which organizations each key owns, as this caller may see them.
 
-    note: after the list cache, never inside it. The cached list is shared by everyone with the same
+    After the list cache, never inside it. The cached list is shared by everyone with the same
     cluster scope, while the slugs a caller may see depend on the caller, and ownership moves without
     the key changing. A database that cannot answer leaves the counts null rather than failing the
     list, because the refusal on revoke and delete is what enforces the rule.
@@ -3001,10 +2867,9 @@ async def list_api_keys(
     try:
         # Scoped cache key so each org gets its own cached list
         cache = get_cache_manager()
-        # important: `:v2` because the cached value changed shape. It now carries the user
-        # mapping counts beside the metadata, and a v1 entry written by a running instance
-        # during a rolling deploy is a bare list. A new key is cheaper and safer than teaching
-        # the reader to recognise both, and the old entries expire on their own in 60s.
+        # important: the `:v2` suffix marks the cached shape, which carries the user mapping
+        # counts beside the metadata; a v1 entry is a bare list. Change the suffix with the
+        # shape, so a rolling deploy never reads the other shape.
         cache_key = get_scope_cache_key("integrations:api_keys:list:v2")
         cached_data = None if fresh else cache.get("api_responses", cache_key)
 
@@ -3024,11 +2889,9 @@ async def list_api_keys(
                     if not _key_clusters(meta, generations) or _key_clusters(meta, generations) & allowed
                 ]
 
-            # important: the user mapping count is resolved HERE, inside the cache miss, and
-            # cached with the metadata it belongs to. It used to be read one key at a time
-            # below the cache, so every request paid a Vault LIST plus one read per mapping
-            # for every visible key even on a cache hit. The cache covered the metadata and
-            # nothing else, which is why the endpoint stayed slow no matter how warm it was.
+            # The user mapping counts are resolved here, inside the cache miss, and cached with
+            # the metadata they belong to. Read below the cache, every request would pay a Vault
+            # LIST plus one read per mapping for every visible key, even on a hit.
             user_counts = await asyncio.to_thread(
                 lambda: {
                     meta["id"]: len(get_user_mappings_from_vault(vault_client, meta["id"]))
@@ -3046,8 +2909,8 @@ async def list_api_keys(
         else:
             all_metadata = cached_data.get("metadata", [])
             user_counts = cached_data.get("user_counts", {})
-        # note: after the cache, because the cached list is shared by everyone with the same
-        # cluster scope while who manages a key depends on the caller.
+        # After the cache, because the cached list is shared by everyone with the same cluster
+        # scope while who manages a key depends on the caller.
         scope = get_current_allowed_clusters()
         generations = await _generations_for_scope()
         all_metadata = await _keys_the_caller_manages(
@@ -3059,17 +2922,13 @@ async def list_api_keys(
             ],
         )
         
-        # Process and count
-        # important: an expired key is not active. It was counted here, so the dashboard
-        # reported six lapsed keys among its active ones and an operator had to read each date
-        # to find out otherwise. The counting lives in `tally_keys` rather than in this loop so
-        # it can be asserted on fixtures: an earlier structural test only checked that the
-        # counter was incremented, and stayed green when the branch bodies were swapped.
+        # An expired key is not active. The counting lives in `tally_keys` rather than in this
+        # loop so it can be asserted on fixtures.
         records = [m for m in all_metadata if isinstance(m, dict)]
         counts = tally_keys(records)
 
-        # note: `_key_info` builds the model with `APIKeyInfo(**metadata)`, so the count is
-        # passed alongside rather than folded into the dict, which would be an unexpected field.
+        # `_key_info` builds the model with `APIKeyInfo(**metadata)`, so the count is passed
+        # alongside rather than folded into the dict, where it would be an unexpected field.
         keys = [
             _key_info(metadata, user_counts.get(metadata.get("id"), 0))
             for metadata in records
@@ -3133,7 +2992,7 @@ async def update_api_key_permissions(
     _rbac: AuthenticatedUser = Depends(require_partner()),
     lxd_service: LXDService = Depends(get_lxd_service),
     db: AsyncSession = Depends(get_db),
-    # note: last, so callers passing the others by position are unchanged.
+    # Last, so callers passing the others by position are unaffected.
     rebind_cluster_ids: List[str] = Query(
         default=[],
         description=(
@@ -3147,9 +3006,8 @@ async def update_api_key_permissions(
     current = await _authorize_api_key(key_id, _rbac, db)
     refuse_grant_edit(current)
 
-    # important: creation validates the requested clusters against the caller's own set
-    # (see create_api_key), and this path did not, so a partner could create a key scoped to
-    # their cluster and then widen it to the whole fleet in a second call. Same rule, both doors.
+    # important: the same cluster-set check as create_api_key. Without it a partner could create
+    # a key scoped to their cluster and then widen it to the whole fleet in a second call.
     allowed = get_current_allowed_clusters()
     if allowed is not None:
         requested = {p.cluster_id for p in permissions}
@@ -3160,8 +3018,8 @@ async def update_api_key_permissions(
                 detail=f"Not permitted to grant access to clusters: {sorted(invalid)}",
             )
     refuse_grants_on_purchased_clusters(p.cluster_id for p in permissions)
-    # note: what the key already holds on a cluster is carried over at its level or lower, so an
-    # edit cannot widen a key past the bound but never breaks a running one.
+    # What the key already holds on a cluster is carried over at its level or lower, so an edit
+    # cannot widen a key past the bound but never breaks a running one.
     await _refuse_a_grant_past_the_project_bound(db, _rbac.email, permissions, already_granted(current))
 
     # The cluster reads stay outside the key's lock: nothing in them depends on what the key holds.
@@ -3171,8 +3029,8 @@ async def update_api_key_permissions(
     try:
         # important: the held ids, the registry refusal and the write all under the key's lock, like
         # revoke and the capability edit. Read before the lock, an id a deregistration cleanup removed
-        # in between still counted as held, and the write put it back. Committed right after the
-        # write, so the lock is not held through the mapping read below.
+        # in between would still count as held, and the write would put it back. Committed right
+        # after the write, so the lock is not held through the mapping read below.
         async with serialize_key_ownership(db, key_id):
             metadata, secret_hash = await asyncio.to_thread(
                 get_api_key_from_vault, vault_client, key_id, use_cache=False
@@ -3199,7 +3057,7 @@ async def update_api_key_permissions(
         # Clear all scoped cache variants
         cache = get_cache_manager()
         cache.delete_pattern("api_responses", "integrations:api_keys:list*")
-        # important: also drop the process-local validation cache, otherwise the old
+        # important: also drop the process-local validation cache, otherwise the previous
         # cluster_permissions keep authorising proxy calls until its TTL expires.
         evict_api_key_cache(key_id)
 
@@ -3250,30 +3108,27 @@ async def update_api_key_capabilities(
 ):
     """Give a key a capability set it can be narrowed with.
 
-    important: without this there was no migration path at all. A key issued before capabilities
-    existed carries no field, which means unrestricted, and nothing could add one; the only way
-    to narrow such a key was to revoke it and have the integration reconfigured. That is a strong
-    incentive to leave the legacy keys alone, which is the opposite of what the capability model
-    is for.
+    A key issued before capabilities existed carries no field, which means unrestricted. This is
+    how such a key is narrowed without revoking it and reconfiguring the integration.
 
-    Read-modify-write like every other metadata writer here, so the field this adds is the only
-    one that changes. The cache is evicted because the old capability set would otherwise keep
-    authorising requests until its TTL expired.
+    Read-modify-write like every other metadata writer here, so the capability field is the only
+    one that changes. The validation cache is evicted because the previous capability set would
+    otherwise keep authorising requests until its TTL expired.
     """
     await _authorize_api_key(key_id, _rbac, db)
     vault_client = get_vault_integrations_client()
 
     try:
         # important: read inside the key's lock, which revoke, delete, the permission edit and a
-        # rotation take too. Read before it, this write could put back a revoke that landed between.
+        # rotation take too. Read before it, this write could undo a revoke that landed in between.
         handed_off: List[Any] = []
         async with serialize_key_ownership(db, key_id):
             metadata, _secret_hash = await asyncio.to_thread(
                 get_api_key_from_vault, vault_client, key_id, use_cache=False
             )
             refuse_grant_edit(metadata)
-            # A key minted before grants on purchased clusters were refused keeps its grants, but
-            # gains no capability through them (security review 2026-10-27).
+            # A key holding grants on purchased clusters keeps them, but gains no capability
+            # through them.
             refuse_grants_on_purchased_clusters(
                 p.get("cluster_id") for p in (metadata.get("cluster_permissions") or []) if isinstance(p, dict)
             )
@@ -3292,10 +3147,10 @@ async def update_api_key_capabilities(
                         db, key_id, action="capabilities", audit_action=CAPABILITIES_UPDATE_ACTION,
                         user=_rbac, metadata=previous, withdrawn=withdrawn, vault_client=vault_client,
                     )
-                    # note: the key stays an owner of what another owner carries on, but not its primary
+                    # The key stays an owner of what another owner carries on, but not its primary.
                     handed_off = await apply_owner_handoffs(db, key_id, handoffs, remove=False)
-                # important: asked about rather than refused (services/integration_key_provisioning.py).
-                # An owner without tenant.provision stops provisioning for its organizations.
+                # Asked about rather than refused (services/integration_key_provisioning.py): an
+                # owner without tenant.provision stops provisioning for its organizations.
                 forced = None
                 if has_capability(previous, PROVISIONING_CAPABILITY) and not has_capability(metadata, PROVISIONING_CAPABILITY):
                     forced = await confirm_provisioning_withdrawal(
@@ -3355,15 +3210,13 @@ async def revoke_api_key(
                     db, key_id, action="revoke", audit_action="integration.api_key.revoke",
                     user=_rbac, metadata=metadata, vault_client=vault_client,
                 )
-                # note: a revoked key leaves every owner set another owner carries on (decision D11)
+                # A revoked key leaves every owner set another owner carries on.
                 handed_off = await apply_owner_handoffs(db, key_id, handoffs, remove=True)
 
-                # Mark as revoked
                 metadata["is_revoked"] = True
                 metadata["is_active"] = False
                 metadata["revoked_at"] = datetime.utcnow().isoformat()
 
-                # Save updated metadata
                 await _write_key_then_commit(db, key_id, handed_off, lambda: vault_client.vault_kv_put(
                     f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
                     metadata
@@ -3374,8 +3227,8 @@ async def revoke_api_key(
         cache = get_cache_manager()
         cache.delete_pattern("api_responses", "integrations:api_keys:list*")
         cache.delete("api_responses", f"integrations:api_key:{key_id}")
-        # important: revocation must be immediate. _write_key_then_commit evicted the key from the
-        # process-local validation cache, without which it keeps working until its TTL expires.
+        # important: revocation must be immediate. _write_key_then_commit has evicted the key from
+        # the process-local validation cache; without that it keeps working until its TTL expires.
 
         logger.info(f"API key {key_id} revoked")
         _audit_credential_lifecycle(
@@ -3413,9 +3266,9 @@ async def rotate_api_key_secret(
 ):
     """Rotate a key's secret in place.
 
-    important: the key id is what every synced organization records as its owner, so rotating by
-    minting a new key left all of them refusing the new one and stopped their sync. Keeping the
-    id keeps the organizations, the member push and provisioning exactly as they were.
+    important: the key id is what every synced organization records as its owner, so a new key
+    would be refused by all of them and stop their sync. Keeping the id keeps the organizations,
+    the member push and provisioning as they were.
     """
     await _authorize_api_key(key_id, _rbac, db)
     vault_client = get_vault_integrations_client()
@@ -3428,7 +3281,7 @@ async def rotate_api_key_secret(
         if classify_key(metadata) != "active":
             raise HTTPException(status_code=409, detail=_ROTATE_A_DEAD_KEY)
         # important: everything that could fail runs before the write. Once the new secret is stored
-        # the old one is dead, and a failure after it would leave a secret nobody was ever shown.
+        # the previous one stops working, and a failure after it would leave a secret no one was shown.
         user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
         try:
             key_info = _key_info(metadata, len(user_mappings))
@@ -3439,11 +3292,10 @@ async def rotate_api_key_secret(
             ) from None
         # important: revoking, deleting or narrowing a key someone else minted hands the caller nothing,
         # but a rotation hands them a working secret. So every caller but an Admin, the key's creator
-        # included, gets one only for a key whose every cluster is inside their scope: minting a key
-        # is a fact about the past, and a creator whose scope has shrunk since would take a secret
-        # reaching clusters they can no longer reach. A non-creator is also held to the project
-        # bound. The creator is not, the same as when the key was created, which this line does not
-        # bound. Managing the key at all already needed its side (_authorize_api_key).
+        # included, gets one only for a key whose every cluster is inside their current scope: a
+        # creator whose scope has shrunk must not take a secret reaching clusters outside it. A
+        # non-creator is also held to the project bound; the creator is not, as at creation.
+        # Managing the key at all already needed its side (_authorize_api_key).
         allowed = get_current_allowed_clusters()
         if allowed is not None:
             outside = sorted({grant.cluster_id for grant in key_info.cluster_permissions} - set(allowed))
@@ -3506,24 +3358,24 @@ async def rotate_api_key_secret(
         try:
             await asyncio.to_thread(save_api_key_secret_to_vault, vault_client, key_id, secret_hash, key_secret)
         except Exception as e:
-            # note: the write may have landed before its reply was lost, so every worker still drops
-            # its cached copy and checks Vault again
+            # The write may have landed before its reply was lost, so every worker still drops
+            # its cached copy and checks Vault again.
             evict_api_key_cache(key_id)
             logger.error("Failed to rotate the secret of API key %s: %s", key_id, type(e).__name__)
-            # note: 503, so the sentence reaches the operator. A 500 is answered with a reference.
+            # 503, so the sentence reaches the operator. A 500 is answered with a reference.
             raise HTTPException(
                 status_code=503,
                 detail="The secret rotation did not confirm. Rotate again before using this key.",
             ) from None
-        # note: the validation cache is keyed by id and secret, and the tombstone makes every worker
-        # drop its copy, so the old secret fails on the next request wherever it lands
+        # The validation cache is keyed by id and secret, and the tombstone makes every worker
+        # drop its copy, so the replaced secret fails on the next request wherever it lands.
         evict_api_key_cache(key_id)
         cache = get_cache_manager()
         cache.delete_pattern("api_responses", "integrations:api_keys:list*")
         cache.delete("api_responses", f"integrations:api_key:{key_id}")
-    # note: no second clear. A sync authenticated with the old secret stores its URL under this
+    # No second clear. A sync authenticated with the replaced secret stores its URL under this
     # lock and only while that secret is current (_bind_callback_url_blocking), and a URL stored
-    # with the old secret is never used with the new one (bound_callback_url).
+    # with the replaced secret is never used with the new one (bound_callback_url).
     _audit_credential_lifecycle(
         action=API_KEY_ROTATE, key_id=key_id, metadata=metadata,
         extra_details={"callback_url_cleared": bool(forgot)},
@@ -3548,8 +3400,8 @@ async def delete_api_key(
     vault_client = get_vault_integrations_client()
     
     try:
-        # note: ownership first, so an add-on credential that owns organizations is answered with
-        # the remedy for that (transfer them, or suspend the add-on), not with the installation's.
+        # Ownership first, so an add-on credential that owns organizations is answered with the
+        # remedy for that (transfer them, or suspend the add-on) rather than the installation's.
         async with serialize_key_ownership(db, key_id):
             # Read before the delete: afterwards there is nothing left to describe what was removed.
             metadata, _ = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id, use_cache=False)
@@ -3561,7 +3413,6 @@ async def delete_api_key(
                 await refuse_delete(db, key_id, metadata)
                 handed_off = await apply_owner_handoffs(db, key_id, handoffs, remove=True)
 
-                # Delete from Vault
                 await _write_key_then_commit(db, key_id, handed_off, lambda: _raise_if_incomplete(delete_api_key_from_vault(vault_client, key_id)))
         record_owner_handoffs(handed_off, key_id=key_id, action="delete", actor_email=_rbac.email, remove=True)
 
@@ -3608,7 +3459,6 @@ async def add_user_mapping(
         # Verify API key exists
         await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
         
-        # Create user mapping
         now = datetime.utcnow().isoformat()
         user_mapping = ExternalUserMapping(
             external_user_id=request.external_user_id,
@@ -3619,11 +3469,9 @@ async def add_user_mapping(
             updated_at=now,
         )
         
-        # Save to Vault
         save_user_mapping_to_vault(vault_client, key_id, user_mapping)
-        
-        # Mapping data rides along in the cached key metadata, exactly as the four sibling
-        # handlers assume when they clear this same pattern.
+
+        # Mapping counts are cached with the key list, so clear it like the other key writers.
         get_cache_manager().delete_pattern("api_responses", "integrations:api_keys:list*")
         return user_mapping
         
@@ -3677,7 +3525,7 @@ async def delete_user_mapping(
     try:
         path = f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/users/{user_id}"
         vault_client.vault_delete(path)
-        # the mapping rides along in the cached key list, as it does for add_user_mapping
+        # The mapping count is cached with the key list, as for add_user_mapping.
         get_cache_manager().delete_pattern("api_responses", "integrations:api_keys:list*")
         
         return {"success": True, "message": f"User mapping {user_id} deleted"}
@@ -3705,27 +3553,21 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
     try:
         metadata, secret_hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, request.api_key_id)
         
-        # Verify secret
         if not verify_api_key_secret(request.api_key_secret, secret_hash):
             return APIKeyValidateResponse(valid=False, error="Invalid API key or secret")
-        
-        # Check if revoked
+
         if metadata.get("is_revoked", False):
             return APIKeyValidateResponse(valid=False, error="API key revoked")
-        
-        # Check if active
+
         if not metadata.get("is_active", True):
             return APIKeyValidateResponse(valid=False, error="API key not active")
-        
-        # Check expiration. Same decision as the header dependency, and for the same reason:
-        # this handler's broad `except Exception` below would otherwise turn a TypeError from a
-        # naive/aware comparison into a generic "Validation failed", which tells an integrator
-        # nothing about why its key stopped working.
+
+        # Same expiry decision as the header dependency. A naive/aware comparison here would raise
+        # into the broad `except Exception` below and answer a generic "Validation failed".
         expires_at = metadata.get("expires_at")
         if is_expired(expires_at):
             return APIKeyValidateResponse(valid=False, error="API key expired")
         
-        # Valid!
         raw_permissions = metadata.get("cluster_permissions", [])
         grant_ids = [perm.get("cluster_id") for perm in raw_permissions if perm.get("cluster_id")]
         unregistered = await _unregistered_cluster_ids(grant_ids)
@@ -3756,17 +3598,17 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
             enriched_perm["cluster_name"] = cluster_names.get(cluster_id, cluster_id)
             enriched_permissions.append(ClusterPermission(**enriched_perm))
         
-        # note: this endpoint takes credentials in the body, so it never passes through
+        # This endpoint takes credentials in the body, so it never passes through
         # validate_api_key and would otherwise be the one metered path a valid key could spend
-        # without limit. Counted here, after the secret verified, for the same reason.
+        # without limit. Counted here, after the secret verified, for the same reason as there.
         if not consume_api_key_budget(request.api_key_id):
             return APIKeyValidateResponse(
                 valid=False, error="Rate limit exceeded for this API key"
             )
 
-        # note: granted_capabilities returns None for a legacy key, which is exactly what the
-        # response means by null. An integrator reads this to discover what it may call before
-        # it calls it, so it must not be flattened into an empty list.
+        # granted_capabilities returns None for a legacy key, which is what the response means by
+        # null. An integrator reads this to discover what it may call before it calls it, so it
+        # must not be flattened into an empty list.
         granted = granted_capabilities(metadata)
         return APIKeyValidateResponse(
             valid=True,
@@ -3786,8 +3628,8 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
         # it during an outage, so it says nothing about which ids exist.
         if exc.status_code == 503:
             raise
-        # note: the same wording as a wrong secret. This endpoint takes no authentication, so
-        # distinguishing the two turned it into a free oracle for which key ids exist.
+        # The same wording as a wrong secret. This endpoint takes no authentication, so telling
+        # the two apart would reveal which key ids exist.
         return APIKeyValidateResponse(valid=False, error="Invalid API key or secret")
     except Exception as e:
         logger.error(f"Error validating API key: {e}")
@@ -3805,7 +3647,7 @@ async def sync_data(
     api_key: Dict[str, Any] = Depends(require_capability("inventory.read")),
     lxd_service: LXDService = Depends(get_lxd_service),
     db: AsyncSession = Depends(get_db),
-    # note: the secret the dependency above already verified, read again only to bind app_url to it
+    # The secret the dependency above already verified, read again only to bind app_url to it.
     x_api_key_secret: Optional[str] = Header(None, alias="X-API-Key-Secret"),
 ):
     """Sync data to external application."""
@@ -3837,8 +3679,8 @@ async def sync_data(
             result.members_synced = members_synced
             result.members_removed = members_removed
 
-        # ── Offboarding reconcile (flag-gated, default off): drop members no longer in the
-        #    pushed roster for each synced org. See _reconcile_synced_members for the guards. ──
+        # ── Offboarding reconcile (flag-gated, default off): drop members missing from the
+        #    pushed roster of each synced org. See _reconcile_synced_members for the guards. ──
         _settings = get_settings()
         if _settings.member_reconcile_enabled and request.organizations:
             result.members_removed += await _reconcile_synced_members(
@@ -3848,12 +3690,11 @@ async def sync_data(
 
         # ── Store callback URL in Vault API key metadata ──
         if request.app_url:
-            # important: this is the third write in this handler, not bookkeeping. `app_url` is
-            # the base that `refresh_organizations` fetches `/api/external/organizations` from,
-            # and it feeds the response straight into _upsert_synced_organizations. A key that
-            # could set it without org.sync would therefore get organization creation through the
-            # back door, which is the exact power this handler gates above, and would also aim an
-            # authenticated server-side request at a host of its choosing.
+            # important: a write gated like the organization push. `app_url` is the base that
+            # `refresh_organizations` fetches `/api/external/organizations` from, and it feeds
+            # the response straight into _upsert_synced_organizations. Setting it without
+            # org.sync would give organization creation through the back door and aim an
+            # authenticated server-side request at a host of the caller's choosing.
             assert_capability(api_key, "org.sync")
             # important: under the key's lock, bound to the secret this sync presented, and only if
             # that is still the key's secret. A sync already in flight when a rotation ran would
@@ -3863,30 +3704,27 @@ async def sync_data(
             try:
                 async with serialize_key_ownership(db, api_key_id):
                     # important: waited out, never cut off, as the rotation's writes are. A timeout
-                    # stopped the wait but not the thread, whose read-modify-write of the whole key
-                    # document then landed outside the lock and could undo a revoke or a grant edit
-                    # made meanwhile. The Vault client bounds each attempt itself.
+                    # would stop the wait but not the thread, whose read-modify-write of the whole
+                    # key document would then land outside the lock and could undo a revoke or a
+                    # grant edit made meanwhile. The Vault client bounds each attempt itself.
                     await asyncio.to_thread(_bind_callback_url_blocking, api_key_id, request.app_url, presented)
             except Exception as e:
                 logger.warning(f"Could not store app_url for {api_key_id}: {e}")
             finally:
-                # note: not held through the inventory reads below, whether or not the write worked
+                # Not held through the inventory reads below, whether or not the write worked.
                 try:
                     await release_key_locks(db)
                 except Exception as e:  # noqa: BLE001 - the lock ends with the session either way
                     logger.warning(f"Could not release the key lock of {api_key_id} after the sync: {e}")
         
-        # Get allowed cluster IDs from API key permissions
         allowed_clusters = {
             p["cluster_id"] for p in api_key.get("cluster_permissions", [])
         }
-        
-        # Filter requested clusters
+
         requested_clusters = set(request.cluster_ids) if request.cluster_ids else allowed_clusters
         cluster_ids = allowed_clusters.intersection(requested_clusters)
-        
+
         if request.include_clusters:
-            # Get cluster info
             settings = get_settings()
             if settings.vault_enabled and settings.vault_token:
                 from app.services.lxd_cert_manager import LXDCertificateManager
@@ -3943,14 +3781,11 @@ async def _integration_hardware_totals(
     result. Unreachable clusters contribute nothing instead of blocking the response: the
     shared circuit breaker returns them immediately.
 
-    The GPU total counts compute GPUs, matching every internal surface. This endpoint used to
-    return a hardcoded zero for every total, which told partners their GPUs did not exist.
+    The GPU total counts compute GPUs, matching every internal surface.
 
-    note: stale-while-revalidate (owner decision 2026-11-04). This read each cluster one after the
-    other on every miss of a plain 120 s cache, so most of OrcaHub's polls waited 2.4 s (p95
-    10.4 s, max 14.6 s on dev, the long ones dialing dead clusters). Now a poll answers from the
-    cache, up to SWR_MAX_STALE_SECONDS past its soft TTL, while one background read replaces it.
-    A read where no cluster answered is not remembered: the old cache kept zeros for 120 s.
+    Stale-while-revalidate: a poll answers from the cache, up to SWR_MAX_STALE_SECONDS past its
+    soft TTL, while one background read replaces it. A read where no cluster answered is not
+    remembered.
     """
     empty = {key: 0 for key in _TOTALS_KEYS}
     if not allowed_clusters:
@@ -4021,15 +3856,13 @@ async def _integration_hardware_totals(
 # Resource-shaped reads for integrations
 # ============================================
 #
-# important: these exist because the key-authenticated surface was proxy-shaped and nothing else.
-# Reading instances meant POST /integrations/raw-proxy with a body naming an HTTP verb and a
-# cluster id the key had no way to discover, while GET /instances, /nodes and /projects all
-# answered 401 because they are the JWT routers. An integrator's first call therefore failed and
-# read as "this needs a login", which is exactly the conclusion that was drawn.
+# Plain GET reads for a key holder, beside the proxy-shaped POST /integrations/raw-proxy. GET
+# /instances, /nodes and /projects are the JWT routers and answer 401 to a key, so without these
+# an integrator's first call fails and reads as "this needs a login".
 #
 # They add no reach. Each one is the data POST /integrations/sync already returns to the same
 # caller, through the same fetch helpers, narrowed by the same intersection with the key's
-# cluster_permissions. What changes is the shape.
+# cluster_permissions. Only the shape differs.
 
 
 # Which audit action a raw-proxy path belongs under. A call that reaches inside a guest is the
@@ -4054,18 +3887,17 @@ async def _assert_desktop_allowed(
 ) -> None:
     """Everything a desktop action needs beyond the capability and the cluster grant.
 
-    The capability says what the INTEGRATION may attempt. This adds the three things the
-    capability cannot express: whether the organization owning the screen agreed at all, whether
-    a human has authorised this particular key for a bounded time, and whether the key has
-    already done enough of this in the last minute.
+    The capability says what the integration may attempt. This adds what it cannot express:
+    whether the organization owning the screen agreed, whether a human has authorised this key
+    for a bounded time, and whether the key has already done enough of this in the last minute.
 
-    important: it lives here rather than in `services/desktop/entry.py` because it needs the
-    database and the owning organization, and `entry.desktop_action` runs on a worker thread
-    through `run_blocking`. `proxy_operation` takes no session either, so this opens its own,
-    which is what `routers/console.py` already does for the break-glass check on the human path.
+    It lives here rather than in `services/desktop/entry.py` because it needs the database and
+    the owning organization, and `entry.desktop_action` runs on a worker thread through
+    `run_blocking`. `proxy_operation` takes no session either, so this opens its own, as
+    `routers/console.py` does for the break-glass check on the human path.
 
-    Every refusal is audited. A key attempting a screen it was never authorised for is the signal
-    worth alerting on, and it is invisible if only the successful calls are written.
+    Every refusal is audited: a key attempting a screen it was never authorised for is the
+    signal worth alerting on.
     """
     from app.core.database import async_session_maker
     from app.core.org_scope import resolve_cluster_org
@@ -4106,15 +3938,14 @@ async def _assert_desktop_allowed(
     async with async_session_maker() as db:
         org = await resolve_cluster_org(request.cluster_id, db)
 
-        # important: EVERY organization sharing the cluster, not the one it is attributed to. A
-        # cluster can carry more than one binding and one here does, so consulting a single row
-        # would let one tenant's yes authorise capturing another tenant's screens.
+        # important: every organization sharing the cluster, not only the one it is attributed to.
+        # A cluster can carry more than one binding, so consulting a single row would let one
+        # tenant's yes authorise capturing another tenant's screens.
         consent, dissenting = await consent_for_cluster(db, request.cluster_id)
-        # important: `dissenting` is recorded and NOT returned. It names a co-tenant of a shared
-        # cluster, and this refusal is reachable by any key holding the capability, before the
-        # grant is checked. Putting it in the message would tell a caller with no authorisation
-        # at all which other organizations share the cluster and what each has consented to. The
-        # operator reading the audit already knows who their co-tenants are.
+        # important: `dissenting` is recorded, never returned. It names a co-tenant of a shared
+        # cluster, and this refusal is reachable by any key holding the capability before the
+        # grant is checked, so the message would tell an unauthorised caller which organizations
+        # share the cluster and what each has consented to.
         if not consent.may_view:
             _refuse(
                 403,
@@ -4174,7 +4005,7 @@ async def _assert_desktop_allowed(
         instance=instance,
         capture=operation in ("desktop_view", "desktop_probe"),
         # Input fails closed when the budget store cannot answer. Every other limiter here fails
-        # open on purpose, and that reasoning does not carry to typing into somebody's desktop.
+        # open, which is not acceptable for typing into somebody's desktop.
         fail_closed=capability == "desktop.input",
     )
     if not allowed:
@@ -4192,11 +4023,9 @@ async def _assert_desktop_allowed(
 def _guest_audit_action(operation: str) -> str:
     """The audit action for a guest-reaching operation.
 
-    important: `.get`, not `[]`. This table was subscripted bare with the operation's capability
-    at two sites, and it held only the exec pair, so every desktop operation raised KeyError: a
-    refusal returned a generic error with no record of the refused attempt, and a timeout lost
-    both its audit row and its "may still be running" message. A missing entry must degrade to a
-    generic name, never take the request down.
+    important: `.get`, never `[]`. A missing entry must degrade to a generic name: a KeyError here
+    would lose the record of a refused attempt, and a timeout's audit row and "may still be
+    running" message.
     """
     return _PROXY_AUDIT_ACTIONS.get(
         GUEST_ACCESS_OPERATIONS.get(operation), "integration.proxy.request"
@@ -4210,9 +4039,8 @@ def _guest_audit_details(operation: str, params: Dict[str, Any]) -> Dict[str, An
     did and where. Recording every shape unconditionally would put nulls in every record and tell
     a reader nothing about which call this was.
 
-    important: typed text is recorded by LENGTH only. The exec path already argues this for
-    command output, and typed text is the same liability with a sharper edge: the first thing an
-    agent types at a login prompt is a password.
+    important: typed text is recorded by length only, as exec output is: the first thing an agent
+    types at a login prompt is a password.
     """
     if operation == "exec_instance":
         return {
@@ -4236,8 +4064,8 @@ def _proxy_audit_action(method: str, path: str) -> str:
     Guest-reaching calls are named first, because reaching inside a guest is the more serious
     fact about a call that also happens to delete something. A destructive call comes next: a
     DELETE through the proxy removes the same resource the dashboard's own endpoint would, and
-    naming it `integration.proxy.request` put it outside HIGH_SEVERITY_ACTIONS, so anything
-    alerting on `image.delete` never saw this route. Everything else is ordinary proxy traffic.
+    naming it `integration.proxy.request` would put it outside HIGH_SEVERITY_ACTIONS, hidden from
+    anything alerting on `image.delete`. Everything else is ordinary proxy traffic.
     """
     guest = _PROXY_AUDIT_ACTIONS.get(guest_access_capability_for(path))
     if guest:
@@ -4258,19 +4086,14 @@ def _audit_credential_lifecycle(
 ) -> None:
     """Record an operator creating, revoking or deleting an integration credential.
 
-    important: distinct from `_audit_key_action`. There the actor is the key; here it is a human
-    holding a JWT, and `log_activity` fills that in from the request context. Issuing a
-    credential into an organization and taking one away are the two sharpest things this surface
-    does and neither left a record: `revoke_api_key` and `delete_api_key` wrote one
-    `logger.info` apiece, which is not routed to the audit index, and `create_api_key` wrote
-    nothing at all. An operator asking who minted a live credential had nowhere to look.
+    Distinct from `_audit_key_action`: there the actor is the key; here it is a human holding a
+    JWT, and `log_activity` fills that in from the request context. The app log is not routed to
+    the audit index, so this is the only place an operator can see who minted a credential.
 
-    note: `api_key_id` is deliberately public and is allowlisted by the audit sanitiser. The
-    secret never passes through here, and the metadata is reduced to the fields that describe
-    the grant rather than handed over whole.
-
-    note: an edit passes `previous`, the metadata before the write, so the record also says which
-    capabilities it granted and withdrew.
+    `api_key_id` is public and allowlisted by the audit sanitiser. The secret never passes
+    through here, and the metadata is reduced to the fields that describe the grant. An edit
+    passes `previous`, the metadata before the write, so the record also says which capabilities
+    it granted and withdrew.
     """
     metadata = metadata or {}
     try:
@@ -4316,20 +4139,15 @@ def _audit_key_action(
 ) -> None:
     """Record what a key did, in the index a human reviews rather than only the app log.
 
-    important: the owning organization is passed through. Without it every record on this surface
-    landed with a NULL org, so an action against a tenant's guest was not attributable to that
-    tenant and could not appear in a tenant-scoped view of the audit. The human console and
-    terminal paths have carried it since break-glass shipped; the key-authenticated surface did
-    not, which made the tenant-visible trail those paths promise incomplete for exactly the
-    unattended callers it most needed to cover.
+    The owning organization is passed through, so an action against a tenant's guest is
+    attributable to that tenant and appears in a tenant-scoped view of the audit, as on the human
+    console and terminal paths.
 
-    important: this surface had no audit record at all. The one `logger.info` beside it names the
-    method and path but never the body, is not routed to the audit index, and is subject to
-    `LogDeduplicationFilter`, so a hundred different commands against the same instance inside a
-    minute collapsed to a single line. For a path that runs code inside a customer's guest that
-    is not a trail.
+    The app log is no substitute: it never records the body, is not routed to the audit index,
+    and `LogDeduplicationFilter` collapses a hundred different commands against one instance
+    inside a minute into a single line.
 
-    important: the actor is the KEY, not `external_user_email`. That field is supplied by the
+    important: the actor is the key, not `external_user_email`. That field is supplied by the
     caller on the request body and is never verified, so treating it as identity would let the
     caller write its own audit entry. It is recorded as an untrusted annotation instead.
     """
@@ -4359,15 +4177,10 @@ def _audit_key_action(
 def _key_info(metadata: Dict[str, Any], user_mappings_count: int = 0) -> "APIKeyInfo":
     """One builder for every APIKeyInfo, so the derived fields cannot be right on one path only.
 
-    important: five handlers construct this model and only the list passed the two derived
-    fields, so `GET /integrations/api-keys/{id}` on a key that lapsed in 2020 answered
-    `expiry_state: "never"` beside its own past date. Deriving them here means a new handler
-    cannot forget.
-
-    note: `is_expired` is derived from the timestamp, NOT from `classify_key`. The classifier
-    ranks revocation above expiry so the badge reads "Revoked", which is what an operator needs,
-    but the field is documented as "past its expiration" and an integration branches on it. A
-    key that is both would otherwise report `is_expired: false` next to `expiry_state: expired`.
+    `is_expired` is derived from the timestamp, not from `classify_key`. The classifier ranks
+    revocation above expiry so the badge reads "Revoked", but the field is documented as "past
+    its expiration" and an integration branches on it. A key that is both would otherwise report
+    `is_expired: false` next to `expiry_state: expired`.
     """
     grants = metadata.get("cluster_permissions") or []
     generations = cluster_generations.known()
@@ -4399,9 +4212,8 @@ def _audit_raw_proxy(
 ) -> None:
     """One record per raw-proxy call, whatever became of it.
 
-    note: a call that timed out or was shed still reached the cluster, or may have. Recording
-    only the ones that answered would leave the slowest, which are the ones worth reviewing,
-    out of the index entirely.
+    A call that timed out or was shed may still have reached the cluster. Recording only the ones
+    that answered would leave the slowest, the ones worth reviewing, out of the index.
     """
     _audit_key_action(
         api_key,
@@ -4426,7 +4238,7 @@ def _audit_raw_refusal(
 ) -> None:
     """The failure record a raw-proxy gate leaves when it refuses a request before it is sent.
 
-    note: reads the path, the cluster and the claimed email only, never the body, so a gate that
+    Reads the path, the cluster and the claimed email only, never the body, so a gate that
     runs before the body is held to one spelling may hand it the request.
     """
     _audit_key_action(
@@ -4453,19 +4265,16 @@ def _observe_policy_key_write(
 ) -> None:
     """Record a key setting the upstream product's snapshot-schedule keys. Refuse nothing yet.
 
-    important: this is deliberately observation and not a gate. `snapshots.schedule` decides
-    whether the console treats an instance as owned by the metered product sold upstream, which
-    in turn decides whether an operator's own snapshot actions on it are refused. Any key with
-    `lxd.proxy` and `write` can set it today, because the proxy prices an instance-config change
-    by what it reaches inside the guest and these keys reach sideways into another product.
+    important: this observes and does not gate. `snapshots.schedule` decides whether the console
+    treats an instance as owned by the metered product sold upstream, which decides whether an
+    operator's own snapshot actions on it are refused. Any key with `lxd.proxy` and `write` can
+    set it, because the proxy prices an instance-config change by what it reaches inside the
+    guest and these keys reach sideways into another product.
 
-    Which keys legitimately write them is not knowable from this repository, and enforcing on an
-    assumption about a live paid product is how an outage happens. So the record comes first and
-    the refusal is fitted to it: an explicit, never-inherited capability, seeded only for the
-    application type that actually owns the schedules.
-
-    The console's own create paths did not wait for that. They refuse these keys at the request
-    boundary already, because no user-authenticated caller has a reason to set them.
+    Which keys legitimately write them is not knowable from this repository, so the record comes
+    first. A refusal would be an explicit, never-inherited capability seeded only for the
+    application type that owns the schedules. The console's own create paths already refuse these
+    keys at the request boundary, because no user-authenticated caller has a reason to set them.
     """
     if not keys:
         return
@@ -4493,9 +4302,9 @@ def _observe_policy_key_write(
 def _clusters_for_key(api_key: Dict[str, Any], cluster_id: Optional[str]) -> set:
     """The clusters this request may touch: the key's grant, optionally narrowed by one id.
 
-    Intersection, not a lookup, and the same one sync_data performs. A caller-supplied cluster
-    that is not in the grant simply is not in the result, so an unknown id and an unauthorised
-    one are indistinguishable and neither can be probed.
+    An intersection, the same one sync_data performs. A caller-supplied cluster that is not in
+    the grant is not in the result, so an unknown id and an unauthorised one are
+    indistinguishable and neither can be probed.
     """
     allowed = {
         grant["cluster_id"]
@@ -4532,14 +4341,11 @@ def _within_granted_projects(
     """Drop rows for a project the key was not granted on that row's cluster.
 
     important: the fan-out reads every project on a cluster, because that is the only way to
-    see instances outside `default`. Narrowing back to the grant therefore has to happen here
-    or a key scoped to one project enumerates all of them. The proxy paths have always
-    enforced this; these read endpoints did not, which was a hole in the newer surface rather
-    than in the older one.
+    see instances outside `default`. Narrowing back to the grant therefore has to happen here,
+    as on the proxy paths, or a key scoped to one project enumerates all of them.
 
-    note: `project_field` exists because a project row names itself in `name` while an instance
-    row names its project in `project`. Defaulting to `project` silently kept every row for a
-    project listing, so the filter looked applied and did nothing. Callers state the field.
+    `project_field` exists because a project row names itself in `name` while an instance row
+    names its project in `project`. The wrong field silently keeps every row, so callers state it.
     """
     allowed_by_cluster: Dict[str, Optional[set]] = {}
     kept = []
@@ -4562,9 +4368,8 @@ def _within_granted_projects(
 async def whoami(api_key: Dict[str, Any] = Depends(validate_api_key)):
     """The natural first call, and the one that makes a copy-pasted credential prove itself.
 
-    `/validate` already answers this, but it takes the credentials in the BODY, so an integrator
-    who sends the headers every other endpoint wants gets a 422 and reasonably concludes the key
-    is broken. This is the same answer through the same headers as everything else.
+    `/validate` answers the same but takes the credentials in the body; this takes the headers
+    every other endpoint wants, so a caller sending them does not get a 422.
 
     No capability is required, and it is exempt in the capability ratchet for the reason
     `/validate` carries: it grants nothing and reports only what the presented key already holds.
@@ -4596,9 +4401,9 @@ async def whoami(api_key: Dict[str, Any] = Depends(validate_api_key)):
 async def _gather_cluster_rows(api_key: Dict[str, Any], cert_manager, cluster_ids) -> ClusterFanout:
     """Every cluster row a key's listing returns: registration, last known state, its own access.
 
-    important: `skip_tripped=False` because the fetch reads only Vault. A tripped cluster used to
-    vanish into `unreachable` with the breaker's raw text, which read as "this cluster may not
-    exist" to an integration. It now stays a row whose status says offline or not_authorized.
+    `skip_tripped=False` because the fetch reads only Vault. A tripped cluster stays a row whose
+    status says offline or not_authorized, rather than an `unreachable` entry with the breaker's
+    raw text, which reads as "this cluster may not exist" to an integration.
     """
     fanout = await _gather_per_cluster(
         _fetch_cluster_info, cert_manager, cluster_ids, "cluster_info", skip_tripped=False
@@ -4622,7 +4427,7 @@ async def list_integration_clusters(
     cluster_id: Optional[str] = Query(None, description="Narrow to one cluster"),
     api_key: Dict[str, Any] = Depends(require_capability("inventory.read")),
 ):
-    """The answer to "which cluster_id do I pass", which nothing previously told a key holder."""
+    """The answer to "which cluster_id do I pass" for a key holder."""
     settings = get_settings()
     if not (settings.vault_enabled and settings.vault_token):
         raise HTTPException(status_code=503, detail="Vault is not configured")
@@ -4658,8 +4463,8 @@ async def list_integration_cluster_failover(
 ):
     """The one server setting a marketplace needs before it may call a cluster highly available.
 
-    note: inventory.read, the gate of every other read here. It adds no reach: the key could
-    already list these clusters, and the answer names no host, address or credential.
+    Gated by inventory.read, like every other read here. It adds no reach: the key can already
+    list these clusters, and the answer names no host, address or credential.
     """
     fanout = await _gather_per_cluster(
         _fetch_cluster_failover, lxd_service, _clusters_for_key(api_key, cluster_id), "failover_config"
@@ -4751,8 +4556,8 @@ async def get_integration_instance(
     api_key: Dict[str, Any] = Depends(require_capability("inventory.read")),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
-    # important: requests folds a dot segment out of the path it sends, so ".." read LXD's server root
-    # and answered its config as an instance. Refused here, which MCP's orcastra_get_instance calls too.
+    # important: requests folds a dot segment out of the path it sends, so ".." would read LXD's server
+    # root and answer its config as an instance. Refused here, which MCP's orcastra_get_instance calls too.
     lxd_segment(name, what="Instance name")
     clusters = _clusters_for_key(api_key, cluster_id)
     fanout = await _gather_per_cluster(
@@ -4766,9 +4571,9 @@ async def get_integration_instance(
     )
     matches = _within_granted_projects(api_key, fanout.items)
     if not matches:
-        # note: 404 whether the name does not exist or sits in a project the key was not
-        # granted. Splitting the two would let a caller enumerate other tenants' instance
-        # names one guess at a time.
+        # 404 whether the name does not exist or sits in a project the key was not granted.
+        # Splitting the two would let a caller enumerate other tenants' instance names one
+        # guess at a time.
         raise HTTPException(
             status_code=404,
             detail=(
@@ -4782,7 +4587,7 @@ async def get_integration_instance(
             ),
         )
     if len(matches) > 1:
-        # A name is unique per project, not per fleet. Say so rather than picking one.
+        # A name is unique only per project, so report every match rather than pick one.
         raise HTTPException(
             status_code=409,
             detail=(
@@ -4831,15 +4636,14 @@ async def get_integration_operation(
     except BlockingTimeout as timeout_error:
         raise HTTPException(status_code=504, detail=str(timeout_error)) from timeout_error
     except BlockingPoolFull as pool_error:
-        # note: chained so MCP can tell a busy server from a down cluster; both are 503 here.
+        # Chained so MCP can tell a busy server from a down cluster; both are 503 here.
         raise HTTPException(status_code=503, detail=str(pool_error)) from pool_error
     except HTTPException:
         raise
     except Exception as e:
-        # important: an id LXD does not know raised out of here into the generic 500 handler,
-        # which the error sanitiser then renders as "Internal server error". A caller polling
-        # an operation that has already been reaped cannot act on that; it has to be able to
-        # tell "gone" from "the server is broken".
+        # important: an id LXD does not know must not reach the generic 500 handler, which
+        # renders "Internal server error". A caller polling an operation that has already been
+        # reaped has to be able to tell "gone" from "the server is broken".
         code = classify_proxy_error(e)
         if code == "not_found":
             raise HTTPException(
@@ -4922,9 +4726,8 @@ async def get_integration_regions(
         return {
             "regions": list(regions.values()),
             "total_nodes": sum(region["node_count"] for region in regions.values()),
-            # note: this endpoint reports hardware, not workload. Instance counts come from a
-            # different source and are not enumerated here, so the key stays 0 rather than
-            # carrying a number this handler cannot support.
+            # This endpoint reports hardware, not workload. Instance counts come from a different
+            # source and are not enumerated here, so the key stays 0.
             "total_instances": 0,
             "total_cpu": totals["cpu"],
             "total_memory": totals["memory"],
@@ -4951,7 +4754,6 @@ async def raw_proxy(
 ):
     """Raw HTTP proxy for external applications to access LXD API."""
     try:
-        # Check cluster permission
         cluster_permissions = {
             p["cluster_id"]: p for p in api_key.get("cluster_permissions", [])
         }
@@ -4964,8 +4766,7 @@ async def raw_proxy(
             )
         
         perm = cluster_permissions[request.cluster_id]
-        
-        # Check project permission if specified
+
         project = request.project or "default"
         allowed_projects = perm.get("projects", ["default"])
         if project not in allowed_projects and "*" not in allowed_projects:
@@ -4974,10 +4775,9 @@ async def raw_proxy(
                 detail=f"No permission for project {project}"
             )
         
-        # Determine required permission based on method
         method = request.method.upper()
 
-        # note: validated out here in the outer try so it surfaces as a real HTTP 400. Raised
+        # Validated out here in the outer try so it surfaces as a real HTTP 400. Raised
         # inside the inner block it would be swallowed by the generic handler and downgraded
         # to HTTP 200 carrying status_code 500.
         if method not in ALLOWED_METHODS:
@@ -4998,18 +4798,17 @@ async def raw_proxy(
             if refusal.status_code == 403:
                 _audit_raw_refusal(api_key, request, method, project, refusal, "refused_for_every_key")
             raise
-        # important: reaching inside a guest is a different power from managing it, and this path
-        # never asked for it. `_REFUSED_PROXY_PREFIXES` holds only `/certificates`, so
-        # `POST /1.0/instances/<n>/exec` ran arbitrary commands as root for any key with
-        # `lxd.proxy` + `write`, and a GET of `/files` needed only `read`. Both were demonstrated
-        # against this deployment before the fix. The capability is never inherited by a legacy
-        # key, so this closes the door for the 17 of 22 keys that hold everything by default.
+        # important: reaching inside a guest is a different power from managing it.
+        # `_REFUSED_PROXY_PREFIXES` holds only `/certificates`, so without this
+        # `POST /1.0/instances/<n>/exec` would run arbitrary commands as root for any key with
+        # `lxd.proxy` + `write`, and a GET of `/files` would need only `read`. The capability is
+        # never inherited by a legacy key.
         try:
             assert_guest_access_allowed(request.path, api_key)
         except HTTPException as refusal:
-            # note: a refused attempt to reach inside a guest is the record most worth having.
-            # Success is expected traffic; a key trying a path it was never granted is the
-            # signal, and it is invisible if only successes are written.
+            # A refused attempt to reach inside a guest is the record most worth having: a key
+            # trying a path it was never granted is the signal, and it is invisible if only
+            # successes are written.
             _audit_key_action(
                 api_key,
                 action=_proxy_audit_action(method, request.path),
@@ -5057,8 +4856,8 @@ async def raw_proxy(
             _audit_raw_refusal(api_key, request, method, project, refusal, "capability_not_granted")
             raise
         # important: a create whose source the daemon fetches itself (an image server, a URL, a
-        # migration) made the hypervisor reach any address and accept data the dashboard never saw
-        # (core/key_pull_sources.py). Recorded when refused: no correct caller sends one.
+        # migration) would make the hypervisor reach any address and accept data the dashboard never
+        # saw (core/key_pull_sources.py). Recorded when refused: no correct caller sends one.
         try:
             assert_key_pull_source_allowed(method, request.body)
         except HTTPException as refusal:
@@ -5102,8 +4901,8 @@ async def raw_proxy(
         elif method == "DELETE":
             required_permission = "admin"
         
-        # note: shared with the image and ISO upload routers. An empty grant raised ValueError
-        # here and surfaced as a 500; it is a 403 now. See app/core/api_key_permissions.py.
+        # Shared with the image and ISO upload routers. An empty grant is a 403, not a 500; see
+        # app/core/api_key_permissions.py.
         assert_cluster_permission(api_key, request.cluster_id, required_permission)
         await _refuse_a_cluster_not_registered(request.cluster_id)
         # important: `default` on a cluster another party holds is view only for a key a partner
@@ -5146,8 +4945,8 @@ async def raw_proxy(
         )
         assert_plan_segments(plan)
 
-        # important: the breaker check sits AFTER the permission checks on purpose, so
-        # response timing cannot be used to probe which clusters exist without permission.
+        # important: the breaker check sits after the permission checks, so response timing
+        # cannot reveal which clusters exist to a caller without permission.
         if health.is_tripped(request.cluster_id):
             raise HTTPException(
                 status_code=503,
@@ -5157,7 +4956,7 @@ async def raw_proxy(
                 ),
             )
 
-        # note: get_client blocks too. It revalidates the pooled connection with a live
+        # get_client blocks too. It revalidates the pooled connection with a live
         # request and may rebuild the client, so it needs the same offload as the verb call
         # below. Wrapping only the verb call would leave this on the event loop.
         try:
@@ -5178,8 +4977,8 @@ async def raw_proxy(
         except BlockingPoolFull:
             raise HTTPException(status_code=503, detail="Proxy saturated, retry shortly")
 
-        # note: the shared 503 names the breaker's recorded reason (an untrusted certificate, a
-        # failed reconnect), which "not connected" alone never told an integrator.
+        # The shared 503 names the breaker's recorded reason (an untrusted certificate, a failed
+        # reconnect), which "not connected" alone would not tell an integrator.
         client = require_client(client, request.cluster_id)
 
         # important: `project` is authorised above from request.project, so a copy of it
@@ -5197,8 +4996,7 @@ async def raw_proxy(
 
         # important: what the key names is not always where LXD writes. A project that does not
         # isolate images, profiles, network ACLs or custom volumes keeps them in `default`, and an
-        # operation belongs to the project of its resources whatever `?project=` says (security
-        # review of the follow-up round, findings 2 and 3).
+        # operation belongs to the project of its resources whatever `?project=` says.
         isolation_targets = _raw_isolation_targets(request, project) if is_party_bounded(api_key, request.cluster_id) else []
         if isolation_targets:
             try:
@@ -5301,8 +5099,8 @@ async def raw_proxy(
                     )
                     return RawProxyResponse(status_code=404, data=dict(LXD_OPERATION_NOT_FOUND), headers={})
             # important: a project DELETE goes through the shared deletion core, which revokes the
-            # access rules naming the project once it is gone. Sent straight to LXD it left them
-            # behind, and a buyer whose project OrcaHub removed kept the cluster in scope.
+            # access rules naming the project once it is gone. Sent straight to LXD it would leave
+            # them behind, and a buyer whose project was removed would keep the cluster in scope.
             deleted_project = raw_project_delete_target(method, request.path)
             if deleted_project is not None:
                 deleted = await _raw_project_delete(
@@ -5331,13 +5129,12 @@ async def raw_proxy(
             )
             health.clear(request.cluster_id)
 
-            # Parse response
             status_code = response.status_code
             try:
                 data = response.json()
             except Exception:
                 data = {"raw": response.text if hasattr(response, 'text') else str(response)}
-            # read before redaction below, which may drop the operation's metadata
+            # Read before redaction below, which may drop the operation's metadata.
             accepted_operation_id = lxd_operation_id(data) if status_code == 202 else None
             # important: an exec or console operation carries the secrets that open its websocket,
             # and a read key may list every operation in its projects. A write's answer is the
@@ -5350,9 +5147,8 @@ async def raw_proxy(
                 sees_command=has_explicit_capability(api_key, "instance.exec"),
             )
             # important: a pool's, network's, profile's or volume's used_by is cluster-wide, so a key
-            # granted some projects read every other project's instances through a plain GET on a
-            # shared cluster. The structured proxy and MCP already held it to the grant; the raw
-            # proxy now does too (RC5 acceptance FU-3, owner decision 2026-11-06).
+            # granted some projects would read every other project's instances through a plain GET
+            # on a shared cluster. Held to the grant here, as on the structured proxy and MCP.
             if not project_grant_is_unrestricted(allowed_projects):
                 data = used_by_in_projects(data, frozenset(allowed_projects))
 
@@ -5382,8 +5178,8 @@ async def raw_proxy(
                 # important: a 202 has not happened yet. A dashboard read in the meantime still
                 # sees the instance an OrcaHub delete is removing and caches it, so clear again
                 # when LXD reports the operation settled.
-                # note: not for a call inside a guest (exec, files, console). Its operation
-                # lives as long as the session and changes no list, and it would hold a waiter.
+                # Not for a call inside a guest (exec, files, console): its operation lives as
+                # long as the session and changes no list, and it would hold a waiter.
                 if status_code == 202 and not guest_access_capability_for(request.path):
                     invalidate_when_settled(
                         lambda: client,
@@ -5407,12 +5203,12 @@ async def raw_proxy(
             # important: a read that outlived the cap is a slow cluster, not an unreachable one.
             # The pooled session never retries a connect (Retry(connect=0)), so a dead host fails
             # fast as a connect error below and is still recorded. Tripping the breaker here
-            # turned one heavy list (a recursive network read on a host with a hundred
+            # would turn one heavy list (a recursive network read on a host with a hundred
             # interfaces) into 60 s of 503 for every caller of the cluster, provisioning included.
-            # A write keeps tripping it: its outcome is unknown, so callers should back off.
+            # A write still trips it: its outcome is unknown, so callers should back off.
             if method not in ("GET", "HEAD", "OPTIONS"):
                 health.record_failure(request.cluster_id, str(timeout_error))
-                # the write may still land on its worker thread; clear the lists when it ends
+                # The write may still land on its worker thread; clear the lists when it ends.
                 timeout_error.when_finished(get_cache_manager().invalidate_after_external_write)
             _audit_raw_proxy(api_key, request, method, project, "failure", error="timeout")
             logger.warning(
@@ -5432,19 +5228,18 @@ async def raw_proxy(
                 error=str(pool_error),
             )
         except ChecksNotFinished as not_sent:
-            # note: only reads ran, so the cluster is not marked unreachable for them
+            # Only reads ran, so the cluster is not marked unreachable for them.
             _audit_raw_proxy(api_key, request, method, project, "failure", error=not_sent.error_code)
             return RawProxyResponse(status_code=not_sent.status_code, data=None, error=str(not_sent))
         except HTTPException:
-            # note: re-raised so a real transport status is never downgraded to a 200 envelope
-            # by the generic handler below.
+            # Re-raised so a real transport status is never downgraded to a 200 envelope by the
+            # generic handler below.
             raise
         except Exception as api_error:
-            # important: the breaker tracks REACHABILITY, so only a transport failure may trip
-            # it. It used to trip on any exception, which meant an LXD 4xx, a decode error or a
-            # bug in our own response handling marked the cluster dead for 60s. That now costs
-            # more than it did: connection.get_client consults the same breaker, so a wrongly
-            # tripped cluster disappears from the dashboard's own read paths too.
+            # important: the breaker tracks reachability, so only a transport failure may trip
+            # it. An LXD 4xx, a decode error or a bug in this handler must not mark the cluster
+            # dead: connection.get_client consults the same breaker, so a wrongly tripped cluster
+            # disappears from the dashboard's own read paths too.
             # A read timeout means TCP and TLS completed and LXD is still working: slow, not
             # unreachable, the distinction _validate_connection already makes. It answers 504 and
             # leaves the breaker alone. A connect failure or connect timeout still trips it.
@@ -5559,12 +5354,12 @@ async def _raw_project_delete(
 
 
 def _still_running_message(operation: str, cluster_id: str) -> str:
-    """What to say when we stopped waiting but the cluster did not stop working.
+    """What to say when the wait ended but the cluster may still be working.
 
     important: "timed out" alone is what makes an unattended caller retry, and a retried create
     collides with the instance the first attempt is still building. Every timeout path uses this.
 
-    note: the budget and the advice both differ by operation. Exec has its own, shorter budget
+    The budget and the advice both differ by operation. Exec has its own, shorter budget
     and no asynchronous form, so telling an exec caller to resend with `"wait": false` would send
     it to a flag that operation does not read.
     """
@@ -5601,19 +5396,16 @@ async def proxy_operation(
     _: None = Depends(check_read_only_mode),
 ):
     """Proxy an LXD operation for external application."""
-    # important: assigned BEFORE the try, because the outer exception handler reads them. They
-    # used to be set inside it, after the permission checks, so any non-HTTPException raised
-    # before that point turned into an UnboundLocalError: a 500 with no audit record, on the one
-    # path whose whole job is to record what a key did. A malformed stored grant is enough.
+    # important: assigned before the try, because the outer exception handler reads them. Set
+    # inside it, any non-HTTPException raised before the permission checks finish (a malformed
+    # stored grant is enough) would become an UnboundLocalError: a 500 with no audit record.
     #
-    # The owning organization is resolved once for every audit record this call may write. One
-    # indexed lookup against a path already budgeted in tens of seconds, and without it the record
-    # cannot be attributed to the tenant whose guest was reached.
+    # The owning organization is resolved once for every audit record this call may write, so the
+    # record can be attributed to the tenant whose guest was reached.
     _guest_org_id: Optional[int] = None
     _guest_org_slug: Optional[str] = None
 
     try:
-        # Check cluster permission
         cluster_permissions = {
             p["cluster_id"]: p for p in api_key.get("cluster_permissions", [])
         }
@@ -5627,7 +5419,6 @@ async def proxy_operation(
         
         perm = cluster_permissions[request.cluster_id]
         
-        # Check project permission
         allowed_projects = perm.get("projects", ["default"])
         if request.project not in allowed_projects and "*" not in allowed_projects:
             raise HTTPException(
@@ -5649,12 +5440,9 @@ async def proxy_operation(
                 ),
             )
 
-        # important: hierarchical, not membership. This line tested `required in granted` and
-        # therefore refused every operation to the 33 of 38 grants in the fleet that hold
-        # exactly ["admin"], because "read" is not in ["admin"]. raw_proxy was migrated to
-        # assert_cluster_permission and this was not, so the whole /proxy surface was dead
-        # while the raw proxy beside it worked. tests/test_cluster_scope_ratchet.py now covers
-        # both.
+        # important: hierarchical, not membership. `required in granted` would refuse every
+        # operation to a grant of exactly ["admin"], because "read" is not in ["admin"].
+        # tests/test_cluster_scope_ratchet.py holds this path and raw_proxy to the same check.
         assert_cluster_permission(api_key, request.cluster_id, required_permission)
         await _refuse_a_cluster_not_registered(request.cluster_id)
         # important: create_instance sends params to LXD as the body and create_storage_pool its
@@ -5724,13 +5512,12 @@ async def proxy_operation(
         # important: an operation that reaches inside a guest costs a capability of its own, on
         # top of lxd.proxy and the level. It is never inherited by a key issued before
         # capabilities existed and never seeded by an application type, so an operator has to
-        # grant it deliberately. Same rule the raw proxy path guard applies to /exec.
+        # grant it explicitly. Same rule the raw proxy path guard applies to /exec.
         guest_capability = GUEST_ACCESS_OPERATIONS.get(operation)
         if guest_capability is None and operation in ("update_instance", "create_instance"):
             # important: `raw.lxc` with an lxc hook runs as root on the HOST, and a disk device
-            # sourced from a host path mounts it into the guest. Both were reachable at `write`
-            # alone, which would have left the new capability guarding the front door of a room
-            # with an open window.
+            # sourced from a host path mounts it into the guest, so both cost a guest-access
+            # capability, not `write` alone.
             guest_capability = config_reaches_inside(
                 (request.params or {}).get("config"), (request.params or {}).get("devices")
             )
@@ -5764,8 +5551,8 @@ async def proxy_operation(
         if guest_capability is None:
             guest_capability = cloud_init_capability
 
-        # Observation only, and deliberately outside the capability decision above: these keys do
-        # not reach inside the guest, they reach sideways into another product's ledger.
+        # Observation only, outside the capability decision above: these keys reach sideways into
+        # another product's ledger rather than inside the guest.
         if operation in ("update_instance", "create_instance"):
             _observe_policy_key_write(
                 api_key,
@@ -5852,7 +5639,7 @@ async def proxy_operation(
         if operation in CLUSTER_WIDE_OPERATIONS and not project_grant_is_unrestricted(
             perm.get("projects", ["default"])
         ):
-            # note: a Partner's key on a cluster another party holds still creates and deletes
+            # A Partner's key on a cluster another party holds still creates and deletes
             # projects inside its creator's bound, as the browser does (services/key_party_bound.py).
             if operation in ("create_project", "delete_project") and is_party_bounded(api_key, request.cluster_id):
                 refusal = await _party_bounded_project_refusal(
@@ -5877,7 +5664,7 @@ async def proxy_operation(
                     ),
                 )
         # important: a Partner's key on a cluster another party holds writes an instance only into
-        # a project that isolates itself, as the browser (security review, 2026-11-06).
+        # a project that isolates itself, as in the browser.
         if operation in ("create_instance", "update_instance", "restore_snapshot") and is_party_bounded(
             api_key, request.cluster_id
         ):
@@ -5949,8 +5736,8 @@ async def proxy_operation(
                 cluster_id=request.cluster_id,
             )
 
-        # important: the breaker check sits AFTER the permission checks so response timing
-        # cannot be used to probe which clusters exist without permission.
+        # important: the breaker check sits after the permission checks, so response timing
+        # cannot reveal which clusters exist to a caller without permission.
         if health.is_tripped(request.cluster_id):
             raise HTTPException(
                 status_code=503,
@@ -5998,15 +5785,15 @@ async def proxy_operation(
         try:
             if _desktop_wait is not None:
                 # important: on the event loop, after every permission, consent and budget check
-                # above, and still through the audit below. Handed to the pool it held one of the
-                # desktop pool's four workers for up to ten seconds doing nothing. Bounded per
+                # above, and still through the audit below. Handed to the pool it would hold one of
+                # the desktop pool's workers for up to ten seconds doing nothing. Bounded per
                 # worker inside serve_wait; a full share is the BlockingPoolFull answer below.
                 result_data = await serve_wait(_desktop_wait)
             elif operation == "delete_project":
                 # important: the dashboard route's delete, not a bare pylxd call: off the loop with
                 # its own budget, under the cluster lock and the migration fence, and the access
                 # rules naming the project go with it. Without that a same-name project another
-                # organization creates later inherits the old bound.
+                # organization creates later inherits the deleted project's bound.
                 result_data = await _delete_project_for_proxy(lxd_service, request, api_key.get("id"))
                 if is_party_bounded(api_key, request.cluster_id):
                     forget_creator_bound_of(api_key, request.cluster_id)
@@ -6020,16 +5807,14 @@ async def proxy_operation(
                     request.project,
                     request.wait,
                     visible_projects=_frozen_grant(api_key, request.cluster_id),
-                    # note: a guest-reaching call holds a worker for as long as it runs, so it gets
-                    # its own budget rather than the operation one. A command that needs longer is a
+                    # A guest-reaching call holds a worker for as long as it runs, so it gets its
+                    # own budget rather than the operation one. A command that needs longer is a
                     # job.
                     #
-                    # important: THREE tiers, chosen by `operation_pool` beside the vocabulary rather
-                    # than by a condition here. Written as a two-way choice on GUEST_ACCESS_OPERATIONS
-                    # it put every desktop action on exec's four workers, which is exactly the
-                    # starvation the desktop pool was built to prevent, and that pool was then never
-                    # used. `_client_for` derives its socket window from the same selector, so the
-                    # budget and the window cannot disagree.
+                    # important: three tiers, chosen by `operation_pool` beside the vocabulary rather
+                    # than by a two-way condition on GUEST_ACCESS_OPERATIONS here, which would put
+                    # every desktop action on exec's workers. `_client_for` derives its socket
+                    # window from the same selector, so the budget and the window cannot disagree.
                     timeout=operation_timeout(operation),
                     label=f"proxy_operation[{operation} {request.cluster_id}]",
                     executor=_operation_executor,
@@ -6044,8 +5829,8 @@ async def proxy_operation(
                         result_data = {**result_data, "note": note.lstrip(". ")}
             if operation in LIST_MUTATIONS:
                 # The upstream product writes through this proxy rather than through the
-                # dashboard's own routes. Without this an operator watched an instance OrcaHub had
-                # just deleted stay listed, or one it created stay missing, for a whole TTL.
+                # dashboard's own routes. Without this an instance it just deleted would stay
+                # listed, or one it created stay missing, for a whole TTL.
                 get_cache_manager().invalidate_after_external_write()
                 pending_operation = (
                     result_data.get("operation_id") if isinstance(result_data, dict) else None
@@ -6054,10 +5839,10 @@ async def proxy_operation(
                     request.cluster_id, request.project, deleted_instance, instance_rules
                 )
                 if pending_operation:
-                    # accepted but not finished (wait=false or a long operation): clear again
-                    # once LXD settles it
+                    # Accepted but not finished (wait=false or a long operation): clear again
+                    # once LXD settles it.
                     invalidate_when_settled(
-                        # runs on the waiter's threads, never on the loop
+                        # Runs on the waiter's threads, never on the loop.
                         partial(lxd_service.connection_manager.get_client, request.cluster_id),
                         str(pending_operation),
                         request.project,
@@ -6069,11 +5854,10 @@ async def proxy_operation(
                 elif forget_rules is not None:
                     await forget_rules("Success")
         except BlockingTimeout as timeout_error:
-            # important: exec lands HERE, not in the generic handler below, so its audit record
-            # and its "still running" message have to be written on this path too. They were only
-            # on the other one, which the QA run happened to reach because a socket read expired
-            # first. `exec_instance` is also not in PROXY_WAIT_OPERATIONS, so without this it fell
-            # through to record_failure and tripped the process-wide breaker: one integration's
+            # important: exec lands here, not in the generic handler below, so its audit record
+            # and its "still running" message have to be written on this path too.
+            # `exec_instance` is also not in PROXY_WAIT_OPERATIONS, so without this it would fall
+            # through to record_failure and trip the process-wide breaker: one integration's
             # slow command would make the cluster read as offline for every other caller.
             if operation in GUEST_ACCESS_OPERATIONS:
                 _audit_key_action(
@@ -6104,18 +5888,17 @@ async def proxy_operation(
                 )
             long_running = operation in PROXY_WAIT_OPERATIONS and request.wait
             # important: a long operation is not an unreachable cluster. Tripping the breaker
-            # here made one slow create return 503 for every other caller of that cluster for
-            # a full TTL, which is the mistake _gather_per_cluster already documents avoiding
-            # on its own timeout path. Only a read that ran out of time still counts as a
-            # symptom worth recording.
+            # here would make one slow create return 503 for every other caller of that cluster
+            # for a full TTL, as _gather_per_cluster also avoids on its timeout path. Only a read
+            # that ran out of time counts as a symptom worth recording.
             if not long_running:
                 health.record_failure(request.cluster_id, str(timeout_error))
             logger.warning(
                 f"Proxy operation timeout: {operation} on {request.cluster_id} "
                 f"after {PROXY_OP_TIMEOUT}s"
             )
-            # A write that ran out of time may still have changed the cluster, on behalf of an
-            # external system nobody is watching. Drop the cached reads it may have invalidated.
+            # A write that ran out of time may still have changed the cluster for an unattended
+            # external system. Drop the cached reads it may have invalidated.
             if operation in LIST_MUTATIONS:
                 get_cache_manager().invalidate_after_external_write()
                 timeout_error.when_finished(get_cache_manager().invalidate_after_external_write)
@@ -6152,18 +5935,16 @@ async def proxy_operation(
                 error_code="conflict",
                 error=f"Another configuration change on {request.cluster_id} is still running. Retry shortly.",
             )
-        
-        # Log the operation for audit
+
         logger.info(
             f"Proxy operation: {operation} on {request.cluster_id}/{request.project} "
             f"by {request.external_user_email or 'unknown'} via {api_key.get('app_name', 'unknown')}"
         )
-        
+
         # important: list_projects answers about the whole cluster, not about the project the
         # operation ran in, so authorising request.project does not bound it. A key granted
-        # only `default` could read every tenant project name, and those names carry customer
-        # slugs. The REST read was narrowed in this pass; this is the same leak through the
-        # other door.
+        # only `default` could otherwise read every tenant project name, and those names carry
+        # customer slugs. The REST read applies the same narrowing.
         if operation == "list_projects" and isinstance(result_data, list):
             allowed = _granted_projects(api_key, request.cluster_id)
             if allowed is not None:
@@ -6173,15 +5954,13 @@ async def proxy_operation(
                 ]
 
         if operation in GUEST_ACCESS_OPERATIONS and isinstance(result_data, dict):
-            # important: keyed on the guest-access SET, not on the name `exec_instance`. Written
-            # for exec and left that way, it meant a successful desktop action produced no audit
-            # record at all on this route, which is the one record a tenant would look for.
+            # important: keyed on the guest-access set, not on the name `exec_instance`, so a
+            # successful desktop action leaves the record a tenant would look for too.
             #
-            # What is recorded and what is not: the request is described, the RESULT is not.
-            # Output is whatever the caller chose to read out of the guest, so an audit index that
-            # stored it would become a copy of every secret anyone ever cat-ed. Sizes and the exit
-            # code carry the forensic value without the liability, and the same rule sends typed
-            # text through as a length.
+            # The request is described, the result is not. Output is whatever the caller chose to
+            # read out of the guest, so an audit index that stored it would become a copy of every
+            # secret anyone printed. Sizes and the exit code carry the forensic value, and the same
+            # rule records typed text as a length.
             _audit_key_action(
                 api_key,
                 action=_guest_audit_action(operation),
@@ -6202,10 +5981,9 @@ async def proxy_operation(
                 target_organization_slug=_guest_org_slug,
             )
 
-            # One session row per session, not one per action. A tenant reading their session list
-            # wants to see that an agent connected to a guest, not four hundred rows saying it
-            # moved the mouse. `session_started` is set by the desktop entry point on the call
-            # that actually established it.
+            # One session row per session, not one per action, so a tenant's session list shows
+            # that an agent connected to a guest rather than every mouse move. `session_started`
+            # is set by the desktop entry point on the call that established the session.
             if result_data.get("session_started") and operation.startswith("desktop_"):
                 from app.services.session_audit import fire_and_forget_connect
                 from app.services.session_models import SessionProtocol
@@ -6232,18 +6010,14 @@ async def proxy_operation(
             result_data.get("operation_id") if isinstance(result_data, dict) else None
         )
 
-        # important: announce the lifecycle change to any add-on subscribed to it. Until this
-        # existed nothing in the deployment ever called `enqueue_event`, so nine catalogued
-        # events, served to authors and documented publicly with a "when it fires" column, never
-        # fired once. A subscription verified, went active, and delivered nothing forever.
-        #
-        # After the operation and before the response on purpose: the cluster has already changed,
-        # so the event describes something true, and `emit_for_proxy_operation` never raises, so a
-        # notification problem cannot turn a completed create into a failed one.
+        # Announce the lifecycle change to any add-on subscribed to it, after the operation and
+        # before the response: the cluster has already changed, so the event describes something
+        # true, and `emit_for_proxy_operation` never raises, so a notification problem cannot turn
+        # a completed create into a failed one.
         from app.services.webhooks.emitter import emit_for_proxy_operation
 
-        # note: delete_project announces from inside its own shielded task, and only for a project
-        # that really went, so a delete of a name that was never there sends no event.
+        # delete_project announces from inside its own shielded task, and only for a project that
+        # was deleted, so a delete of a name that was never there sends no event.
         if operation != "delete_project":
             await emit_for_proxy_operation(
                 operation,
@@ -6265,7 +6039,7 @@ async def proxy_operation(
         logger.error(f"Error in proxy operation: {e}", exc_info=True)
         error_code = classify_proxy_error(e)
         if request.operation in LIST_MUTATIONS:
-            # Whether the cluster changed before this failed is unknown, and a list that hides
+            # Whether the cluster changed before the failure is unknown, and a list that hides
             # a change is the worse mistake: clear it.
             get_cache_manager().invalidate_after_external_write()
         if request.operation in GUEST_ACCESS_OPERATIONS:
@@ -6298,10 +6072,9 @@ async def proxy_operation(
                 error_code=error_code,
                 error=_still_running_message(request.operation, request.cluster_id),
             )
-        # important: a socket read timeout reaches here rather than as BlockingTimeout, and it
-        # carries the same hazard: the cluster kept working after we stopped listening. Observed
-        # live, a create that timed out this way left a real instance behind while the caller
-        # was told it had failed. Same guidance, whichever timeout fired.
+        # important: a socket read timeout reaches here rather than as BlockingTimeout, with the
+        # same hazard: the cluster keeps working after the wait ends, so a create that timed out
+        # this way can still leave a real instance behind. Same guidance, whichever timeout fired.
         if error_code == "timeout" and request.operation in PROXY_WAIT_OPERATIONS and request.wait:
             return ProxyResponse(
                 success=False,
@@ -6349,9 +6122,8 @@ class CapabilityOption(BaseModel):
         default=False,
         description="Needs a deliberate decision rather than an application-type default",
     )
-    # note: the reason belongs on the server because there is more than one. The create form used
-    # to label every elevated capability "Writes access control", which is true of org.sync and
-    # tenant.provision and false of the two that reach inside a guest.
+    # The reason is served because elevated capabilities differ: org.sync and tenant.provision
+    # write access control, while others reach inside a guest.
     elevated_reason: Optional[str] = Field(
         default=None, description="Why this capability is marked, in operator language"
     )
@@ -6422,10 +6194,9 @@ def _clusters_from_vault(lxd_service: LXDService, cluster_ids: List[str]) -> Lis
     cluster, which is why it is not the ordinary path: an availability row already carries the
     display name, the endpoint and the type, resolved by the same code the Clusters page uses.
 
-    important: the keys are `display_name` and `type`. This handler used to ask for `name` and
-    `server_type`, which `save_cluster_metadata` has never written, so every cluster rendered
-    as its raw id and claimed to be LXD. It also filtered on a `status` key that is not stored
-    either, making that filter unreachable while the endpoint's description promised it.
+    important: the keys are `display_name` and `type`. `save_cluster_metadata` never writes
+    `name`, `server_type` or `status`, so reading those would render every cluster as its raw id
+    and claim it is LXD.
     """
     rows: List[AvailableCluster] = []
     for cluster_id in cluster_ids:
@@ -6462,10 +6233,9 @@ async def list_available_clusters(
 ):
     """List clusters available to the current user for API key assignment.
 
-    important: status is an enrichment, not the payload. If reachability cannot be established
-    the clusters are still returned, with a null status, because this endpoint's job is to say
-    what a credential may be scoped to. Failing the whole read would empty the picker and make
-    an existing grant unrevocable, which is a worse answer than "we could not tell".
+    important: status is optional. If reachability cannot be established the clusters are still
+    returned, with a null status, because this endpoint says what a credential may be scoped to.
+    Failing the whole read would empty the picker and make an existing grant unrevocable.
     """
     try:
         cluster_ids = lxd_service.get_node_names()
@@ -6480,8 +6250,8 @@ async def list_available_clusters(
             by_id = {}
 
         if not by_id:
-            # note: off the loop. This is one Vault round trip per cluster, and it only runs when
-            # reachability is unavailable, which is exactly when the box is already unwell.
+            # Off the loop. This is one Vault round trip per cluster, and it only runs when
+            # reachability is unavailable, which is when the server is already unwell.
             return AvailableClustersResponse(
                 clusters=await asyncio.to_thread(_clusters_from_vault, lxd_service, cluster_ids)
             )
@@ -6499,9 +6269,9 @@ async def list_available_clusters(
                 AvailableCluster(
                     id=cluster_id,
                     name=row.display_name,
-                    # note: the availability layer uses the literal "unknown" when it has no
-                    # endpoint. Passing that through prints a word that reads as a fact about
-                    # the cluster rather than a gap in what we know.
+                    # The availability layer uses the literal "unknown" when it has no endpoint.
+                    # Passed through, that word would read as a fact about the cluster rather
+                    # than a gap in the data.
                     endpoint=None if row.endpoint == "unknown" else row.endpoint,
                     server_type=row.node_type,
                     status=row.status,
@@ -6534,7 +6304,7 @@ class IntegrationOrgResponse(BaseModel):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     # The owner key as it stands now. Only the owner syncs an organization, updates its members
-    # and policies and provisions for it, so an owner that no longer works freezes all three.
+    # and policies and provisions for it, so an owner that stops working freezes all three.
     # Null for a caller who is not an Admin and holds no partner row in the organization.
     owner_key_name: Optional[str] = None
     owner_key_state: Optional[str] = Field(
@@ -6604,12 +6374,12 @@ async def list_synced_organizations(
                 and_(Organization.source == source, Organization.is_active == True)
             )
         else:
-            # default: return only externally synced orgs (non-local)
+            # Default: only externally synced orgs (non-local).
             stmt = select(Organization).where(
                 and_(Organization.source != "local", Organization.is_active == True)
             )
 
-        # scope by user membership for non-admins
+        # Non-admins see only organizations they created or belong to.
         roles = resolve_roles(user)
         highest = get_highest_role(roles)
         if highest != Role.ADMIN:
@@ -6661,7 +6431,7 @@ async def list_synced_organizations(
         if running is not None:
             homes = await keys_whose_home_the_user_partners(db, user.email, every_owner)
 
-        # note: the owner keys' metadata only, never a secret, and read live: a cached copy from
+        # The owner keys' metadata only, never a secret, and read live: a cached copy from
         # before a revoke would report a frozen organization as healthy.
         owners = await _owner_keys(sorted(every_owner))
 
@@ -6670,7 +6440,7 @@ async def list_synced_organizations(
             read = owners.get(org.api_key_id, (None, None)) if org.api_key_id else (None, None)
             meta = read[0] or {}
             in_set = {row.api_key_id for row in owner_sets.get(org.id, [])} | ({org.api_key_id} if org.api_key_id else set())
-            # note: a partner of the home organization of any key in the set sees them
+            # A partner of the home organization of any key in the set sees them.
             shown = running is None or (bool(in_set & homes) if org.api_key_id else org.id in running)
             response.append(IntegrationOrgResponse(
                 id=org.id,
@@ -6727,8 +6497,8 @@ async def refresh_organizations(
     from app.core.safe_http import SafeHTTPError
     from app.services.orcahub_callbacks import get_from_app
 
-    # important: every other single-key handler here scopes through _authorize_api_key, and this
-    # one took `api_key_id` straight from a query parameter. Any partner could therefore name any
+    # important: `api_key_id` comes from a query parameter, so it is scoped through
+    # _authorize_api_key like every other single-key handler. Otherwise any partner could name any
     # key in any organisation and make this server issue an authenticated request to that key's
     # stored callback, then have the response upserted as organizations. Same overlap rule, same
     # side rule, same 404-for-out-of-scope shape, so an id cannot be probed apart from a
@@ -6736,8 +6506,8 @@ async def refresh_organizations(
     metadata = await _authorize_api_key(api_key_id, user, db)
     vault_client = get_vault_integrations_client()
     # important: after the scope check, so it never confirms an id the caller cannot see, and
-    # before the secret is read. Refreshing such a key sent its stored credential hash to its
-    # callback URL and wrote the answer under the dead key's ownership. The OrcaHub callbacks
+    # before the secret is read. Refreshing such a key would send its stored credential hash to
+    # its callback URL and write the answer under the dead key's ownership. The OrcaHub callbacks
     # skip it the same way (orcahub_sync._get_orcahub_credentials).
     if classify_key(metadata) != "active":
         raise HTTPException(
@@ -6780,7 +6550,6 @@ async def refresh_organizations(
             ),
         )
 
-    # Call external app's organizations endpoint
     callback_url = f"{app_url.rstrip('/')}/api/external/organizations"
     try:
         body = await get_from_app(
@@ -6792,8 +6561,8 @@ async def refresh_organizations(
         )
         data = json.loads(body)
     except SafeHTTPError as e:
-        # note: status or category only. Logging the body put the fetched content into the log,
-        # which turns a blind SSRF into a returned one for anyone who can read logs.
+        # important: status or category only. Logging the body would put the fetched content into
+        # the log, turning a blind SSRF into a returned one for anyone who can read logs.
         if e.status_code is not None:
             logger.error("External app returned %s for the configured callback", e.status_code)
             raise HTTPException(status_code=502, detail=f"External app returned {e.status_code}")
@@ -6805,7 +6574,6 @@ async def refresh_organizations(
     if not isinstance(data, dict):
         raise HTTPException(status_code=502, detail="External app returned an unreadable answer")
 
-    # Parse and upsert organizations
     orgs_data = data.get("organizations", [])
     if not orgs_data:
         return {"message": "No organizations returned from external app", "organizations_synced": 0}
@@ -6862,7 +6630,7 @@ def _audit_owner_transfer(
 ) -> None:
     """Record an owner transfer or its refusal.
 
-    note: the key ids travel as from_key_id and to_key_id. The audit sanitiser blanks any detail
+    The key ids travel as from_key_id and to_key_id. The audit sanitiser blanks any detail
     whose name contains api_key, except exactly api_key_id.
     """
     try:
@@ -6901,9 +6669,9 @@ async def transfer_organization_owner(
 ):
     """Move one organization to another owner key.
 
-    important: before this existed an owner key that was revoked, deleted or left to expire froze
-    its organizations, because a key may sync only what it owns or what no key has claimed. The
-    only way out was SQL against production. See services/integration_key_ownership.py.
+    An owner key that is revoked, deleted or left to expire freezes its organizations, because a
+    key may sync only what it owns or what no key has claimed. This hands them to a working key.
+    See services/integration_key_ownership.py.
     """
     org = (await db.execute(select(Organization).where(Organization.id == org_id))).scalar_one_or_none()
     if org is None:
@@ -6939,15 +6707,15 @@ async def transfer_organization_owner(
         # cannot land between the check and the write and leave the organization on a dead key.
         metadata, failure = await asyncio.to_thread(_read_key_metadata_blocking, vault_client, target)
         owners_before = await owner_key_ids(db, org.id)
-        # note: a transfer replaces the whole owner set, so one to the current primary still changes
-        # an organization that has co-owners
+        # A transfer replaces the whole owner set, so one to the current primary still changes an
+        # organization that has co-owners.
         changed = previous != target or any(key != target for key in owners_before)
         if changed:
             refused = owner_key_refusal(metadata, failure)
             if refused is not None:
                 status, code, message = refused
                 _audit_owner_transfer(org, details=context, result="denied", error_code=code)
-                # note: a 503 detail is sanitised to a string by the app's error handler.
+                # A 503 detail is sanitised to a string by the app's error handler.
                 raise HTTPException(
                     status_code=status,
                     detail=message if status >= 500 else {"error": code, "message": message},
@@ -6956,7 +6724,7 @@ async def transfer_organization_owner(
             if moved is None:
                 raise HTTPException(status_code=404, detail="Organization not found")
             org = moved
-            # note: the co-owners only; the previous primary is reported as previous_api_key_id
+            # The co-owners only; the previous primary is reported as previous_api_key_id.
             removed = [key for key in owners_before if key not in (target, previous)]
             await db.commit()
 
@@ -6986,7 +6754,7 @@ async def transfer_organization_owner(
     if not changed:
         return answer
 
-    # note: here rather than in a helper, so the cache ratchet sees the handler clear the key list,
+    # Here rather than in a helper, so the cache ratchet sees the handler clear the key list,
     # which carries what each key owns.
     get_cache_manager().delete_pattern("api_responses", "integrations:api_keys:list*")
     for key_id in dict.fromkeys([previous, target, *removed]):
@@ -7051,7 +6819,7 @@ async def _json_body(request: Request, model: Type[_Body]) -> _Body:
     """A route's JSON body, read and validated by the route rather than by FastAPI.
 
     important: FastAPI parses a declared body before it resolves any dependency, so malformed JSON
-    answered 422 ahead of the flag's 404 and the login. Read here, the flag and the caller come first.
+    would answer 422 ahead of the flag's 404 and the login. Read here, the flag and the caller come first.
     The 422 never carries the input: FastAPI's own answer echoes each failing value.
     """
     return await read_json_body(request, model)
@@ -7117,7 +6885,7 @@ async def add_organization_owner(
     org = await _owned_org_or_refuse(db, org_id)
     vault_client = get_vault_integrations_client()
     async with serialize_key_ownership(db, body.api_key_id), serialize_org_owners(db, [org.id]):
-        # note: again under the lock, which read the organization afresh
+        # Again under the lock, which read the organization afresh.
         org = await _owned_org_or_refuse(db, org_id)
         metadata, failure = await asyncio.to_thread(_read_key_metadata_blocking, vault_client, body.api_key_id)
         refused = owner_key_refusal(metadata, failure)
@@ -7136,7 +6904,7 @@ async def add_organization_owner(
             await db.commit()
         after = await owner_key_ids(db, org.id)
     if added:
-        # note: the key list carries what each key owns (cache ratchet: cleared in the handler)
+        # The key list carries what each key owns (cache ratchet: cleared in the handler).
         get_cache_manager().delete_pattern("api_responses", "integrations:api_keys:list*")
         _evict_owner_keys(body.api_key_id)
         record_owner_change(ADD_ACTION, org, before=before, after=after, primary_before=org.api_key_id,
@@ -7171,7 +6939,7 @@ async def remove_organization_owner(
     org = await _owned_org_or_refuse(db, org_id)
     vault_client = get_vault_integrations_client()
     async with serialize_key_ownership(db, key_id), serialize_org_owners(db, [org.id]):
-        # note: again under the lock, which read the organization afresh
+        # Again under the lock, which read the organization afresh.
         org = await _owned_org_or_refuse(db, org_id)
         before = await owner_key_ids(db, org.id)
         if key_id not in before:
@@ -7224,7 +6992,7 @@ async def set_organization_primary(
     org = await _owned_org_or_refuse(db, org_id)
     vault_client = get_vault_integrations_client()
     async with serialize_key_ownership(db, body.api_key_id), serialize_org_owners(db, [org.id]):
-        # note: again under the lock, which read the organization afresh
+        # Again under the lock, which read the organization afresh.
         org = await _owned_org_or_refuse(db, org_id)
         owners = await owner_key_ids(db, org.id)
         if body.api_key_id not in owners:
@@ -7262,7 +7030,7 @@ class OwnerKeysResponse(BaseModel):
 class OwnerKeyEnrollRequest(BaseModel):
     organization_external_id: str = Field(..., min_length=1, max_length=255)
     new_key_id: str = Field(..., pattern=r"^[A-Za-z0-9_-]{1,128}$", description="The key that joins the owner set")
-    # note: SecretStr, so a repr or log of the request never shows it. The route parses the body itself
+    # SecretStr, so a repr or log of the request never shows it. The route parses the body itself
     # (_enroll_body) because FastAPI's own 422 would echo it.
     new_key_secret: SecretStr = Field(..., min_length=1, max_length=512, description="Its secret, proving the caller holds it")
 
@@ -7279,7 +7047,7 @@ async def _enroll_body(request: Request) -> OwnerKeyEnrollRequest:
 def _read_key_secret_hash_blocking(vault_client, key_id: str) -> Tuple[Optional[str], Optional[str]]:
     """A key's stored secret hash, or None and why: "missing" when Vault has no such key, else "unknown".
 
-    note: as _read_key_metadata_blocking, so an unreadable store is told apart from a missing key and is
+    As _read_key_metadata_blocking, so an unreadable store is told apart from a missing key and is
     never counted as a failed guess.
     """
     from app.core.vault_client import VaultClientError
@@ -7334,7 +7102,7 @@ async def read_organization_owner_keys(
 ):
     key_id = api_key.get("id", "")
     org = await _external_org(db, external_id)
-    # note: a missing organization answers unclaimed, as it is to a sync: the first push claims it.
+    # A missing organization answers unclaimed, as it is to a sync: the first push claims it.
     # So this says no more about which ids exist than the sync probe already does.
     if org is None or not org.api_key_id:
         return OwnerKeysResponse(status="unclaimed")
@@ -7407,13 +7175,13 @@ async def enroll_owner_key(
             new_metadata, new_failure = await asyncio.to_thread(_read_key_metadata_blocking, vault_client, new_key)
             stored_hash, hash_failure = await asyncio.to_thread(_read_key_secret_hash_blocking, vault_client, new_key)
             if "unknown" in (new_failure, hash_failure):
-                # note: not a failed guess. An outage must not lock the pair out.
+                # Not a failed guess: an outage must not lock the pair out.
                 raise HTTPException(status_code=503, detail=owner_key_enrollment.UNREADABLE)
-            # note: the hash is computed for a missing key too, so both take the same path
+            # The hash is computed for a missing key too, so both take the same path.
             verified = verify_api_key_secret(body.new_key_secret.get_secret_value(), stored_hash or "")
             if new_metadata is None or not verified:
                 owner_key_enrollment.record_failure(vouching, new_key)
-                # note: key ids and the organization only, never the secret that was tried
+                # Key ids and the organization only, never the secret that was tried.
                 logger.warning("Owner key enrollment refused: api key %s could not verify %s (organization %s); "
                                "a missing key and a wrong secret read the same", vouching, new_key, org.slug)
                 raise _refuse(403, "new_key_unverified", owner_key_enrollment.UNVERIFIED)
@@ -7443,7 +7211,7 @@ async def enroll_owner_key(
                 try:
                     await db.commit()
                 except IntegrityError:
-                    # note: a concurrent enrollment of the same key won the unique constraint
+                    # A concurrent enrollment of the same key won the unique constraint.
                     await db.rollback()
                     added = False
             after = await owner_key_ids(db, org.id)
@@ -7451,9 +7219,9 @@ async def enroll_owner_key(
         get_cache_manager().delete_pattern("api_responses", "integrations:api_keys:list*")
         evict_api_key_cache(vouching)
         evict_api_key_cache(new_key)
-        # note: D9 (telling the partners) is not built: Orcastra has no notification channel. The count
-        # is recorded so the record says who would have been told; the enrollment is committed by now, so
-        # a failed count must not cost it its audit record.
+        # The partners are not notified, as there is no notification channel. The count is recorded so
+        # the record says how many would have been told; the enrollment is committed by now, so a failed
+        # count must not cost it its audit record.
         try:
             partner_count: Optional[int] = len(await owner_key_enrollment.partner_emails(db, org))
         except Exception as exc:  # noqa: BLE001 - the record matters more than the count
@@ -7544,8 +7312,8 @@ class SyncPolicyAssignment(BaseModel):
 def _assignment_expiry(raw: Optional[str]) -> Optional[datetime]:
     """An assignment expiry as an instant. A value without an offset was always written as UTC.
 
-    note: kept a string on the wire, as OrcaHub sends it today; a bare `fromisoformat` handed the
-    database a naive value for a timestamptz column, which compared wrongly against aware now().
+    Kept a string on the wire, as OrcaHub sends it. A bare `fromisoformat` would hand the database
+    a naive value for a timestamptz column, which compares wrongly against an aware now().
     """
     if not raw:
         return None
@@ -7590,12 +7358,9 @@ async def sync_policies_from_external(
     Creates or updates policies based on external_id matching.
     Handles rules and assignments as part of the sync.
 
-    important: this used to authenticate by hand, comparing a plain SHA-256 of the presented
-    secret against the stored hash. Keys are stored as HMAC-SHA256 keyed with SECRET_KEY
-    (generate_api_key_pair), so the two could never match and this endpoint answered 401 to every
-    caller, including OrcaHub. The hand-rolled block also skipped the expiry check and the
-    cross-worker revocation tombstone. It now shares the one dependency the rest of this router
-    uses, which fixes all three at once.
+    important: authenticated by the dependency the rest of this router uses, never by hand. Keys
+    are stored as HMAC-SHA256 keyed with SECRET_KEY (generate_api_key_pair), and the dependency
+    also applies the expiry check and the cross-worker revocation tombstone.
     """
     from app.models.db_models import (
         TenantAccessPolicy,
@@ -7653,8 +7418,8 @@ async def sync_policies_from_external(
             # find org by external_id
             # important: `source` is filtered here as every sibling lookup in this file does.
             # Without it a dashboard-created organisation that happens to carry an external_id
-            # was writable through this endpoint, which grants tenants operate and console access
-            # to clusters. The ownership test below is the second half.
+            # would be writable through this endpoint, which grants tenants operate and console
+            # access to clusters. The ownership test below is the second half.
             org_stmt = select(Organization).where(
                 and_(
                     Organization.source == "orcahub",
@@ -7672,10 +7437,8 @@ async def sync_policies_from_external(
             # tenant access policies, which are authorization data. Without binding the key to
             # the org, any valid key could write policies into another integration's tenants.
             # Reported as not-found so a caller cannot probe which external ids exist.
-            # important: `if org.api_key_id and ...` skipped the check entirely for an
-            # unclaimed organisation, so a NULL owner was an open door rather than a closed one.
-            # Writing tenant access policies is an authorization write; an organisation no key
-            # has claimed is not one this key may write to.
+            # important: an unclaimed organisation is refused too. A NULL owner must not skip the
+            # check: an organisation no key has claimed is not one this key may write to.
             if not await is_owner(db, org, api_key_id):
                 logger.warning(
                     "Refusing policy sync into organization %s: owned by api key %s, caller is %s",
@@ -7694,7 +7457,7 @@ async def sync_policies_from_external(
             result = await db.execute(existing_stmt)
             policy = result.scalar_one_or_none()
 
-            # Refused before this policy is touched, so a stale or impossible term skips it whole.
+            # Refused before the policy is touched, so a stale or impossible term skips it whole.
             received_term = _received_term(sync_policy)
             try:
                 merged_term = _merged_term(policy, received_term) if received_term else None
@@ -7704,12 +7467,10 @@ async def sync_policies_from_external(
                 continue
 
             if policy:
-                # update existing
                 policy.name = sync_policy.name
                 policy.description = sync_policy.description
                 policy.updated_at = datetime.utcnow()
             else:
-                # create new
                 policy = TenantAccessPolicy(
                     organization_id=org.id,
                     name=sync_policy.name,
@@ -7725,7 +7486,7 @@ async def sync_policies_from_external(
                 policy.access_ends_at = merged_term.access_ends_at
                 policy.term_as_of = merged_term.as_of
 
-            # replace rules
+            # Replace the rules.
             await db.execute(
                 delete(TenantPolicyRule).where(TenantPolicyRule.policy_id == policy.id)
             )
@@ -7744,9 +7505,8 @@ async def sync_policies_from_external(
                     db, org, cluster_id=sold_on, key_minter=api_key.get("created_by"), api_key_id=api_key_id,
                 )
 
-            # sync assignments (merge - don't remove local ones)
+            # Assignments merge: local ones are never removed.
             for assign_data in sync_policy.assignments:
-                # find org member
                 member_stmt = select(OrganizationMember).where(
                     and_(
                         OrganizationMember.organization_id == org.id,
@@ -7759,7 +7519,6 @@ async def sync_policies_from_external(
                 if not member:
                     continue  # skip unknown users
 
-                # check existing assignment
                 existing_assign = await db.execute(
                     select(TenantPolicyAssignment).where(
                         and_(
@@ -7792,9 +7551,9 @@ async def sync_policies_from_external(
 
     await db.commit()
 
-    # This path changes what tenants may see on behalf of an external system, where nobody is
-    # watching a UI to notice a stale list. The helper advances the generation the instance lists
-    # fence on, so a read already in flight cannot write the old scope back.
+    # This path changes what tenants may see on behalf of an external system, with no UI open to
+    # notice a stale list. The helper advances the generation the instance lists fence on, so a
+    # read already in flight cannot write the previous scope back.
     get_cache_manager().invalidate_after_access_change()
     return {
         "message": f"Synced {synced_count} policies",
@@ -7816,14 +7575,12 @@ async def get_policies_for_external(
 ):
     """Read policies for external app pull sync.
 
-    Carried the same unusable plain-SHA-256 comparison as its sibling above, so it too answered
-    401 to every caller. Same fix: the shared dependency.
+    Authenticated by the shared key dependency, like sync_policies_from_external.
     """
     from app.models.db_models import TenantAccessPolicy, TenantPolicyRule
 
     api_key_id = api_key.get("id", "")
 
-    # build query
     stmt = (
         select(TenantAccessPolicy)
         .join(Organization, TenantAccessPolicy.organization_id == Organization.id)
@@ -7833,16 +7590,14 @@ async def get_policies_for_external(
     if org_external_id:
         stmt = stmt.where(Organization.external_id == org_external_id)
 
-    # limit to orgs this API key is an owner of
+    # Only organizations this API key is an owner of.
     stmt = stmt.where(owned_by_clause([api_key_id]))
 
     result = await db.execute(stmt)
     policies = result.scalars().unique().all()
 
-    # build response
     response_policies = []
     for policy in policies:
-        # load rules
         rules_stmt = select(TenantPolicyRule).where(TenantPolicyRule.policy_id == policy.id)
         rules_result = await db.execute(rules_stmt)
         rules = rules_result.scalars().all()
@@ -7918,7 +7673,7 @@ class ProvisionTenantAccessRequest(BaseModel):
         default=["view", "operate", "console", "snapshot", "file_transfer"],
         description="Permissions to grant",
     )
-    # Auto-creation fields - sent when buyer org might not exist in Orcastra yet
+    # Auto-creation fields, sent when the buyer org may not exist in Orcastra yet.
     organization_name: Optional[str] = Field(default=None, description="Org name for auto-creation")
     organization_slug: Optional[str] = Field(default=None, description="Org slug for auto-creation")
     # The paid term (core/tenant_term.py). Absent leaves the stored value, null clears it.
@@ -7947,8 +7702,7 @@ class ProvisionTenantAccessRequest(BaseModel):
     @field_validator("permissions")
     @classmethod
     def _known_permissions(cls, value: List[str]) -> List[str]:
-        # important: validated here, before the organization and member rows are written, rather
-        # than after them as it used to be.
+        # important: validated here, before the organization and member rows are written.
         unknown = set(value) - {"view", "operate", "console", "snapshot", "file_transfer"}
         if unknown:
             raise ValueError(f"Invalid permissions: {sorted(unknown)}")
@@ -7975,7 +7729,7 @@ _TERM_FIELDS = ("term_ended_at", "access_ends_at", "as_of")
 
 
 def _received_term(body: Any) -> Dict[str, Any]:
-    """The term fields the caller actually sent: an absent field keeps, an explicit null clears."""
+    """The term fields the caller sent: an absent field keeps, an explicit null clears."""
     sent = getattr(body, "model_fields_set", None) or set()
     return {name: getattr(body, name) for name in _TERM_FIELDS if name in sent}
 
@@ -8057,7 +7811,7 @@ async def provision_tenant_access(
     """
     # important: this writes an OrganizationCluster row and grants operate/console from a
     # caller-supplied cluster_id, so it needs the same allow-list every other external
-    # endpoint applies. Without it any valid key can bind another partner's cluster to its
+    # endpoint applies. Without it any valid key could bind another partner's cluster to its
     # own org and hand its tenants real access. Same check as revoke_tenant_access.
     cluster_permissions = {p["cluster_id"]: p for p in api_key.get("cluster_permissions", [])}
     if body.cluster_id not in cluster_permissions:
@@ -8129,12 +7883,10 @@ async def provision_tenant_access(
                 ),
             )
         # important: the lookup above folds api_key_id in, so a caller whose key does not own
-        # an existing org simply misses it and falls through to this create. The database
-        # then refuses on uq_org_source_external_id or ix_organizations_slug, which is the
-        # right outcome by the wrong route: the caller gets a conflict about a slug when the
-        # actual reason is that another integration owns the organisation. sync() states this
-        # plainly at its own ownership guard, so state it here too rather than letting the
-        # constraint speak for it. This denies nothing new, the constraints already did.
+        # an existing org misses it and falls through to this create. The database would then
+        # refuse on uq_org_source_external_id or ix_organizations_slug with a conflict about a
+        # slug, when the reason is that another integration owns the organisation. Say so here,
+        # as sync() does at its own ownership guard. This denies nothing the constraints allow.
         owner_stmt = select(Organization).where(
             and_(
                 Organization.source == "orcahub",
@@ -8157,7 +7909,7 @@ async def provision_tenant_access(
                 ),
             )
         # important: as in a sync, only an add-on installation's current credential may claim a new
-        # organization (add_on_credential_edits.is_current_add_on_credential)
+        # organization (add_on_credential_edits.is_current_add_on_credential).
         if is_add_on_credential(api_key) and not await is_current_add_on_credential(db, api_key_id):
             raise HTTPException(status_code=409, detail={
                 "error": "superseded_credential",
@@ -8177,8 +7929,8 @@ async def provision_tenant_access(
             external_id=body.organization_external_id,
             api_key_id=api_key_id,
             is_active=True,
-            # important: created_by is NOT NULL. Omitting it made this INSERT fail, so a brand-new
-            # buyer org silently received no ACL at purchase (500, no policy). Stamp the provisioning key.
+            # important: created_by is NOT NULL. Without it this INSERT fails and a new buyer org
+            # gets no ACL at purchase (500, no policy). Stamp the provisioning key's creator.
             created_by=api_key.get("created_by") or "orcahub-provisioning",
         )
         mark_entry(org, "provision")
@@ -8188,7 +7940,7 @@ async def provision_tenant_access(
         except IntegrityError as exc:
             # important: the lookup above keys on (source, external_id, api_key_id), but slug
             # carries its own unique index. A slug already held by a different external_id
-            # misses that lookup and violates ix_organizations_slug on INSERT, which escaped
+            # misses that lookup and violates ix_organizations_slug on INSERT, which would escape
             # as a 500 with an asyncpg traceback. Roll back explicitly: the request ends here,
             # so a savepoint would buy nothing and the session must not stay poisoned.
             await db.rollback()
@@ -8205,9 +7957,9 @@ async def provision_tenant_access(
 
 
 
-    # Step 1b: the buyer shows its seller's branding, live, until it sets its own. A link, not the
-    # copy this step used to make, so a later change by the seller reaches every buyer. Fill-only
-    # and never fatal (services/branding/provider_link.py).
+    # Step 1b: the buyer shows its seller's branding until it sets its own. It is a link, so a
+    # later change by the seller reaches every buyer. Fill-only and never fatal
+    # (services/branding/provider_link.py).
     await provider_link.link_on_provision(
         db, org, cluster_id=body.cluster_id, key_minter=api_key.get("created_by"), api_key_id=api_key_id,
     )
@@ -8250,7 +8002,7 @@ async def provision_tenant_access(
 
     await db.flush()
 
-    # find or create policy for this project (idempotent)
+    # Find or create the policy for this project (idempotent).
     from app.models.db_models import TenantPolicyRule, TenantPolicyAssignment
 
     policy_name = f"auto:{body.project_name}"
@@ -8286,7 +8038,7 @@ async def provision_tenant_access(
         policy.access_ends_at = merged_term.access_ends_at
         policy.term_as_of = merged_term.as_of
 
-    # upsert rule for this cluster/project/instance
+    # Upsert the rule for this cluster/project/instance.
     rule_stmt = select(TenantPolicyRule).where(
         and_(
             TenantPolicyRule.policy_id == policy.id,
@@ -8312,7 +8064,7 @@ async def provision_tenant_access(
         ))
         rules_created = 1
 
-    # assign policy to each user email (members now guaranteed to exist)
+    # Assign the policy to each user email (the members exist by now).
     assignments_created = 0
     assignments_skipped = 0
 
@@ -8352,7 +8104,7 @@ async def provision_tenant_access(
 
     await db.commit()
 
-    # invalidate caches so tenants see access immediately
+    # Invalidate caches so tenants see access immediately.
     try:
         get_cache_manager().invalidate_after_access_change()
     except Exception:
@@ -8484,7 +8236,7 @@ async def revoke_tenant_access(
             pass
 
     def _audit_revoke(org: Any, *, policy_deleted: bool, rules: int, assignments: int) -> None:
-        # note: counts only; the emails named in the request are not copied into the trail.
+        # Counts only; the emails named in the request are not copied into the trail.
         _audit_key_action(
             api_key,
             action="tenant.access.revoke",
@@ -8511,10 +8263,9 @@ async def revoke_tenant_access(
     )))).scalar_one_or_none()
     if not org:
         # important: that lookup folds api_key_id in, so it misses for two different
-        # reasons and the single `if not org` merged them. No such organisation is an
-        # idempotent success and stays one. An organisation owned by another key is not:
-        # answering 200 told the caller a revoke succeeded while nothing was touched.
-        # provision refuses this exact condition by name, so revoke must agree with it.
+        # reasons. No such organisation is an idempotent success. An organisation owned by
+        # another key is not: a 200 would tell the caller a revoke succeeded while nothing
+        # was touched. Provision refuses this exact condition by name, so revoke agrees.
         owner = (await db.execute(select(Organization).where(and_(
             Organization.source == "orcahub",
             Organization.external_id == body.organization_external_id,
@@ -8549,8 +8300,8 @@ async def revoke_tenant_access(
         select(TenantPolicyAssignment).where(TenantPolicyAssignment.policy_id == policy.id)
     )).scalars().all()
 
-    # Project-level revoke (no user_emails) OR user-level that removes the last assignment:
-    # delete the whole policy and let CASCADE take its rules + assignments.
+    # A project-level revoke (no user_emails), and below a user-level one that removes the last
+    # assignment, deletes the whole policy and lets CASCADE take its rules and assignments.
     if not body.user_emails:
         policy_id = policy.id
         await db.delete(policy)

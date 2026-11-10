@@ -31,7 +31,7 @@ def network_capabilities(client) -> NetworkCapabilities:
                 supported -= {"ipv4.nat", "ipv6.nat"}
             if "network_ovn_dhcp" not in advertised:
                 supported -= {"ipv4.dhcp", "ipv6.dhcp", "ipv6.dhcp.stateful"}
-            # note: OVN DHCP controls do not imply support for custom allocation ranges.
+            # OVN DHCP controls do not imply support for custom allocation ranges.
             if "ovn_dhcp_ranges" not in advertised:
                 supported.discard("ipv4.dhcp.ranges")
     return NetworkCapabilities(known=known, types=types, config_keys={
@@ -41,7 +41,7 @@ def network_capabilities(client) -> NetworkCapabilities:
 
 def validate_network_capabilities(client, network_type: str, config: Dict[str, str]) -> None:
     capabilities = network_capabilities(client)
-    # note: older adapters may omit extension metadata. Preserve daemon validation as the
+    # Older adapters may omit extension metadata. Preserve daemon validation as the
     # fallback; absence of metadata is different from an advertised capability denial.
     if not capabilities.known:
         return

@@ -1,42 +1,21 @@
-"""cloud-init user-data and vendor-data in a key's write, and what it costs.
+"""cloud-init data in an API key's write, and the capability it costs.
 
-LXD hands `cloud-init.user-data` and `cloud-init.vendor-data` (and the older `user.user-data` and
-`user.vendor-data`) to cloud-init inside the guest, which runs what they say as root. When one of
-them changes in an instance's expanded config, LXD gives the guest a new cloud-init instance-id
-(needsNewInstanceID in lxd/instance/drivers/driver_common.go, called from each driver's Update), so
-cloud-init treats the next boot as a first boot and runs the new data even on an instance that has
-booted before. A profile carrying them reaches every instance that uses it. Writing one is running a
-command in the guest, so it costs `instance.exec` for every key, `*` included. So does
-`cloud-init.ssh-keys.<name>` (LXD's cloud_init_ssh_keys extension, 5.21 and later), whose `<user>:<key>`
-value cloud-init installs as a login for that user, root included, on instances and profiles alike.
-And so does `user.meta-data`, which LXD appends verbatim to the meta-data cloud-init reads (the config
-drive in lxd/device/disk.go and /1.0/meta-data in lxd/devlxd.go), so it can carry anything cloud-init
-takes from meta-data, a login key or a replacement instance-id included.
+LXD hands `cloud-init.user-data`, `cloud-init.vendor-data` and the older `user.user-data` and
+`user.vendor-data` to cloud-init, which runs them as root; a changed value gives the guest a new
+instance-id (needsNewInstanceID, lxd/instance/drivers/driver_common.go), so the next boot runs it.
+`cloud-init.ssh-keys.*` (LXD 5.21+) installs a login for any user and `user.meta-data` is appended
+verbatim to the meta-data (lxd/device/disk.go, lxd/devlxd.go). Writing any of these runs a command
+in the guest, so it costs `instance.exec` on every key, `*` included. Checked on raw-proxy instance
+and profile config writes (`_writes_config`) and on /proxy create_instance and update_instance.
 
-Read wherever a key writes instance or profile config:
-
-- the raw proxy: POST /instances in every source form, PUT and PATCH /instances/<name>, POST
-  /instances/<name> when its body carries config, on /instances, /containers and /virtual-machines,
-  and POST /profiles, PUT and PATCH /profiles/<name>;
-- /proxy create_instance and update_instance, which MCP calls.
-
-A write is judged by what it changes. LXD merges a PATCH, and a POST /<family>/<name> that moves an
-instance, over the object's own config and a PUT replaces it (instance_patch.go,
-instancePostMigration in instance_post.go), then reruns cloud-init only when an expanded value
-differs (driver_lxc.go Update diffs the expanded config). So a write to an existing instance or
-profile whose cloud-init values the object's own config already holds changes nothing cloud-init
-reads, whatever its profiles say, and it passes. That is the integrator's read-modify-write PUT,
-which sends back the whole config it just read. A new, changed or removed value costs exec, and so
-does any cloud-init key in a create, which has no config to compare with. A copy is a create: LXD
-copies the source's config anyway, so carrying the source's value adds nothing a caller needs.
-
-important: only these keys are new for every key. The host-reaching config rule (raw.*,
-security.privileged, host devices) keeps the reach it has on each surface today, so the integrator's
-GPU recipe keeps working on a `*` key.
-
-note: key names are compared without regard to case, after the body rule (core/api_key_body.py).
-LXD matches a config key exactly, so another spelling is refused by LXD or never read by cloud-init,
-and it is priced rather than guessed at.
+A write is judged by what it changes. LXD merges a PATCH, and a POST that moves an instance, over
+the object's config and a PUT replaces it (instance_patch.go, instancePostMigration in
+instance_post.go); cloud-init reruns only when an expanded value differs (driver_lxc.go Update).
+So a PUT sending back the held values passes; a new, changed or removed value, or any cloud-init
+key in a create or a copy, costs exec. Key names compare case-insensitively (after
+core/api_key_body.py), so another spelling costs the same although LXD matches exactly. The
+host-reaching config rule (raw.*, security.privileged, host devices) is separate, so a GPU recipe
+keeps working on a `*` key.
 """
 
 from collections.abc import Mapping
@@ -139,7 +118,7 @@ def assert_cloud_init_paid_for(path: str, method: str, body: Any, api_key: Dict[
 def changed_cloud_init_keys(config: Any, current: Any) -> List[str]:
     """The cloud-init keys `config` sets to a value other than the one `current` holds.
 
-    note: compared the way LXD diffs a config, where an absent key reads as "". So null or "" on a
+    Compared the way LXD diffs a config, where an absent key reads as "". So null or "" on a
     key the object lacks changes nothing, and "" on a key it holds removes it, which is a change. A
     value LXD would refuse (neither a string nor null) counts as a change rather than a guess.
     """
@@ -164,7 +143,7 @@ def proxy_cloud_init_capability_for(operation: str, params: Mapping[str, Any]) -
 def proxy_cloud_init_compared_at(operation: str, params: Mapping[str, Any]) -> Optional[str]:
     """The LXD path of the instance whose own config a /proxy update merges into, else None.
 
-    note: update_instance merges `config` into the instance it reads (proxy_operations.py), the way
+    update_instance merges `config` into the instance it reads (proxy_operations.py), the way
     LXD merges a PATCH. create_instance, and an update naming no instance, have nothing to compare.
     """
     name = params.get("name")

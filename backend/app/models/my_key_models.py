@@ -1,9 +1,9 @@
 """A registry of the keys My Keys issued, kept after a key is deleted (services/my_keys_registry.py).
 
-Vault holds the live keys and is still their source of truth. This table exists for the audit
-trail: it keeps a deleted key's owner and cluster, so its history stays readable by its owner, and
-it maps the certificate fingerprint LXD reports as the requestor back to the key, so what was done
-on the cluster with a key appears in that key's activity.
+Vault holds the live keys and is their source of truth. This table serves the audit trail: it
+keeps a deleted key's owner and cluster, so its owner can still read its history, and maps the
+certificate fingerprint LXD reports as the requestor back to the key, so what was done on the
+cluster with a key appears in that key's activity.
 """
 
 from sqlalchemy import Column, DateTime, Index, String

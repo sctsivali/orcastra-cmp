@@ -1,11 +1,10 @@
 """Operator snapshot schedules.
 
-`require_partner()` sits on the router rather than on each handler, because "tenants never see
-this" is the whole gate and a per-handler dependency is one a later route can forget to carry.
+`require_partner()` sits on the router rather than on each handler: keeping tenants out is the
+whole gate, and a per-handler dependency is one a later route can forget to carry.
 
-note: `_assert_snapshot_surface_enabled` and `_enforce_snapshot_access` from the per-instance
-snapshot router are deliberately NOT called here. Both exist only to decide a tenant's ACL, and no
-tenant reaches this router at all. Their absence would otherwise read as an oversight.
+`_assert_snapshot_surface_enabled` and `_enforce_snapshot_access` from the per-instance snapshot
+router are not called here. Both only decide a tenant's ACL, and no tenant reaches this router.
 """
 
 import logging
@@ -98,9 +97,9 @@ async def _guard_schedule_mutation(
 def _verify_project_for_withdrawal(cluster_id: str, project: Optional[str]) -> str:
     """verify_project_access for pause and delete, without the view-only `default` refusal.
 
-    note: both change only the dashboard's own row, never LXD, so an owner whose schedule the
-    view-only rule stopped can still stop or remove it (RC5 follow-up FU-2). Update, resume and
-    run-now keep verify_project_access.
+    Both change only the dashboard's own row, never LXD, so an owner whose schedule the
+    view-only rule stopped can still stop or remove it. Update, resume and run-now keep
+    verify_project_access.
     """
     project = (project or "default").strip() or "default"
     verify_cluster_access(cluster_id)
@@ -116,12 +115,10 @@ async def list_schedules(
     user: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
 ):
-    """Every schedule on a cluster the caller's organization holds. All three filters optional.
+    """Every schedule on a cluster the caller's organization holds. All three filters are optional.
 
-    The listing is narrowed by the caller's own clusters regardless, so this could have relied on
-    the filter alone. It refuses a named cluster outside the org scope anyway, matching the fleet
-    snapshot route beside it: an operator who names a cluster they cannot see should be told so,
-    not handed an empty list that reads as "nothing is scheduled there".
+    A named cluster outside the caller's org scope is refused, as on the fleet snapshot route,
+    rather than answered with an empty list that would read as "nothing is scheduled there".
     """
     if host is not None:
         verify_cluster_access(host)
@@ -146,9 +143,8 @@ async def create_schedule(
 ):
     """Create a schedule, refusing anything the cluster's own state contradicts.
 
-    important: the cluster and normalized project gates run before any database or LXD read. A
-    Partner on a shared cluster must not be able to use an instance name as a probe into another
-    organization's project.
+    The cluster and normalized project gates run before any database or LXD read, so a Partner on
+    a shared cluster cannot use an instance name to probe another organization's project.
     """
     body.project = verify_project_access(body.host, body.project)
     organization_id = await svc.assert_actor_can_schedule_target(
@@ -187,7 +183,7 @@ async def create_schedule(
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001 - mapped as the instance snapshot routes map it
-            # A name the cluster does not have answered 500 (live, 2026-11-05).
+            # Map the LXD error, so an instance name the cluster does not have answers 404.
             raise lxd_http_error(exc, "Instance", body.instance_name) from exc
 
         no_room = svc.capacity_conflict(body.instance_name, rows, body.keep_last)
@@ -268,7 +264,7 @@ async def pause_schedule(
     user: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
 ):
-    """Idempotent. Pausing a paused schedule is not an error, it is the state being asked for."""
+    """Pause a schedule. Idempotent: pausing a paused schedule succeeds."""
     schedule = await svc.get_owned(db, schedule_id, user.email)
     schedule.project = _verify_project_for_withdrawal(schedule.cluster_id, schedule.project)
     async with _guard_schedule_mutation(
@@ -296,7 +292,11 @@ async def resume_schedule(
     db: AsyncSession = Depends(get_db),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
-    """Resuming re-asks the question that paused it, rather than trusting that it went away."""
+    """Resume a schedule after re-running the checks that pause one.
+
+    The owner's standing authority, the owner's view-only `default` rule and any upstream LXD
+    schedule on the instance are checked again before the schedule is re-armed.
+    """
     schedule = await svc.get_owned(db, schedule_id, user.email)
     schedule.project = verify_project_access(schedule.cluster_id, schedule.project)
     async with _guard_schedule_mutation(
@@ -374,12 +374,10 @@ async def delete_schedule(
     user: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
 ):
-    """Removes the plan. The snapshots it already took stay and expire on their own.
+    """Remove the schedule. The snapshots it already took stay and expire on their own.
 
-    note: there is deliberately no `keep_snapshots=false`. One click destroying restore points that
-    each individually require their own decision is exactly what the per-snapshot ownership gate
-    exists to prevent; an operator who wants them gone deletes them from the list, where each one
-    is gated on its own.
+    There is no `keep_snapshots=false`: to remove the snapshots, delete them from the list, where
+    the per-snapshot ownership gate checks each one.
     """
     schedule = await svc.get_owned(db, schedule_id, user.email)
     schedule.project = _verify_project_for_withdrawal(schedule.cluster_id, schedule.project)
@@ -405,11 +403,11 @@ async def run_schedule_now(
     db: AsyncSession = Depends(get_db),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
-    """Fire this schedule now, through the loop's own code rather than a copy of it.
+    """Run this schedule now, through the scheduler's own code path.
 
-    Useful before something risky, and it is also the only way to prove a schedule works without
-    waiting six hours for its slot. `due_slot` is set to now, so the snapshot is named for this
-    moment rather than for a slot that has not come round.
+    Useful before a risky change, or to prove a schedule works without waiting for its slot.
+    `due_slot` is set to now, so the snapshot is named for this moment rather than for a slot that
+    has not come round.
     """
     schedule = await svc.get_owned(db, schedule_id, user.email)
     schedule.project = verify_project_access(schedule.cluster_id, schedule.project)

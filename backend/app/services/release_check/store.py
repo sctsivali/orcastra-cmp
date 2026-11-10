@@ -48,8 +48,8 @@ def manifest_from_dict(data: Optional[Dict[str, Any]]) -> Optional[Manifest]:
 class ReleaseCheckStore:
     def __init__(self, redis: Callable[[], Any] = _shared_redis, state_key: str = STATE_KEY) -> None:
         self._redis = redis
-        # note: other once-a-day public feeds (services/hypervisor_releases/) keep their state the
-        # same way under their own key.
+        # Other once-a-day public feeds (services/hypervisor_releases/) keep their state the same
+        # way under their own key.
         self._state_key = state_key
         self._local: Dict[str, Any] = {}
         self._local_cooldown_until = 0.0

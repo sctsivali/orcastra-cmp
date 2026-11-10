@@ -1,7 +1,7 @@
 """Publishing an add-on. Partner-authored, JWT-authenticated.
 
 Nothing on this router grants access to anything. It manages descriptions that an operator later
-consents to; `extension_installs.py` is where a grant is actually made.
+consents to; `extension_installs.py` is where a grant is made.
 """
 
 import logging
@@ -54,11 +54,7 @@ def _audit(action: str, slug: str, details: Optional[Dict[str, Any]] = None) -> 
     ),
 )
 async def get_vocabulary() -> Dict[str, Any]:
-    """Served, not hardcoded.
-
-    The same rule the capability picker already follows: a client that hardcodes this list will
-    eventually offer something the server refuses, and the operator sees a form that lies.
-    """
+    """Served so a client never offers what the server refuses, as with the capability picker."""
     return {
         "capabilities": [
             capability_request_info(name, description).model_dump()
@@ -76,11 +72,9 @@ async def get_vocabulary() -> Dict[str, Any]:
 
 
 async def assert_manifest_within_limit(request: Request) -> None:
-    """Hold an API publisher to the same 16 KB the dialog and the docs already promise.
+    """Hold an API publisher to the same 16 KB limit the dialog and the docs state.
 
-    The cap was documented as a server rule and enforced only in the browser, so publishing the
-    same manifest through the API succeeded where the UI refused it. Reading the cached body here
-    costs nothing: FastAPI has already read it to build the model.
+    Reading the cached body here costs nothing: FastAPI has already read it to build the model.
     """
     body = await request.body()
     if len(body) > MANIFEST_MAX_BYTES:
@@ -106,7 +100,7 @@ async def register_extension(
     user: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
 ) -> ExtensionResponse:
-    # note: published from an organization the author runs, never a buyer's or a teammate's one
+    # Published from an organization the author runs, never a buyer's or a teammate's.
     org_ids = await orgs_the_user_runs(db, user.email)
     extension = await extension_service.create_extension(
         db,

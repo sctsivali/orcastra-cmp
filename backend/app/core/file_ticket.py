@@ -3,11 +3,12 @@
 A browser cannot attach a Bearer header to a navigation, and fetching into a blob holds the whole
 file in memory, so a multi-gigabyte download needs a credential in its URL. A ticket is minted over
 an authenticated POST, lives 30 seconds, names exact paths on one instance, and is deleted when
-redeemed. It is a sibling of the WebSocket ticket rather than a new kind of one: its own store,
-prefix and MAC context mean neither ticket can be spent on the other's door. The URL is harmless
-in a log, since `ticket` is a redacted parameter and the value is already spent by then.
+redeemed. It uses the WebSocket ticket store class with its own prefix and MAC context, so neither
+kind of ticket can be spent on the other's route. The URL is harmless in a log, since `ticket` is
+a redacted parameter and the value is already spent by then.
 
-note: no Range. A resumed download would present a spent ticket, so a retry mints a new one.
+Range is not supported: a resumed download would present a spent ticket, so a retry mints a new
+one.
 """
 
 import json

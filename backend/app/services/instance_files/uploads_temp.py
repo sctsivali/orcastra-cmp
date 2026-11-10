@@ -1,10 +1,10 @@
-"""The names of temporary files this service leaves beside a destination while writing it.
+"""Names of the temporary files this service leaves beside a destination while writing it.
 
 A temp lives in the destination's own directory so the final rename stays on one filesystem. Its
-expiry is in its name because there is no record of it anywhere else: a later upload to the same
-folder, or a person pressing purge, is what removes one a crashed browser left behind. Nothing
-sweeps guests in the background, since a system actor writing into a tenant's guest is exactly the
-silent access this feature refuses.
+expiry is in its name because nothing else records it: a later upload to the same folder, or a
+person pressing purge, removes one a crashed browser left behind. Nothing sweeps guests in the
+background, because a system actor writing into a tenant's guest is the silent access this feature
+refuses.
 """
 
 import re

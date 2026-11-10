@@ -1,12 +1,11 @@
 """Refuse an image import on an unpatched build when the uploader does not hold the cluster.
 
 The daemon unpacks an imported image's metadata area as root on the host. Without the fixes a
-crafted image reaches host files: symlinks in image data on LXD (Canonical advisory of
-2026-07-31) and, on Incus, special files and hard links in the metadata area too
-(GHSA-5pgx-q9xx-j3qv, the 2026-10-29 batch). Where one party holds the cluster alone that is its
-own host. Where another party holds it, or the uploader is an integration key, it is a way out of
-the tenancy, so the import waits for a patched build (owner decision 2026-11-08). The floors are
-core/engine_baseline.py ("image_import").
+crafted image reaches host files: symlinks in image data on LXD (Canonical's image symlink
+advisory) and, on Incus, special files and hard links in the metadata area too
+(GHSA-5pgx-q9xx-j3qv). Where one party holds the cluster alone that is its own host. Where another
+party holds it, or the uploader is an integration key, it is a way out of the tenancy, so the
+import waits for a patched build. The floors are core/engine_baseline.py ("image_import").
 """
 
 from __future__ import annotations

@@ -24,8 +24,8 @@ from .pinned_exec import PinnedExecResult, run_with_stdin
 
 logger = logging.getLogger(__name__)
 
-# note: C locale so tools answer in the words the parsers expect; no HOME, since a uid exec has
-# none and nothing here may depend on one.
+# C locale so tools answer in the words the parsers expect; no HOME, since a uid exec has none
+# and nothing here may depend on one.
 ENVIRONMENT: Dict[str, str] = {"LC_ALL": "C", "PATH": "/usr/sbin:/usr/bin:/sbin:/bin"}
 
 

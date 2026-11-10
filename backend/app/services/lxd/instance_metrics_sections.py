@@ -2,7 +2,7 @@
 
 important: presence is the contract. A field LXD omitted is unavailable; an explicit zero or an
 empty collection is a real reading. The pylxd-style StateWrapper fills omitted fields with `{}`
-and `0` for its older consumers, so presence comes from its `has_field`, never from the value.
+and `0`, so presence comes from its `has_field`, never from the value.
 """
 
 import math
@@ -24,7 +24,7 @@ _AGENT_SECTIONS = frozenset({"cpu", "memory", "processes"})
 
 
 def state_mapping(state: Any) -> Dict[str, Any]:
-    """The fields the state read actually carried, as a plain mapping."""
+    """The fields the state read carried, as a plain mapping."""
     if state is None:
         return {}
     if isinstance(state, Mapping):

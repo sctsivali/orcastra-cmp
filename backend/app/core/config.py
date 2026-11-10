@@ -1,7 +1,4 @@
-"""
-Configuration settings for the Orcastra CMP backend.
-Loads environment variables and provides typed configuration.
-"""
+"""Typed backend settings, loaded from environment variables."""
 
 import os
 
@@ -20,10 +17,8 @@ class Settings(BaseSettings):
         alias="APP_VERSION",
         description="Application version - propagates to all components"
     )
-    # important: APP_VERSION is a mutable env string, the commit is not. These are what make
-    # "prove the running container is the image we built" answerable. main.py and
-    # routers/system.py already read them via getattr and returned null while they stayed
-    # commented out.
+    # APP_VERSION is a mutable env string; the build commit and date are stamped into the image,
+    # so they tell which build a running container is.
     build_date: str = Field(
         default="",
         alias="BUILD_DATE",
@@ -34,10 +29,8 @@ class Settings(BaseSettings):
         alias="BUILD_COMMIT",
         description="Git commit the image was built from"
     )
-    # note: compose has always passed API_VERSION through and .env.example has always described it
-    # as the version the API reports, but nothing declared it, so `extra = "ignore"` dropped it and
-    # the two /system endpoints the frontend reads it from never carried it. Declared here so the
-    # documented contract is the one that runs.
+    # Compose passes API_VERSION through and .env.example documents it as the version the API
+    # reports. Declared here so `extra = "ignore"` does not drop it.
     api_version: str = Field(
         default="",
         alias="API_VERSION",
@@ -170,21 +163,11 @@ class Settings(BaseSettings):
 
     # Per-project tenant permission enforcement on power, console, metrics, tags and rebuild.
     #
-    # important: default ON. It was OFF while those routes gated on cluster membership alone and
-    # the grants that would activate had been pushed by the upstream sync for a long time without
-    # anything enforcing them, so turning them all on at once had to be deliberate. That reasoning
-    # has expired: the grants are enforced here, the routes they gate now check the instance rather
-    # than only its cluster, and a deployment that simply forgets the environment variable is the
-    # dangerous case rather than the safe one.
-    #
-    # note: this gates the routes that ACT, not the ones that read. Listings, the single-instance
-    # read and the project list narrow by the ACL unconditionally, so the flag does not widen what
-    # a tenant can SEE. What it changes is sharper than that and easy to misread from the name:
-    # with it off, a tenant who cannot see an instance can still stop it, provided they hold any
-    # policy on its cluster. Measured on a two-project fixture, not inferred.
-    #
-    # An install that genuinely wants the old behaviour now says so out loud by setting
-    # TENANT_PERM_ENFORCEMENT_ENABLED=false, which is a decision someone can find and question.
+    # important: on by default; a deployment that forgets the variable must get the safe case. The
+    # flag gates the routes that act. Listings, the single-instance read and the project list
+    # narrow by the ACL regardless, but with the flag off a tenant who cannot see an instance can
+    # still stop it if they hold any policy on its cluster. Turning it off takes an explicit
+    # TENANT_PERM_ENFORCEMENT_ENABLED=false.
     #
     # Flipping either way requires a container restart, because settings are lru_cache'd.
     tenant_perm_enforcement_enabled: bool = Field(
@@ -212,10 +195,8 @@ class Settings(BaseSettings):
     )
 
     # Tenant snapshot rights, gated separately from the flag above.
-    # The "snapshot" permission has been in the vocabulary and pushed by OrcaHub for a long time
-    # while nothing enforced it, so grants accumulated: 55 policy rules carry it today and 28 of
-    # them target a live cluster. Wiring enforcement under the existing flag would have turned all
-    # of those on at deploy time, for real tenants, as a side effect of shipping a UI. This flag
+    # Policies OrcaHub pushes can already carry the "snapshot" permission, and enforcing it under
+    # the flag above would switch every such grant on at deploy time for real tenants. This flag
     # keeps that a deliberate act. Partner and Admin are unaffected by it.
     snapshot_tenant_enforcement_enabled: bool = Field(
         default=False,
@@ -223,13 +204,6 @@ class Settings(BaseSettings):
         description="Honour the per-project tenant 'snapshot' permission. Off means only Partner and Admin may act on snapshots."
     )
 
-    # Orcastra's own recurring snapshots, which are a different mechanism from the LXD-native
-    # schedule above and never write it.
-    #
-    # important: off by default, for the same reason the flag above is. A scheduler that begins
-    # taking snapshots on live customer clusters as a side effect of a deploy is not a deliberate
-    # act. It gates the loop AND the routes, so a deployment that has not turned it on has no
-    # surface at all rather than one that answers but never fires.
     instance_files_enabled: bool = Field(
         default=True,
         alias="INSTANCE_FILES_ENABLED",
@@ -247,6 +221,12 @@ class Settings(BaseSettings):
         alias="INSTANCE_FILES_MAX_TRANSFER_BYTES",
         description="Largest single file or folder archive moved through the file explorer.",
     )
+    # Orcastra's own recurring snapshots, a mechanism separate from LXD's native snapshot
+    # schedule, which they never write.
+    #
+    # important: off by default. A scheduler that starts taking snapshots on live customer
+    # clusters as a side effect of a deploy is not a deliberate act. The flag gates the loop and
+    # the routes, so a deployment that has not turned it on has no surface at all.
     snapshot_schedules_enabled: bool = Field(
         default=False,
         alias="SNAPSHOT_SCHEDULES_ENABLED",
@@ -265,7 +245,7 @@ class Settings(BaseSettings):
 
     # Removing the LXD trust entries of client certificates the dashboard replaced.
     #
-    # note: on by default, unlike the two loops above, because what it deletes is narrow: only a
+    # On by default, unlike the snapshot schedule loop, because what it deletes is narrow: only a
     # fingerprint this dashboard recorded superseding on that cluster, only once the cluster has
     # been shown to trust the current certificate, and only after the grace period. The flag gates
     # the timed sweep alone. Recording, "Remove now" and removal at deregistration always work.
@@ -442,8 +422,7 @@ class Settings(BaseSettings):
         description="Journal LXD operations and dashboard activity into Postgres and serve the task panel."
     )
     # important: at least one day. Zero or a negative value would make the first prune pass
-    # delete every row, which is not what an operator reaching for "unlimited" meant; a bad
-    # value refuses to boot instead.
+    # delete every row, so a bad value refuses to boot instead.
     task_journal_retention_days: int = Field(
         default=30,
         ge=1,
@@ -470,18 +449,17 @@ class Settings(BaseSettings):
         alias="TASK_JOURNAL_FOLLOWER_RETRY_SECONDS",
         description="How often a worker that does not hold the follower lock tries to take it."
     )
-    # important: a cluster registered read-only for inspection (a partner's production cluster in a
-    # development deployment) must not have its operations copied into this database, and must
-    # never become a cancel target. Names here are never subscribed, seeded or listed, by the
-    # journal or by the cache clearance below.
+    # important: a cluster registered read-only for inspection must not have its operations copied
+    # into this database, and must never become a cancel target. Names here are never subscribed,
+    # seeded or listed, by the journal or by the cache clearance below.
     task_journal_exclude_clusters: str = Field(
         default="",
         alias="TASK_JOURNAL_EXCLUDE_CLUSTERS",
         description="Comma-separated cluster ids the task journal never follows."
     )
-    # A change made on the cluster itself (the lxc CLI, the LXD UI) passes no route, so without
-    # this the console's cached lists keep the old state for their TTL. Runs on the elected
-    # follower only, so it needs task_journal_enabled as well.
+    # A change made on the cluster itself (the lxc CLI, the LXD UI) passes no route; without this
+    # the console's cached lists show the earlier state for their TTL. Runs on the elected follower
+    # only, so it needs task_journal_enabled as well.
     task_journal_cache_clearance: bool = Field(
         default=True,
         alias="TASK_JOURNAL_CACHE_CLEARANCE",
@@ -489,9 +467,8 @@ class Settings(BaseSettings):
     )
 
     # An API key grant reaches only the registration of a cluster id it was given for
-    # (services/cluster_generations.py). A kill switch, not a rollout stage: off, a grant matches
-    # by id alone again, and a key still naming a deregistered id reaches whatever is registered
-    # under it next.
+    # (services/cluster_generations.py). A kill switch: off, a grant matches by id alone, and a key
+    # still naming a deregistered id reaches whatever is registered under it next.
     key_grant_generations: bool = Field(
         default=True,
         alias="KEY_GRANT_GENERATIONS",
@@ -499,16 +476,13 @@ class Settings(BaseSettings):
     )
 
     # ── MCP (Model Context Protocol) server ────────────────────────────────────────────────────
-    # On, with an off switch kept for an operator who wants one.
+    # On, with an off switch for an operator who wants one.
     #
-    # important: none of these five (MCP_GUEST_TOOLS_ENABLED sits below the extensions block) is
-    # the security boundary, and reading them as one would be a mistake. The endpoint refuses any
-    # request without a valid integration API key, and
-    # `tools/list` is already narrowed per key, so a key lacking a capability never sees the tools
-    # that cost it. What actually stands in the way is the capability itself (explicit, never
-    # inherited by a legacy key), the per-cluster grant, the project allow-list, and for the
-    # desktop family the owning organization's own consent row. These flags decide what is offered,
-    # not what is permitted. Settings are lru_cache'd, so a change needs a restart.
+    # important: these flags decide what is offered; none of them, nor MCP_GUEST_TOOLS_ENABLED
+    # below the extensions block, is the security boundary. The endpoint requires a valid
+    # integration API key and narrows `tools/list` per key. The boundary is the capability (explicit,
+    # never inherited by a legacy key), the per-cluster grant, the project allow-list and, for the
+    # desktop family, the owning organization's consent row. A change needs a restart.
     mcp_enabled: bool = Field(
         default=True,
         alias="MCP_ENABLED",
@@ -593,11 +567,11 @@ class Settings(BaseSettings):
         description="Offer the tools that reach inside a guest (exec, read and write files). They run as root unless a user is named and cost a capability no application type seeds."
     )
 
-    # Offboarding: remove OrganizationMember rows for orgs present in a sync push whose email is
-    # no longer in OrcaHub's pushed roster (OrcaHub is the source of truth and never sends an
-    # explicit member-remove). Default OFF because it is DESTRUCTIVE: it revokes org-scope access
-    # and cascades tenant policy assignments. Only turn ON once you trust OrcaHub sends a complete
-    # roster per pushed org. Flipping requires a container restart (settings are lru_cache'd).
+    # Offboarding: remove OrganizationMember rows for orgs in a sync push whose email is missing
+    # from OrcaHub's pushed roster (OrcaHub is the source of truth and never sends an explicit
+    # member-remove). Off by default because it is destructive: it revokes org-scope access and
+    # cascades tenant policy assignments. Turn it on only once OrcaHub sends a complete roster per
+    # pushed org. Flipping requires a container restart (settings are lru_cache'd).
     member_reconcile_enabled: bool = Field(
         default=False,
         alias="MEMBER_RECONCILE_ENABLED",
@@ -613,9 +587,9 @@ class Settings(BaseSettings):
         description="Let more than one integration key own a synced organization (enrollment, owner-key routes).",
     )
 
-    # Observe-only mode for the member reconcile. Default ON so the FIRST time reconcile is enabled
-    # it only LOGS the members it would remove (no deletes), letting ops audit a few real syncs
-    # before flipping this off to actually enforce removals. Requires a container restart to flip.
+    # Observe-only mode for the member reconcile, on by default: the first time reconcile is enabled
+    # it only logs the members it would remove, so operators can audit a few real syncs before
+    # turning this off to enforce removals. Requires a container restart to flip.
     member_reconcile_dry_run: bool = Field(
         default=True,
         alias="MEMBER_RECONCILE_DRY_RUN",
@@ -778,7 +752,7 @@ class Settings(BaseSettings):
         alias="KERNEL_CVE_FEED_URL",
         description="A mirror of Ubuntu's CVE records: an https URL with {id} where the CVE id goes; empty reads ubuntu.com",
     )
-    # note: at most 48 so a read always lands well inside the three days a verdict trusts a record
+    # At most 48 so a read always lands well inside the three days a verdict trusts a record
     # (kernel_advisory.UBUNTU_GOOD_FOR), with room for the failure backoff.
     kernel_cve_feed_interval_hours: int = Field(
         default=6,
@@ -801,7 +775,7 @@ class Settings(BaseSettings):
         alias="HYPERVISOR_RELEASE_CHECK_ENABLED",
         description="Read the public LXD and Incus release feeds and tell Partners when a Cluster's track has a newer release",
     )
-    # note: at most 48 so a read always lands well inside the seven days a verdict trusts the
+    # At most 48 so a read always lands well inside the seven days a verdict trusts the
     # feed (hypervisor_releases.verdict.GOOD_FOR_SECONDS), with room for the failure backoff.
     hypervisor_release_check_interval_hours: int = Field(
         default=6,
@@ -872,8 +846,8 @@ class Settings(BaseSettings):
 
     # One LXD console operation per graphical console: the four SPICE channels of a display meet
     # in Redis (services/spice_session.py) instead of each creating an operation of its own.
-    # Off restores an operation per channel, which is what a channel falls back to anyway when
-    # the shared record does not appear.
+    # Off, each channel creates its own operation, which is also its fallback when the shared
+    # record does not appear.
     console_shared_spice_operation: bool = Field(
         default=True,
         alias="CONSOLE_SHARED_SPICE_OPERATION",
@@ -883,10 +857,9 @@ class Settings(BaseSettings):
     # Live console/terminal sessions are shared across uvicorn workers through Redis,
     # because a WebSocket pins to one worker while the REST poll that lists sessions
     # does not. These two tune that share.
-    # important: keep STALE > 3 x HEARTBEAT. The stale window is what decides a session
-    # is gone, so setting it near the heartbeat makes a worker that is merely busy look
-    # dead and the list will flicker; setting it very high leaves a killed worker's
-    # sessions listed as connected for that long. Raise BOTH or neither.
+    # important: keep STALE > 3 x HEARTBEAT. The stale window decides a session is gone:
+    # near the heartbeat a busy worker looks dead and the list flickers; very high, a
+    # killed worker's sessions stay listed as connected that long. Raise both or neither.
     session_registry_heartbeat_seconds: int = Field(
         default=2,
         alias="SESSION_REGISTRY_HEARTBEAT_SECONDS",
@@ -907,7 +880,7 @@ class Settings(BaseSettings):
         alias="CACHE_TTL_VAULT_METADATA",
         description="Cache TTL for Vault metadata in seconds (default: 10 minutes)"
     )
-    # NOTE: cache_ttl_vault_certs removed - certificates are NEVER cached in Redis
+    # No TTL for Vault certificates: certificates are never cached in Redis.
     cache_ttl_lxd_data: int = Field(
         default=60,
         alias="CACHE_TTL_LXD_DATA",
@@ -941,7 +914,7 @@ def get_settings() -> Settings:
 def configured_worker_count() -> int:
     """The uvicorn worker count this process was started among (WEB_CONCURRENCY, default 1).
 
-    note: read from the environment, not Settings: uvicorn takes its --workers default from the
+    Read from the environment, not Settings: uvicorn takes its --workers default from the
     same variable (backend/Dockerfile), and this has to agree with what uvicorn did.
     """
     try:
@@ -1002,11 +975,8 @@ def _mirror_exemptions(url: str, cidrs: str) -> tuple:
 def webhook_destination_exemptions() -> tuple:
     """CIDRs a webhook delivery may reach despite being private, or nothing.
 
-    important: gated on DEBUG in code, not by asking an operator to leave the variable unset. A
-    setting whose only protection is that nobody fills it in is a setting that eventually gets
-    filled in, copied from a development compose file into a production one. Here the value is
-    read and then discarded unless DEBUG is on, so the production behaviour does not depend on
-    the environment being tidy.
+    important: gated on DEBUG here, so a value copied from a development compose file into a
+    production one is read and discarded.
     """
     import ipaddress
 

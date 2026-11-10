@@ -1,16 +1,15 @@
 """The paid term behind a tenant access policy: which phase it is in and what it still grants.
 
 OrcaHub sells a buyer a project for a paid term, then keeps the data for a retention window
-before deleting it. Orcastra records two dates on the buyer's `auto:<project>` policy:
+before deleting it. Orcastra records two optional dates on the buyer's `auto:<project>` policy:
 
-- `term_ended_at`: the paid term is over. The policy grants viewing only from then on (owner
-  decision 2026-10-27): no start, no console, no snapshot, whatever permissions the rule holds.
+- `term_ended_at`: the paid term is over. The policy grants viewing only, whatever permissions
+  the rule holds.
 - `access_ends_at`: the retention window is over. The policy grants nothing.
 
-Both are optional. A policy OrcaHub narrowed without dates (its downgrade drops `operate`) is
-read-only by inference; that changes the wording the tenant sees, never what is enforced.
-
-Everything here is pure: the dates come in, a phase and a permission set come out.
+A policy OrcaHub narrowed without dates (its downgrade drops `operate`) is read-only by
+inference; that changes the wording the tenant sees, never what is enforced. Everything here is
+pure: dates in, a phase and a permission set out.
 """
 
 from __future__ import annotations
@@ -66,7 +65,7 @@ def utc(value: Optional[datetime]) -> Optional[datetime]:
 
 
 def _stored(value: Optional[datetime]) -> Optional[datetime]:
-    # note: SQLite test sessions hand back naive values for timestamptz columns; they were UTC.
+    # SQLite test sessions return naive values for timestamptz columns; they were stored as UTC.
     if value is not None and value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value

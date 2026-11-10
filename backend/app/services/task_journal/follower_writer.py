@@ -4,8 +4,8 @@ Every per-host consumer offers its operation and lifecycle frames here. The writ
 inbox in batches of up to 200 frames or 250 ms, holds progress-only frames so one operation
 costs at most one write per second however fast the daemon reports, flushes a status change at
 once, and retries a refused batch with backoff while holding it. Once the database answers
-again after a refusal, the owner is told so every connected cluster is seeded to repair what
-the outage hid.
+again after a refusal, `on_db_recovered` lets the follower reseed every connected cluster to
+repair what the outage hid.
 """
 
 from __future__ import annotations
@@ -48,13 +48,12 @@ fingerprint = lxd_fingerprint
 class DashboardIdentities:
     """Per-cluster set of the identities that are this dashboard, computed off the loop.
 
-    note: rebuilt every IDENTITY_REFRESH_S. A renewal or regenerate replaces the certificate in
-    Vault while workers that have not switched yet still present the old one, and an operation
-    started under the old certificate can finish after its trust entry is gone. Memoising the first
-    fingerprint forever attributed every operation under the new certificate to an external actor
-    until a restart. The set is the current certificate plus the superseded ones still legitimately
-    ours (`read_tracked`: in their grace period, or removed within the day). It is rebuilt rather
-    than grown, so a certificate that stops being ours stops being counted as the dashboard.
+    Rebuilt every IDENTITY_REFRESH_S. A renewal or regenerate replaces the certificate in Vault
+    while workers that have not switched yet still present the previous one, and an operation
+    started under it can finish after its trust entry is gone. The set is the current certificate
+    plus the superseded ones still legitimately ours (`read_tracked`: in their grace period, or
+    removed within the day). It is rebuilt rather than grown, so a certificate that stops being
+    ours stops being counted as the dashboard.
     """
 
     def __init__(

@@ -1,9 +1,9 @@
 """Server-certificate pin enforcement for the connection manager.
 
-Split out of `connection` so the manager stays readable: deciding whether the certificate a cluster
-presents is the one this console enrolled, recording a first pin or a public-CA renewal in the
-cluster's Vault metadata, and holding a migration transport to an approved pin. The rules
-themselves live in `services/lxd_certs/pinning.py`; this is where they meet Vault and the pool.
+Decides whether the certificate a cluster presents is the one this console enrolled, records a
+first pin or a public-CA renewal in the cluster's Vault metadata, and holds a migration transport
+to an approved pin. The rules live in `services/lxd_certs/pinning.py`; this is where they meet
+Vault and the pool.
 """
 
 import logging
@@ -28,8 +28,8 @@ class CertificatePinMixin:
     """Expects LXDConnectionManager's `_connection_info`, `_clients` and `cleanup_connection`."""
 
     def _pin_lock(self, cluster_id: str) -> threading.Lock:
-        # note: not the rotation lock. Certificate rotation calls connect_with_vault_cert while
-        # holding that one, and this lock is taken inside it.
+        # important: not the rotation lock. Certificate rotation calls connect_with_vault_cert
+        # while holding that one, and this lock is taken inside it.
         with _pin_locks_guard:
             locks: Dict[str, threading.Lock] = self.__dict__.setdefault("_pin_locks", {})
             return locks.setdefault(cluster_id, threading.Lock())
@@ -107,8 +107,8 @@ class CertificatePinMixin:
         to call for a cluster whose pin is missing or stale. Returns the fingerprint the cluster
         must present, or None when it cannot be read.
 
-        note: answered from memory for a few seconds, and skipped for a cluster the breaker holds
-        as down, so a caller in a loop cannot turn it into a stream of handshakes.
+        Answered from memory for a few seconds, and skipped for a cluster the breaker holds as
+        down, so a caller in a loop cannot turn it into a stream of handshakes.
         """
         recent = self.__dict__.setdefault("_pin_refreshed", {})
         cached = recent.get(cluster_id)

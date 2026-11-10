@@ -1,22 +1,15 @@
 """What an external API key is allowed to *do*, as opposed to what it may reach.
 
-`api_key_permissions.py` answers "which cluster and project, and how strongly". It cannot answer
-"may this key create organizations at all", because the grant it reads has no room for the
-question. That gap was the whole security model for `external_router`: every valid key reached
-every endpoint there, so a key issued for a read-only integration could also call
-`POST /integrations/sync` and mint an organization, add members, and push a `partner` role into
-Authentik.
+`api_key_permissions.py` answers "which cluster and project, and how strongly"; its grant cannot
+say whether a key may create organizations at all. A capability names a family of endpoints on
+`external_router` (ex; `POST /integrations/sync` creates organizations and pushes roles into
+Authentik) and composes with the per-cluster grant: `lxd.proxy` decides whether the proxy is
+reachable, and `assert_cluster_permission` still decides which cluster and which verb.
 
-A capability names a family of endpoints. It composes with the per-cluster grant rather than
-replacing it: `lxd.proxy` decides whether the proxy is reachable, and `assert_cluster_permission`
-still decides which cluster and which verb once it is.
-
-important: an ABSENT `capabilities` field means legacy, and legacy means full access. Keys issued
-before this existed are read straight out of Vault without passing through any Pydantic model, so
-inventing a restrictive default would silently revoke access from running integrations. An
-explicit empty list is the opposite: it is a decision the operator expressed, and it grants
-nothing. That is the same distinction `granted_level` already draws between a missing field and
-an empty one.
+important: an ABSENT `capabilities` field means a legacy key with full access. Such keys are read
+straight out of Vault without passing through a Pydantic model, so a restrictive default would
+silently revoke running integrations. An explicit empty list is an operator decision and grants
+nothing, the same distinction `granted_level` draws between a missing field and an empty one.
 """
 
 import logging
@@ -47,68 +40,58 @@ CAPABILITIES: Dict[str, str] = {
 
 # Reaching INSIDE a guest, rather than managing it from outside.
 #
-# important: these two are excluded from every preset and from the legacy grandfather rule below,
-# and both exclusions are load-bearing rather than tidy. `orcahub` is `set(CAPABILITIES)`, so
-# without the first a new vocabulary entry silently widens the one integration in production. And
-# `granted_capabilities` returns None for a key issued before capabilities existed, which
-# `has_capability` reads as everything; 17 of the 22 keys in this deployment are in that state, so
-# without the second, shipping this grants root-in-guest to most of the fleet with nobody deciding
-# it. A power that did not exist when a key was issued cannot already have been granted to it.
+# important: every power that reaches inside a guest must be listed here. `orcahub` is
+# `set(CAPABILITIES)` minus this set, and `has_capability` reads a legacy key as holding
+# everything, so a guest-reaching entry missing from this set silently joins both. Listed powers
+# are checked with `assert_explicit_capability`, which no legacy key satisfies: a power that did
+# not exist when a key was issued cannot have been granted to it.
 GUEST_ACCESS_CAPABILITIES = frozenset({
     "instance.exec",
     "instance.files",
-    # The desktop family belongs here for the same reason and one stronger. `desktop.input` is not
-    # merely another way to reach inside a guest, it is a LARGER power than `instance.exec`:
-    # exec runs in a fresh non-interactive context, while typing into a logged-in session inherits
-    # that session's authenticated browser, unlocked keyring, live ssh-agent and already-validated
-    # sudo timestamp. Pricing it as an equal of exec would understate it.
+    # `desktop.input` is a LARGER power than `instance.exec`: exec runs in a fresh non-interactive
+    # context, while typing into a logged-in session inherits its authenticated browser, unlocked
+    # keyring, live ssh-agent and cached sudo timestamp.
     "desktop.view",
     "desktop.input",
     "desktop.clipboard",
 })
 
 # What each application type gets when the caller does not name capabilities itself. These are
-# defaults, not a ceiling: the operator may tick any capability for any type.
+# defaults; the operator may tick any capability for any type.
 #
-# important: `orcahub` is every capability on purpose. It is the only integration in production,
-# and this is the value that keeps its behaviour identical to before capabilities existed.
+# important: `orcahub` gets every capability outside guest access, the same reach a legacy key
+# has. Narrowing it changes what the OrcaHub integration may call.
 APP_TYPE_CAPABILITIES: Dict[str, Set[str]] = {
     "orcahub": set(CAPABILITIES) - GUEST_ACCESS_CAPABILITIES,
     "mcp": {"inventory.read", "lxd.proxy"},
     "automation": {"inventory.read", "lxd.proxy", "storage.upload"},
     "agent": {"inventory.read", "lxd.proxy"},
-    # Deliberately empty. "Custom" means the operator chooses, so there is nothing to guess, and
-    # a request that names neither a type default nor its own capabilities is refused at the
-    # boundary rather than issued as a key that can do nothing.
+    # Empty: "Custom" means the operator chooses. A create request that names no capabilities for
+    # it is refused with 422 instead of issuing a key that can do nothing.
     "custom": set(),
 }
 
 APP_TYPES = tuple(APP_TYPE_CAPABILITIES)
 
-# Capabilities that write authorization data rather than reading or driving infrastructure.
-# `org.sync` creates organizations and sets member roles, which are propagated to Authentik as
-# global system roles; `tenant.provision` binds clusters to organizations and grants tenants
-# operate and console access. Granting either to an unattended caller is a real decision, so the
-# create form marks them instead of listing all five as equivalent ticks.
-# `instance.exec` and `instance.files` are elevated for a different reason: they cross from
-# managing an instance to reaching inside it. Exec runs as root in the guest by default, and the
-# file API reads any path, so either one turns a key into a credential for the guest's contents
-# rather than for its lifecycle.
+# Capabilities the create form marks as elevated. `org.sync` creates organizations and sets member
+# roles, which propagate to Authentik as global system roles; `tenant.provision` binds clusters to
+# organizations and grants tenants operate and console access. The guest-access set crosses from
+# managing an instance to reaching inside it: exec runs as root in the guest by default, the file
+# API reads any path, and the desktop capabilities act in the user's graphical session.
 ELEVATED_CAPABILITIES = frozenset(
     {"org.sync", "tenant.provision"} | GUEST_ACCESS_CAPABILITIES
 )
 
-# The operator-facing reason a capability is marked, so the create form stops claiming that every
-# elevated capability "writes access control", which is true of two of them and false of two.
+# The operator-facing reason each elevated capability is marked. Only two of them write access
+# control.
 ELEVATED_REASONS: Dict[str, str] = {
     "org.sync": "Writes access control",
     "tenant.provision": "Writes access control",
     "instance.exec": "Reaches inside the guest",
     "instance.files": "Reaches inside the guest",
     "desktop.view": "Photographs the user's screen",
-    # important: not "Reaches inside the guest". That sentence is true of exec and files and
-    # undersells this one, which acts AS the logged-in user with everything their session already
-    # has unlocked. An operator reading the create dialog has to be told the difference.
+    # Stronger than "Reaches inside the guest": input acts AS the logged-in user, with everything
+    # their session has unlocked, and the create dialog has to say so.
     "desktop.input": "Acts as the logged-in desktop user",
     "desktop.clipboard": "Reads whatever the user last copied",
 }
@@ -117,11 +100,9 @@ ELEVATED_REASONS: Dict[str, str] = {
 def granted_capabilities(api_key: Dict[str, Any]) -> Optional[Set[str]]:
     """The key's capabilities, or None for a legacy key that predates them.
 
-    None is not "empty". It means the field was never written, which only happens for keys issued
-    before this module existed, and those keep the unrestricted access they were issued with.
-
-    A value that is not a list is corruption rather than a decision, and there is exactly one
-    writer, so it fails closed to the empty set instead of being read as legacy.
+    None is not "empty": the field is absent or null, and such a key keeps unrestricted access. A
+    value that is not a list is corruption, since the one writer always stores a list, so it fails
+    closed to the empty set instead of being read as legacy.
     """
     if "capabilities" not in api_key:
         return None
@@ -147,10 +128,8 @@ def has_capability(api_key: Dict[str, Any], capability: str) -> bool:
 def has_explicit_capability(api_key: Dict[str, Any], capability: str) -> bool:
     """Like ``has_capability``, but a legacy key does NOT satisfy it.
 
-    important: the only difference is the grandfather rule, and that difference is the whole
-    point. ``has_capability`` answers "was this key issued before we started restricting", which
-    is the right question for a power that existed then. It is the wrong question for a power
-    that did not: nobody chose to grant it, so nobody can be said to already hold it.
+    For powers that did not exist when legacy keys were issued: they were never granted, so a
+    legacy key cannot already hold them.
     """
     granted = granted_capabilities(api_key)
     return granted is not None and capability in granted
@@ -202,68 +181,43 @@ def default_capabilities_for(app_type: str) -> Set[str]:
 
 # ── the raw LXD proxy's path guard ─────────────────────────────────────────────────────────────
 
-# LXD API paths an integration must never reach through the proxy, whatever its cluster grant.
-#
-# important: a refusal list, not an allowlist, and that is a deliberate trade. An allowlist would
-# be safer and would also break OrcaHub the first time it used a path nobody had enumerated, so
-# the choice was to close what is provably dangerous and leave the rest working.
-#
-# `/certificates` is the sharp one. It is not project-scoped, so the per-key project allow-list
-# does not touch it, and it returns every client certificate trusted by that cluster. A key with
-# nothing but `read` on one cluster could enumerate the trust store of the whole control plane.
-# `/cluster/members` and `/resources` are omitted deliberately: they are topology, an integration
-# has legitimate reasons to read them, and the audit rated them lower than the certificate store.
-# `/auth` is the same sink on LXD 5.21 and later: `/auth/identities/tls` adds a trusted TLS client
-# and `/auth/groups` gives it server-wide entitlements, a credential that outlives the key.
+# LXD API paths no integration may reach through the proxy, whatever its cluster grant. A refusal
+# list, so unlisted paths keep working. `/certificates` is not project-scoped and lists every
+# client certificate the cluster trusts; `/auth` (LXD 5.21+) adds trusted TLS clients and
+# server-wide entitlements, a credential that outlives the key. `/cluster/members` and
+# `/resources` stay open: they are topology an integration may need.
 _REFUSED_PROXY_PREFIXES = ("/certificates", "/auth")
 
 # Resources the per-key project allow-list cannot bound.
 #
-# important: a grant of `projects: ["tenant-a"]` is enforced by binding the request to that
-# project, which is a real boundary for instances, images, volumes and snapshots. It is not a
-# boundary for a resource whose identity IS a project name, nor for one that lives above projects
-# entirely. `DELETE /1.0/projects/tenant-b` carrying `project=tenant-a` passes the project check
-# and destroys another tenant's project, and a storage pool is cluster-wide with a caller-chosen
-# source path on the LXD host.
-#
-# So mutating these needs a grant that is not project-limited. A key holding `["*"]` on the
-# cluster already reaches all of it and loses nothing; a key scoped to one project never had a
-# defensible claim to them. Reads are left alone: refusing `GET /1.0/networks` would break
-# integrations that legitimately enumerate topology, and disclosure is a smaller harm than
-# destruction.
+# important: a project grant binds the request to that project, which bounds instances, images,
+# volumes and snapshots but not a resource whose identity IS a project name or one above projects
+# (ex; `DELETE /1.0/projects/tenant-b` with `project=tenant-a` passes the project check, and a
+# storage pool takes a caller-chosen host path). Mutating these needs a `["*"]` grant; reads stay
+# open, since disclosure is a smaller harm than destruction.
 _PROJECT_UNBOUNDABLE_PREFIXES = ("/projects", "/storage-pools", "/networks", "/profiles")
 
 # The only resources a project grant bounds, so the only ones a key that is not `*` may change.
 #
-# important: an allowlist, not the four prefixes above as a refusal list. The server config, the
-# cluster, network ACLs and zones, warnings and every resource LXD adds above projects were open
-# to a narrow key under the refusal list. Storage volumes stay refused, as before, because
-# `/storage-pools` also holds the pools themselves.
-# note: images are bounded only while the project keeps its own image store (features.images).
+# important: an allowlist, so the server config, the cluster, network ACLs and zones, warnings and
+# any resource LXD adds above projects stay closed to a narrow key. Storage volumes stay refused
+# because `/storage-pools` also holds the pools themselves.
+# Images are bounded only while the project keeps its own image store (features.images).
 _PROJECT_BOUNDED_WRITE_PREFIXES = ("/instances", "/images", "/operations")
 
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
-# LXD paths that reach INSIDE a guest rather than managing it from outside, and the capability
-# each one costs.
-#
-# important: this closes a hole rather than adding a rule. `_REFUSED_PROXY_PREFIXES` holds exactly
-# one entry, so `POST /1.0/instances/<n>/exec` was never refused: any key with `lxd.proxy` and
-# `write` ran arbitrary commands as root in any guest in an allowed project, and a GET of
-# `/files` needed only `read`, which made a read-only monitoring key an exfiltration tool.
-# Demonstrated against this deployment before the fix: `uid=0(root)` from a `write` key, and
-# /etc/shadow read with a `read` key. The integrator document actively recommended the exec path.
-#
-# `/logs` is here because exec output lands there as `exec_<uuid>.stdout`, and listing the
-# directory exposes another caller's. A key using the first-class `exec_instance` operation gets
-# its output in the response and never needs it.
+# important: LXD paths that reach INSIDE a guest, and the capability each one costs. Without this,
+# any `lxd.proxy` key with `write` could run commands as root through `/exec`, and a `read` key
+# could read /etc/shadow through `/files`. `/logs` is priced in `guest_access_capability_for`,
+# since exec output lands there as `exec_<uuid>.stdout`.
 _GUEST_ACCESS_PREFIXES: Dict[str, str] = {
     "/exec": "instance.exec",
-    # important: `/console` hands back the same thing the endpoint removed from terminal.py did.
-    # A POST returns the operation's file-descriptor secrets (see services/console_service.py,
-    # which reads metadata.metadata.fds to build its wss URL), so a caller can attach to the
-    # guest's console directly, outside this proxy and outside every session control. A GET
-    # returns the console log buffer, which is guest tty output.
+    # important: a POST to `/console` returns the operation's file-descriptor secrets (see
+    # `operation_urls` in services/lxd_ws.py, which builds the websocket URL from
+    # metadata.metadata.fds), so a caller could attach to the guest's console directly, outside
+    # this proxy and every session control. A GET returns the console log buffer (guest tty
+    # output).
     "/console": "instance.exec",
     "/files": "instance.files",
     # A backup or a published image is the guest's filesystem in a tarball, which is the same
@@ -274,7 +228,7 @@ _GUEST_ACCESS_PREFIXES: Dict[str, str] = {
     "/sftp": "instance.files",
     "/bitmaps": "instance.files",
     # The metadata area's templates are rendered into the guest as root on create, copy and start,
-    # so a template written here is a guest file written by another road (owner, 2026-11-08).
+    # so a template written here is a guest file written by another road.
     "/metadata": "instance.files",
     # important: each of these is root in the guest by another road. `nbd` opens the root and
     # dependent disks, `nvram` (Incus) and `uefi-vars` (LXD) rewrite the boot variables, and
@@ -288,10 +242,9 @@ _GUEST_ACCESS_PREFIXES: Dict[str, str] = {
     "/debug": "instance.exec",
 }
 
-# Log files whose contents are the output of a command someone ran. Ordinary instance logs
-# (lxc.log, console.log) stay readable at `read`, because a monitoring integration has a real
-# reason to want them and forcing it to hold root-in-guest to read a crash log is worse than the
-# disclosure it prevents.
+# Log files that hold the output of a command someone ran. Ordinary instance logs (lxc.log,
+# console.log) stay readable at `read`, so a monitoring integration can read a crash log without
+# holding root in the guest.
 _EXEC_LOG_PREFIX = "exec_"
 # important: LXD 5.21 and later record exec output under logs/exec-output/<file>, where
 # services/lxd/guest_output.py reads it. LXD itself serves that listing and each file only to a
@@ -302,11 +255,9 @@ _EXEC_OUTPUT_DIR = "exec-output"
 # Instance configuration keys and device shapes that are execution by another name.
 #
 # important: `raw.lxc` reaches the container runtime and `lxc.hook.pre-start` runs as root ON THE
-# HOST, which is more than exec-in-guest, not less. `security.privileged` plus a disk device whose
-# source is a host path is the same reach by a slower road. All of it was available to any key
-# with `lxd.proxy` and `write`, which would have made the new capability a door beside an open
-# window. Gated at the same capability rather than refused outright, because a key that may run
-# commands in a guest is not made more dangerous by being able to configure one.
+# HOST, more than exec in the guest. `security.privileged` plus a disk device whose source is a
+# host path reaches as far. These cost `instance.exec` instead of being refused, because a key
+# that may run commands in a guest is not made more dangerous by being able to configure one.
 _EXECUTION_EQUIVALENT_CONFIG_PREFIXES = ("raw.", "security.privileged", "security.nesting")
 
 
@@ -333,20 +284,11 @@ def config_reaches_inside(config: Any, devices: Any) -> Optional[str]:
 def policy_keys_in_config(config: Any) -> List[str]:
     """The snapshot-schedule keys an instance-configuration change would set, if any.
 
-    important: this OBSERVES and never refuses. The four keys belong to the metered snapshot
-    product sold upstream, and `snapshots.schedule` is what the console derives
-    `externally_managed` from, so a write here decides whether an operator's own snapshot actions
-    on that instance are gated. Today any key holding `lxd.proxy` and `write` can set them,
-    because the proxy prices an instance-config change by what it reaches inside the guest and
-    these reach sideways into another product instead.
-
-    Refusing immediately would be the wrong order. Which keys actually write these is not knowable
-    from this repository, and enforcing on an assumption about a live paid product is how an
-    outage happens. So this records who does it, and the refusal is fitted afterwards to what the
-    record shows, gated on an explicit never-inherited capability.
-
-    The console's own create paths do not wait for that: they refuse these keys outright at the
-    request boundary, because no user-authenticated caller has a reason to set them.
+    important: this observes and never refuses. The console derives `externally_managed` from
+    `snapshots.schedule`, so such a write decides whether an operator's own snapshot actions on
+    the instance are gated. The upstream product writes these keys through API keys, and which
+    keys do is not known here, so the write is recorded rather than refused on a guess. The
+    console's own create paths refuse the keys at the request boundary.
     """
     if not isinstance(config, dict):
         return []
@@ -363,19 +305,16 @@ def proxy_path_segments(path: str) -> List[str]:
     return list(canonical_proxy_path(path).lowered)
 
 
-# note: the raw-proxy path families that address instances. LXD routes all three to one handler.
+# Raw-proxy path families that address instances. LXD routes all three to one handler.
 INSTANCE_PATH_FAMILIES = frozenset({"instances", "containers", "virtual-machines"})
 
 
 def policy_keys_in_raw_body(path: str, body: Any) -> List[str]:
     """The same observation for the raw proxy, which passes a body nothing inspects.
 
-    Scoped to `/instances`, because that is the only resource family carrying these keys, and
-    read through `proxy_path_segments` so a percent-encoded spelling cannot present a second
-    answer to this classifier than it does to the traversal guard.
-
-    note: LXD serves `/containers` and `/virtual-machines` as aliases of `/instances`
-    (lxd/instances.go), so a write through either is the same write and is recorded too.
+    Scoped to the instance path families, the only ones carrying these keys. LXD serves
+    `/containers` and `/virtual-machines` as aliases of `/instances` (lxd/instances.go), so a
+    write through either is recorded too.
     """
     segments = proxy_path_segments(path)
     if not segments or segments[0] not in INSTANCE_PATH_FAMILIES:
@@ -387,8 +326,8 @@ def policy_keys_in_raw_body(path: str, body: Any) -> List[str]:
 
 # What a destructive raw-proxy call is called in the audit trail, keyed on the resource it
 # addresses. These mirror the dashboard's own names one namespace over, ex; image.delete becomes
-# integration.image.delete, so the two routes to the same destructive act are both alertable and
-# still tell you which principal did it.
+# integration.image.delete, so both routes to the same destructive act are alertable and still
+# name the principal.
 _PROXY_DESTRUCTIVE_RESOURCES: Dict[str, str] = {
     "images": "image",
     "instances": "instance",
@@ -405,13 +344,10 @@ _PROXY_DESTRUCTIVE_RESOURCES: Dict[str, str] = {
 def proxy_destructive_action_for(method: str, path: str) -> Optional[str]:
     """The audit action name for a raw-proxy call that destroys something, else None.
 
-    A DELETE through the proxy removes the same resource the dashboard's own endpoint would,
-    but it used to be recorded as the generic `integration.proxy.request`, which is not a
-    high-severity action. Anything alerting on `image.delete` therefore never saw the API-key
-    route at all. This names it for what it is.
-
-    A bare collection path is not destructive: `DELETE /1.0/images` is not a thing LXD does, and
-    refusing to name it stops a malformed path inventing an event.
+    A proxy DELETE removes the same resource the dashboard's own endpoint would, so it gets a
+    named destructive action instead of the generic `integration.proxy.request`, and alerting on
+    destructive actions also covers the API-key route. A bare collection path is not destructive
+    (LXD has no `DELETE /1.0/images`), so a malformed path cannot invent an event.
     """
     if (method or "").upper() != "DELETE":
         return None
@@ -421,7 +357,7 @@ def proxy_destructive_action_for(method: str, path: str) -> Optional[str]:
     resource = _PROXY_DESTRUCTIVE_RESOURCES.get(segments[0])
     if resource is None:
         return None
-    # storage-pools/<pool>/volumes/<type>/<name> is a volume, not the pool itself.
+    # storage-pools/<pool>/volumes/<type>/<name> deletes a volume; the pool stays.
     if segments[0] == "storage-pools" and "volumes" in segments:
         return "integration.storage.volume.delete"
     return f"integration.{resource}.delete"
@@ -431,8 +367,8 @@ def guest_access_capability_for(path: str) -> Optional[str]:
     """The capability a raw-proxy path costs, or None when it stays outside the guest.
 
     Matches on the segment after the instance name, so `/1.0/instances/<n>/exec` is caught while
-    an instance whose NAME contains "exec" is not. Decodes first, the way the traversal guard
-    beside it does, so a percent-encoded spelling is not a second answer.
+    an instance whose NAME contains "exec" is not. Reads the canonical path, as the traversal
+    guard does, so a percent-encoded spelling gets the same answer.
     """
     segments = proxy_path_segments(path)
     # instances/<name>/<action>...
@@ -442,8 +378,8 @@ def guest_access_capability_for(path: str) -> Optional[str]:
         if segments[2] == prefix.lstrip("/"):
             return capability
 
-    # `/logs` is split: the directory listing and any exec_<uuid>.stdout is exec output and costs
-    # the exec capability; a named ordinary log does not.
+    # `/logs` is split: the directory listing, the exec-output directory and any
+    # exec_<uuid>.stdout are exec output and cost the exec capability; an ordinary log does not.
     if segments[2] == "logs":
         if len(segments) > 3 and segments[3] == _EXEC_OUTPUT_DIR:
             return "instance.exec"
@@ -465,18 +401,14 @@ def project_grant_is_unrestricted(allowed_projects: Optional[List[str]]) -> bool
     return "*" in (allowed_projects or [])
 
 
-# LXD/Incus project names, same shape and same 63-character ceiling this repo already applies to
-# the other LXD object names it puts in a URL (`_VOLUME_NAME_RE`/`_POOL_NAME_RE` in
-# routers/iso_uploads.py, `ProjectCreateRequest.name` max_length in models/schemas.py). Leading
-# alphanumeric rather than leading alpha: LXD's letter-first rule is specific to networks, and a
-# project named `2024-archive` is legal.
+# LXD/Incus project names, with the shape and 63-character ceiling of the other LXD names put in
+# a URL (routers/iso_uploads.py, models/schemas.py). A leading digit is legal (`2024-archive`).
 #
-# important: `\A...\Z`, not `^...$`, so a trailing newline cannot slip through. This value is
-# compared literally against the project LXD reports and is interpolated into `?project=`, so it
-# is an authorization gate, not a tidiness rule.
+# important: `\A...\Z` so a trailing newline cannot slip through. The value is compared literally
+# against the project LXD reports and put into `?project=`: this is an authorization gate.
 PROJECT_NAME_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,62}\Z")
 
-# A grant naming more projects than a cluster can plausibly hold is a paste accident, not a scope.
+# More projects than a cluster can plausibly hold is a paste accident; refuse the grant.
 MAX_PROJECTS_PER_GRANT = 64
 
 PROJECT_NAME_MAX_LENGTH = 63
@@ -490,15 +422,11 @@ def is_valid_project_name(name: str) -> bool:
 def normalise_project_grant(value: List[str]) -> List[str]:
     """Clean a requested project allow-list, or refuse it. Request path only, never stored data.
 
-    important: no case folding and no unicode normalisation, both deliberate.
-
-    Every enforcement site compares the grant to the project name LXD reports with an exact `in`
-    (routers/integrations.py `_granted_projects` and the proxy checks), so folding `Tenant-A` to
-    `tenant-a` would produce a grant that matches nothing. That silent dead grant is the defect
-    this validation exists to prevent, so manufacturing it here would be self-defeating.
-
-    NFKC is worse than useless: it maps `\uff0a` FULLWIDTH ASTERISK onto `*`, which would turn a
-    harmless dead grant into a real cluster-wide wildcard. The ASCII charset refuses it instead.
+    important: no case folding and no Unicode normalisation. Every enforcement site compares the
+    grant to the project name LXD reports with an exact `in` (routers/integrations.py
+    `_granted_projects` and the proxy checks), so folding `Tenant-A` to `tenant-a` would store a
+    grant that silently matches nothing. NFKC maps `\uff0a` FULLWIDTH ASTERISK onto `*`, which
+    would turn a dead grant into a cluster-wide wildcard; the ASCII charset refuses it instead.
     """
     if not isinstance(value, list):
         raise ValueError("projects must be a list of project names.")
@@ -557,10 +485,10 @@ def assert_project_scope_allows_path(
 ) -> None:
     """Refuse a mutation the caller's project grant cannot bound.
 
-    Paired with `assert_proxy_path_allowed`, which refuses paths nobody may reach. This one
-    refuses paths this particular grant may not reach, which is why it needs the grant.
-    That includes an `all-projects` query in any spelling, which reads every project on the
-    cluster, and a change to anything outside `_PROJECT_BOUNDED_WRITE_PREFIXES`.
+    Paired with `assert_proxy_path_allowed`, which refuses paths no key may reach. This one
+    refuses what this grant may not reach: an `all-projects` query in any spelling, which reads
+    every project on the cluster, and a change to anything outside
+    `_PROJECT_BOUNDED_WRITE_PREFIXES`.
     """
     if project_grant_is_unrestricted(allowed_projects):
         return
@@ -595,16 +523,12 @@ def assert_project_scope_allows_path(
 def assert_proxy_path_allowed(path: str) -> None:
     """Raise 403 for a proxy path no integration may reach, or 400 for a malformed one.
 
-    Traversal is refused rather than normalised. A `..` reached LXD, whose Go mux cleaned the
-    path and answered a redirect to somewhere outside `/1.0`; following it carried the cluster's
-    client certificate along. Redirects are no longer followed (`services/lxd/proxy.py`), and
-    this refuses the input that produced them, because one of those two alone leaves the other
-    as the only thing standing.
-
     important: read off canonical_proxy_path, which refuses `.`, `..`, empty segments and a
     backslash with 400 and drops the fragment. requests (urllib3 2.x) removes dot segments and
-    never sends a fragment, so `/1.0/./certificates` and `/1.0/certificates#x` reached the trust
-    store past a check that looked for `..` in the raw string only.
+    never sends a fragment, so a raw-string check would let `/1.0/./certificates` or
+    `/1.0/certificates#x` reach the trust store. LXD answers a `..` path with a redirect outside
+    `/1.0`, and following it would send the cluster's client certificate there. This refusal and
+    `allow_redirects=False` in `services/lxd/proxy.py` are separate layers; keep both.
     """
     canonical = canonical_proxy_path(path)
     for prefix in _REFUSED_PROXY_PREFIXES:

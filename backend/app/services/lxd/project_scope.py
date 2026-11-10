@@ -1,24 +1,15 @@
 """Reading LXD resources across every project, and deciding which project owns what.
 
-The dashboard's pooled pylxd client is built without a `project=` kwarg, which binds it to
-LXD's `default` project for the life of the pool. Every read of networks, network ACLs and
-profiles therefore answered about one project out of however many the cluster carries, and
-nothing in the tree consulted the project's own `features.*` flags to know whether that was
-even the right project to ask about. This module supplies both halves.
+The pooled pylxd client is built without `project=`, so it is bound to `default` for the life
+of the pool and a plain read of networks, network ACLs or profiles answers about one project.
 
-LXD answers the first half directly. Since the `networks_all_projects`,
-`network_acls_all_projects` and `profiles_all_projects` extensions, one
+Reading: with the `*_all_projects` extensions (ALL_PROJECTS_EXTENSION), one
 `?recursion=1&all-projects=true` request returns every project's records, each stamped with
-the project it belongs to. That is one request per cluster instead of one per project, and
-cheaper than what it replaces: pylxd's collection managers list at recursion 0 and then sync
-each item, so reading 91 networks cost 92 round trips.
+its project; pylxd's managers would list at recursion 0 and sync each item, one request each.
 
-The second half is `features.*`. A project with `features.networks=true` owns its own
-networks; with the flag false or absent it uses the `default` project's. The same rule governs
-network ACLs, which LXD does not give a key of their own, and `features.profiles` governs
-profiles. Resolving that is what `effective_project` is for, and it applies to writes as much
-as to reads: creating a network in a project that does not own networks has to land in
-`default`, because that is where LXD will look for it afterwards.
+Owning: a project with `features.networks=true` owns its networks, otherwise it uses
+`default`'s (FEATURE_FOR_COLLECTION maps each collection to its flag). `effective_project`
+applies to writes too: a network created in a non-owning project must land in `default`.
 """
 
 import logging
@@ -39,7 +30,7 @@ ALL_PROJECTS_EXTENSION: Dict[str, str] = {
 }
 
 # Which project feature flag decides whether a collection is isolated per project.
-# note: LXD has no `features.network-acls`; ACLs follow `features.networks`.
+# LXD has no `features.network-acls`; ACLs follow `features.networks`.
 FEATURE_FOR_COLLECTION: Dict[str, str] = {
     "networks": "features.networks",
     "network-acls": "features.networks",
@@ -52,15 +43,13 @@ FEATURE_FOR_COLLECTION: Dict[str, str] = {
     "images": "features.images",
 }
 
-# How many projects the fallback path will walk on one cluster before it stops and says so.
-# Above the 47 that the largest cluster on this fleet carries, so it guards against a fleet
-# that grew rather than limiting anyone today. Exceeding it marks the read partial; it never
-# truncates silently.
+# How many projects the fallback path walks on one cluster before it stops and says so.
+# Exceeding it marks the read partial; it never truncates silently.
 MAX_PROJECTS_PER_CLUSTER = 120
 
-# (connect, read). The pooled client's own read budget is 8s, which a fleet-wide recursion=1
-# across every project can exceed on a large cluster. The socket timeout is what actually
-# frees the worker thread, so it is passed explicitly at the call site.
+# (connect, read). The pooled client's 8s read budget can be too short for a recursion=1 read
+# across every project of a large cluster. The socket timeout frees the worker thread, so it is
+# passed explicitly at each call site.
 ALL_PROJECTS_READ_TIMEOUT = (3, 25)
 
 
@@ -75,10 +64,9 @@ def _metadata(response: Any) -> Any:
 def supports_all_projects(client: Any, collection: str) -> bool:
     """Whether this daemon can answer about every project in one request.
 
-    Read off the `/1.0` body pylxd already holds, so this costs nothing. Deliberately not
-    `client.has_api_extension`, which raises KeyError when `host_info` carries no
-    `api_extensions` key at all, which is exactly the shape a stub or an unusual daemon
-    presents.
+    Read off the `/1.0` body pylxd already holds, so this costs nothing. Not
+    `client.has_api_extension`, which raises KeyError when `host_info` has no `api_extensions`
+    key, the shape a stub or an unusual daemon presents.
     """
     extension = ALL_PROJECTS_EXTENSION.get(collection)
     if not extension:
@@ -107,7 +95,7 @@ def _assert_pooled(client: Any, collection: str) -> None:
 def list_project_configs(client: Any) -> Dict[str, Dict[str, str]]:
     """Every project on the cluster mapped to its config, in one request.
 
-    The `features.*` flags live in that config. Read at recursion 1 on purpose: pylxd's
+    The `features.*` flags live in that config. Read at recursion 1 because pylxd's
     ProjectManager lists at recursion 0 and then syncs each project on first attribute access,
     which is one extra round trip per project.
     """
@@ -140,12 +128,12 @@ def effective_project(
     project: Optional[str],
     project_configs: Optional[Dict[str, Dict[str, str]]],
 ) -> str:
-    """The project LXD will actually store this collection in.
+    """The project LXD will store this collection in.
 
     A project only holds its own networks, ACLs or profiles when the governing `features.*`
-    flag is true. Unset means false: LXD's documented default for every `features.*` option is
-    false, and several projects on this fleet omit the key entirely rather than setting it.
-    Anything else resolves to `default`, which is where the records really live.
+    flag is true. Unset means false, LXD's documented default for every `features.*` option,
+    and projects often omit the key. Anything else resolves to `default`, where the records
+    live.
     """
     if not project or project == DEFAULT_PROJECT:
         return DEFAULT_PROJECT
@@ -161,7 +149,7 @@ def effective_project(
 
 
 def resolve_owner(client: Any, collection: str, project: Optional[str]) -> str:
-    """The project that really holds `collection` for a caller asking about `project`.
+    """The project that holds `collection` for a caller asking about `project`.
 
     Short-circuits before reading the project list when the answer cannot be anything but
     `default`, so the common case costs no extra round trip.
@@ -174,9 +162,8 @@ def resolve_owner(client: Any, collection: str, project: Optional[str]) -> str:
 def project_params(project: Optional[str], **extra: Any) -> Dict[str, Any]:
     """Query parameters naming a project, for a raw call on the pooled client.
 
-    note: the pooled client carries no project of its own, so the project has to be named on
-    every request that is not about `default`. Naming it explicitly is also what keeps a write
-    from silently landing in `default`.
+    The pooled client carries no project of its own, so every request names one; that also
+    keeps a write from silently landing in `default`.
     """
     params: Dict[str, Any] = dict(extra)
     params["project"] = project or DEFAULT_PROJECT
@@ -225,8 +212,8 @@ def list_across_projects(
     """Every record of `collection` on the cluster, whatever project holds it.
 
     Returns (rows, complete). `complete` is False when the fallback could not read every
-    project, so the caller can say the list is partial rather than presenting a short list as
-    the whole truth. `path` overrides the API path (see list_in_project).
+    project, so the caller can mark the list partial. `path` overrides the API path (see
+    list_in_project).
     """
     _assert_pooled(client, collection)
 
@@ -256,10 +243,9 @@ def _walk_projects(
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """The fallback: enumerate projects and read each one.
 
-    important: with the governing feature flag false, a project does not hold its own records,
-    it sees `default`'s. Reading such a project returns `default`'s rows again, so a cluster
-    with 47 projects would return the same bridge 47 times, each stamped differently, and the
-    total would be a lie. Records are therefore keyed on the project that really holds them.
+    important: with the governing feature flag false, a project sees `default`'s records rather
+    than its own, so reading it returns `default`'s rows again under another stamp. Records are
+    keyed on the project that holds them, or one bridge would be counted once per project.
     """
     complete = True
     names = list_project_names(client)
@@ -277,9 +263,8 @@ def _walk_projects(
     if collection == "storage-volumes":
         return _walk_projects_for_volumes(client, names, configs, recursion, path, complete)
 
-    # Resolve every project to the one that really holds its records, then read each of those
-    # once. On a fleet where most projects inherit, this is the difference between 47 requests
-    # and two, and it is also what stops the same bridge appearing 47 times.
+    # Resolve every project to the one that holds its records, then read each owner once. Where
+    # most projects inherit, that is a couple of requests instead of one per project.
     owners: List[str] = []
     for name in names:
         owner = effective_project(collection, name, configs)
@@ -309,13 +294,12 @@ def _walk_projects_for_volumes(
     path: Optional[str],
     complete: bool,
 ) -> Tuple[List[Dict[str, Any]], bool]:
-    """The volume walk reads every project, not only the owners.
+    """The volume walk reads every project, owner or not.
 
     `features.storage.volumes` governs custom volumes only: a project with the flag false sees
     default's custom volumes, but the root volumes of its own instances still live in that
-    project. Reading owners alone dropped those. So every project is read; from a project that
-    does not own its custom volumes only the instance volumes are kept, custom and image rows
-    being default's repeated.
+    project. From a project that does not own its custom volumes only the instance volumes are
+    kept, since its custom and image rows are default's repeated.
     """
     rows: List[Dict[str, Any]] = []
     for name in names:
@@ -335,10 +319,9 @@ def _walk_projects_for_volumes(
 class InstanceRecord:
     """One instance from an all-projects listing, exposing what the readers duck-type.
 
-    The member, node and region readers all count instances by walking objects and asking for
-    `status`, `location`, `expanded_devices` and `config`. Handing them raw dicts would make
-    every one of those getattr calls miss and report zero, which reads as free capacity rather
-    than as a failure, so the rows are wrapped instead of the readers being rewritten.
+    The member, node and region readers count instances by asking objects for `status`,
+    `location`, `expanded_devices` and `config`. On raw dicts every one of those getattr calls
+    would miss and report zero, which reads as free capacity.
     """
 
     __slots__ = (
@@ -369,10 +352,9 @@ def list_instance_records(client: Any) -> Tuple[List[InstanceRecord], bool]:
     """Every instance on the cluster, in every project, with its config expanded.
 
     recursion=1: LXD's Instance body already carries `expanded_config`, `expanded_devices`,
-    `location` and `status`, which is everything the readers duck-type. recursion=2 only adds
-    `state`, `snapshots` and `backups`, and on a 62-instance MicroCloud it cost 4.6 s against
-    0.8 s, against a 25 s budget that a busier cluster exceeded, which left the member dialog
-    reporting zero instances. Returns (records, complete).
+    `location` and `status`, everything the readers duck-type. recursion=2 adds only `state`,
+    `snapshots` and `backups`, at several times the cost, and can exceed the 25 s budget on a
+    busy cluster. Returns (records, complete).
     """
     rows, complete = list_across_projects(client, "instances", recursion=1)
     return [InstanceRecord(row) for row in rows], complete

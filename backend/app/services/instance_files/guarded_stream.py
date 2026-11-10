@@ -1,9 +1,8 @@
 """A download that stops when it should, and never looks finished when it did not finish.
 
-`StreamingResponse` is the wrong tool here for three reasons. It has no send timeout, so a client
-that stops reading parks the handler forever, holding a guest connection and a transfer slot. It
-has no way to end a stream when access is withdrawn. And an HTTP response only reads as failed if
-it ends without its terminal chunk.
+`StreamingResponse` does not fit: it has no send timeout, so a client that stops reading parks the
+handler forever, holding a guest connection and a transfer slot; it cannot end a stream when access
+is withdrawn; and an HTTP response reads as failed only if it ends without its terminal chunk.
 
 important: this app's middleware is all `BaseHTTPMiddleware`, which finishes a response itself when
 the inner app stops, even when it stops by raising. So a cut stream marks its scope for

@@ -30,8 +30,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/system", tags=["Host Health"], dependencies=[Depends(require_admin())])
 
-# note: two pools. The dialog polls the status every 2 s from every open browser, and sharing one
-# bound with the submit let a slow Vault turn a key submission into "pool full" before it was sent.
+# Two pools: the dialog polls the status every 2 s from every open browser, and a bound shared with
+# the submit would let a slow Vault turn a key submission into "pool full" before it is sent.
 _status_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vault_seal_status")
 _unseal_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vault_unseal")
 # Above the sum of the submit's socket budgets (probe 5 s, PUT 12 s, re-probe 5 s), so a slow Vault
@@ -74,8 +74,8 @@ class UnsealRequest(BaseModel):
     """Exactly one of `key` and `reset`. `nonce` is the attempt the caller last saw ("" when none)."""
     model_config = ConfigDict(extra="forbid")
 
-    # note: SecretStr so a repr or log of the request never shows it; read_json_body keeps the 422
-    # from echoing it.
+    # SecretStr so a repr or log of the request never shows it; read_json_body keeps the 422 from
+    # echoing it.
     key: Optional[SecretStr] = Field(default=None, max_length=vault_unseal.KEY_MAX_LENGTH * 2)
     reset: bool = False
     nonce: Optional[str] = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9-]*$")
@@ -139,13 +139,10 @@ async def get_host_health(response: Response, fresh: bool = False):
 
 @router.get("/vault/seal-status", response_model=SealStatusResponse)
 async def get_seal_status(response: Response):
-    """Vault's seal state and unseal progress, for the unseal dialog: Vault's answer now, never cached.
-
-    important: not seal_probe(force=True). That reuses an answer up to two seconds old per worker,
-    and a poll landing on another worker handed the dialog the attempt as it stood before the last
-    key: the progress went backwards and a reset carried the old attempt's nonce, which the
-    unseal route then refused (found live, 2026-10-27, with a 3-of-5 Vault).
-    """
+    """Vault's seal state and unseal progress, for the unseal dialog: Vault's answer now, never cached."""
+    # important: do not use seal_probe(force=True). It reuses an answer up to two seconds old per
+    # worker, so a poll landing on another worker can show the attempt as it stood before the last
+    # key: progress goes backwards and a reset carries a stale nonce, which the unseal route refuses.
     response.headers["Cache-Control"] = "no-store"
     try:
         probe = await run_blocking(vault_probe.ask_now, timeout=10, label="vault.seal_status",
@@ -159,8 +156,7 @@ async def get_seal_status(response: Response):
 async def unseal_vault(request: Request, response: Response, user: AuthenticatedUser = Depends(require_admin())):
     """Submit one unseal key share (or reset the attempt) to the Vault at VAULT_ADDR.
 
-    Allowed in read-only mode on purpose (owner decision 2026-10-27): it restores a dependency and
-    changes nothing in the fleet.
+    Allowed in read-only mode: it restores a dependency and changes nothing in the fleet.
     """
     response.headers["Cache-Control"] = "no-store"
     settings = get_settings()

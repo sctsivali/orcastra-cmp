@@ -1,21 +1,16 @@
 """Moving a workload between projects, cluster members and clusters (dashboard, JWT).
 
-Admin and Partner only. This is a platform capability, not a tenant product: it is how an
-operator decommissions a node, rebalances capacity, or promotes a workload out of a scratch
-project. OrcaHub sells data protection; this moves running workloads, and the two are different
-jobs even though both touch the same instances.
+Admin and Partner only: decommissioning a member, rebalancing capacity, or promoting a workload
+out of a scratch project. Separate from OrcaHub's data protection, though both touch the same
+instances.
 
-Copy, never move. The source instance survives every path through this router, so a destination
-that turns out wrong is recoverable and the operator decides when to remove the original.
-
-Transport is chosen by the server, not the caller, because the caller cannot know which one a
-given pair of endpoints supports: `copy` inside one cluster, native pull `migration` between two.
-
-A cross-cluster migration requires the TARGET to open a connection to the SOURCE. LXD offers no
-call that answers "can you reach this host", so that is not probed in advance: it is learned from
-the attempt, which is why the operation is polled rather than assumed. A streaming transport
-through the control plane is drafted in the service layer and deliberately not reachable from
-here; see documentation/instances/operator-snapshots-and-mobility.md for why.
+Copy, never move: the source survives every path through this router, so a wrong destination is
+recoverable and the operator decides when to remove the original. `move-preflight` lists the
+destinations the caller may use, with reachability, architecture and pool headroom. `copy`
+authorizes both ends, applies the billing gate and submits a durable Migration Center job, which
+picks the transport (the caller cannot know which one a pair of endpoints supports) and tracks
+progress. A cross-cluster pull needs the target to reach the source, which cannot be probed in
+advance. The service layer's streaming transport is not reachable from this router.
 """
 import logging
 import re
@@ -326,9 +321,8 @@ async def move_preflight(
                 destinations.append(entry)
                 continue
             entry["reachable"] = True
-            # An architecture mismatch is a hard refusal from LXD, not a slow path, so the
-            # destination is offered as unavailable with the reason rather than allowed to fail
-            # after the operator has committed to it.
+            # LXD refuses an architecture mismatch outright, so the destination is offered as
+            # unavailable with the reason instead of failing after the operator has committed.
             arches = await _blocking(
                 mobility.host_architectures, client, label="mobility.arches"
             )
@@ -409,8 +403,8 @@ async def copy_instance(
     _: None = Depends(check_read_only_mode),
     user: AuthenticatedUser = Depends(require_partner()),
 ) -> MoveResponse:
-    # Both ends are authorized. Checking only the source would let a partner read out of a
-    # cluster they own and write into one they do not, which is the whole boundary.
+    # Both ends are authorized: checking only the source would let a partner read out of a
+    # cluster it owns and write into one it does not.
     source_project = verify_project_access(body.host, body.project)
     target_project = verify_project_access(body.target_host, body.target_project)
     body = body.model_copy(
@@ -436,9 +430,8 @@ async def copy_instance(
 
     source = await _client(lxd_service, body.host)
 
-    # A copy reads the source and duplicates it. That does not move the storage the external
-    # schedule is measured on, but the rule an operator carries is "anything on a billing-linked
-    # instance is acknowledged", and a rule with an exception is one nobody remembers the shape of.
+    # A copy does not move the storage the external schedule is measured on, but it still takes
+    # the billing gate: anything done to a billing-linked instance is acknowledged, no exceptions.
     policy = await _read_source_policy(source, instance_name, body.project)
     justification = _gate_copy(policy, instance_name, body)
 

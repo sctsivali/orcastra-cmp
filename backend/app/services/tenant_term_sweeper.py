@@ -1,10 +1,9 @@
 """Record each paid-term boundary once, as it passes, and clear what the tenant sees.
 
-Enforcement does not wait for this: the grant query reads the dates on every request
-(core/org_scope.py), so a policy past its term grants viewing only the moment the term ends. What
-needs a loop is the trail. Nobody calls the dashboard at the instant a term ends, so without this
-the audit would never say when a buyer's access narrowed or ended, and cached lists built
-under the old grants would live out their TTL.
+Enforcement does not depend on this: the grant query reads the dates on every request
+(core/org_scope.py), so a policy past its term grants viewing only the moment the term ends. The
+loop exists for the audit trail, which would otherwise never say when a buyer's access narrowed
+or ended, and for cached lists built under the previous grants, which would live out their TTL.
 
 important: the phase is advanced with a conditional UPDATE (`IS DISTINCT FROM`) that returns the
 rows it changed, so with two workers, or Redis down and every worker running the loop, each
@@ -76,7 +75,7 @@ async def sweep(session_maker: Callable[[], Any], *, now: Optional[datetime] = N
                         TenantAccessPolicy.id == policy_id,
                         TenantAccessPolicy.term_phase_recorded.is_distinct_from(state.phase),
                     )
-                    # note: bookkeeping, not an edit: the policy's own updated_at stays as it was.
+                    # Bookkeeping only: the policy's own updated_at is left unchanged.
                     .values(term_phase_recorded=state.phase, updated_at=TenantAccessPolicy.updated_at)
                     .returning(TenantAccessPolicy.id)
                 )

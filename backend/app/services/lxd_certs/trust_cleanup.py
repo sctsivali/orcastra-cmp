@@ -1,22 +1,18 @@
 """Removing the LXD trust entries of client certificates this dashboard replaced.
 
-The order of every pass is fixed, and each step exists because skipping it can lock the dashboard
-out of a cluster or delete something that is not ours:
-
-1. Only fingerprints recorded in `lxd_trust_cleanup` for this cluster are candidates. Nothing is
-   ever chosen by name, and anything still current or pending in Vault is cancelled, not removed.
+important: keep this order or the dashboard can lock itself out or delete an entry it does not own:
+1. Only fingerprints recorded in `lxd_trust_cleanup` for this cluster are candidates, never names;
+   anything still current or pending in Vault is cancelled instead.
 2. The CURRENT Vault certificate is proven trusted and unrestricted on a fresh pinned session
-   (trust_http). Until it is, the grace period is re-armed: after a regenerate the cluster does
-   not trust the new certificate yet, and removing the old entry then would cut every worker off.
+   (trust_http), else the grace period is re-armed: right after a regenerate the cluster does not
+   trust the new certificate yet, and removing the replaced entry would cut every worker off.
 3. Each entry is looked up and its fingerprint compared exactly before the DELETE.
 
-Every worker runs the loop. A per-cluster transaction lock decides who acts on a cluster this pass
-(trust_cleanup_store.cluster_cert_lock); no leader is elected, because the one lease this codebase
-has fails open and would let four workers sweep at once during a Redis outage.
-
-Each worker also pre-switches its own pooled connection to the current certificate once the
-cluster trusts it, so by the time the old entry goes no worker is still presenting it. The ones
-that miss the switch heal on their next request (connection.py, _try_rotated_certificate).
+Every worker runs the loop; a per-cluster transaction lock (trust_cleanup_store.cluster_cert_lock)
+picks who acts. No leader is elected: a Redis lease fails open and would let every worker sweep at
+once during an outage. Workers pre-switch their pooled connection to the current certificate once
+trusted, so none still presents the replaced one when its entry goes; one that misses the switch
+heals on its next request (connection.py, _try_rotated_certificate).
 """
 
 import asyncio
@@ -298,11 +294,11 @@ async def sweep_cluster(
 
 
 def preswitch_worker(cluster_id: str) -> bool:
-    """Blocking. Move THIS worker's pooled connection to the current certificate, if proven.
+    """Blocking. Move this worker's pooled connection to the current certificate, if proven.
 
-    note: never a blind connect. connect_with_vault_cert on a refused certificate drops the cached
-    credentials and trips the breaker, which after a regenerate would take a working cluster
-    offline for a minute in this worker. The staging probe proves trust first.
+    important: never a blind connect. connect_with_vault_cert on a refused certificate drops the
+    cached credentials and trips the breaker, which after a regenerate would take a working
+    cluster offline for a minute in this worker. The staging probe proves trust first.
     """
     from app.services.lxd_service import get_lxd_service
 
@@ -390,7 +386,7 @@ class DeregistrationTrust:
 
 
 async def remove_trust_for_deregistration(db: Any, cluster_id: str) -> DeregistrationTrust:
-    """Best effort, before the Vault material is deleted: our superseded entries, the pending
+    """Best effort, before the Vault material is deleted: superseded entries, the pending
     certificate, then the dashboard's own entry last. Returns the commands an operator still needs.
 
     Called under cluster_cert_lock by delete_cluster. Never raises: deregistration proceeds either way.

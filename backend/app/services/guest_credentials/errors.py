@@ -55,7 +55,7 @@ def guest_timeout() -> CredentialError:
 
 def outcome_unknown() -> CredentialError:
     # important: the change was sent and no answer came back. Saying it failed could make someone
-    # think an old password still works, so the answer says what is actually known.
+    # think an old password still works, so the answer says only what is known.
     return refuse(
         "credential_outcome_unknown", 504,
         "The change was sent but the guest did not confirm it. Check the account before relying on it.",
@@ -85,7 +85,7 @@ def guest_answer_invalid() -> CredentialError:
 
 
 def tool_missing(tool: str) -> CredentialError:
-    # note: `tool` is one of this package's own names (useradd, chpasswd, ...), never guest text.
+    # `tool` is one of this package's own names (useradd, chpasswd, ...), never guest text.
     return refuse("tool_missing", 409, "This guest lacks a tool this change needs.", {"tool": tool})
 
 

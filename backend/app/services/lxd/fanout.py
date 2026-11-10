@@ -1,24 +1,15 @@
 """
 One classification for what a per-cluster listing came back with.
 
-Every list router fans out one helper per cluster and pairs the results with the cluster
-names. Before this module each helper caught `Exception` and returned an empty list, so a
-cluster whose listing failed (LXD answered 400 or 403, the read timed out after the
-connection probe succeeded, a row did not validate) was counted as "answered" and its empty
-answer was cached for the full TTL. On a production MicroCloud that read as "no storage
-pools", "no volumes", "no identities" while the cluster held dozens of each.
+Every list router fans out one helper per cluster. A cluster is fully read, partially read (lost
+rows named), or not read at all (named in `unreachable_nodes` with a reason); a failed listing
+never passes as an empty answer. Partial reads and LXD error answers are never cached. Handlers
+that opt in (`cacheable_despite_outages`) may briefly cache a fan-out whose only failures are
+unreachable clusters: the body names them, so it is a true answer.
 
-The rule now: a cluster is either fully read, partially read (some rows lost, named), or not
-read at all (named in `unreachable_nodes` with a reason). A partial read or an LXD error answer
-is never cached. A fan-out where some clusters could not be reached at all, and every other
-cluster answered in full, may be cached briefly by the handlers that opt in
-(`cacheable_despite_outages`): the body names those clusters, so it is a true answer.
-
-important: reasons are shown in the console banner. They never carry a host name, an
-endpoint or the text of a transport error (both can name the host); LXD's own error text is
-kept, truncated, because it is what an operator needs ("More than one cluster member has a
-volume named ..."). Tenants get no reason at all: the text can name pools and volumes from
-projects they cannot see, and transport diagnostics are operator information.
+important: reasons are shown in the console banner. They never carry a host name, an endpoint or
+transport error text; LXD's own error text is kept, truncated, because operators need it. Tenants
+get no reason: it can name pools and volumes from projects they cannot see.
 """
 
 from __future__ import annotations
@@ -55,9 +46,9 @@ KIND_FAILED = "error"
 KIND_PARTIAL = "partial"
 KIND_LATE = "late"
 
-# How long a fleet answer missing a cluster that did not answer within its wall is remembered:
-# briefly, so the next read asks that cluster again soon, but not "never", which would make every
-# poll pay the whole wall again.
+# Seconds a fleet answer missing a cluster that did not answer within its wall is remembered:
+# short, so the next read asks that cluster again soon, but nonzero, so every poll does not pay
+# the whole wall again.
 LATE_FRESH_SECONDS = 10
 
 # LXD's error field, truncated. Long enough for "More than one cluster member has a volume
@@ -83,7 +74,7 @@ class NodeRead(Generic[T]):
 def transport_reason(exc: BaseException) -> Optional[str]:
     """A fixed phrase for a requests/urllib3 transport failure, or None if it is not one.
 
-    note: the pooled adapter mounts Retry(read=0), so urllib3 exhausts on the first read
+    The pooled adapter mounts Retry(read=0), so urllib3 exhausts on the first read
     timeout and requests surfaces it as ConnectionError wrapping MaxRetryError whose reason
     is ReadTimeoutError. Unwrapped here so a read timeout is named as one.
     """
@@ -97,7 +88,7 @@ def transport_reason(exc: BaseException) -> Optional[str]:
         reason = _urllib3_reason(exc)
         if isinstance(reason, urllib3.exceptions.ReadTimeoutError):
             return "read timed out"
-        # note: NewConnectionError (refused, no route, DNS) subclasses ConnectTimeoutError in
+        # NewConnectionError (refused, no route, DNS) subclasses ConnectTimeoutError in
         # urllib3, so it has to be told apart first or it reads as a timeout.
         if isinstance(reason, urllib3.exceptions.NewConnectionError):
             return "connection refused or host unreachable"
@@ -199,11 +190,10 @@ class Fanout(Generic[T]):
     def cacheable_despite_outages(self) -> bool:
         """Complete, or complete apart from clusters that could not be reached at all.
 
-        important: a transport failure (connect or read timeout, refused, TLS) leaves no rows to
-        misread, and the body names the cluster, so remembering it for a short degraded TTL is
-        remembering a true answer. Without this a single timing-out cluster made every read of
-        the storage volume list cost the full 25 s read budget. A 4xx/5xx from LXD or a partial
-        read is still never cached: those look like an answer while missing rows.
+        A transport failure (connect or read timeout, refused, TLS) leaves no rows to misread
+        and the body names the cluster, so a short degraded TTL remembers a true answer and one
+        timing-out cluster does not make every read pay the full read budget. A 4xx/5xx from LXD
+        or a partial read is never cached: those look like an answer while missing rows.
         """
         if not self.answered or self.partial_nodes:
             return False
@@ -227,14 +217,13 @@ def down_text(kind: Optional[str]) -> str:
 def known_down(cluster_id: str, connection_manager: object = None) -> Optional[str]:
     """The failure kind when this worker knows the cluster is down and holds no client for it.
 
-    important: a fleet read must not dial such a cluster. Once its 60 s trip lapsed, the next read
-    that reached it paid a whole connect (about 8 s against a silent host on dev) and its response
-    waited for it; 29 of the 32 such dials in one day came from a single integration poll. The
-    background healer re-probes the cluster and clears the verdict on its first success, and the
-    forced paths (Check Authentication, Verify, renew) still dial. A cluster this worker never saw
-    fail answers None and is still dialed once.
+    important: a fleet read must not dial such a cluster. Once its trip lapsed, the next read that
+    reached it would pay a whole connect against a silent host and its response would wait for
+    it. The background healer re-probes the cluster and clears the verdict on its first success,
+    and the forced paths (Check Authentication, Verify, renew) still dial. A cluster this worker
+    never saw fail answers None and is still dialed once.
 
-    note: the memory read comes first, so a manager is only consulted for a cluster that failed. A
+    The memory read comes first, so a manager is only consulted for a cluster that failed. A
     manager without get_cached_client (a stub) counts as holding no client.
     """
     verdict = health.last_failure(cluster_id)
@@ -279,9 +268,8 @@ def complete_reasons(
 ) -> Dict[str, str]:
     """`node_errors` for a list answer: one reason per missing or partial cluster, for this caller.
 
-    Clusters reach unreachable_nodes without passing through collect() (no client in this worker,
-    a breaker skip, a registered cluster nobody asked), and they used to carry nothing, so the
-    banner printed "no reason reported" beside the one cluster that had a reason.
+    Clusters also reach unreachable_nodes without passing through collect() (no client in this
+    worker, a breaker skip, a registered cluster not queried); they get a reason here too.
 
     A Tenant gets nothing. On a cluster this caller sees only part of, the text is reduced to its
     kind; visible_projects_for answers None for an Admin and on a single-organization cluster, so
@@ -320,15 +308,14 @@ def unattempted(seeded: Sequence[str], connection_manager: object) -> List[str]:
     """The seeded clusters this worker has never tried to connect to.
 
     A list handler seeds `unreachable_nodes` with every registered cluster it holds no client
-    for. Two very different things put a cluster there: it is down (this worker tried, and
-    the healer keeps trying), or this worker has not caught up with a registration yet (the
-    next healer tick connects it, within a minute). A body naming a known-down cluster is a
-    correct answer and may be cached, as it always was; a body naming a cluster the worker
-    has simply not tried must not be, because the cache is shared by every worker and the
-    one that did connect it would then serve "unreachable" for the whole TTL.
+    for. Either the cluster is down (this worker tried, and the healer keeps trying), or this
+    worker has not caught up with a registration yet (the next healer tick connects it). A
+    body naming a known-down cluster may be cached; one naming an untried cluster must not
+    be, because the cache is shared by every worker and the one that did connect it would
+    then serve "unreachable" for the whole TTL.
 
-    A manager without `has_attempted` (a stub) is treated as having tried nothing, which is
-    the conservative reading: no cache rather than a wrong one.
+    A manager without `has_attempted` (a stub) is treated as having tried nothing: no cache
+    rather than a wrong one.
     """
     tried = getattr(connection_manager, "has_attempted", None)
     if tried is None:
@@ -387,14 +374,14 @@ def collect(
 
 # --- A wall per cluster, and a read that outlives it finishes in the background ------------------
 
-# Owner decision 2026-11-04: a fleet list waits at most this long for any one cluster.
+# Longest a fleet list waits for any one cluster, in seconds.
 CLUSTER_WALL_SECONDS = 15.0
 # How long a late cluster's finished read stands in for it in later answers.
 LATE_KEEP_SECONDS = 180.0
 # A stand-in older than this is read again in the background while it keeps answering.
 LATE_REREAD_AFTER_SECONDS = 90.0
-# The background re-read's own budget: about the slowest listing measured on dev (central-1's
-# volumes, 24 s) with room to spare.
+# The background re-read's own budget, in seconds: well above the slowest listings observed
+# (about 24 s).
 LATE_REREAD_TIMEOUT_SECONDS = 60.0
 _LATE_MAX_ENTRIES = 256
 
@@ -446,7 +433,7 @@ def _late_finished(key: str, entry: _Late, future: "asyncio.Future[Any]", on_don
         return
     entry.value = future.result()
     entry.finished_at = time.monotonic()
-    # note: only an entry still held schedules the rebuild. One evicted meanwhile (the memo is
+    # Only an entry still held schedules the rebuild. One evicted meanwhile (the memo is
     # bounded) would otherwise buy a rebuild that cannot use it and reads the cluster again.
     if on_done is not None and _late_entry(key) is entry:
         on_done()
@@ -465,19 +452,17 @@ async def gather_clusters(
 ) -> List[object]:
     """asyncio.gather(..., return_exceptions=True) over clusters, with a wall per cluster.
 
-    A cluster still reading at the wall answers LateRead (collect() lists it in late_nodes),
-    and its read runs on. When it finishes, its result stands in for that cluster in later answers
-    of the same list and scope for LATE_KEEP_SECONDS, and one background rebuild of the entry
-    being built is scheduled (swr.capture_refresh), so the rows appear without a poll missing
-    first. A stand-in older than LATE_REREAD_AFTER_SECONDS is read again in the background while
-    it keeps answering, so a cluster that is always slow (central-1's volumes take 17 to 24 s on
-    dev) is never missing after its first read. A second request meeting a read still running
-    waits on it instead of starting another.
+    A cluster still reading at the wall answers LateRead (listed in late_nodes) and its read runs
+    on. Its result then stands in for that cluster in the same list and scope for
+    LATE_KEEP_SECONDS, and one background rebuild is scheduled (swr.capture_refresh) so the next
+    poll already sees the rows. A stand-in older than LATE_REREAD_AFTER_SECONDS keeps answering
+    while it is re-read in the background, so an always-slow cluster is never missing after its
+    first read. A request meeting a running read waits on it instead of starting another.
 
-    important: keyed by the caller's scope (get_scope_cache_key) and fenced by `generation`, like
-    the response cache: a stand-in never crosses a scope, and a mutation discards it. Only a late
-    cluster ever gets one; every other cluster is read every time. `fn(node, *args)` runs through
-    run_blocking, so it gets the caller's context and needs its own socket timeouts.
+    important: only a late cluster gets a stand-in; every other cluster is read every time.
+    Stand-ins are keyed by scope (get_scope_cache_key) and fenced by `generation`: none crosses a
+    scope and a mutation discards it. `fn(node, *args)` runs through run_blocking, so it gets the
+    caller's context and needs its own socket timeouts.
     """
     from app.core import swr
     from app.core.blocking import BlockingTimeout, run_blocking
@@ -564,10 +549,9 @@ async def run_in_slot(name: str, size: int, fn: Callable[..., Any], *args: Any, 
     """run_blocking, waiting for one of `size` slots first instead of failing when none is free.
 
     important: run_blocking's max_in_flight refuses (BlockingPoolFull) at once, so a gather over
-    more clusters than the cap dropped every cluster past it: a key granting five clusters always
-    lost one from its totals. This queues instead, and the wall starts once the call has a slot.
-    A slot is given back when the thread really finishes, not when its wall passes, so a slow
-    cluster cannot let more calls in than the pool has threads.
+    more clusters than the cap would drop every cluster past it. This queues instead, and the wall
+    starts once the call has a slot. A slot is given back when the thread finishes, not when its
+    wall passes, so a slow cluster cannot let more calls in than the pool has threads.
     """
     from app.core.blocking import BlockingTimeout, run_blocking
 

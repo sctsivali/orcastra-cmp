@@ -1,25 +1,16 @@
-"""Whether a schedule may still fire, asked again every single time.
+"""Whether a schedule may still fire, re-checked on every run.
 
-A schedule is a standing instruction that outlives the session that made it by months. Everything a
-request path relies on to answer "may this happen" is absent here, and absent in the permissive
-direction: `verify_cluster_access` is documented as "a no-op for admin / dev mode / background
-tasks", `apply_cluster_filter` "returns all clusters if no scope is active", and
-`check_tenant_permission` "returns True on a None ACL. In a worker that is unconditional, so it
-fails OPEN". None of them is called from this package, and a ratchet holds that.
+A schedule outlives the session that made it by months, and the request-path authorization helpers
+fail open in a background task: `verify_cluster_access`, `apply_cluster_filter` and
+`check_tenant_permission` all answer "allowed" when their ContextVar is unset. None of them is
+called from this package (a ratchet test enforces it); authorization is rebuilt from current
+database rows.
 
-The shape is deliberately `dispatcher._still_authorised`: reload rather than trust the row, return a
-REASON rather than raise, and record the reason rather than discard it. An operator asking why their
-nightly snapshot stopped gets an answer instead of silence. Unlike a request dependency, the proof
-comes entirely from current database rows and cannot fail open because a ContextVar is absent.
-
-Two differences from that precedent, both chosen rather than inherited:
-
-* It reads `organization_clusters`, the authoritative table, where the dispatcher reads a JSON copy
-  a sweep reconciles on a timer. Revocation is therefore effective at the next tick rather than at
-  the next reconcile.
-* A refusal here distinguishes "terminal for the schedule" from "terminal for this run". A delivery
-  that drops is one lost event; a months-long schedule that silently drops runs is worse than one
-  that stops and says so.
+The shape follows the webhook dispatcher's `_still_authorised`: reload rather than trust the row,
+return a reason rather than raise, and record the reason so an operator can see why a schedule
+stopped. Two differences: this reads `organization_clusters` directly instead of a JSON copy a sweep
+reconciles on a timer, so revocation takes effect at the next tick; and a refusal says whether it
+ends the schedule or only this run.
 """
 
 import logging
@@ -38,9 +29,8 @@ from app.models.db_models import (
 
 logger = logging.getLogger(__name__)
 
-# How many consecutive "the instance is not there" answers before the schedule stops asking. An
-# instance can be absent because it is mid-migration or because a listing was served stale; three
-# ticks of a schedule is hours, which is long enough that absence means gone.
+# Consecutive "the instance is not there" answers before the schedule pauses, because one listing
+# can be served stale. Misses are retried with the scheduler's failure backoff, not once per slot.
 MISSING_INSTANCE_GRACE = 3
 
 
@@ -52,8 +42,8 @@ OWNER_ROLE_UNREADABLE = "schedule_owner_role_unreadable"
 class Refusal:
     """Why this schedule must not fire now.
 
-    `terminal` pauses the schedule and shows the message to an operator. Not terminal means try
-    again at the next slot: the cluster was unreachable, not the grant withdrawn.
+    `terminal` pauses the schedule and shows the message to an operator. A non-terminal refusal is
+    retried after the scheduler's failure backoff, ex; the cluster was unreachable.
     """
 
     code: str
@@ -69,9 +59,9 @@ async def _affiliated_organizations(
 ) -> List[int]:
     """Active organizations the actor currently belongs to and that bind the cluster.
 
-    ``registered_by`` is deliberately insufficient here. It is a historical registration fact
-    and can survive a rebind; using it as current organization affiliation would let a former
-    registrant keep an unattended write after leaving the organization.
+    ``registered_by`` is not used: it is a historical registration fact that can survive a rebind,
+    and reading it as affiliation would let a former registrant keep an unattended write after
+    leaving the organization.
     """
     rows = await db.execute(
         select(Organization.id)
@@ -118,10 +108,9 @@ async def authorizing_organization_id(
 ) -> Optional[int]:
     """Pick the actor's organization that currently authorizes this exact target.
 
-    Selection happens after project authority, not before it. An operator may belong to two
-    organizations on one shared cluster, while only the second owns the requested project. Picking
-    the first cluster binding would turn that valid target into a false 403 and persist the wrong
-    organization on the schedule.
+    Selection happens after project authority. An operator may belong to two organizations on one
+    shared cluster while only the second owns the project; picking the first cluster binding would
+    give a false 403 and store the wrong organization on the schedule.
     """
     if not actor_email:
         return None
@@ -169,21 +158,15 @@ async def standing_authority_refusal(
 ) -> Optional[Refusal]:
     """Rebuild a schedule's durable authorization from current database state.
 
-    The HTTP request stores no authorization snapshot that a worker may trust later. This query
-    therefore proves three independent facts on every use: the organization is still active and
-    bound to the cluster, the named actor still creates or belongs to that organization, and a
-    named project on a shared cluster is still recorded by that organization's policy.
+    No authorization snapshot from the HTTP request is trusted later, so every use proves three
+    facts: the organization is still active and bound to the cluster, the actor still created or
+    belongs to it, and a named project on a shared cluster is still recorded by its policy.
+    ``default`` on a shared cluster and any project on a single-owner cluster pass, matching the
+    Partner request bound. Admins get no background exemption, and the scheduler process is never
+    an actor.
 
-    ``default`` remains visible on a shared cluster, matching the Partner request bound. A cluster
-    with one owner remains unrestricted by project, also matching that bound. Admin does not get a
-    background exemption: this product intentionally treats a recurring schedule as an
-    organization-owned standing commitment, not as a continuation of an Admin session. The
-    scheduler process itself is never an actor and cannot authorize a row merely by running it.
-
-    note: project-ownership rules deliberately do not require a tenant assignment. Dashboard-made
-    projects are recorded in an unassigned ``dashboard:<cluster>`` policy, because the rule owns
-    the Partner boundary without granting a Tenant access. Assignment expiry remains a Tenant ACL
-    concern and cannot be used as schedule authority without breaking that contract.
+    Project ownership does not require a tenant assignment: dashboard-made projects are recorded in
+    an unassigned ``dashboard:<cluster>`` policy, and assignment expiry is a Tenant ACL concern.
     """
     if organization_id is None:
         return Refusal(
@@ -272,12 +255,10 @@ async def standing_authority_refusal(
 async def db_refusal_for(db: Any, schedule: Any) -> Optional[Refusal]:
     """The refusals answerable from Postgres alone. Cheap, so it runs before any cluster call.
 
-    Roles arrive only in a JWT, so the worker does not attempt to reconstruct one. It instead
-    requires the persisted organization, the exact cluster/project ownership evidence, and the
-    creator's current database-backed affiliation. Historical ``registered_by`` metadata is not
-    current organization affiliation and cannot lend authority to this schedule after a rebind.
-    The one role the worker reads, for the view-only `default` exemption, is read from Authentik
-    in default_view_only_refusal, never reconstructed.
+    Roles arrive only in a JWT, so the worker does not reconstruct one. It requires the stored
+    organization, the cluster/project ownership evidence and the creator's current affiliation;
+    ``registered_by`` is not affiliation. The one role the worker reads, for the view-only
+    `default` exemption, comes from Authentik in default_view_only_refusal.
     """
     if schedule.state != "active":
         return Refusal(
@@ -298,15 +279,13 @@ async def db_refusal_for(db: Any, schedule: Any) -> Optional[Refusal]:
 async def default_view_only_refusal(db: Any, schedule: Any, *, roles: Any = None) -> Optional[Refusal]:
     """`default` where another party holds the cluster is view only for the schedule's owner.
 
-    A schedule created before that rule kept taking snapshots in another party's `default`
-    (RC5 acceptance FU-2, 2026-11-06). The rule is the browser's, judged from the owner: the party
-    from the database (cluster_parties), the role from Authentik, because an Admin's schedule keeps
-    running (owner decision 2026-11-06). The worker has no request role, so this is the one place
-    it reads one; an unanswered identity provider defers the run rather than pausing it.
+    This also stops schedules created before the rule. It is the browser's rule, judged from the
+    owner: the party from the database (cluster_parties), the role from Authentik, because an
+    Admin's schedule keeps running. The worker has no request role, so this is the one place it
+    reads one; an unanswered identity provider defers the run rather than pausing it.
 
-    note: kept apart from standing_authority_refusal on purpose. That one also decides which
-    schedules and migration rows an owner may see, and an owner must still see, pause and delete a
-    schedule this stops.
+    Kept apart from standing_authority_refusal, which also decides which schedules and migration
+    rows an owner may see: an owner must still see, pause and delete a schedule this stops.
     """
     from app.services.cluster_parties import default_view_only_clusters
     from app.services.creator_role import creator_is_admin
@@ -343,19 +322,15 @@ async def default_view_only_refusal(db: Any, schedule: Any, *, roles: Any = None
 def fingerprint_refusal(stored: Optional[str], current: Any) -> Optional[Refusal]:
     """Refuse when the cluster behind the name is demonstrably a different registration.
 
-    important: `cluster_fingerprint` returns None for BOTH "nothing is pinned" and "Vault could not
-    be read", and it swallows every exception to do it. Treating None as a mismatch would pause
-    every schedule on the fleet during a Vault outage; treating a mismatch as None would let a
-    re-registered cluster inherit another organization's schedule. So the refusal fires only when
-    both values are present and differ, and the ambiguity is stated here rather than discovered
-    later.
+    important: `cluster_fingerprint` returns None both when nothing is pinned and when Vault could
+    not be read. Treating None as a mismatch would pause every schedule during a Vault outage;
+    treating a mismatch as None would let a re-registered cluster inherit another organization's
+    schedule. So the refusal fires only when both values are present and differ.
 
-    `cluster_id` is free text with no foreign key in this schema, so the name alone cannot tell a
-    cluster from its replacement.
-
-    ``current`` is the cluster's `PinState`, or a bare fingerprint. A public-CA cluster renews its
-    certificate without becoming another registration, so a fingerprint in its renewal lineage is
-    still the same cluster.
+    `cluster_id` is free text with no foreign key, so the name alone cannot tell a cluster from its
+    replacement. ``current`` is the cluster's `PinState` or a bare fingerprint; a public-CA cluster
+    that renews its certificate is still the same cluster while the stored fingerprint is in its
+    renewal lineage.
     """
     from app.services.lxd_certs.pinning import PinState
 
@@ -382,10 +357,9 @@ def cluster_refusal_for(
     instance_config: Optional[Dict[str, Any]],
     instance_present: bool,
 ) -> Optional[Refusal]:
-    """The refusals that need the cluster's own answer. Pure: the caller does the reading.
+    """The refusals that need the cluster's own answer.
 
-    Pure on purpose. Every branch here is a decision an operator will one day have to defend, and a
-    function that also opens sockets cannot be exercised against the twenty states that matter.
+    Pure: the caller does the reading, so every branch can be tested without a cluster.
     """
     if not instance_present:
         # Not terminal on its own. The caller counts consecutive misses and pauses at the grace,
@@ -411,9 +385,8 @@ def cluster_refusal_for(
             terminal=True,
         )
 
-    # The owner's decision, applied at fire time rather than only at creation. An instance can
-    # acquire an upstream schedule months after ours was made, which is precisely the case a
-    # creation-time check cannot see.
+    # Checked at fire time as well as at creation: an instance can acquire an upstream schedule
+    # months after this one was made.
     if policy.get("externally_managed"):
         existing = policy.get("schedule") or "a schedule"
         return Refusal(
@@ -440,9 +413,9 @@ def refusal_is_terminal(refusal: Refusal, consecutive_failures: int) -> bool:
 def forbidden_scope_helpers() -> List[str]:
     """The org-scope helpers no module in this package may name.
 
-    Kept here as data rather than only in the ratchet so the rule is readable next to the code it
-    governs. Every one of these answers "allowed" when the ContextVar it reads is unset, which is
-    always, in a task the lifespan started.
+    Kept here as well as in the ratchet test so the rule is readable next to the code it governs.
+    Each answers "allowed" when the ContextVar it reads is unset, which it always is in a task the
+    lifespan started.
     """
     return [
         "verify_cluster_access",

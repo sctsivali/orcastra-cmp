@@ -1,22 +1,15 @@
 """Drop cluster ids no cluster is registered under from API key grants.
 
-Deployment data, not schema. The backend image does not ship ``scripts/``, so feed the file to
-the running backend's interpreter, dry run by default:
+The backend image does not ship ``scripts/``; pipe the file in. Dry run by default, idempotent:
 
     docker exec -i <backend> python - < backend/scripts/repair_key_grant_cluster_ids.py
     docker exec -i <backend> python - --apply < backend/scripts/repair_key_grant_cluster_ids.py
 
-A grant naming an unregistered id authorises nothing (there is no cluster to reach), but the key
-reports it as held, its integration polls it, and every poll looked the id up in Vault. On the
-dev installation the owner key of organization 6 still held ``nuc-2`` and ``blitz01``, the ids
-of two clusters registered again as ``nuc2`` and ``blitz001``.
-
-Nothing is remapped: a cluster registered again is a new trust identity, and ``blitz001``
-belongs to another organization. Two kinds of key are reported and left alone: an add-on
-installation's key (the installation owns its grant) and a key whose grant would be left
-empty (an empty grant hides the key from its partner's list; its owner decides). Each write
-takes the key's ownership lock, re-reads Vault uncached, and evicts the key's caches. Idempotent:
-a second run selects nothing.
+A grant naming an unregistered id authorises nothing, yet the key reports it as held and its
+integration polls it through Vault. Nothing is remapped: a re-registered cluster is a new trust
+identity, possibly of another organization. Only reported: add-on keys (the installation owns the
+grant) and keys an empty grant would hide from the partner's list (its owner decides). Each write
+takes the key's ownership lock, re-reads Vault uncached and evicts the key's caches.
 """
 
 from __future__ import annotations
@@ -42,7 +35,7 @@ def _registered_ids() -> List[str]:
     from app.services.lxd_service import get_lxd_service
 
     read = get_lxd_service().cert_manager.read_registry(False)
-    # A last-known copy is fine for a picker, not for deciding what to delete.
+    # Only a live Vault read may decide what to delete; a last-known copy can be stale.
     if read.source != "vault":
         raise SystemExit(f"the cluster registry was not read from Vault ({read.source}); refusing to judge any grant")
     return sorted(read.cluster_ids)

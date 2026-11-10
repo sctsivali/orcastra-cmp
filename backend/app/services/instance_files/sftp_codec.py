@@ -1,10 +1,10 @@
 """SFTP version 3 packets, with every length checked before it is trusted.
 
 important: the peer of this codec is a guest. On a virtual machine the bytes come from lxd-agent,
-which root inside the guest can replace, and LXD copies them to us unread. So a length field is an
-attacker's number. Nothing here allocates from one before comparing it to the bytes actually held,
-and the packet ceiling is enforced by the caller before the body is read at all. That is why this
-is not paramiko: its `_read_packet` reads whatever 32-bit size the peer states.
+which root inside the guest can replace, and LXD forwards them unread, so a length field is an
+attacker's number. Nothing here allocates from one before comparing it to the bytes held, and the
+caller enforces the packet ceiling before reading the body. paramiko is not used because its
+`_read_packet` reads whatever 32-bit size the peer states.
 
 Pure functions over bytes, no I/O, so the hostile cases can be tested as a table.
 """
@@ -239,8 +239,8 @@ def decode_data(body: bytes, requested: int) -> bytes:
 def decode_names(body: bytes) -> List[Name]:
     cursor = Cursor(body)
     count = cursor.u32()
-    # An entry costs at least 12 bytes (two empty strings and flags), so a count the packet could
-    # not hold is refused here rather than discovered after building a list for it.
+    # An entry costs at least 12 bytes (two empty strings and flags), so a count the packet cannot
+    # hold is refused before any list is built.
     if count * 12 > cursor.remaining:
         raise protocol_error("name count past the packet")
     names: List[Name] = []

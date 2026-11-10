@@ -9,12 +9,12 @@ class LXDCertManagerError(Exception):
 
 
 class ConnectionProbe(NamedTuple):
-    """What a single connectivity probe actually observed.
+    """What a single connectivity probe observed.
 
-    `reachable` and `trusted` are independent: a host can answer and still refuse us. Collapsing
-    them into one bool is what made a dead cluster and an untrusted one indistinguishable, so
-    verify_connection keeps returning a bool for its five existing callers while anything that
-    needs the distinction reads this instead. `reachable` is None only when the probe never ran.
+    `reachable` and `trusted` are independent: a host can answer and still refuse the client,
+    and a dead cluster must stay distinguishable from an untrusted one. verify_connection
+    returns a bool; callers that need the distinction read this. `reachable` is None only when
+    the probe never ran.
     """
     reachable: Optional[bool]
     trusted: bool
@@ -22,11 +22,7 @@ class ConnectionProbe(NamedTuple):
 
 
 def extract_cert_base64(pem_cert: str) -> str:
-    """
-    Extract pure base64 content from PEM certificate.
-    LXD API expects base64-encoded certificate without PEM headers.
-    """
-    # Remove headers, footers, and whitespace
+    """The base64 body of a PEM certificate, which is the form the LXD API expects."""
     lines = pem_cert.strip().split('\n')
     base64_lines = [
         line for line in lines 

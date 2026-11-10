@@ -1,11 +1,10 @@
 """Whether an add-on installation hears about a project: the webhook side of the party bound.
 
-note: webhooks were routed by cluster alone, so an add-on heard every project on a cluster it
-reached, another party's included (security review, 2026-11-06). An event's project must be in the
-installation's grant for that cluster, held to the installer's bound where another party holds the
-cluster (services/key_party_bound.py), judged when the event is queued (emitter.py). Delivery
-re-checks the stored grant (dispatcher.py); the delivery log and redeliver judge the current bound
-(routers/extension_webhooks.py).
+An event's project must be in the installation's grant for that cluster, held to the installer's
+bound where another party holds the cluster (services/key_party_bound.py), judged when the event
+is queued (emitter.py). Routing by cluster alone would let an add-on hear every project on a
+cluster it reaches, another party's included. Delivery re-checks the stored grant (dispatcher.py);
+the delivery log and redeliver judge the current bound (routers/extension_webhooks.py).
 """
 
 from __future__ import annotations
@@ -148,12 +147,10 @@ async def install_reaches_project(
 ) -> bool:
     """Whether an add-on installation may hear about `project` on `cluster_id`.
 
-    note: webhooks were routed by cluster alone, so an add-on heard every project on a cluster it
-    reached, another party's included (security review, 2026-11-06). The event's project must now
-    be in the installation's grant for that cluster, and where another party holds the cluster for
-    the installer, that grant is held to the installer's bound exactly as its key is. The bound is
-    read in its own session, once per installer for a `memo`, and waits ROLE_SECONDS at most for
-    the identity provider. Raises when it cannot be read.
+    The event's project must be in the installation's grant for that cluster, and where another
+    party holds the cluster for the installer, that grant is held to the installer's bound exactly
+    as its key is. The bound is read in its own session, once per installer for a `memo`, and waits
+    ROLE_SECONDS at most for the identity provider. Raises when it cannot be read.
 
     `deleted_and_held`: for a project delete, whether the delete named the installation's
     organization as one whose policies held the project. The project is in no bound by then, so
@@ -190,11 +187,11 @@ def payload_reach(payload: Mapping[str, Any]) -> Optional[Tuple[str, str, bool]]
 async def payload_reaches(install: Any, payload: Mapping[str, Any], memo: Optional[ReachMemo] = None) -> bool:
     """Whether a queued webhook payload is about something this installation reaches now.
 
-    An instance or volume event names its project; one that names none (queued before events
-    carried it) is not reached. A project event is about the project it names; a queued project
-    delete is judged as one the delete did not name as held (the queue does not keep that), so on a
-    cluster another party holds it is not reached. An event about the installation itself always
-    is. A bound that cannot be read is not reached.
+    An instance or volume event names its project; one that names none is not reached. A project
+    event is about the project it names; a queued project delete is judged as one the delete did
+    not name as held (the queue does not keep that), so on a cluster another party holds it is not
+    reached. An event about the installation itself always is. A bound that cannot be read is not
+    reached.
     """
     about = payload_reach(payload)
     if about is None:

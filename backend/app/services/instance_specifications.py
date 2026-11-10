@@ -6,8 +6,8 @@ field, sends LXD's ETag back with the PUT, waits for the daemon operation, and r
 back before calling it successful.
 
 The orchestration layer is durable. A request row is committed before any mutation, carries a
-short database lease, and can be reconciled after a worker restart without blindly submitting
-the write twice.
+short database lease, and can be reconciled after a worker restart without submitting the write
+twice.
 """
 
 from __future__ import annotations
@@ -1139,7 +1139,7 @@ async def _set_job(
         or (values.get("status") == "failure" and values.get("result") is not None)
     )
     # An ambiguous action (the daemon may or may not have applied it) leaves the cached
-    # inventory unproven, the same as a readback would replace it.
+    # inventory unproven, so it is invalidated as a readback would be.
     ambiguous_action = values.get("status") == "unknown" and values.get("result") is not None
     if transitioned and (
         values.get("stopped_by_job") is True
@@ -1244,8 +1244,8 @@ async def _terminal(
     if not transitioned:
         return False
     if status == "unknown":
-        # Unknown is deliberately not a terminal audit verdict. Reconciliation will emit the
-        # single success/failure/partial record after actual daemon state can be established.
+        # Unknown is not a terminal audit verdict. Reconciliation emits the single
+        # success/failure/partial record once the daemon state can be established.
         return True
     try:
         await drain_instance_operation_audits(job_id=row.job_id)
@@ -1381,7 +1381,7 @@ async def _complete_restart_after_apply(
     completion_status: str = "success",
     completion_error: Optional[str] = None,
 ) -> None:
-    """Start a guest stopped by this job and verify that it is actually running."""
+    """Start a guest stopped by this job and verify that it is running."""
     if completion_status not in {"success", "partial"}:
         raise ValueError("Unsupported restart completion status")
     guarded = await _read_before_automatic_start(
@@ -1929,8 +1929,8 @@ async def _run_claimed_specification_job(
             "unknown",
         }
         if row.status == "unknown" or row.stopped_by_job or ambiguous_phase:
-            # A cluster outage cannot turn a previously ambiguous mutation into a known
-            # failure. Retain target exclusivity and retry read-only reconciliation later.
+            # A cluster outage cannot turn an ambiguous mutation into a known failure.
+            # Retain target exclusivity and retry read-only reconciliation later.
             released = await _set_job(
                 row.job_id,
                 worker_id=worker_id,
@@ -1983,8 +1983,8 @@ async def _run_claimed_specification_job(
 
             if target_matches:
                 # No daemon specification operation belongs to a pending/preflight/applying
-                # phase. A matching state may have been changed externally; report that truth
-                # without claiming this job observed a successful terminal operation.
+                # phase. A matching state may have been changed externally; report it without
+                # claiming this job observed a successful terminal operation.
                 completion_error = (
                     "The requested specification is present, but this job did not record a "
                     "terminal daemon update operation."
@@ -2159,9 +2159,9 @@ async def _run_claimed_specification_job(
                     project=row.project,
                     expected_etag=current.etag or "",
                     # The persisted revision was checked above, while the instance still had
-                    # its original runtime state. A deliberate graceful stop changes execution
+                    # its original runtime state. This worker's graceful stop changes execution
                     # from restart_required to stopped, so recomputing that revision here would
-                    # reject the exact transition this worker just performed.
+                    # reject the transition this worker just performed.
                     expected_plan_revision="",
                     requested=row.requested or {},
                     acknowledgements=(row.target_spec or {}).get("acknowledgements", []),

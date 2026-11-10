@@ -1,7 +1,4 @@
-"""
-API Router for VM operations.
-Provides endpoints for listing, creating, and managing VMs across LXD nodes.
-"""
+"""VM routes under /vms: list, read, create, start, stop, restart, delete and metrics."""
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Optional
@@ -205,8 +202,8 @@ async def _legacy_effective_payload(
                 "plan_revision": evaluation.response.plan_revision,
             },
         )
-    # NETWORKLESS remains a warning on the synchronous compatibility endpoint. Its callers do
-    # not have an acknowledgement field, and isolated instances were already a supported use.
+    # NETWORKLESS stays a warning on this synchronous endpoint: its callers have no
+    # acknowledgement field, and isolated instances are a supported use.
     return evaluation
 
 
@@ -373,8 +370,8 @@ async def _create_vm_under_policy(
         # hold one database connection and block unrelated ownership work for up to 31 minutes.
         await db.commit()
 
-    # Do not hold the ownership transaction for a remote image pull. The durable active row is
-    # now the admission guard, and its background watcher survives client cancellation.
+    # Do not hold the ownership transaction for a remote image pull. From here the durable active
+    # row is the admission guard, and its background watcher survives client cancellation.
     return await _wait_for_legacy_create(job_id, request, lxd_service)
 
 
@@ -406,7 +403,7 @@ async def list_vms(
     """List all VMs across all LXD nodes with optional filtering."""
     if host:
         verify_cluster_access(host)
-    # Try cache first (30 second cache for VM list)
+    # Try the cache first; the list is cached for 180 seconds.
     cache = get_cache_manager()
     cache_key = get_scope_cache_key(f"vms:list:host={host}:status={status}:o={offset}:l={limit}")
     cached_response = None if fresh else cache.get("api_responses", cache_key)
@@ -419,7 +416,6 @@ async def list_vms(
     try:
         vms, connected_nodes = await lxd_service.list_all_vms()
         
-        # Apply filters
         filtered_vms = vms
         
         if host:
@@ -429,11 +425,9 @@ async def list_vms(
             filtered_vms = [vm for vm in filtered_vms if vm.status == status]
 
         # important: check_tenant_permission alone does not cover a Partner. The tenant ACL is
-        # always None for Admin and Partner, so it passes everything for them, and a Partner is
-        # scoped by cluster rather than by project. This list spans every project, so without
-        # the project bound it named the other organization's instances on a shared cluster.
-        # This is the same gate the /instances list applies; this route is a second, parallel
-        # instance list and was missed when that one was fixed.
+        # None for Admin and Partner and passes everything, and a Partner is scoped by cluster,
+        # not project. Without the project bound this list would name another organization's
+        # instances on a shared cluster. The /instances list applies the same gate.
         filtered_vms = [
             vm for vm in filtered_vms
             if project_is_visible(vm.host, vm.project or "default")
@@ -451,7 +445,7 @@ async def list_vms(
         def _type_or_none(node_name: str) -> Optional[str]:
             try:
                 return _registered_type(node_name)
-            except Exception:  # noqa: BLE001 - an unreadable record counts as LXD, as before
+            except Exception:  # noqa: BLE001 - an unreadable record counts as LXD
                 return None
 
         registered = dict(zip(
@@ -460,10 +454,10 @@ async def list_vms(
         ))
         lxd_count, microcloud_count, incus_count = count_engines(connected_nodes, registered.get)
 
-        # important: connected_nodes is what answered, not what exists. Both it and
+        # connected_nodes lists the clusters that answered. Both it and
         # get_node_names() pass through apply_cluster_filter, so the difference is the
-        # registered clusters this operator can see that stayed silent. Without it the
-        # list just gets shorter and nothing says why.
+        # visible registered clusters that stayed silent. Without it the list just gets
+        # shorter and nothing says why.
         unreachable_nodes = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(connected_nodes))
         )
@@ -482,9 +476,9 @@ async def list_vms(
         )
         
         # important: see instances.py. A fan-out where no cluster answered still
-        # returns 200 with an empty list, and caching that pins emptiness for the
-        # full TTL. Worse on a forced refresh, which would overwrite data the
-        # operator could still see with the result of an outage.
+        # returns 200 with an empty list. Caching it would pin the emptiness for the
+        # full TTL and, on a forced refresh, overwrite data the operator could still
+        # see with the result of an outage.
         if connected_nodes:
             if cache.instance_list_generation() == list_generation:
                 cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
@@ -633,9 +627,8 @@ async def create_vm(
         raise HTTPException(status_code=503, detail=str(e))
     except HTTPException:
         # important: let a deliberate status through. This try raises HTTPException
-        # itself, and the broad handler below rewrote it, so an unreachable cluster
-        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
-        # instead of 403.
+        # itself, and the broad handler below would turn an unreachable cluster's 503
+        # or a tenant ACL denial's 403 into a 500.
         raise
     except InstanceSecurityPolicyViolation as exc:
         raise _policy_refusal(exc) from exc
@@ -662,16 +655,12 @@ async def start_vm(
     _: None = Depends(check_read_only_mode),
 ):
     """Start a VM."""
-    # important: ONE project value is authorized and acted on. This checked the ACL against
-    # `request.project or "default"` and then handed `request.project` to the service, which
-    # searches EVERY project when it is None and returns the first hit. A caller holding
-    # `operate` on `default` was authorized there while the action ran against whichever project
-    # LXD listed first, which on a shared cluster is another tenant's instance.
-    #
-    # note: this router is the one the console actually drives. The identical routes under
-    # /instances carry the same fix, and fixing only those would have left the live path open.
+    # important: authorize and act on one project value. Given None, the service searches every
+    # project and acts on the first hit, so an ACL check against "default" would let the action
+    # land on another tenant's instance on a shared cluster. The console drives these routes; the
+    # /instances routes apply the same rule.
     project = verify_instance_view_access(request.host, request.project, vm_name)
-    # important: enforce BEFORE the try - a 403 raised inside it would be swallowed and re-raised 500.
+    # important: enforce before the try; a 403 raised inside it would be re-raised as a 500.
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(request.host, project, vm_name, "operate")
     try:
@@ -683,7 +672,6 @@ async def start_vm(
         )
         get_cache_manager().invalidate_instance_cache()
         
-        # Log activity: VM start success
         activity_logger.log_activity(
             action="vm.start",
             target_type="vm",
@@ -709,7 +697,6 @@ async def start_vm(
         # falls to `except Exception` below and answers 500.
         raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
-        # Log activity: VM start failure
         activity_logger.log_activity(
             action="vm.start",
             target_type="vm",
@@ -724,7 +711,6 @@ async def start_vm(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error starting VM {vm_name}: {e}")
-        # Log activity: VM start failure
         activity_logger.log_activity(
             action="vm.start",
             target_type="vm",
@@ -736,7 +722,7 @@ async def start_vm(
         )
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # a failure may still have changed the instance, or found it gone; throttled
+        # A failure may still have changed the instance, or found it gone; the clear is throttled.
         clear_instance_lists_after_failure(sys.exc_info()[1])
 
 
@@ -758,14 +744,10 @@ async def stop_vm(
     _: None = Depends(check_read_only_mode),
 ):
     """Stop a VM."""
-    # important: ONE project value is authorized and acted on. This checked the ACL against
-    # `request.project or "default"` and then handed `request.project` to the service, which
-    # searches EVERY project when it is None and returns the first hit. A caller holding
-    # `operate` on `default` was authorized there while the action ran against whichever project
-    # LXD listed first, which on a shared cluster is another tenant's instance.
-    #
-    # note: this router is the one the console actually drives. The identical routes under
-    # /instances carry the same fix, and fixing only those would have left the live path open.
+    # important: authorize and act on one project value. Given None, the service searches every
+    # project and acts on the first hit, so an ACL check against "default" would let the action
+    # land on another tenant's instance on a shared cluster. The console drives these routes; the
+    # /instances routes apply the same rule.
     project = verify_instance_view_access(request.host, request.project, vm_name)
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(request.host, project, vm_name, "operate")
@@ -779,7 +761,6 @@ async def stop_vm(
         )
         get_cache_manager().invalidate_instance_cache()
         
-        # Log activity: VM stop success
         activity_logger.log_activity(
             action="vm.stop",
             target_type="vm",
@@ -800,9 +781,9 @@ async def stop_vm(
 
     except LXDGracefulTimeoutError as e:
         # Must precede LXDOperationError (its parent). The guest ignored the ACPI
-        # shutdown (commonly a VM with no OS, or one at a boot menu); recoverable
-        # by retrying with force, so return 504 + a GRACEFUL_TIMEOUT audit signal
-        # instead of a bare 400 -- matching /instances/{name}/stop.
+        # shutdown (commonly a VM with no OS, or one at a boot menu); retrying with
+        # force recovers, so answer 504 with a GRACEFUL_TIMEOUT audit signal instead
+        # of a bare 400, as /instances/{name}/stop does.
         logger.warning(f"Graceful stop timed out for VM {vm_name}: {e}")
         activity_logger.log_activity(
             action="vm.stop",
@@ -821,7 +802,6 @@ async def stop_vm(
         # falls to `except Exception` below and answers 500.
         raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
-        # Log activity: VM stop failure
         activity_logger.log_activity(
             action="vm.stop",
             target_type="vm",
@@ -836,7 +816,6 @@ async def stop_vm(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error stopping VM {vm_name}: {e}")
-        # Log activity: VM stop failure
         activity_logger.log_activity(
             action="vm.stop",
             target_type="vm",
@@ -848,7 +827,7 @@ async def stop_vm(
         )
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # a failure may still have changed the instance, or found it gone; throttled
+        # A failure may still have changed the instance, or found it gone; the clear is throttled.
         clear_instance_lists_after_failure(sys.exc_info()[1])
 
 
@@ -870,14 +849,10 @@ async def restart_vm(
     _: None = Depends(check_read_only_mode),
 ):
     """Restart a VM."""
-    # important: ONE project value is authorized and acted on. This checked the ACL against
-    # `request.project or "default"` and then handed `request.project` to the service, which
-    # searches EVERY project when it is None and returns the first hit. A caller holding
-    # `operate` on `default` was authorized there while the action ran against whichever project
-    # LXD listed first, which on a shared cluster is another tenant's instance.
-    #
-    # note: this router is the one the console actually drives. The identical routes under
-    # /instances carry the same fix, and fixing only those would have left the live path open.
+    # important: authorize and act on one project value. Given None, the service searches every
+    # project and acts on the first hit, so an ACL check against "default" would let the action
+    # land on another tenant's instance on a shared cluster. The console drives these routes; the
+    # /instances routes apply the same rule.
     project = verify_instance_view_access(request.host, request.project, vm_name)
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(request.host, project, vm_name, "operate")
@@ -891,7 +866,6 @@ async def restart_vm(
         )
         get_cache_manager().invalidate_instance_cache()
         
-        # Log activity: VM restart success
         activity_logger.log_activity(
             action="vm.restart",
             target_type="vm",
@@ -913,9 +887,9 @@ async def restart_vm(
     except MigrationFenceConflict as exc:
         raise HTTPException(status_code=409, detail=exc.detail) from exc
     except LXDGracefulTimeoutError as e:
-        # Must precede LXDOperationError (its parent). Guest ignored the ACPI
-        # shutdown during the restart; recoverable with force. 504 + GRACEFUL_TIMEOUT
-        # audit signal, matching /instances/{name}/restart.
+        # Must precede LXDOperationError (its parent). The guest ignored the ACPI
+        # shutdown during the restart; retrying with force recovers. 504 with a
+        # GRACEFUL_TIMEOUT audit signal, as /instances/{name}/restart does.
         logger.warning(f"Graceful restart timed out for VM {vm_name}: {e}")
         activity_logger.log_activity(
             action="vm.restart",
@@ -934,7 +908,6 @@ async def restart_vm(
         # falls to `except Exception` below and answers 500.
         raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
-        # Log activity: VM restart failure
         activity_logger.log_activity(
             action="vm.restart",
             target_type="vm",
@@ -949,7 +922,6 @@ async def restart_vm(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error restarting VM {vm_name}: {e}")
-        # Log activity: VM restart failure
         activity_logger.log_activity(
             action="vm.restart",
             target_type="vm",
@@ -961,7 +933,7 @@ async def restart_vm(
         )
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # a failure may still have changed the instance, or found it gone; throttled
+        # A failure may still have changed the instance, or found it gone; the clear is throttled.
         clear_instance_lists_after_failure(sys.exc_info()[1])
 
 
@@ -1019,7 +991,6 @@ async def delete_vm(
                 f"Failed to clean up tags for deleted instance {vm_name}: {tag_err}"
             )
 
-        # Log activity: VM delete success
         activity_logger.log_activity(
             action="vm.delete",
             target_type="vm",
@@ -1045,7 +1016,6 @@ async def delete_vm(
         # falls to `except Exception` below and answers 500.
         raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
-        # Log activity: VM delete failure
         activity_logger.log_activity(
             action="vm.delete",
             target_type="vm",
@@ -1060,7 +1030,6 @@ async def delete_vm(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error deleting VM {vm_name}: {e}")
-        # Log activity: VM delete failure
         activity_logger.log_activity(
             action="vm.delete",
             target_type="vm",
@@ -1072,7 +1041,7 @@ async def delete_vm(
         )
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # a failure may still have changed the instance, or found it gone; throttled
+        # A failure may still have changed the instance, or found it gone; the clear is throttled.
         clear_instance_lists_after_failure(sys.exc_info()[1])
 
 

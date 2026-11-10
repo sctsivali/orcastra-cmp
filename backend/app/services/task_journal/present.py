@@ -1,11 +1,10 @@
 """Journal rows on the wire, with the field policy of the caller's tier applied.
 
 Every declared field of `TaskRecord` and `ClusterLogEntry` is set here explicitly, so a column
-the models gain and this module does not know about is a test failure rather than a default
-the frontend types and builds a control on. The tier is an argument: this package never reads
-the request scope itself.
+the models gain but this module does not set fails a test instead of reaching the frontend as a
+silent default. The tier is an argument: this package never reads the request scope itself.
 
-Field policy (D12): `target_organization_id/slug` and `requestor.address` reach Admin only;
+Field policy: `target_organization_id/slug` and `requestor.address` reach Admin only;
 `location` reaches Admin and Partner; a tenant's `metadata` and `details` are cut to the
 allowlist below. Nothing here can reveal what was never stored (`fds`, exec command lines,
 audit before/after bodies).

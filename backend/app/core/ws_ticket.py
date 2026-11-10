@@ -1,14 +1,14 @@
 """Single-use tickets that open a WebSocket in place of an access token in its URL.
 
-important: a browser cannot set headers on a WebSocket upgrade, so every socket here carried the
-caller's access token in its query string, where proxies, access logs and crash reports keep
+important: a browser cannot set headers on a WebSocket upgrade, so without a ticket the caller's
+access token would sit in the query string, where proxies, access logs and crash reports keep
 URLs. A ticket is minted over an authenticated POST, lives 30 seconds, opens one socket of one
 kind for one target, and is deleted when it is redeemed. The store keeps only its SHA-256, so
 neither a key listing nor a log line can replay one.
 
-note: a ticket carries the identity of the token it was minted with, and that token's expiry as
-the session's. Connect-time authorization still runs on every socket; the ticket replaces only
-how the caller proves who they are.
+A ticket carries the identity of the token it was minted with, and that token's expiry as the
+session's. Connect-time authorization still runs on every socket; the ticket replaces only how
+the caller proves who they are.
 """
 
 import hashlib

@@ -5,8 +5,8 @@ password, which goes on chpasswd's stdin through the pinned exec (`pinned_exec.p
 argv only after `NEW_NAME` or `inventory.EXISTING_NAME` accepted them, and none may start with a
 dash, so no name can be read as an option.
 
-note: a non-zero exit is reported by code. A tool's stderr is matched as a hint here and never
-returned or logged, because a guest writes it.
+A non-zero exit is reported by code. A tool's stderr is matched as a hint here and never returned
+or logged, because a guest writes it.
 """
 
 from __future__ import annotations
@@ -102,8 +102,8 @@ async def set_password(guest: Guest, facts: GuestFacts, account: Account, passwo
     result = await guest.with_stdin(argv, chpasswd_stdin(account.name, password), label="password_set")
     if result.exit_code != 0:
         lowered = (result.stderr + result.stdout).lower()
-        # important: a PAM quality module (pwquality, cracklib) refused it. Its reason names the
-        # rule, which helps; its text is guest-written, so only the fact is returned.
+        # important: a PAM quality module (pwquality, cracklib) refused it. Its message is
+        # guest-written, so only the fact is returned, never the text.
         if "bad password" in lowered or "pam_chauthtok" in lowered or "authentication token manipulation" in lowered:
             raise errors.refuse(
                 "password_rejected_by_guest", 422,

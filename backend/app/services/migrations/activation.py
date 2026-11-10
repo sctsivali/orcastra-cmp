@@ -152,8 +152,8 @@ async def _change_state(
                     # important: a settled, failed start that leaves the target stopped is a
                     # definitive refusal (ex; LXD's start validation finding the MAC or the name
                     # already in use on that member): the target never ran. Treated as unknown,
-                    # reconciliation re-adopted it and started it again on every backoff while
-                    # the fenced source stayed down, then gave up into manual recovery.
+                    # reconciliation would re-adopt it and start it again on every backoff while
+                    # the fenced source stays down, then give up into manual recovery.
                     state = {**state, "target_start_refused": True}
                     await _resource_update(resource.resource_id, state="cutting_over", safe_result=state)
                     raise TargetStartRefused(message)
@@ -242,8 +242,9 @@ async def _fence_source_autostart(
         expanded = source.get("expanded_config") or source.get("config") or {}
         if str(expanded.get("boot.autostart") or "").lower() != "true":
             if state.get("source_autostart_fence_intent") and not state.get("source_autostart_fenced"):
-                # important: the patch landed before a crash or a failed readback. Adopt it, as the
-                # NIC fence does, instead of a contract that reads the fenced value as drift.
+                # important: the patch already landed, before a crash or a failed readback.
+                # Adopt it, as the NIC fence does, instead of a contract that reads the fenced
+                # value as drift.
                 state = {
                     **state,
                     "source_autostart_fenced": True,

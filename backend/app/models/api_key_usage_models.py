@@ -1,8 +1,8 @@
 """When an external API key was last used, kept apart from the key's Vault document.
 
-important: the hot path used to rewrite the whole key document to record this, from a cached
-read and without the key's lock, so it could put back a grant a cleanup had just removed, an old
-`is_revoked`, or old capabilities. A row here is the only thing a request writes.
+important: a request records its use here and nowhere else. Rewriting the key document on the
+hot path, from a cached read and without the key's lock, could put back a grant a cleanup had
+just removed, an old `is_revoked`, or old capabilities.
 """
 
 from datetime import datetime, timezone

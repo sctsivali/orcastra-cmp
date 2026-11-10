@@ -1,30 +1,15 @@
 """
-Release the other workers' breakers once one worker proves a cluster reachable again.
+Share breaker verdicts across workers through cache markers.
 
-The breaker (services/lxd/health.py) is per process, and prod runs four uvicorn workers. When a
-cluster that refused every certificate is repaired, only the worker that served Check
-Authentication or Verify reconnects. The others kept answering 503 until their own trip expired
-and the 30s healer reconnected them: about 37s measured in the lab, up to 90s in theory.
-
-Every trusted connect now leaves a shared "proven at" marker. Each worker runs a short loop that
-retries, through the healer's own door (`ensure_connection`), any cluster it last saw fail
-before that marker. `health.clear` drops the failure time before the retry, so a cluster is
-retried once per marker and a cluster that stays broken cannot cause a storm.
-
-note: without Redis the marker lands in the announcing worker's memory only, which leaves every
-other worker exactly where it was before this module existed. That is the fallback, not a new
-failure mode. A worker with nothing failed does no cache I/O; one with a cluster that stays dead
-reads one marker per such cluster per pass.
-
-Failures are shared the same way (2026-11-04). Every worker's healer redialed each dead cluster
-once its own 60 s trip lapsed, and a fleet read that got there first paid the dial on a request
-(about 8 s against a silent host on dev). Now only the collector's leader probes clusters it
-holds down, every DEAD_PROBE_INTERVAL_S, past its own trip, and publishes what it observed as a
-"down at" marker carrying only the time and the kind. A follower's healer adopts a fresh marker
-instead of dialing (health.adopt), and learns of a recovery from the proof as before. A proof as
-new as or newer than a down marker always wins, a malformed marker is ignored, and a follower
-falls back to its own redials as soon as no fresh marker is left: a leader that stopped probing,
-or no Redis, leaves every worker exactly as it was before.
+The breaker (services/lxd/health.py) is per process, so a cluster repaired through one worker
+stays tripped in the others. Every trusted connect leaves a shared "proven at" marker, and each
+worker's loop retries (through `ensure_connection`) any cluster it last saw fail before that marker.
+`health.clear` drops the failure time first, so a cluster is retried once per marker and one that
+stays broken cannot cause a storm. Failures are shared too: only the metrics collector's leader
+probes the clusters it holds down, every `dead_probe_interval()`, and publishes a "down at" marker
+(time and kind only) that followers adopt instead of dialing (`health.adopt`). A proof at least as
+new as a down marker wins, a malformed marker is ignored, and with no fresh marker a follower
+redials itself. Without Redis every worker heals for itself.
 """
 
 import asyncio
@@ -51,7 +36,7 @@ SYNC_TIMEOUT_S = 60.0
 MAX_CLOCK_SKEW_S = 5.0
 
 DOWN_NAMESPACE = "lxd_cluster_down"
-# Two probe intervals and then some: a marker outlives one missed probe, not a leader that stopped.
+# Outlives one missed probe, but expires once the leader stops probing.
 DOWN_TTL_S = 120
 _DOWN_KINDS = (health.KIND_OFFLINE, health.KIND_UNAUTHORIZED)
 PROBE_WORKERS = 4
@@ -60,7 +45,7 @@ PROBE_WALL_S = 20.0
 
 
 def dead_probe_interval() -> float:
-    """How often the leader redials the clusters it holds down. Owner decision 2026-11-04: 30 s."""
+    """Seconds between the leader's redials of the clusters it holds down (default 30, minimum 5)."""
     try:
         return max(5.0, float(os.environ.get("ORCASTRA_DEAD_PROBE_SECONDS", "30")))
     except ValueError:
@@ -68,10 +53,10 @@ def dead_probe_interval() -> float:
 
 
 def shared_mode() -> bool:
-    """Whether failures are shared: a reachable Redis, and not switched off.
+    """Whether failures are shared: Redis answers and the feature is not switched off.
 
-    note: false while the Redis guard skips Redis, so during an outage every worker heals for
-    itself (the behaviour without Redis) instead of waiting on markers nobody can write.
+    False while the Redis guard skips Redis, so during an outage every worker heals for itself
+    instead of waiting on markers no worker can write.
     """
     if os.environ.get("ORCASTRA_FLEET_VERDICT_SHARED", "true").strip().lower() in ("0", "false", "no"):
         return False
@@ -81,7 +66,7 @@ def shared_mode() -> bool:
     return answering(getattr(get_cache_manager(), "redis_client", None))
 
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lxd-breaker-sync")
-# important: its own thread. The announce runs inside connect_with_vault_cert, which
+# important: a separate thread. The announce runs inside connect_with_vault_cert, which
 # _try_rotated_certificate calls under a per-cluster lock; a hung Redis must not hold that lock.
 _announcer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lxd-breaker-announce")
 _prober = ThreadPoolExecutor(max_workers=PROBE_WORKERS, thread_name_prefix="lxd-dead-probe")
@@ -121,8 +106,8 @@ def _write_down(cluster_id: str, observed_at: float, kind: str) -> None:
 def publish_down(cluster_id: str, kind: str, observed_at: float) -> None:
     """The leader's probe saw `cluster_id` fail. Never blocks or raises.
 
-    important: only probe_dead_once calls this (test_only_the_leader_publishes_a_down_verdict).
-    A request's own failure is never shared: a fleet verdict is a background observation, so no
+    important: only the dead-cluster probe (`_probe_one`) calls this
+    (test_only_the_probe_publishes_a_down_verdict). A request's own failure is never shared, so no
     caller can mark a cluster down for every worker by sending reads.
     `observed_at` is when the probe started, so a proof made while it ran outranks it.
     """
@@ -135,7 +120,7 @@ def publish_down(cluster_id: str, kind: str, observed_at: float) -> None:
 
 
 def announce_proven(cluster_id: str) -> None:
-    """Never blocks or raises. The time is taken now, at the proof, not when the write lands."""
+    """Publish a reachability proof. Never blocks or raises; the time is taken at the call."""
     try:
         _announcer.submit(_write_marker, cluster_id, time.time())
     except RuntimeError:  # the executor is gone at interpreter shutdown
@@ -146,7 +131,7 @@ def _proven_at(cache: Any, cluster_id: str) -> Optional[float]:
     try:
         value = cache.get(PROVEN_NAMESPACE, cluster_id)
         proven_at = float(value) if value is not None else None
-    except Exception:  # noqa: BLE001 - unreadable means "not proven", the pre-sync behaviour
+    except Exception:  # noqa: BLE001 - unreadable means "not proven"
         return None
     if proven_at is None or not math.isfinite(proven_at) or proven_at > time.time() + MAX_CLOCK_SKEW_S:
         return None
@@ -270,8 +255,8 @@ def sync_once(lxd_service: Any) -> List[str]:
                 recovered.append(cluster_id)
                 continue
         except (LXDTransportPinError, LXDLocalStorageError) as exc:
-            # Never recorded anywhere in this codebase: a pin violation is not reachability, and a
-            # local storage fault never contacted the peer. See test_storage_faults_never_trip_the_breaker.
+            # Never recorded: a pin violation is not reachability, and a local storage fault never
+            # contacted the peer (test_storage_faults_never_trip_the_breaker).
             logger.warning("Breaker sync could not reconnect %s: %s", cluster_id, exc)
             continue
         except Exception as exc:  # noqa: BLE001 - ensure_connection catches the rest itself
@@ -287,7 +272,7 @@ def sync_once(lxd_service: Any) -> List[str]:
         try:
             from app.core.cache import get_cache_manager
 
-            # One pass, one invalidation: it clears fleet-wide lists, not one cluster's keys.
+            # One call per pass: the invalidation clears fleet-wide lists, whatever the cluster ids.
             get_cache_manager().invalidate_cluster_reachability(*recovered)
         except Exception as exc:  # noqa: BLE001
             logger.debug("Reachability cache invalidation after breaker sync failed: %s", exc)
@@ -321,7 +306,7 @@ async def _loop(interval: float) -> None:
 
     while True:
         await asyncio.sleep(interval)
-        # important: a local dict read first. A worker with nothing failed does no I/O at all.
+        # A local dict read first, so a worker with nothing failed does no I/O.
         if not health.failure_times():
             continue
         await _probe_if_leading()

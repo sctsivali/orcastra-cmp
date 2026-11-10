@@ -1,9 +1,9 @@
 """Read a route's JSON body in the route, so a 422 never echoes what the caller sent.
 
 important: FastAPI's own 422 for a declared body lists each failing value back to the caller, and
-it parses that body before any dependency (feature flag, login) runs. A secret one character too
-long would come back in the response and in any proxy log on the way. Routes that accept secrets
-read their body with this instead.
+it parses that body before any dependency (feature flag, login) runs, so a secret one character
+too long would come back in the response and in any proxy log. Routes that accept secrets read
+their body with this instead.
 """
 
 from typing import Any, Dict, Type, TypeVar

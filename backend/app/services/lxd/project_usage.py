@@ -4,8 +4,8 @@ LXD's project limit checks (lxd/project/limits.go) sum, over every instance in t
 whatever its state, the expanded config (profiles applied) of `limits.cpu` and
 `limits.memory`, and count instances by type against `limits.instances`,
 `limits.containers` and `limits.virtual-machines`. The create-instance form shows the
-result beside the operator's request, so the daemon's synchronous refusal is no longer the
-first signal. Aggregates only: nothing here carries an instance name.
+result beside the operator's request, before the daemon refuses it. Aggregates only:
+nothing here carries an instance name.
 """
 
 import logging
@@ -62,9 +62,8 @@ class ProjectUsage:
     used: Dict[str, int]
     # False when the instance read failed: the limits are real, the usage is a floor of zero.
     complete: bool
-    # Newer daemons expose authoritative aggregate allocation through project state. Keep
-    # per-resource completeness so a missing disk-capability check does not make a verified
-    # CPU-only change look unknowable. ``None`` preserves the legacy all-or-nothing contract
+    # Per-resource completeness, so a missing disk capability does not make a verified
+    # CPU-only change look unknowable. ``None`` falls back to ``complete`` for every field,
     # for test doubles and callers that construct this type directly.
     complete_fields: Optional[Set[str]] = None
 
@@ -79,9 +78,9 @@ def _read_project_disk_allocation(client: Any, project: str) -> Optional[int]:
     instance root devices would undercount and could approve a growth the daemon must reject,
     so no local approximation is used.
     """
-    # PyLXD exposes ``has_api_extension``, not ``has_extension``. Read the cached
-    # handshake directly, as the rest of this service layer does, because test doubles and
-    # unusual daemons can omit the extension list and PyLXD's helper then raises KeyError.
+    # Read the cached handshake directly, as the rest of this service layer does: test
+    # doubles and unusual daemons can omit the extension list, and PyLXD's
+    # ``has_api_extension`` then raises KeyError.
     info = getattr(client, "host_info", None) or {}
     if "project_usage" not in (info.get("api_extensions") or []):
         return None
@@ -100,9 +99,9 @@ def _read_project_disk_allocation(client: Any, project: str) -> Optional[int]:
     else:
         return None
 
-    # Incus returns the canonical project-state fields as ``Limit`` and ``Usage``.
-    # Older test doubles and daemon variants can use lowercase keys. Do not coerce
-    # booleans or floats into byte counts because an uncertain quota read must fail closed.
+    # Incus returns the project-state fields as ``Limit`` and ``Usage``; some test doubles
+    # and daemon variants use lowercase keys. Booleans and floats are refused rather than
+    # coerced into byte counts: an uncertain quota read must fail closed.
     if isinstance(raw_usage, bool) or not isinstance(raw_usage, (int, str)):
         return None
     try:
@@ -151,8 +150,8 @@ def read_project_usage(client: Any, project: str) -> ProjectUsage:
         rows, complete, instance_usage_complete = [], False, False
     for row in rows:
         expanded = row.get("expanded_config") or row.get("config") or {}
-        # default=0: LXD refuses to create an instance without limits.cpu in a project that
-        # limits it, so an unset value is nothing, not the member read's "one core".
+        # default=0: in a project that limits CPU, LXD refuses an instance without
+        # limits.cpu, so an unset value counts as zero here (the member read counts one core).
         used["cpu"] += parse_cpu_limit(expanded.get("limits.cpu"), default=0)
         used["memory_bytes"] += parse_lxd_size(expanded.get("limits.memory")) or 0
         used["instances"] += 1

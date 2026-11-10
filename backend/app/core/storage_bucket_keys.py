@@ -4,10 +4,10 @@ LXD serves storage-pools/<pool>/buckets/<bucket>/keys and keys/<name> to anyone 
 bucket, and each key answers with its S3 access key and secret key. A key granted `read` on one
 project could collect the credentials of every bucket there, which outlive the API key and reach the
 bucket without passing this proxy. So the path and everything below it are refused like the trust
-store (`/certificates`), whatever the grant. Bucket reads other than the keys are left as they were.
+store (`/certificates`), whatever the grant. Other bucket reads are unaffected.
 
-note: read off canonical_proxy_path, so a case, a percent-encoding, a trailing slash or a query
-cannot present a second spelling. `/proxy` and MCP have no bucket operation, which
+The path is read off canonical_proxy_path, so a case, a percent-encoding, a trailing slash or a
+query cannot present a second spelling. `/proxy` and MCP have no bucket operation, which
 tests/test_storage_bucket_keys_are_never_proxied.py holds with a ratchet.
 """
 

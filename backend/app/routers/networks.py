@@ -1,7 +1,4 @@
-"""
-API Router for Network operations.
-Provides endpoints for managing LXD networks.
-"""
+"""Network endpoints: list, read, create, update and delete LXD networks, and their state."""
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
 from typing import Optional, List, Dict
@@ -88,7 +85,7 @@ router = APIRouter(
     dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
 )
 
-# Thread pool for parallel operations
+# Pool for the list fan-out and the bounded network writes.
 _executor = ThreadPoolExecutor(max_workers=5)
 
 # Wall-clock cap for a create. On a cluster the call is N+4 sequential round trips, each
@@ -109,11 +106,10 @@ NETWORK_MAX_IN_FLIGHT_PER_CLUSTER = 1
 def _invalidate_network_lists() -> None:
     """A network write changes the networks list and the gateway rows IPAM shows for it.
 
-    IPAM caches for 120 s and used to be left alone, so a network created or deleted here kept
-    its old gateway row on the IPAM page until the TTL ran out.
+    Both are cleared; otherwise IPAM shows a stale gateway row until its 120 s TTL runs out.
     """
     cache = get_cache_manager()
-    # one family per call: some cache stand-ins accept a single kind
+    # One family per call: some cache stand-ins accept a single kind.
     cache.invalidate_resource_cache("networks")
     cache.invalidate_resource_cache("ipam")
 
@@ -124,7 +120,11 @@ async def _run_network_blocking(
     host: str,
     label: str,
 ):
-    """Keep the cluster lock until an admitted worker has actually stopped."""
+    """Run one bounded network call.
+
+    On timeout or cancellation, wait for the admitted worker to stop before raising, so the
+    caller keeps the cluster lock until it has.
+    """
     try:
         return await run_blocking(
             function,
@@ -149,7 +149,7 @@ async def _run_network_blocking(
 
 
 class NetworkInfo(BaseModel):
-    """Network information."""
+    """One LXD network and the project that holds it."""
     name: str = Field(..., description="Network name")
     description: str = Field("", description="Network description")
     type: str = Field(..., description="Network type (bridge, physical, etc)")
@@ -165,11 +165,8 @@ class NetworkInfo(BaseModel):
 
 
 # An OVN network reaches the outside world through an uplink, and LXD accepts only a managed
-# Bridge or Physical network for the job. The dashboard used to hand the daemon whatever the
-# operator picked, and the picker offered every interface it could see: other OVN networks,
-# macvlan interfaces, and the loopback. On one LXD 6.9 host that is 11 candidates LXD cannot
-# accept out of 23 offered. Choosing one produced a failure at the daemon, or an instance that
-# never finished creating.
+# bridge or physical network for the job. Any other interface (another OVN network, macvlan,
+# the loopback) fails at the daemon or leaves an instance that never finishes creating.
 OVN_UPLINK_TYPES = frozenset({"bridge", "physical"})
 
 # Network types that carry member-specific config on a cluster, and so must be defined on
@@ -195,9 +192,8 @@ def _uplink_candidates(client, host: str) -> Dict[str, Dict]:
 def _restricted_uplinks(project_config: Dict[str, str]) -> Optional[set]:
     """The uplinks a project is allowed to use, or None when it is not restricted.
 
-    important: LXD ignores the whole `restricted.*` family unless `restricted` is true, so
-    honouring the list unconditionally would wrongly narrow the choice for every ordinary
-    project. Most projects on this fleet set `restricted: false` explicitly.
+    LXD ignores the whole `restricted.*` family unless `restricted` is true, so honouring the
+    list unconditionally would wrongly narrow the choice for every ordinary project.
     """
     if str(project_config.get("restricted", "false")).lower() != "true":
         return None
@@ -286,31 +282,26 @@ def validate_uplink(
 
 
 # Maps a daemon error onto a status and strips URLs and filesystem paths out of the text
-# before it reaches the client.
-#
-# note: both used to be defined here, and this file was the only correct copy in the backend
-# while 169 other handlers passed `str(e)` through untouched. They now live in app/core so the
-# global 5xx handler and the image and storage-volume delete paths share one definition
-# rather than growing variants that drift.
+# before it reaches the client. Shared through app/core, so the global 5xx handler and the
+# image and storage-volume delete paths use one definition.
 from app.core.lxd_errors import lxd_http_error, lxd_transport_error  # noqa: E402
 
 
-# note: module-level aliases, not direct imports at the call sites. create_network resolves
-# these by name at call time, which is what lets a test swap the cluster shape.
+# Module-level aliases rather than direct imports at the call sites: create_network resolves
+# these by name at call time, so a test can swap the cluster shape.
 _is_clustered = is_clustered
 _cluster_member_names = cluster_member_names
 
 
 def _lxd_http_error(exc: Exception, network_name: str) -> HTTPException:
     """Map an LXD/daemon error onto a meaningful status instead of a blanket 500."""
-    # note: the mapping moved to app/core/lxd_errors so the image and storage-volume delete
-    # paths share it. This wrapper stays because five call sites below read better naming
-    # the network once rather than repeating the noun at each raise.
+    # The mapping lives in app/core/lxd_errors; this wrapper names the noun once for the
+    # call sites below.
     return lxd_http_error(exc, "Network", network_name)
 
 
 class NetworkListResponse(BaseModel):
-    """Response for listing networks."""
+    """Networks across the requested clusters."""
     total: int = Field(..., description="Total number of networks")
     networks: List[NetworkInfo] = Field(..., description="List of networks")
     nodes: List[str] = Field(..., description="Clusters included in this response")
@@ -340,14 +331,14 @@ class NetworkListResponse(BaseModel):
 def _fetch_networks_for_node(
     lxd_service: LXDService, node_name: str, project: Optional[str] = None
 ) -> tuple[str, Optional[List[NetworkInfo]], bool]:
-    """Fetch networks for a single node - runs in thread pool.
+    """Networks on one cluster. Runs in the thread pool.
 
     Returns (node_name, networks, complete). `networks` is None when the node is
     unreachable, so the caller can tell "node is down" apart from "node has no
-    networks" (previously both looked like an empty list).
+    networks".
 
     With no project asked for this reads every project on the node. Naming one reads the
-    project that actually holds its networks, which is the project itself only when it sets
+    project that holds its networks, which is the project itself only when it sets
     features.networks; otherwise it sees the default project's.
     """
     networks_list: List[NetworkInfo] = []
@@ -375,11 +366,10 @@ def _fetch_networks_for_node(
                 project=row.get("project") or DEFAULT_PROJECT,
             ))
     except Exception as e:
-        # important: an error while listing is not the same as an unreachable node, and
-        # conflating them is user-visible. A network disappearing mid-iteration raises
-        # "Network not found", and treating that as unreachability wiped every network on a
-        # healthy node and told the operator the node was down. Reproduced by listing while
-        # a network was being deleted. Report what was collected instead.
+        # important: an error while listing is not an unreachable node. A network
+        # disappearing mid-iteration raises "Network not found", and treating that as
+        # unreachability would hide every network on a healthy node and report it down.
+        # Report what was collected instead.
         logger.warning(f"Partial network listing on {node_name}: {e}")
         return node_name, networks_list, False
     return node_name, networks_list, complete
@@ -403,7 +393,7 @@ async def list_networks(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
 ):
-    """List all networks."""
+    """List the networks the caller may see."""
     if host:
         verify_cluster_access(host)
     cache = get_cache_manager()
@@ -411,7 +401,7 @@ async def list_networks(
     async def build() -> Built:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
-        # Fetch networks from all nodes in parallel
+        # All clusters in parallel.
         loop = asyncio.get_event_loop()
         tasks = [
             loop.run_in_executor(
@@ -421,14 +411,12 @@ async def list_networks(
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Flatten results, tracking nodes we could not reach so an unreachable
-        # cluster isn't silently reported as "0 networks".
+        # Unreachable clusters are tracked, so one is never reported as having no networks.
         all_networks = []
-        # important: two different things make a node absent, and both must be named.
-        # A node can fail during the fan-out, or never be asked at all, because
-        # connection_manager.get_node_names() returns only nodes with a live client while
-        # the fleet is whatever Vault has registered. Reporting only the first kind left a
-        # dead cluster silently missing rather than merely empty.
+        # important: two things make a node absent, and both must be named. A node can fail
+        # during the fan-out, or never be asked at all: connection_manager.get_node_names()
+        # returns only nodes with a live client, while the fleet is whatever Vault has
+        # registered. Naming only the first kind leaves a dead cluster silently missing.
         unreachable_nodes: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
@@ -449,7 +437,7 @@ async def list_networks(
 
         # important: a Partner is scoped by cluster, not by project, and the used_by filter
         # below never runs for them. On a cluster shared with another organization this is the
-        # only thing standing between them and that organization's network configuration.
+        # only thing keeping that organization's network configuration from them.
         all_networks = [n for n in all_networks if project_is_visible(n.node, n.project)]
         # used_by is held to the caller's bound for every role; only a tenant loses the row
         # when nothing they may see uses it.
@@ -459,14 +447,13 @@ async def list_networks(
         if tenant_acl_active():
             visible_networks = []
             for network in all_networks:
-                # ownership as well as usage: see tenant_may_see_project
+                # Ownership as well as usage: see tenant_may_see_project.
                 if not tenant_may_see_project(network.node, network.project):
                     continue
                 if network.used_by:
                     visible_networks.append(network)
             all_networks = visible_networks
 
-        # Store in variable first
         response = NetworkListResponse(
             total=len(all_networks),
             networks=all_networks,
@@ -486,7 +473,7 @@ async def list_networks(
         # important: the project belongs in the key. get_scope_cache_key mixes in the cluster
         # scope and the ACL digest but not the query, so without it a project-scoped read and a
         # fleet-wide one collide on one entry for the whole TTL.
-        # e1: the body moved into the stale-while-revalidate envelope and gained collected_at.
+        # e1 is the cache body version; bump it when the body changes shape.
         served = await swr.serve(
             cache=cache,
             base_key=f"networks:list:e1:host={host}:project={project or '*'}",
@@ -498,7 +485,7 @@ async def list_networks(
         listed = served.as_model(NetworkListResponse)
         tier = caller_tier()
         if tier == "tenant":
-            # note: on the way out, after the cache; the body cached per scope stays whole (A3).
+            # Trimmed on the way out, after the cache, so the body cached per scope stays whole.
             listed = listed.model_copy(update={
                 "networks": [network_for_tier(network, tier) for network in listed.networks],
             })
@@ -591,9 +578,8 @@ async def get_network(
             project=data.get("project") or owner,
         ), caller_tier())
     except HTTPException:
-        # 503 (unreachable) / 403 (tenant denied) must survive. Previously the
-        # generic handler collapsed everything into a 404 "not found", so a real
-        # but unreachable network read as deleted.
+        # 503 (unreachable) and 403 (tenant denied) must survive; the generic
+        # handler below would turn them into a 500.
         raise
     except (LXDAPIException, ClientConnectionFailed) as e:
         logger.error(f"LXD error getting network {network_name} on {host}: {e}")
@@ -643,19 +629,16 @@ async def create_network(
     def _create_blocking(client, project_configs, owner):
         """Run validation, daemon submission, operation wait, and readback off the loop.
 
-        important: on a cluster this is N+3 sequential HTTP round trips after target
-        resolution (cluster probe, member list, one define per member, the cluster-wide
-        create, the read-back), so it scales with cluster size.
+        On a cluster this is N+3 sequential HTTP round trips after target resolution
+        (cluster probe, member list, one define per member, the cluster-wide create, the
+        read-back), so it scales with cluster size.
         """
-        # important: resolved, not taken as given. A project that does not set
-        # features.networks holds no networks of its own and LXD stores this in default;
+        # important: the owner is resolved, not taken as given. A project that does not set
+        # features.networks holds no networks of its own and LXD stores this one in default;
         # writing it as asked and reading it back as resolved would disagree about where it
         # went.
-        # important: LXD refuses any network type except OVN in a project other than default,
-        # with "Network type does not support non-default projects". Verified against LXD 6.9.
-        # Saying so here is the difference between an operator learning the rule and an
-        # operator reading a daemon string, and it is why a project-scoped network on a
-        # cluster is an OVN one.
+        # LXD (6.9) refuses every network type except OVN in a project other than default,
+        # with "Network type does not support non-default projects"; say so in plain words.
         if owner != DEFAULT_PROJECT and request.type != "ovn":
             raise HTTPException(
                 status_code=400,
@@ -684,9 +667,6 @@ async def create_network(
             # important: only for the types that carry member-specific config. An OVN
             # network is a cluster-wide object with none, and the daemon refuses the define
             # step outright: 'Network type "ovn" does not support member specific config'.
-            # Measured against a 3-member MicroCloud: every OVN create from the console
-            # answered 400 while a bridge went through, so the one network type a MicroCloud
-            # tenant can create in its project was the one it could not create.
             for member in _cluster_member_names(client):
                 wait_for_lxd_operation(
                     client,
@@ -769,7 +749,7 @@ async def create_network(
         except BlockingTimeout as timeout_error:
             logger.error(f"create_network timed out on {host} for {request.name}")
             if submission_started:
-                # the create goes on in its worker thread; clear the lists when it actually ends
+                # The create goes on in its worker thread; clear the lists when it ends.
                 timeout_error.when_finished(_invalidate_network_lists)
             if not submission_started:
                 raise HTTPException(
@@ -803,9 +783,8 @@ async def create_network(
             details={"type": request.type, "description": request.description}
         )
 
-        # Invalidate the (180s) networks list cache so the new network shows
-        # immediately instead of after the TTL. Scope-aware keys look like
-        # "networks:list:host=...:scope=...", so clear by prefix.
+        # Clear the networks and IPAM lists so the new network shows now rather
+        # than after the TTL.
         _invalidate_network_lists()
 
         return {
@@ -1058,7 +1037,7 @@ async def delete_network(
             result="failure",
             error_message=str(e),
         )
-        # e.g. an unmanaged network, or one still in use -> 409/400, not 500.
+        # ex; an unmanaged network, or one still in use: 409/400 rather than 500.
         raise _lxd_http_error(e, network_name)
     except Exception as e:
         logger.error(f"Unexpected error deleting network {network_name}: {e}", exc_info=True)
@@ -1110,17 +1089,16 @@ async def get_network_state(
         if tenant_acl_active() and not used_by:
             raise HTTPException(status_code=403, detail="Access denied to this network")
 
-        # jsonable_lxd, not the raw object: network.state() returns a pylxd AttributeDict that
-        # pydantic cannot serialise, and the failure happens while rendering the response, after
-        # this handler has returned, so the except blocks below never see it. The caller got a
-        # bare 500 on a perfectly healthy cluster.
+        # jsonable_lxd rather than the raw object: network.state() returns a pylxd AttributeDict
+        # that pydantic cannot serialise, and that failure happens while rendering the response,
+        # after this handler has returned, where the except blocks below never see it.
         state = client.api.networks[safe_segment(network_name)].state.get(params=scope).json().get(
             "metadata"
         ) or {}
         return {
             "name": network_name,
             # A Tenant keeps addresses and counters; bridge, bond, vlan and ovn name host
-            # devices and cluster members (A3).
+            # devices and cluster members.
             "state": network_state_for_tier(jsonable_lxd(state), caller_tier()),
         }
     except HTTPException:
@@ -1130,10 +1108,9 @@ async def get_network_state(
         raise _lxd_http_error(e, network_name)
     except (requests.Timeout, requests.ConnectionError) as e:
         # important: a peer that accepted the connection and then stopped answering is not a
-        # server fault. This fell into the blanket 500 below, and main.py replaces a 500 body
-        # with an opaque reference, so a slow nuc2 reached the interface as an unactionable id.
-        # Same taxonomy as the member resource read: 504 for a read that ran out of budget,
-        # 503 for never getting a usable connection.
+        # server fault, and main.py would replace a 500 body with an opaque reference. Same
+        # taxonomy as the member resource read: 504 for a read that ran out of budget, 503 for
+        # never getting a usable connection.
         logger.warning(f"Transport failure getting network state {network_name} on {host}: {e}")
         raise lxd_transport_error(e, host, f"reporting the state of {network_name}")
     except Exception as e:

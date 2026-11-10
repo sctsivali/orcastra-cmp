@@ -1,11 +1,8 @@
 """
-Tag Service
+Tags, categories, assignments and per-user tag visibility.
 
-- PostgreSQL as source of truth
-- Redis caching for performance
-- LXD sync for backward compatibility
-- Per-user visibility settings
-- Category-based classification
+PostgreSQL is the source of truth and Redis caches reads. Assignments are mirrored to the
+resource's LXD `user.tags` config, where LXD itself keeps tags.
 """
 
 import logging
@@ -110,21 +107,14 @@ DEFAULT_CATEGORIES = [
     },
 ]
 
-# Cache TTL settings
-CACHE_TTL_TAGS = 300  # 5 minutes
-CACHE_TTL_CATEGORIES = 600  # 10 minutes
-CACHE_TTL_STATS = 120  # 2 minutes
+# Cache TTLs, in seconds.
+CACHE_TTL_TAGS = 300
+CACHE_TTL_CATEGORIES = 600
+CACHE_TTL_STATS = 120
 
 
 class TagService:
-    """
-    - CRUD for tags and categories
-    - Tag classification based on prefix
-    - Bulk operations
-    - LXD sync
-    - Redis caching
-    - User visibility settings
-    """
+    """Tag and category operations on one database session, with LXD sync and Redis caching."""
     
     def __init__(self, db: AsyncSession, lxd_service=None):
         self.db = db
@@ -137,9 +127,7 @@ class TagService:
     
     @staticmethod
     def classify_tag(tag: str) -> Tuple[str, str]:
-        """
-        Classify a tag based on its prefix.
-        """
+        """Split a tag into (known prefix, value), or ("other", tag)."""
         known_prefixes = ["loc_", "reg_", "vend_", "own_", "env_", "app_", "sla_", "cost_"]
         
         for prefix in known_prefixes:
@@ -150,23 +138,13 @@ class TagService:
     
     @staticmethod
     def get_display_name(tag: str) -> str:
-        """
-        Extract human-readable display name from tag.
-        
-        Examples:
-            "loc_jakarta" -> "Jakarta"
-            "vend_canonical" -> "Canonical"
-            "production" -> "Production"
-        """
+        """Human-readable name for a tag, ex; "loc_jakarta" -> "Jakarta"."""
         _, value = TagService.classify_tag(tag)
-        # Convert to title case and replace dashes/underscores with spaces
         return value.replace("-", " ").replace("_", " ").title()
     
     @staticmethod
     def group_tags(tags: List[str]) -> TagGrouped:
-        """
-        Group tags by their category prefix.
-        """
+        """Group tags by their category prefix."""
         grouped = TagGrouped()
         
         prefix_map = {
@@ -193,14 +171,7 @@ class TagService:
     
     @staticmethod
     def validate_tag_name(tag: str) -> Tuple[bool, str]:
-        """
-        Validate tag name format.
-        
-        Rules:
-        - Lowercase alphanumeric, dashes, underscores
-        - 1-100 characters
-        - Cannot start with dash or underscore (unless it's a prefix)
-        """
+        """Check a tag name: at most 100 of `[a-z0-9_-]`, starting with a letter."""
         if not tag:
             return False, "Tag name cannot be empty"
         
@@ -219,14 +190,10 @@ class TagService:
     # ============================================
     
     async def initialize_default_categories(self) -> int:
-        """
-        Initialize default tag categories if they don't exist.
-        Called on application startup.
-        """
+        """Create the default categories that do not exist yet. Called at application startup."""
         created_count = 0
-        
+
         for cat_data in DEFAULT_CATEGORIES:
-            # Check if category exists
             result = await self.db.execute(
                 select(TagCategory).where(TagCategory.prefix == cat_data["prefix"])
             )
@@ -245,7 +212,7 @@ class TagService:
         return created_count
     
     async def list_categories(self, include_inactive: bool = False) -> List[TagCategoryResponse]:
-        """Get all tag categories."""
+        """Tag categories with their tag counts, cached."""
         cache_key = f"categories:all:{include_inactive}"
         cached = self.cache.get("tags", cache_key)
         if cached:
@@ -259,7 +226,6 @@ class TagService:
         result = await self.db.execute(query)
         categories = result.scalars().all()
         
-        # Get tag counts per category
         count_query = select(
             Tag.category_id,
             func.count(Tag.id).label("count")
@@ -285,7 +251,7 @@ class TagService:
             }
             response.append(TagCategoryResponse(**cat_dict))
         
-        # Cache for 10 minutes unless a tag/category mutation completed during the DB reads.
+        # Cache only if no tag or category mutation completed during the reads.
         if get_resource_list_generation(self.cache, "tags") == tag_generation:
             self.cache.set(
                 "tags",
@@ -299,18 +265,14 @@ class TagService:
         return response
     
     async def get_category_by_prefix(self, prefix: str) -> Optional[TagCategory]:
-        """Get category by prefix."""
         result = await self.db.execute(
             select(TagCategory).where(TagCategory.prefix == prefix)
         )
         return result.scalar_one_or_none()
     
     async def create_category(self, data: TagCategoryCreate) -> TagCategoryResponse:
-        """Create a new tag category."""
-        # Ensure prefix ends with underscore
         prefix = data.prefix if data.prefix.endswith("_") else f"{data.prefix}_"
-        
-        # Check for duplicate
+
         existing = await self.get_category_by_prefix(prefix)
         if existing:
             raise ValueError(f"Category with prefix '{prefix}' already exists")
@@ -323,7 +285,7 @@ class TagService:
             icon=data.icon,
             sort_order=data.sort_order,
             is_active=data.is_active,
-            is_system=False,  # User-created categories are not system
+            is_system=False,
         )
         
         self.db.add(category)
@@ -348,7 +310,6 @@ class TagService:
         )
     
     async def update_category(self, category_id: int, data: TagCategoryUpdate) -> TagCategoryResponse:
-        """Update a tag category."""
         result = await self.db.execute(
             select(TagCategory).where(TagCategory.id == category_id)
         )
@@ -357,7 +318,6 @@ class TagService:
         if not category:
             raise ValueError(f"Category with ID {category_id} not found")
         
-        # Update fields
         update_data = data.model_dump(exclude_unset=True)
         for field, value in update_data.items():
             if hasattr(category, field):
@@ -368,7 +328,6 @@ class TagService:
         
         self._invalidate_tag_cache()
         
-        # Get tag count
         count_result = await self.db.execute(
             select(func.count(Tag.id)).where(Tag.category_id == category_id)
         )
@@ -400,12 +359,10 @@ class TagService:
         user_id: Optional[str] = None,
         include_usage: bool = True,
     ) -> TagListResponse:
-        """
-        List all tags with optional filtering.
-        """
+        """Tags filtered by category, search text and the user's visibility settings."""
         cache_key = f"tags:list:{category_id}:{search}:{user_id}"
         cached = self.cache.get("tags", cache_key)
-        if cached and not include_usage:  # Don't cache usage counts
+        if cached and not include_usage:  # Only the list without usage counts is cached.
             return TagListResponse(**cached)
         tag_generation = get_resource_list_generation(self.cache, "tags")
         
@@ -423,16 +380,13 @@ class TagService:
                 )
             )
         
-        # Apply user visibility filter
         if user_id:
             visibility = await self.get_user_visibility(user_id)
             if visibility and visibility.visibility_mode != "all":
                 if visibility.visibility_mode == "whitelist":
-                    # Only show visible tags
                     if visibility.visible_tags:
                         query = query.where(Tag.name.in_(visibility.visible_tags))
                 elif visibility.visibility_mode == "blacklist":
-                    # Hide specified tags
                     if visibility.hidden_tags:
                         query = query.where(~Tag.name.in_(visibility.hidden_tags))
         
@@ -441,10 +395,8 @@ class TagService:
         result = await self.db.execute(query)
         tags = result.scalars().all()
         
-        # Get categories for response
         categories = await self.list_categories()
-        
-        # Build response
+
         tag_responses = []
         for tag in tags:
             cat_response = None
@@ -485,7 +437,6 @@ class TagService:
             categories=categories,
         )
         
-        # Cache without usage counts
         if (
             not include_usage
             and get_resource_list_generation(self.cache, "tags") == tag_generation
@@ -502,26 +453,21 @@ class TagService:
         user_id: Optional[str] = None,
         auto_categorize: bool = True,
     ) -> Tag:
-        """
-        Get existing tag or create new one.
-        """
+        """The tag with this name, created and categorized by its prefix when it does not exist."""
         tag_name = tag_name.lower().strip()
-        
-        # Validate
+
         is_valid, error = self.validate_tag_name(tag_name)
         if not is_valid:
             raise ValueError(error)
-        
-        # Check existing
+
         result = await self.db.execute(
             select(Tag).where(Tag.name == tag_name)
         )
         existing = result.scalar_one_or_none()
-        
+
         if existing:
             return existing
-        
-        # Create new tag
+
         category_id = None
         display_name = self.get_display_name(tag_name)
         
@@ -544,29 +490,25 @@ class TagService:
         await self.db.refresh(tag)
         
         logger.info(f"Created new tag: {tag_name} (category_id={category_id})")
-        
-        # Invalidate cache
+
         self._invalidate_tag_cache()
         
         return tag
     
     async def create_tag(self, data: TagCreate, user_id: Optional[str] = None) -> TagResponse:
-        """Create a new tag explicitly."""
+        """Create a tag; without an explicit category it takes the one its prefix names."""
         tag_name = data.name.lower().strip()
-        
-        # Validate
+
         is_valid, error = self.validate_tag_name(tag_name)
         if not is_valid:
             raise ValueError(error)
-        
-        # Check duplicate
+
         result = await self.db.execute(
             select(Tag).where(Tag.name == tag_name)
         )
         if result.scalar_one_or_none():
             raise ValueError(f"Tag '{tag_name}' already exists")
-        
-        # Determine category
+
         category_id = data.category_id
         if not category_id:
             prefix, _ = self.classify_tag(tag_name)
@@ -575,7 +517,6 @@ class TagService:
                 if category:
                     category_id = category.id
         
-        # Create tag
         tag = Tag(
             name=tag_name,
             display_name=data.display_name or self.get_display_name(tag_name),
@@ -589,7 +530,6 @@ class TagService:
         await self.db.commit()
         await self.db.refresh(tag)
         
-        # Load category
         if tag.category_id:
             await self.db.refresh(tag, ["category"])
         
@@ -598,7 +538,6 @@ class TagService:
         return self._tag_to_response(tag)
     
     async def update_tag(self, tag_id: int, data: TagUpdate) -> TagResponse:
-        """Update a tag."""
         result = await self.db.execute(
             select(Tag).options(selectinload(Tag.category)).where(Tag.id == tag_id)
         )
@@ -650,14 +589,7 @@ class TagService:
         user_id: Optional[str] = None,
         sync_to_lxd: bool = True,
     ) -> BulkTagAssignResponse:
-        """
-        Assign multiple tags to a resource.
-        
-        This is the main method for tag assignment that:
-        1. Creates tags if they don't exist
-        2. Creates assignments in PostgreSQL
-        3. Syncs to LXD for backward compatibility
-        """
+        """Assign tags to a resource, creating missing tags, then mirror them to LXD `user.tags`."""
         assigned_tags = []
         failed_tags = []
         
@@ -667,10 +599,8 @@ class TagService:
                 if not tag_name:
                     continue
                 
-                # Get or create tag
                 tag = await self.get_or_create_tag(tag_name, user_id)
-                
-                # Check if assignment exists
+
                 existing_query = select(TagAssignment).where(
                     and_(
                         TagAssignment.tag_id == tag.id,
@@ -692,8 +622,7 @@ class TagService:
                         assigned_by=user_id,
                     )
                     self.db.add(assignment)
-                    
-                    # Update usage count
+
                     tag.usage_count += 1
                 
                 assigned_tags.append(tag_name)
@@ -703,8 +632,7 @@ class TagService:
                 failed_tags.append(tag_name)
         
         await self.db.commit()
-        
-        # Sync to LXD
+
         synced = False
         if sync_to_lxd and self.lxd_service and assigned_tags:
             try:
@@ -739,8 +667,7 @@ class TagService:
     ) -> bool:
         """Remove a single tag from a resource."""
         tag_name = tag_name.lower().strip()
-        
-        # Find tag
+
         tag_result = await self.db.execute(
             select(Tag).where(Tag.name == tag_name)
         )
@@ -749,7 +676,6 @@ class TagService:
         if not tag:
             return False
         
-        # Find assignment
         query = select(TagAssignment).where(
             and_(
                 TagAssignment.tag_id == tag.id,
@@ -766,8 +692,7 @@ class TagService:
             await self.db.delete(assignment)
             tag.usage_count = max(0, tag.usage_count - 1)
             await self.db.commit()
-            
-            # Sync to LXD
+
             if sync_to_lxd and self.lxd_service:
                 try:
                     await self._sync_tags_to_lxd(
@@ -792,12 +717,7 @@ class TagService:
         user_id: Optional[str] = None,
         sync_to_lxd: bool = True,
     ) -> BulkTagAssignResponse:
-        """
-        Set exact tags for a resource (replace all existing).
-        
-        This removes all current tags and assigns the new ones.
-        """
-        # Remove all existing assignments
+        """Replace a resource's tags with exactly `tags`."""
         delete_query = delete(TagAssignment).where(
             and_(
                 TagAssignment.resource_type == resource_type,
@@ -809,7 +729,6 @@ class TagService:
         await self.db.execute(delete_query)
         await self.db.commit()
         
-        # Assign new tags
         if tags:
             return await self.assign_tags_to_resource(
                 BulkTagAssignRequest(
@@ -823,7 +742,7 @@ class TagService:
                 sync_to_lxd=sync_to_lxd,
             )
         
-        # Sync empty tags to LXD
+        # No tags left: clear the LXD copy too.
         if sync_to_lxd and self.lxd_service:
             try:
                 await self._sync_tags_to_lxd(
@@ -832,9 +751,8 @@ class TagService:
             except Exception as e:
                 logger.warning(f"Failed to sync tags to LXD: {e}")
         
-        # Invalidate cache for resource type (ex; projects list)
         self._invalidate_resource_cache(resource_type)
-        
+
         return BulkTagAssignResponse(
             success=True,
             message="All tags removed",
@@ -849,7 +767,7 @@ class TagService:
         resource_host: Optional[str] = None,
         resource_project: Optional[str] = None,
     ) -> ResourceTagsResponse:
-        """Get all tags for a resource with grouping."""
+        """A resource's tags, as a list and grouped by category."""
         query = (
             select(TagAssignment)
             .options(selectinload(TagAssignment.tag).selectinload(Tag.category))
@@ -883,14 +801,13 @@ class TagService:
     # ============================================
     
     async def get_user_visibility(self, user_id: str) -> Optional[UserTagVisibility]:
-        """Get user's tag visibility settings."""
         result = await self.db.execute(
             select(UserTagVisibility).where(UserTagVisibility.user_id == user_id)
         )
         return result.scalar_one_or_none()
     
     async def get_user_visibility_response(self, user_id: str) -> UserTagVisibilityResponse:
-        """Get user visibility settings as response object."""
+        """The user's visibility settings, or the show-all defaults when none are stored."""
         visibility = await self.get_user_visibility(user_id)
         
         if visibility:
@@ -905,7 +822,6 @@ class TagService:
                 updated_at=visibility.updated_at,
             )
         
-        # Return defaults
         return UserTagVisibilityResponse(
             user_id=user_id,
             visibility_mode="all",
@@ -922,11 +838,9 @@ class TagService:
         user_id: str,
         settings: UserTagVisibilitySettings,
     ) -> UserTagVisibilityResponse:
-        """Update user's tag visibility settings."""
         visibility = await self.get_user_visibility(user_id)
-        
+
         if visibility:
-            # Update existing
             visibility.visibility_mode = settings.visibility_mode
             visibility.visible_categories = settings.visible_categories
             visibility.visible_tags = settings.visible_tags
@@ -934,7 +848,6 @@ class TagService:
             visibility.hidden_tags = settings.hidden_tags
             visibility.default_filter_tags = settings.default_filter_tags
         else:
-            # Create new
             visibility = UserTagVisibility(
                 user_id=user_id,
                 visibility_mode=settings.visibility_mode,
@@ -957,20 +870,17 @@ class TagService:
     # ============================================
     
     async def get_tag_statistics(self) -> TagStatsResponse:
-        """Get comprehensive tag statistics."""
+        """Tag totals, counts per category and the ten most used tags, cached."""
         cache_key = "stats:overview"
         cached = self.cache.get("tags", cache_key)
         if cached:
             return TagStatsResponse(**cached)
         tag_generation = get_resource_list_generation(self.cache, "tags")
         
-        # Total tags
         total_tags = (await self.db.execute(select(func.count(Tag.id)))).scalar() or 0
-        
-        # Total assignments
+
         total_assignments = (await self.db.execute(select(func.count(TagAssignment.id)))).scalar() or 0
-        
-        # Tags by category
+
         category_counts = await self.db.execute(
             select(
                 TagCategory.prefix,
@@ -981,7 +891,6 @@ class TagService:
         )
         tags_by_category = {row.prefix: row.count for row in category_counts}
         
-        # Top tags
         top_tags_query = (
             select(Tag)
             .options(selectinload(Tag.category))
@@ -993,7 +902,6 @@ class TagService:
         
         top_stats = []
         for tag in top_tags:
-            # Get counts by resource type
             node_count = (await self.db.execute(
                 select(func.count(TagAssignment.id))
                 .where(and_(TagAssignment.tag_id == tag.id, TagAssignment.resource_type == "node"))
@@ -1020,9 +928,8 @@ class TagService:
                 total_usage=tag.usage_count,
             ))
         
-        # Get categories
         categories = await self.list_categories()
-        
+
         response = TagStatsResponse(
             total_tags=total_tags,
             total_assignments=total_assignments,
@@ -1049,15 +956,10 @@ class TagService:
         resource_host: Optional[str] = None,
         resource_project: Optional[str] = None,
     ) -> bool:
-        """
-        Sync tags from PostgreSQL to LXD's user.tags config.
-        
-        This maintains backward compatibility with LXD's native tag storage.
-        """
+        """Write the resource's tags from PostgreSQL to its LXD `user.tags` config."""
         if not self.lxd_service:
             return False
-        
-        # Get current tags from PostgreSQL
+
         resource_tags = await self.get_resource_tags(
             resource_type, resource_id, resource_host, resource_project
         )
@@ -1092,11 +994,10 @@ class TagService:
                     json=instance_data,
                     params={'project': resource_project or 'default'}
                 )
-                # important: an instance update is asynchronous. LXD answers 202 and does the work
-                # afterwards, so returning here reported synced_to_lxd=true for a write that could
-                # still fail: the instance mid-operation, the config rejected, the daemon
-                # restarted. The caller shows the tag as live on the cluster while LXD never
-                # applied it, and nothing revisits the discrepancy.
+                # important: an instance update is asynchronous; LXD answers 202 and does the work
+                # afterwards. Returning without the wait would report synced_to_lxd=true for a
+                # write that can still fail (instance mid-operation, config rejected), and nothing
+                # revisits the discrepancy.
                 wait_for_lxd_operation(client, put_response)
 
             logger.info(f"Synced tags to LXD for {resource_type}:{resource_id}")
@@ -1114,11 +1015,7 @@ class TagService:
         resource_project: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> BulkTagAssignResponse:
-        """
-        Import tags from LXD's user.tags into PostgreSQL.
-        
-        Useful for migrating existing LXD tags to the new system.
-        """
+        """Import a resource's LXD `user.tags` into PostgreSQL."""
         if not self.lxd_service:
             return BulkTagAssignResponse(
                 success=False,
@@ -1174,7 +1071,7 @@ class TagService:
                 resource_project=resource_project,
             ),
             user_id=user_id,
-            sync_to_lxd=False,  # Don't sync back, we're importing
+            sync_to_lxd=False,  # The tags came from LXD.
         )
     
     # ============================================
@@ -1182,7 +1079,6 @@ class TagService:
     # ============================================
     
     def _tag_to_response(self, tag: Tag) -> TagResponse:
-        """Convert Tag model to TagResponse."""
         cat_response = None
         if tag.category:
             cat_response = TagCategoryResponse(
@@ -1222,9 +1118,9 @@ class TagService:
         resource_host: Optional[str] = None,
         resource_project: Optional[str] = None,
     ) -> int:
-        """Remove all tag assignments for a resource (e.g. when an instance is
-        deleted) and recompute usage_count for the affected tags so the Postgres
-        side doesn't drift from reality. Returns the number of affected tags.
+        """Remove every tag assignment of a resource, ex; a deleted instance.
+
+        Recomputes usage_count for the affected tags and returns how many there were.
         """
         match = and_(
             TagAssignment.resource_type == resource_type,
@@ -1239,8 +1135,7 @@ class TagService:
 
         await self.db.execute(delete(TagAssignment).where(match))
 
-        # Recompute usage_count from the surviving assignments (robust against any
-        # prior drift, not just a decrement).
+        # Recount from the remaining assignments, which also corrects any earlier drift.
         for tag_id in tag_ids:
             remaining = (
                 await self.db.execute(
@@ -1259,7 +1154,6 @@ class TagService:
         return len(tag_ids)
 
     def _invalidate_tag_cache(self):
-        """Invalidate all tag-related caches."""
         self.cache.invalidate_tag_cache()
 
     def _invalidate_resource_cache(self, resource_type: str):
@@ -1280,5 +1174,4 @@ async def get_tag_service(
     db: AsyncSession,
     lxd_service=None,
 ) -> TagService:
-    """Factory function to create TagService instance."""
     return TagService(db=db, lxd_service=lxd_service)

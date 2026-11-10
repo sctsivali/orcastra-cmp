@@ -1,16 +1,10 @@
-"""Dashboard (JWT) resumable-ISO-upload endpoints.
+"""Dashboard (JWT) resumable ISO upload endpoints.
 
-Same tus flow + import/recovery machinery as ``iso_uploads.py`` (which is
-OrcaHub-facing, API-key auth), but authenticated with the user session and
-org-scope so a Partner can upload a custom ISO from Orcastra CMP.
-
-Everything durable is reused verbatim: the ``iso_upload_sessions`` table, the
-staging dir, ``_run_import`` (verify -> stream into the pool as an LXD custom
-``iso`` volume), and the crash-recovery sweep. Only the auth/authorization layer
-differs: ``require_partner()`` for writes, and ``verify_cluster_access`` (org
-scope) in place of the API-key cluster-permission check. Sessions created here
-share the same MAX_ACTIVE_SESSIONS / disk-headroom guards and the same recovery
-loop as the OrcaHub path.
+Reuses the tus flow, the ``iso_upload_sessions`` table, the staging directory,
+``_run_import`` and the recovery sweep of ``iso_uploads.py`` (the OrcaHub-facing,
+API-key path). Only authorization differs: ``require_partner()`` for writes, and
+``verify_cluster_access`` (org scope) in place of the API-key cluster-permission
+check. Sessions created here share the MAX_ACTIVE_SESSIONS and disk-headroom guards.
 """
 import asyncio
 import os
@@ -58,12 +52,10 @@ import logging
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
 
-# A browser upload that is abandoned mid-flight (tab closed, page reloaded, network
-# dropped) leaves its session in an in-progress state, which counts against the
-# global MAX_ACTIVE_SESSIONS cap and is otherwise only reclaimed by the 6h TTL.
-# Because updated_at is bumped on every chunk PATCH, a session with no activity for
-# this long is provably not a live upload, so its slot can be safely reclaimed.
-# The OrcaHub-facing path is unaffected: this sweep runs only in dashboard create.
+# A browser upload abandoned mid-flight (tab closed, page reloaded, network dropped)
+# leaves its session in progress, counting against MAX_ACTIVE_SESSIONS until the
+# session TTL. updated_at moves on every chunk PATCH, so a session idle this long is
+# not a live upload and its slot can be reclaimed. Only dashboard create runs this.
 ISO_UPLOAD_IDLE_RECLAIM = timedelta(minutes=int(os.getenv("ISO_UPLOAD_IDLE_RECLAIM_MIN", "30")))
 # Statuses that represent an in-progress upload (not yet importing/ready/failed).
 _IN_PROGRESS = ("pending", "uploading", "uploaded")
@@ -81,10 +73,9 @@ async def _reclaim_idle_sessions(db: AsyncSession) -> None:
             select(IsoUploadSession).where(
                 IsoUploadSession.status.in_(_IN_PROGRESS),
                 IsoUploadSession.updated_at < cutoff,
-                # Only reclaim dashboard-created (JWT) sessions. OrcaHub sessions
-                # stamp api_key_id, so this leaves their resumable 6h window
-                # untouched -- the sweep runs on every dashboard create_upload and
-                # must not delete another caller's in-flight upload + staging file.
+                # Dashboard (JWT) sessions only. OrcaHub sessions carry api_key_id
+                # and keep their full resumable window: this sweep must not delete
+                # another caller's in-flight upload and staging file.
                 IsoUploadSession.api_key_id.is_(None),
             )
         )
@@ -104,7 +95,7 @@ router = APIRouter(
 
 
 async def _run_import_and_refresh(session_id: str) -> None:
-    """Run the shared import, whose ready transition already refreshes inventory."""
+    """Run the shared import (its ready transition refreshes inventory), then audit it."""
     try:
         await _run_import(session_id)
     finally:
@@ -116,8 +107,7 @@ async def _audit_import_outcome(session_id: str) -> None:
 
     The shared import records its outcome on the session row and never raises, so the row is
     the truth and this record mirrors it; the task journal closes the upload task it opened
-    at finalize on the same session id. Best-effort: a failure here is logged, never raised,
-    so the cache refresh that follows still runs.
+    at finalize on the same session id. Best-effort: a failure here is logged, never raised.
     """
     try:
         async with async_session_maker() as db:
@@ -161,9 +151,9 @@ async def create_upload(
         raise HTTPException(status_code=422, detail="Invalid ISO volume name")
     if not _POOL_NAME_RE.match(body.pool):
         raise HTTPException(status_code=422, detail="Invalid storage pool name")
-    # The console's ISO discovery only queries the default project, so an ISO
-    # uploaded elsewhere would import "ready" yet never appear or be attachable.
-    # Reject it up front as a clear 422 rather than a silent dead end.
+    # The console's ISO discovery queries only the default project, so an ISO
+    # uploaded elsewhere would import as ready and never be attachable. Refused
+    # up front with a 422.
     if (body.project or "default") != "default":
         raise HTTPException(
             status_code=422,
@@ -196,11 +186,10 @@ async def create_upload(
 
     session_id = secrets.token_hex(16)
     path = _staging_path(session_id)
-    # note: deliberately NOT pre-created. Creating the file before the row is committed leaks
-    # it on any failure between the two, and nothing sweeps staging files that have no row
-    # (the recovery loop only re-drives stuck imports). Two such leaks were found on the dev
-    # box. append_request_body creates the file on the first PATCH, so there is nothing to
-    # leak and one fewer thing to keep consistent.
+    # The staging file is not created here. Created before the row commits, it would leak on
+    # any failure between the two, and nothing sweeps staging files that have no row (the
+    # recovery loop only re-drives stuck imports). append_request_body creates it on the
+    # first PATCH.
 
     row = IsoUploadSession(
         session_id=session_id,
@@ -275,11 +264,10 @@ async def patch_upload(
             label=f"iso_upload_dashboard[{session_id}]",
         )
     except UploadStagingUnavailable:
-        # important: retire the row rather than leaving it resumable. The staging volume is
-        # refusing writes, so this session can never make progress however long the client
-        # retries, and every attempt keeps holding one of only MAX_ACTIVE_SESSIONS slots. Two
-        # of these used to lock the key out for the full six-hour TTL. Failing it frees the
-        # slot now, and the client can start a fresh upload once an operator fixes the volume.
+        # important: retire the row rather than leave it resumable. The staging volume refuses
+        # writes, so the session can never progress, and while it lives it holds one of the
+        # MAX_ACTIVE_SESSIONS slots. Failing it frees the slot now; the client starts a fresh
+        # upload once an operator fixes the volume.
         row.status = "failed"
         row.error = "upload staging not writable on the server"
         await db.commit()
@@ -343,12 +331,12 @@ async def abort_upload(
     _rbac: AuthenticatedUser = Depends(require_partner()),
     _ro: None = Depends(check_read_only_mode),
 ):
-    """Cancel an in-progress upload and release its slot immediately.
+    """Cancel an upload and release its slot immediately.
 
-    Called best-effort by the dashboard when the user cancels, hits an error, or
-    closes the tab mid-upload, so a slot is not held until the idle sweep or TTL.
-    Refuses once the import has started (the volume may already be materializing);
-    a completed import is a no-op cleanup of the (already staging-less) session.
+    The dashboard calls this when the user cancels, an error occurs, or the tab
+    closes mid-upload, so a slot is not held until the idle sweep or TTL. Answers
+    409 once the import has started; after a finished import it only removes the
+    session record.
     """
     row = await _authz_session(db, session_id)
     if row.status == "importing":

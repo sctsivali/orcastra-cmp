@@ -1,15 +1,13 @@
 """What each MCP tool costs before it may run.
 
-One declarative table, read by three things that would otherwise drift: the auth middleware that
-enforces it, the `tools/list` filter that hides what a key cannot use, and the ratchet tests that
-assert the surface matches the proxy vocabulary.
+One declarative table, read by the auth middleware that enforces it, the `tools/list` filter that
+hides what a key cannot use, and the ratchet tests that assert the surface matches the proxy
+vocabulary.
 
-important: the per-cluster level is DERIVED from ``PROXY_OPERATION_LEVELS`` rather than restated
-here. Restating it would create a second price list, and this repo has already paid for that once:
-``proxy_operations`` says in its own docstring that the router's permission table and the
-dispatcher fell out of step, so a caller holding exactly the right grant passed authorization and
-then got "Unknown operation". Deriving means a tool cannot claim a price the operation does not
-charge.
+important: the per-cluster level is derived from ``PROXY_OPERATION_LEVELS`` rather than restated
+here. A second price list drifts from the dispatcher, and a caller holding exactly the right grant
+then passes authorization only to get "Unknown operation". Deriving means a tool cannot claim a
+price the operation does not charge.
 """
 
 from dataclasses import dataclass
@@ -28,9 +26,9 @@ __all__ = ["TOOL_CONTRACT", "ToolRequirement", "requirement_for"]
 class ToolRequirement:
     """The gate a tool passes through, and what a host should be told about it."""
 
-    # The endpoint-family capability, checked with the INHERITING gate. A legacy key satisfies it,
-    # which is deliberate: these are powers that existed when those keys were issued. None only for
-    # a tool whose REST route takes no capability (whoami): any key that authenticates may use it.
+    # The endpoint-family capability, checked with the inheriting gate, so a legacy key satisfies
+    # it: these powers existed when those keys were issued. None only for a tool whose REST route
+    # takes no capability (whoami): any key that authenticates may use it.
     capability: Optional[str]
 
     # The proxy operation this tool dispatches to, or None for the inventory tier, which reads
@@ -50,7 +48,7 @@ class ToolRequirement:
 
     @property
     def guest_capability(self) -> Optional[str]:
-        """The capability that must be granted EXPLICITLY, for a tool that reaches inside a guest.
+        """The capability that must be granted explicitly, for a tool that reaches inside a guest.
 
         Never inherited by a legacy key and never seeded by an application type. Derived from the
         operation so a new guest-reaching operation cannot be exposed as a tool without it.
@@ -78,13 +76,13 @@ def _inventory() -> ToolRequirement:
 
 
 # The complete surface. A tool registered on the server without a row here is refused by the
-# middleware and flagged by `test_every_mcp_tool_declares_a_capability`, which is the MCP analogue
-# of the ratchet that keeps a REST endpoint from skipping `require_capability`.
+# middleware and flagged by `test_every_registered_tool_declares_a_capability`, the MCP analogue of
+# the ratchet that keeps a REST endpoint from skipping `require_capability`.
 TOOL_CONTRACT: Dict[str, ToolRequirement] = {
     # ── inventory: reads across the whole grant, no single target cluster ──────────────────────
-    # note: no capability, like REST `/whoami`. It reports only what the presented key already
-    # holds, and it is the tool the server instructions say to call first and the one a refusal
-    # points at, so a key granted `lxd.proxy` alone has to be able to reach it.
+    # No capability, like REST `/whoami`. It reports only what the presented key already holds,
+    # and the server instructions and refusals point at it, so a key granted `lxd.proxy` alone has
+    # to be able to reach it.
     "orcastra_whoami": ToolRequirement(capability=None, read_only=True),
     "orcastra_list_clusters": _inventory(),
     "orcastra_list_projects": _inventory(),
@@ -98,10 +96,9 @@ TOOL_CONTRACT: Dict[str, ToolRequirement] = {
     "lxd_list_projects": _proxy("list_projects", read_only=True),
     "lxd_list_images": _proxy("list_images", read_only=True),
     "lxd_list_snapshots": _proxy("list_snapshots", read_only=True),
-    # note: networks, storage pools and profiles share one code path and one price, so they are
-    # one tool with a `kind`. Collapsing erases no permission distinction. start/stop/restart also
-    # share a branch and are deliberately NOT collapsed: three verbs, three blast radii, and an
-    # operator will want to allow one without the others.
+    # Networks, storage pools and profiles share one code path and one price, so they are one tool
+    # with a `kind`. start/stop/restart also share a branch but stay separate tools, so an operator
+    # can allow one without the others.
     "lxd_list_resources": _proxy("list_networks", read_only=True),
     # The poll for a `wait=false` write, priced like the write's own cluster. orcastra_get_operation
     # answers the same question at `inventory.read`, which a custom key may not hold.

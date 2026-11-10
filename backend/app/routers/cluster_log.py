@@ -52,7 +52,7 @@ async def list_cluster_log(
     severities = csv_filter(severity, LOG_SEVERITIES, "severity")
     actor_email = actor_email_filter(actor, _rbac)
 
-    # note: the window is always bounded so a scan never walks the whole table.
+    # The window is always bounded so a scan never walks the whole table.
     window_start = utc_bound(since) if since else datetime.now(timezone.utc) - DEFAULT_WINDOW
     filters: List[Any] = [ClusterLog.ts >= window_start]
     if kinds:

@@ -2,23 +2,16 @@
 
 important: keyed by the ticket's SHA-256, never the ticket, so a key listing, a slow log or a
 MONITOR session cannot replay one. A mint is one script that also counts the caller's budget
-(300 a minute), and a redeem is GETDEL, so a ticket opens one socket however many race for it.
+(300 a minute); a redeem is GETDEL, so a ticket opens one socket however many race for it. Each
+entry carries an HMAC over its key and claims (keyed from SECRET_KEY), checked before any claim
+is read, so a Redis writer cannot forge a ticket (and a shell) for any identity or move one to
+another key. Without SECRET_KEY nothing is minted.
 
-important: signed. A stored ticket is an HMAC over its key's digest and its claims, with a key
-derived from SECRET_KEY, and a redeem checks it before reading any claim. Without it, anyone who
-could write to Redis could write a ticket for any identity and open a shell as it, no token
-needed. Moving a signed entry to another key fails the check, because the key is part of it.
-
-important: fails closed. With Redis required and not answering, a mint is refused and a redeem
-returns nothing; a per-process store would let a ticket minted on one worker fail on another,
-and silently degrading to it would hide the outage. Redis is required whenever REDIS_ENABLED is
-set or the backend runs more than one worker (main.py): a ticket is minted on whichever worker
-took the POST and redeemed on whichever took the upgrade, so with four workers a per-process
-store refused about three sockets in four. The local store serves only a single-process backend
-without Redis. Without SECRET_KEY nothing is minted.
-
-note: a Redis that was down when the worker started is tried again from a mint or a redeem, at
-most once every RECONNECT_SPACING_SECONDS, instead of refusing every socket until a restart.
+important: fails closed. Redis is required with REDIS_ENABLED or more than one worker (main.py),
+since a ticket is minted on whichever worker took the POST and redeemed on whichever took the
+upgrade. With Redis required and not answering, a mint is refused and a redeem returns nothing,
+never a per-process store that would hide the outage; reconnects are spaced by at least
+RECONNECT_SPACING_SECONDS. Only a single-process backend without Redis uses the local store.
 """
 
 import asyncio
@@ -74,10 +67,10 @@ def _settings_mac_key(context: bytes = _MAC_CONTEXT) -> Optional[bytes]:
 
 
 class WsTicketStore:
-    """Single-use signed tickets. Its defaults are the WebSocket ones.
+    """Single-use signed tickets. The defaults are the WebSocket ones.
 
-    note: another kind of ticket is another store with its own prefix and MAC context, as
-    core/file_ticket.py does, so a ticket of one kind cannot be spent on the other's door.
+    Another kind of ticket gets another store with its own prefix and MAC context, as
+    core/file_ticket.py does, so a ticket of one kind cannot be redeemed for the other.
     """
 
     def __init__(
@@ -132,7 +125,7 @@ class WsTicketStore:
 
     @property
     def mode(self) -> str:
-        """The store in use: redis, local (one process, no Redis) or unavailable (required, not answering)."""
+        """The store in use: redis, local (one process, no Redis) or unavailable (required but not answering)."""
         if self._client is not None:
             return "redis"
         return "unavailable" if self._redis_expected else "local"
@@ -259,10 +252,10 @@ async def start_ticket_stores(
 ) -> bool:
     """Connect this worker's ticket stores (lifespan). Returns whether Redis is required.
 
-    important: required with REDIS_ENABLED and with more than one worker alike. A ticket is minted
-    on whichever worker took the POST and redeemed on whichever took the upgrade, so a per-process
-    store with REDIS_ENABLED unset (its default) refused about three sockets in four. Never binds
-    a ticket to a worker: the upgrade cannot be steered to the worker that minted it.
+    important: required with REDIS_ENABLED, and with more than one worker even when REDIS_ENABLED
+    is unset (its default). A ticket is minted on whichever worker took the POST and redeemed on
+    whichever took the upgrade, and the upgrade cannot be steered to the worker that minted it, so
+    a per-process store would refuse most sockets.
     """
     required = redis_enabled or workers > 1
     for store in stores:

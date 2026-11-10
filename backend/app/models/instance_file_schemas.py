@@ -1,8 +1,8 @@
 """Request and response shapes of the file explorer.
 
-Guest paths are only ever in these bodies. `request_security` answers 404 for a `path` query that
-looks like /etc/shadow, .ssh or anything ending .conf, which is ordinary here, and the access log
-records query strings.
+Guest paths travel only in these bodies, never in a query string: `request_security` answers 404
+for a `path` query that looks like /etc/shadow, .ssh or anything ending .conf, all ordinary here,
+and the access log records query strings.
 """
 
 from typing import Annotated, List, Literal, Optional
@@ -17,8 +17,8 @@ MAX_SELECTION_BYTES = 128 * 1024
 
 
 def _no_nul(value: str) -> str:
-    # important: at the schema, before anything is audited. Postgres refuses \u0000 in jsonb, so
-    # one such path in an audit record would take a whole journal batch down with it.
+    # important: refuse NUL at the schema, before anything is audited. Postgres refuses \u0000 in
+    # jsonb, so one such path in an audit record would fail a whole journal batch.
     if "\x00" in value:
         raise ValueError("a path cannot contain a null byte")
     return value

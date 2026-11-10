@@ -1,9 +1,9 @@
 """POST /ws-tickets: mint the single-use tickets that open this app's WebSockets.
 
 important: the checks here are advisory. They answer a page early (403 for a socket it cannot
-open, the break-glass detail for a tenant console) instead of letting it open a socket that is
-refused, but the socket runs its own authorization on connect and that is what decides. A ticket
-names its kind and target, so it cannot be spent on any other socket.
+open, the break-glass detail for a tenant console); the socket runs its own authorization on
+connect, and that decides. A ticket names its kind and target, so it cannot be spent on any
+other socket.
 """
 
 import logging
@@ -79,8 +79,8 @@ async def _target(body: WsTicketRequest, user: Optional[AuthenticatedUser]) -> W
             )
         bound_project = verify_instance_access(body.host, body.project, body.instance, "console")
         await _session_gate(user, body.host)
-        # note: the socket refuses a fenced instance before accept, where the browser cannot
-        # read why. Refusing the ticket here says it in words the page can show.
+        # The socket refuses a fenced instance before accept, where the browser cannot read
+        # why; refusing the ticket here gives the page words it can show.
         try:
             await assert_instance_not_migration_fenced(
                 cluster_id=body.host, project=bound_project, instance_name=body.instance,
@@ -88,7 +88,7 @@ async def _target(body: WsTicketRequest, user: Optional[AuthenticatedUser]) -> W
         except MigrationFenceConflict as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.detail) from exc
         console_type = body.console_type if isinstance(body, ConsoleTicketRequest) else None
-        # note: the project as the page sends it, which is what its socket URL will carry.
+        # The project as the page sends it, which is what its socket URL will carry.
         return WsTarget(host=body.host, project=body.project, instance=body.instance, console_type=console_type)
     return WsTarget()
 
@@ -99,7 +99,11 @@ async def mint_ws_ticket(
     body: WsTicketRequest = Body(...),
     user: Optional[AuthenticatedUser] = Depends(get_current_user),
 ) -> WsTicketResponse:
-    """Tickets for one socket (one per graphical console channel), 30 seconds each."""
+    """Mint the tickets for one socket (one per graphical console channel), 30 seconds each.
+
+    401 when a feed's session is about to end, 429 past the per-minute budget, 503 when the
+    ticket store is unavailable.
+    """
     response.headers["Cache-Control"] = "no-store"
     expires = getattr(user, "session_exp", None)
     if body.kind in FEED_KINDS and expires is not None and expires - time.time() < MIN_FEED_SESSION_SECONDS:

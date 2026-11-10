@@ -78,10 +78,10 @@ async def guard_migration_mutations(
     tenant policy. Locks are acquired once in canonical cluster order so two multi-cluster
     requests cannot deadlock each other. Fence reads happen only after every lock is held.
 
-    When ``db`` is omitted, a private transaction owns the advisory locks. This form is for
-    existing service methods that commit their request session internally: the private lock
-    transaction remains open across those commits. When ``db`` is supplied, a commit or rollback
-    is the terminal boundary and must be the last migration-relevant write in the context.
+    When ``db`` is omitted, a private transaction owns the advisory locks and stays open across
+    the commits of service methods that commit their request session internally. important: when
+    ``db`` is supplied, a commit or rollback releases the locks and must be the last
+    migration-relevant write in the context.
     """
     cluster_targets = {str(cluster_id) for cluster_id in clusters if str(cluster_id)}
     project_targets = {
@@ -240,9 +240,9 @@ async def guard_instance_mutation(
     migration wins, this guard observes its committed fence and yields no mutation authority. If
     the ordinary write wins, migration execution waits and runs fresh preflight after the write.
 
-    Callers must keep this context open through the final daemon write/readback boundary. The
-    supplied session must not be committed or rolled back inside the context because PostgreSQL
-    transaction advisory locks are released at that boundary.
+    important: keep this context open through the final daemon write and readback, and never
+    commit or roll back the supplied session inside it: PostgreSQL releases transaction advisory
+    locks at that boundary.
     """
     async with guard_migration_mutations(
         db,
@@ -326,8 +326,8 @@ async def _active_cluster_lock_job_id(
 
     A staged move in retention keeps only the exact lock on its stopped source. That instance
     fence must not freeze cluster-wide infrastructure for the whole retention window, so only
-    project-scope locks, which every actively running migration holds, fence the cluster. A
-    rollback or cleanup is running again, so its instance locks fence the cluster too.
+    project-scope locks, which every running migration holds, fence the cluster. A rollback or
+    cleanup mutates daemons again, so its instance locks fence the cluster too.
     """
     statement = (
         select(MigrationResourceLock.job_id)
@@ -413,7 +413,7 @@ async def assert_project_not_migration_fenced(
 
     Instance migrations take project locks as well as exact instance locks. This guard protects
     dependencies such as profiles, networks, ACLs, and custom volumes from drifting after
-    preflight. The rollout flag is deliberately irrelevant to an already durable lock.
+    preflight. The rollout flag does not apply to a lock that is already durable.
     """
     try:
         if db is not None:

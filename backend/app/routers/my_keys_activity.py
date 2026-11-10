@@ -2,7 +2,7 @@
 
 Mounted with the task journal (main.py), because both halves are journal rows: with the journal
 off there is nothing to read and the page says so. The rows themselves are a best-effort copy of
-the audit; the audit index (OpenSearch) stays the record of record.
+the audit; the audit index (OpenSearch) stays the system of record.
 """
 
 from __future__ import annotations

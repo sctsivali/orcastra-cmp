@@ -1,11 +1,9 @@
 """
-Session Audit Logger - Persists session lifecycle events to the database.
+Session audit logger: connect and disconnect events of console, terminal and
+desktop sessions, with duration and bandwidth, in the session audit table.
 
-Records connect/disconnect events with bandwidth and duration data
-for compliance, troubleshooting, and usage analytics.
-
-Uses fire-and-forget async writes with retry so audit logging never
-blocks the main WebSocket proxy flow but still guarantees delivery.
+Writes run as background tasks with a short retry, so audit logging never
+blocks the WebSocket proxy. An event that fails every retry is logged as lost.
 """
 
 import logging
@@ -27,7 +25,7 @@ async def _write_audit_with_retry(entry_kwargs: dict) -> None:
                 entry = SessionAuditLog(**entry_kwargs)
                 db.add(entry)
                 await db.commit()
-                return  # success
+                return
         except Exception:
             if attempt < _MAX_RETRIES - 1:
                 wait = _RETRY_BACKOFF * (2 ** attempt)
@@ -114,11 +112,10 @@ async def log_session_disconnect(
     )
 
 
-# important: asyncio holds only a WEAK reference to a running task. A bare
-# create_task() whose result nobody keeps can be garbage collected before it runs,
-# so a disconnect row - the one carrying duration and byte totals - could simply
-# never be written, silently and unreproducibly. Hold a strong reference until the
-# write finishes.
+# important: asyncio keeps only a weak reference to a running task. An
+# unreferenced create_task() can be garbage collected before it runs, and the
+# disconnect row (the one with duration and byte totals) is then silently never
+# written. Hold a strong reference until the write finishes.
 _pending: set = set()
 
 

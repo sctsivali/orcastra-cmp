@@ -1,17 +1,15 @@
 """Values for the configuration fields a manifest declared.
 
-The dashboard renders the form from the manifest, so this is where the values it collects are
-validated and stored. Two rules carry the weight.
+The dashboard renders the form from the manifest; the values it collects are validated and stored
+here.
 
 important: a secret field is write-only. Its value goes to Vault beside the installation's other
-credential material and is never returned by any read. What a read returns instead is the NAMES of
-the secret fields that hold a value, which is enough for a form to show a field as configured
-without the server handing back what was typed into it. Grafana's `secureJsonFields` is the same
-shape and for the same reason.
+credential material and no read returns it. A read returns the names of the secret fields that
+hold a value instead, enough for a form to show a field as configured (the same shape as Grafana's
+`secureJsonFields`).
 
-important: omitting a secret key on an update leaves the stored value alone. Without that, saving
-any other field would silently blank every credential the operator did not retype, which is a data
-loss bug disguised as a save button.
+important: omitting a secret key on an update leaves the stored value alone, so saving another
+field never blanks a credential the operator did not retype.
 """
 
 import logging
@@ -42,8 +40,7 @@ def validate_values(
 ) -> Tuple[Dict[str, Any], Dict[str, str]]:
     """Check submitted values against the declared fields.
 
-    Returns (plain_values, secret_values). Raises 422 naming the field that was wrong, because a
-    settings form with one generic error message is a form nobody can fix.
+    Returns (plain_values, secret_values). Raises 422 naming the field that was wrong.
     """
     fields = {field["key"]: field for field in (schema or [])}
 
@@ -101,9 +98,8 @@ def validate_values(
         elif kind == "url":
             if not isinstance(value, str):
                 raise _refuse(key, "must be text")
-            # The same guard every stored URL gets. An add-on's configured endpoint is not
-            # fetched by this server today, but a setting that later becomes one must not be the
-            # place the rule was skipped.
+            # The same guard every stored URL gets. This server does not fetch an add-on's
+            # configured endpoint, but a setting fetched later must already have passed it.
             reason = describe_url_risk(value, require_https=True, resolve=False)
             if reason is not None:
                 raise _refuse(key, reason)
@@ -125,23 +121,17 @@ def store_secrets(vault_client, install_id: int, secrets_: Dict[str, str]) -> Li
     """
     if not secrets_:
         return list(read_secret_names(vault_client, install_id))
-    # important: a read failure must NOT become an empty dict. Swallowing it turned the merge
-    # this function exists for into a replace: one Vault hiccup during a settings save destroyed
-    # every other stored secret for that installation and answered 200 with a shortened list.
-    # This module's own docstring calls that "a data loss bug disguised as a save button", and
-    # the swallow was sitting three lines under it.
-    #
-    # important: "nothing stored yet" is not "unavailable", and conflating them broke the very
-    # first save on every installation. `vault_read` raises a 404 for a path that has never been
-    # written, which is exactly the empty case this merge wants, so it is the one failure that
-    # must not become a refusal. Everything else still refuses, which is the guard above intact.
+    # important: a read failure must not become an empty dict. That turns the merge into a
+    # replace, and one Vault error during a save would destroy every other stored secret while
+    # answering 200. The exception is 404: `vault_read` raises it for a path never written, the
+    # empty case of the first save on every installation, so it must not become a refusal.
     try:
         current: Dict[str, Any] = vault_client.vault_read(_settings_path(install_id)) or {}
     except Exception as exc:  # noqa: BLE001
-        # A string match, reluctantly: `vault_read` raises `VaultClientError(...)` without
-        # `from e`, so there is no `__cause__` to inspect and no status on the exception. The
-        # message is `Vault read failed: 404 Client Error: ...` from requests, so the full phrase
-        # is matched rather than a bare "404" that could appear in a path or a body.
+        # A string match: `vault_read` raises `VaultClientError(...)` without `from e`, so there
+        # is no `__cause__` and no status to inspect. The message is `Vault read failed: 404
+        # Client Error: ...` from requests, so the full phrase is matched rather than a bare "404"
+        # that could appear in a path or a body.
         if "404 Client Error" not in str(exc):
             raise HTTPException(
                 status_code=503,

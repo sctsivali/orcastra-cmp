@@ -1,16 +1,15 @@
 """One reading of `limits.cpu` and one way to sum what a member has allocated.
 
-note: "allocated" is the sum of the running instances' CPU limits, which is what the
-member, node and project reads call "used". LXD's resources API carries no host utilisation
-figure and nothing here reads /1.0/metrics. A cluster may legitimately allocate more vCPUs
-than it has threads (KVM shares them), so a ratio above 1 is a fact to present, not a fault.
+"Allocated" is the sum of the running instances' CPU limits, which the member, node and
+project reads call "used". LXD's resources API carries no host utilisation figure and nothing
+here reads /1.0/metrics. A cluster may allocate more vCPUs than it has threads (KVM shares
+them), so a ratio above 1 is a fact to present rather than a fault.
 
 The grammar follows LXD's own `limits.cpu`: a count ("4"), a range ("0-3"), a set ("0,2"),
 or a union of both ("0-3,8-11"), duplicates counted once. Anything LXD would refuse to store
-(a reversed range, a fraction, text) falls back to the caller's default rather than inventing
-capacity. Allocation reads `expanded_config`, which is what the instance runs with once its
-profiles are applied; the instance-local `config` alone counted a profile-inherited limit as
-one core.
+(a reversed range, a fraction, text) falls back to the caller's default. Allocation reads
+`expanded_config`, which includes profile-inherited limits; the instance-local `config` alone
+would count such a limit as one core.
 """
 
 import logging
@@ -20,7 +19,7 @@ from typing import Any, Iterable, Mapping, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
-# A CPU id above this is not a CPU set, it is a value built to make the parser allocate.
+# Highest CPU id accepted; a larger value is malformed or hostile input.
 _MAX_CPU_ID = 65535
 
 
@@ -31,9 +30,9 @@ def limits_set(
 
     A virtual machine's size is its cap, so both are True. A container without `limits.cpu` is
     measured against its host's threads and LXD reports its memory against the host's, so those
-    figures are the host's size, not a limit the instance was given. `complete` is False when
-    `config` is the local config alone and a profile could still set the key: an absent key is
-    then unknown (None) rather than unset.
+    figures are the host's size rather than a limit the instance was given. `complete` is False
+    when `config` is the local config alone and a profile could still set the key: an absent key
+    is then unknown (None) rather than unset.
     """
     if instance_type == "virtual-machine":
         return True, True
@@ -49,16 +48,16 @@ def limits_set(
 def parse_cpu_limit(value: object, default: int = 1) -> int:
     """Cores a `limits.cpu` value pins or counts. `default` for unset or unparseable.
 
-    note: counted on merged intervals, never by materialising every id. "0-4000000000" used to
-    build a set of four billion ints, and the monitoring sweep now parses every running
-    instance's limit on each collection.
+    Counted on merged intervals, never by materialising every id: "0-4000000000" would build a
+    set of four billion ints, and the monitoring sweep parses every running instance's limit on
+    each collection.
     """
     if value is None:
         return default
     text = str(value).strip()
     if not text:
         return default
-    # note: isdigit() accepts "²" and other non-ASCII digits that int() refuses, and int()
+    # isdigit() accepts "²" and other non-ASCII digits that int() refuses, and int()
     # refuses more than 4300 digits; neither is a CPU set LXD would store.
     if not text.isascii() or len(text) > 4096:
         return default
@@ -161,9 +160,9 @@ def effective_vcpus(
 ) -> Optional[int]:
     """vCPUs a live CPU percentage is measured against, or None when nothing says.
 
-    important: not instance_cpu_allocation. That one is allocation accounting and counts an unset
-    limit as one core, which for a container without `limits.cpu` would read a busy
-    eight-thread container as 800 percent of "1 vCPU". Order: LXD's own effective count (it
+    important: do not use instance_cpu_allocation here. It counts an unset limit as one core,
+    so a busy eight-thread container without `limits.cpu` would read as 800 percent of
+    "1 vCPU". Order: LXD's own effective count (it
     reports 0 for virtual machines, so 0 falls through), then `limits.cpu`, then LXD's defaults:
     one vCPU for a virtual machine, every host thread for an unlimited container.
     """

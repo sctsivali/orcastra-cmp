@@ -1,12 +1,4 @@
-"""
-Utility functions for normalizing and handling cluster/node types.
-Ensures consistent type detection and display across the application.
-
-Supported types:
-- LXD: Canonical's standard LXD hypervisor
-- MicroCloud: Canonical's clustered MicroCloud deployment
-- Incus: Linux Containers community fork of LXD
-"""
+"""Detecting and normalizing the hypervisor family (LXD, MicroCloud, Incus) of a cluster."""
 
 from typing import Dict, Any, Optional, List, Tuple
 import logging
@@ -15,13 +7,12 @@ import urllib3
 
 from app.core.url_safety import normalize_endpoint
 
-# Disable SSL warnings for unauthenticated requests
+# Process-wide: silences urllib3's warning for requests made without TLS verification.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
-# Incus-specific api_extensions patterns
-# Incus uses "dev_incus" prefix instead of LXD's "dev_lxd"
+# api_extensions only Incus reports: it names them "dev_incus" where LXD says "dev_lxd".
 INCUS_EXTENSION_PATTERNS = [
     "dev_incus",           # ex; dev_incus_events, dev_incus_images
     "restrict_dev_incus",  # Incus-specific restriction
@@ -29,10 +20,7 @@ INCUS_EXTENSION_PATTERNS = [
 
 
 def _has_incus_extensions(extensions: List[str]) -> bool:
-    """
-    Check if api_extensions indicate this is an Incus server.
-    Incus uses extensions with 'incus' prefix instead of 'lxd'.
-    """
+    """Whether api_extensions carry one of the Incus-only patterns."""
     if not extensions:
         return False
     
@@ -45,37 +33,24 @@ def _has_incus_extensions(extensions: List[str]) -> bool:
 
 def detect_cluster_type_from_metadata(metadata: Dict[str, Any]) -> str:
     """
-    Detect cluster type from hypervisor API metadata (from `/1.0` endpoint).
-    
-    Supports: LXD, MicroCloud, and Incus
+    The hypervisor family (LXD, MicroCloud or Incus) from `/1.0` metadata.
 
-    This answers "which hypervisor family", not "is it clustered". `server_clustered` is
-    deliberately NOT consulted: MicroCloud reports `server: "lxd"`, and a plain
-    `lxc cluster enable` deployment is clustered too, so the flag cannot tell the two apart.
-    Use detect_clustered_from_metadata for that fact.
-
-    Priority order:
-    1. Check api_extensions for Incus-specific patterns (dev_incus, etc.)
-    2. Check 'server' field in environment for explicit type
-    3. Check 'server_name' for the MicroCloud pattern
-    4. Check api_extensions for 'microcloud'
-    5. Default to LXD
+    Checked in order: Incus-only api_extensions, `environment.server`, a MicroCloud
+    `server_name`, a `microcloud` api_extension; otherwise LXD. `server_clustered` is not
+    consulted: a plain `lxc cluster enable` deployment is clustered too, so the flag cannot tell
+    it from MicroCloud (see detect_clustered_from_metadata).
 
     important: only call this on an authenticated payload. An untrusted `/1.0` carries no
-    `environment` block at all, so every signal below reads empty and the LXD default is a
-    guess rather than a reading.
+    `environment` block, so every signal reads empty and the LXD default is a guess.
     """
     try:
         environment = metadata.get("environment", {})
         extensions = metadata.get("api_extensions", [])
         
-        # Priority 1: Check for Incus-specific extensions
-        # Incus uses "dev_incus" instead of "dev_lxd" in extensions
         if _has_incus_extensions(extensions):
             logger.debug("Detected Incus from api_extensions (dev_incus patterns)")
             return "Incus"
         
-        # Priority 2: Check 'server' field for explicit type
         server_type = environment.get("server", "").lower()
         if server_type == "incus":
             logger.debug("Detected Incus from 'server' field")
@@ -84,15 +59,13 @@ def detect_cluster_type_from_metadata(metadata: Dict[str, Any]) -> str:
             logger.debug("Detected MicroCloud from 'server' field")
             return "MicroCloud"
         
-        # Priority 3: Check server_name for patterns
-        # note: not for Incus. `server` above already names it, and server_name is only the host
-        # name, so an "incus" match there could only ever relabel an LXD host.
+        # server_name is only the host name, so it is checked for MicroCloud alone: `server`
+        # above already names Incus, and an "incus" match here could only relabel an LXD host.
         server_name = environment.get("server_name", "").lower()
         if "microcloud" in server_name:
             logger.debug(f"Detected MicroCloud from server_name: {server_name}")
             return "MicroCloud"
         
-        # Priority 4: Check extensions for microcloud
         if "microcloud" in extensions:
             logger.debug("Detected MicroCloud from api_extensions")
             return "MicroCloud"
@@ -110,7 +83,7 @@ def detect_clustered_from_metadata(metadata: Dict[str, Any]) -> Optional[bool]:
 
     Returns None when the answer is not in the payload, which is the case for every
     unauthenticated `/1.0` read: `server_clustered` lives in the `environment` block that LXD
-    only sends to a trusted client. None means "not known", not "standalone".
+    only sends to a trusted client. None means unknown; never read it as standalone.
     """
     try:
         environment = metadata.get("environment") or {}
@@ -152,19 +125,9 @@ def resolve_cluster_type(stored: Optional[str], client: Any = None) -> Optional[
 def resolve_clustered(stored: Optional[bool] = None, client: Any = None) -> Optional[bool]:
     """Whether the cluster is clustered, preferring what the host says now over what was stored.
 
-    Same two-source contract as resolve_cluster_type: a live trusted payload always outranks the
-    stored value, and None means neither source knows.
-
-    important: an earlier revision took no stored fallback, on the reasoning that a snapshot of
-    live state in a field nothing refreshes is what left a MicroCloud labelled LXD. That defect
-    was narrower than the rule drawn from it. The value that went stale was written at
-    registration from an UNTRUSTED probe, which cannot see `environment` at all, and nothing ever
-    re-derived it. What is stored here is only ever a reading the host answered as trusted, and it
-    is only consulted when there is no client to ask, so it can never outrank the truth.
-
-    Without a fallback the picker at /inventory/clustering/members cannot tell a host pending
-    trust from a clustered host that is merely offline, because both answer None. That is the
-    concrete cost the fallback buys.
+    Same two-source contract as resolve_cluster_type. The stored value is only ever a reading the
+    host answered as trusted, consulted only when there is no client to ask. It lets the picker at
+    /inventory/clustering/members tell a host pending trust from an offline clustered host.
     """
     host_info = _trusted_host_info(client)
     if host_info is not None:
@@ -173,15 +136,7 @@ def resolve_clustered(stored: Optional[bool] = None, client: Any = None) -> Opti
 
 
 def normalize_cluster_type(cluster_type: Optional[str]) -> str:
-    """
-    Normalize cluster type to standard display format.
-    
-    Handles various input formats and returns consistent output:
-    - "incus", "Incus", "INCUS" -> "Incus"
-    - "microcloud", "MicroCloud", "MICROCLOUD" -> "MicroCloud"
-    - "lxd", "LXD", "Lxd" -> "LXD"
-    - None or unknown -> "LXD" (default)
-    """
+    """Cluster type in display form, ignoring case; empty or unknown is "LXD"."""
     if not cluster_type:
         return "LXD"
     
@@ -196,9 +151,7 @@ def normalize_cluster_type(cluster_type: Optional[str]) -> str:
 
 
 def normalize_node_type(node_type: Optional[str]) -> str:
-    """
-    Normalize node type to lowercase for internal storage.
-    """
+    """Node type in lowercase for storage; empty or unknown is "lxd"."""
     if not node_type:
         return "lxd"
     
@@ -213,29 +166,21 @@ def normalize_node_type(node_type: Optional[str]) -> str:
 
 
 def is_incus(type_value: Optional[str]) -> bool:
-    """
-    Check if a type value represents Incus.
-    Case-insensitive comparison.
-    """
+    """Whether a type value names Incus, ignoring case and surrounding whitespace."""
     if not type_value:
         return False
     return type_value.lower().strip() == "incus"
 
 
 def is_microcloud(type_value: Optional[str]) -> bool:
-    """
-    Check if a type value represents MicroCloud.
-    Case-insensitive comparison.
-    """
+    """Whether a type value names MicroCloud, ignoring case and surrounding whitespace."""
     if not type_value:
         return False
     return type_value.lower().strip() == "microcloud"
 
 
 def get_cli_command_prefix(cluster_type: Optional[str]) -> str:
-    """
-    Get the appropriate CLI command prefix based on cluster type.
-    """
+    """The CLI binary: `incus` for Incus, `lxc` for everything else."""
     if not cluster_type:
         return "lxc"
     
@@ -246,12 +191,9 @@ def get_cli_command_prefix(cluster_type: Optional[str]) -> str:
 
 
 def get_trust_add_subcommand(cluster_type: Optional[str]) -> str:
-    """
-    Get the appropriate 'config trust' subcommand based on cluster type.
-    
-    LXD and Incus have different CLI syntax for adding certificates:
-    - LXD/MicroCloud: `lxc config trust add <cert> --name <name>`
-    - Incus: `incus config trust add-certificate <cert> --name <name>`
+    """The `config trust` subcommand that adds a certificate.
+
+    `add` on LXD and MicroCloud, `add-certificate` on Incus.
     """
     if not cluster_type:
         return "add"
@@ -264,9 +206,8 @@ def get_trust_add_subcommand(cluster_type: Optional[str]) -> str:
 
 def build_trust_add_command(cluster_type: Optional[str], cert_content: str, identity_name: str) -> str:
     """
-    Build the full CLI command to add a certificate to the trust store.
-    
-    This function handles the differences between LXD and Incus:
+    The full CLI command that adds a certificate to the trust store.
+
     - LXD/MicroCloud: `cat <<EOF | lxc config trust add - --name="name"`
     - Incus: `cat <<EOF | incus config trust add-certificate - --name="name"`
     """
@@ -277,16 +218,16 @@ def build_trust_add_command(cluster_type: Optional[str], cert_content: str, iden
 
 
 def build_trust_remove_command(cluster_type: Optional[str], fingerprint: str) -> str:
-    """The CLI line that removes one trust entry, for when the dashboard could not.
+    """The CLI line that removes one trust entry by hand, when the dashboard could not.
 
-    Both LXD and Incus spell it `config trust remove`. The full fingerprint is used on purpose:
-    the CLI matches a prefix, and a short one can name a different entry.
+    Both LXD and Incus spell it `config trust remove`. It takes the full fingerprint because the
+    CLI matches a prefix, and a short one can name a different entry.
     """
     return f"{get_cli_command_prefix(cluster_type)} config trust remove {fingerprint}"
 
 
 def _pre_auth_type_from_payload(metadata: Dict[str, Any]) -> Optional[str]:
-    """What an unauthenticated `/1.0` body can honestly say about the hypervisor family.
+    """What an unauthenticated `/1.0` body can reliably say about the hypervisor family.
 
     Incus stays identifiable because its `dev_incus` api_extensions are in the untrusted
     payload. Everything that separates LXD from MicroCloud lives in `environment`, which LXD
@@ -303,13 +244,11 @@ async def detect_hypervisor_type_from_endpoint(
     endpoint: str, timeout: float = 5.0
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
     """
-    Detect hypervisor type by querying the /1.0 API endpoint without authentication.
+    The hypervisor type from an unauthenticated `/1.0` request, with the metadata it returned.
 
-    Returns None for the type whenever the probe could not actually establish it: a timeout, a
-    non-200, or the usual untrusted body that omits `environment`. It used to answer "LXD" in
-    all three cases, and registration persisted that guess as though it were a reading, which
-    is how a MicroCloud came to be labelled LXD for the rest of its life. None means unknown,
-    and the caller stores nothing rather than something wrong.
+    The type is None whenever the probe cannot establish it (a timeout, a non-200, or the usual
+    untrusted body without `environment`), and the caller then stores nothing: a guess persisted
+    at registration would read as a fact (ex; a MicroCloud labelled LXD).
     """
     api_url = normalize_endpoint(endpoint)
     if not api_url.endswith("/1.0"):

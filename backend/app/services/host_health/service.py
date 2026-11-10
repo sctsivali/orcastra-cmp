@@ -109,9 +109,9 @@ async def get_report(fresh: bool = False) -> HostHealthReport:
 async def mark_vault_unsealed() -> None:
     """Rewrite the stored report's Vault row the moment an unseal completes.
 
-    important: the full pass that follows takes seconds (the registry read among them), and until it
-    lands every worker would serve the stored "sealed" row. The page and the dialog would then
-    disagree right after the operator succeeded. The transition is recorded here, once.
+    The full pass that follows takes seconds (the registry read among them), and until it lands
+    every worker would serve the stored "sealed" row, so the page and the dialog would disagree
+    right after the operator succeeded. The transition is recorded here, once.
     """
     store = get_store()
     cached = await run_in_pool(store.read_report)
@@ -152,7 +152,7 @@ def refresh_soon() -> None:
 
 async def _loop(interval: float) -> None:
     lease = CollectorLease(LEASE_KEY, int(interval * 2 + 15), _shared_redis)
-    # Jittered so four workers started together do not claim in lockstep.
+    # Jittered so workers started together do not claim in lockstep.
     await asyncio.sleep(random.uniform(1.0, 5.0))
     try:
         while True:

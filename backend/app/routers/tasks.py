@@ -1,13 +1,13 @@
 """The Tasks tab and the Operations page: what the journal recorded, in the caller's scope.
 
-Why this router admits a tenant where `/operations` (`lxd_operations.py`) does not: that one
-reads LXD's live operation bucket per cluster and cannot narrow a row below the cluster, so a
-Partner tier was the only honest gate. The journal stores every row with its project and
-resource, so `app.core.task_scope` narrows a tenant's reads to their own instances by the same
-ACL the instance list applies, and the one mutation here (cancel) stays Partner and above.
+`/operations` (`lxd_operations.py`) reads LXD's live operations per cluster and cannot
+narrow a row below the cluster, so it is Partner only. The journal stores every row with its
+project and resource, so this router admits a tenant: `app.core.task_scope` narrows their
+reads to their own instances by the same ACL the instance list applies. The one mutation
+here, cancel, stays Partner and above.
 
-No response cache on purpose: the panel is a live surface fed by the WebSocket, every read is
-one indexed page, and a cached list would hand a narrowed caller a page built for a wider one.
+There is no response cache: the panel is fed live by the WebSocket, every read is one indexed
+page, and a cached list would hand a narrowed caller a page built for a wider one.
 """
 
 import logging
@@ -91,16 +91,16 @@ def csv_filter(value: Optional[str], allowed: tuple, name: str) -> Optional[List
 def actor_email_filter(actor: Optional[str], user: AuthenticatedUser) -> Optional[str]:
     if actor != "me":
         return actor or None
-    # important: a caller with no email cannot be scoped to "their own" rows; refuse rather
-    # than let None fall through as "no filter" (the console sessions precedent).
+    # important: a caller with no email cannot be scoped to their own rows; refuse so that
+    # None does not fall through as "no filter".
     if not user.email:
         raise HTTPException(status_code=403, detail="Token carries no email claim")
     return user.email
 
 
 def utc_bound(value: datetime) -> datetime:
-    # note: a bare ISO stamp in the query is read as UTC; asyncpg refuses a naive datetime
-    # against a timestamptz column.
+    # A bare ISO stamp in the query is read as UTC; asyncpg refuses a naive datetime against a
+    # timestamptz column.
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
@@ -112,8 +112,8 @@ def task_uuid(task_id: str) -> str:
 
 
 def _not_found() -> HTTPException:
-    # The enumeration rule: a row outside the caller's scope reads exactly like a row that
-    # does not exist, so an id cannot be used to probe another organisation's journal.
+    # A row outside the caller's scope answers like a missing row, so an id cannot be used to
+    # probe another organisation's journal.
     return HTTPException(status_code=404, detail="Task not found")
 
 
@@ -224,8 +224,8 @@ async def get_queue(
         cluster_id = str(schedule["cluster_id"])
         project = str(schedule["project"] or "default")
         name = str(schedule["instance_name"])
-        # important: the snapshot permission, not "any rule here": a tenant holding `view` on
-        # one instance must not learn another instance's schedule (the fleet snapshots idiom).
+        # important: check the snapshot permission on this instance. A tenant holding `view`
+        # on one instance must not learn another instance's schedule.
         if not project_is_visible(cluster_id, project):
             continue
         if not check_tenant_permission(cluster_id, project, name, "snapshot"):
@@ -311,8 +311,8 @@ async def cancel_task(
     if not operation_id:
         raise _refuse("NO_OPERATION", "This task is not a cancellable hypervisor operation")
     if row.get("operation_class") == "websocket":
-        # D16: console and exec sessions are ended from the Sessions page, never by an
-        # operation DELETE that would drop the socket under the operator.
+        # Console and exec sessions are ended from the Sessions page, never by an operation
+        # DELETE that would drop the socket under the operator.
         raise _refuse("WEBSOCKET_CLASS", "Console and exec sessions are ended from the Sessions page")
     if row.get("status") in TERMINAL:
         raise _refuse("ALREADY_FINISHED", "This task has already finished")

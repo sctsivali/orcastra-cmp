@@ -1,18 +1,16 @@
-"""Report tenant access rules that name a project or instance which no longer exists.
+"""Report tenant access rules naming a project or instance that is gone from the cluster.
 
 The dashboard forgets a rule whenever it deletes, renames or moves what the rule names
 (services/project_deletion.py, instance_grants.py, stranded_rules.py). A delete done straight on
-the cluster (`lxc delete`, `lxc project delete`) bypasses all of that, and the rule then waits for
-the next object created under that name and hands it to the old tenant.
-
-This loop finds such rules and reports them; it never removes one (owner decision 2026-10-27).
-A partner or administrator removes a reported rule from Tenant Access, which re-checks the
-cluster first (routers/tenant_access.py).
+the cluster (`lxc delete`, `lxc project delete`) bypasses that, and the rule then hands the next
+object created under that name to the rule's tenant. This loop only reports such rules; a Partner
+or Administrator removes one from Tenant Access, which re-checks the cluster first
+(routers/tenant_access.py).
 
 important: a rule is reported only on evidence. A cluster's list counts only when it answered 200
 with a list, a rule younger than a day or with a delete still settling is not judged, and a rule
 must be missing on two complete reads at least half an interval apart. An unreachable or slow
-cluster records nothing, so it can never turn a paying tenant's rule into a "missing" one.
+cluster records nothing, so it never turns a live rule into a "missing" one.
 """
 
 from __future__ import annotations
