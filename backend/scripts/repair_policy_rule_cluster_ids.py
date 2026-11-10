@@ -3,10 +3,11 @@
 Deployment data, not schema: an Alembic migration would carry one installation's aliases into
 every other. The image does not ship ``scripts/``; feed the file to the running backend:
 
-    docker exec -i <backend> python - [--apply] < backend/scripts/repair_policy_rule_cluster_ids.py
+    docker exec -i <backend> python - --map STALE=REGISTERED [--apply] \
+        < backend/scripts/repair_policy_rule_cluster_ids.py
 
-``MAPPING`` holds one installation's clusters registered again under new ids; rules naming the
-old id are inert (no match in ``get_visible_projects`` or the tenant ACL). A rewrite that
+Each ``--map`` names a cluster registered again under a new id; rules naming the old id are
+inert (no match in ``get_visible_projects`` or the tenant ACL). A rewrite that
 collides with the policy's row for the new id merges the permissions into it and deletes the
 stale row, so the unique constraint on ``(policy_id, cluster_id, project_name, instance_name)``
 cannot fire. Dry run unless ``--apply``, which writes in one transaction; ``--check-registry``
@@ -22,12 +23,15 @@ from typing import Dict, List, Sequence
 
 from sqlalchemy import select
 
-# The stale spelling on the left, the registered id on the right.
-MAPPING: Dict[str, str] = {
-    "nuc-2": "nuc2",
-    "pandora-semanan": "pandora",
-    "blitz01": "blitz001",
-}
+# The stale spelling on the left, the registered id on the right; filled from --map.
+MAPPING: Dict[str, str] = {}
+
+
+def _pair(value: str) -> tuple[str, str]:
+    stale, sep, registered = value.partition("=")
+    if not sep or not stale.strip() or not registered.strip() or stale.strip() == registered.strip():
+        raise argparse.ArgumentTypeError("expected STALE=REGISTERED with two different cluster ids")
+    return stale.strip(), registered.strip()
 
 
 def _print_table(rows: Sequence[Sequence[object]], header: Sequence[str]) -> None:
@@ -158,7 +162,10 @@ def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--apply", action="store_true", help="write the rewrite; default is a dry run")
     parser.add_argument("--check-registry", action="store_true", help="refuse when a mapping target is not a registered cluster")
+    parser.add_argument("--map", dest="pairs", type=_pair, action="append", required=True,
+                        metavar="STALE=REGISTERED", help="a superseded cluster id and the id it is registered under now")
     args = parser.parse_args(argv)
+    MAPPING.update(dict(args.pairs))
     return asyncio.run(run(apply=args.apply, check_registry=args.check_registry))
 
 

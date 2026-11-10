@@ -61,8 +61,8 @@ class DesktopControlPolicyRequest(BaseModel):
         default=False,
         description=(
             "Allow an add-on installed here to run commands and read files inside guests. This "
-            "is root in the container by default, and it used to ride on the screen-capture "
-            "switch, which is not what that switch says."
+            "is root in the container by default, so it needs its own switch on top of the "
+            "screen-capture consent."
         ),
     )
 

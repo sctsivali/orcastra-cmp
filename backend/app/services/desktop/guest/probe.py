@@ -60,10 +60,8 @@ done
 [ -w /dev/uinput ] && echo "uinput_writable=yes"
 
 # important: DISPLAY first. Both tests below invoke xdotool, which cannot connect without one, so
-# running them before the display is known made every guest report "unsupported" for reasons that
-# had nothing to do with the xdotool build. Observed live: a guest where `getdisplaygeometry` and
-# `type --file` both work reported neither, and the second of those silently downgrades typing to
-# argv, where the guest's process table exposes whatever was typed.
+# run earlier they report "unsupported" whatever the xdotool build. A missing `type --file`
+# silently moves typing to argv, where the guest's process table exposes whatever was typed.
 if [ -z "$DISPLAY" ]; then
   for sock in /tmp/.X11-unix/X*; do
     [ -e "$sock" ] || continue
@@ -77,11 +75,10 @@ xdotool getdisplaygeometry 2>/dev/null | tr ' ' 'x' | sed "s/^/geom=/"
 xdotool getdisplaygeometry >/dev/null 2>&1 && echo "subcmd=getdisplaygeometry"
 printf '' | xdotool type --file - >/dev/null 2>&1 && echo "subcmd=type_file"
 
-# important: the same discovery for Wayland, which had none. A wlroots guest was reported ready
-# with grim and wtype, and then every capture failed with "XDG_RUNTIME_DIR is invalid or not set",
-# because a Wayland client finds its compositor through those two variables and an LXD exec
-# inherits neither. The socket was already being listed here; nothing turned it into an
-# environment.
+# important: the same discovery for Wayland. A Wayland client finds its compositor through
+# XDG_RUNTIME_DIR and WAYLAND_DISPLAY and an LXD exec inherits neither, so without this a guest
+# reported ready with grim and wtype fails every capture with "XDG_RUNTIME_DIR is invalid or not
+# set".
 if [ -z "$WAYLAND_DISPLAY" ]; then
   for w in /run/user/*/wayland-[0-9]*; do
     [ -e "$w" ] || continue
