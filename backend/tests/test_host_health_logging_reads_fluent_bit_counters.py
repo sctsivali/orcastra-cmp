@@ -37,7 +37,7 @@ def _facts(result) -> dict:
     return {f.label: f.value for f in result.facts}
 
 
-def test_the_live_incident_parses_into_paused_inputs_and_undelivered_outputs() -> None:
+def test_a_paused_capture_parses_into_paused_inputs_and_undelivered_outputs() -> None:
     sample = fbm.parse_prometheus(PAUSED, at=1_000.0)
     assert sample.version == "4.2.2"
     assert sample.uptime == 4111410
@@ -53,7 +53,7 @@ def test_the_live_incident_parses_into_paused_inputs_and_undelivered_outputs() -
     assert sample.outputs["opensearch.0"].capacity_pct > 99
 
 
-def test_the_live_incident_is_down_without_any_history() -> None:
+def test_a_paused_capture_is_down_without_any_history() -> None:
     sample = fbm.parse_prometheus(PAUSED, at=1_000.0)
     result = logging_check.assess(sample, [], stall_seconds=180)
     assert (result.status, result.severity) == ("down", "critical")

@@ -171,8 +171,8 @@ def test_the_create_body_is_guarded_too():
 @pytest.mark.parametrize(
     "real",
     [
-        "netgate-installer-v1.1.1-RELEASE-amd64.iso",
-        "qa-pr6-v1.iso",
+        "router-installer-v1.1.1-RELEASE-amd64.iso",
+        "qa-media-v1.iso",
         "qa-fixture.iso",
         "hdd-block",
         "micro1-hdd1",
@@ -181,7 +181,7 @@ def test_the_create_body_is_guarded_too():
         "ed16b63d16256ba1f388b9c077161878760addbe31e42190fe4159a93520c9fa",
     ],
 )
-def test_a_real_volume_name_on_this_fleet_is_accepted(real):
+def test_a_realistic_volume_name_is_accepted(real):
     """Volume names in real use are accepted, ISO file names included.
 
     LXD_NAME_PATTERN is the instance rule and admits no dots, so it would refuse every ISO volume.

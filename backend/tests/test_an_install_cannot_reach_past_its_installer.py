@@ -105,9 +105,9 @@ def _install(
 
 
 BASE = dict(
-    allowed_clusters={"nuc2", "pandora"},
+    allowed_clusters={"nuc2", "panda"},
     user_orgs=[3],
-    cluster_bindings={"nuc2": [3], "pandora": [3]},
+    cluster_bindings={"nuc2": [3], "panda": [3]},
     grants=[Grant("nuc2", ["read"], ["default"])],
     manifest_scope={"permission": "read", "clusters": "selected", "projects": "selected"},
     capabilities=["inventory.read"],
@@ -122,7 +122,7 @@ def test_an_ordinary_install_is_allowed(monkeypatch) -> None:
 def test_a_cluster_outside_the_partners_own_scope_is_refused(monkeypatch) -> None:
     """The same check `create_api_key` applies to an ordinary key."""
     with pytest.raises(ScopeRefused) as exc:
-        _install(monkeypatch, **{**BASE, "grants": [Grant("blitz01", ["read"], ["default"])]})
+        _install(monkeypatch, **{**BASE, "grants": [Grant("bliss01", ["read"], ["default"])]})
     assert exc.value.status_code == 403
     assert "outside your own access" in exc.value.detail
 
@@ -332,7 +332,7 @@ def test_a_cluster_outside_the_stored_grant_is_refused_at_request_time(monkeypat
     db = FakeDB(FakeInstall())
     asyncio.run(scope.assert_install_is_live(db, "oak_x", cluster_id="nuc2"))
     with pytest.raises(ScopeRefused) as exc:
-        asyncio.run(scope.assert_install_is_live(db, "oak_x", cluster_id="pandora"))
+        asyncio.run(scope.assert_install_is_live(db, "oak_x", cluster_id="panda"))
     assert "does not reach that cluster" in exc.value.detail
 
 

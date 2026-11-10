@@ -159,7 +159,7 @@ def test_a_delivery_is_dropped_when_the_cluster_left_the_grant() -> None:
     """
     reason = asyncio.run(
         dispatcher._still_authorised(
-            FakeDB(FakeInstall()), FakeSubscription(), _payload("pandora")
+            FakeDB(FakeInstall()), FakeSubscription(), _payload("panda")
         )
     )
     assert reason and "no longer reaches" in reason

@@ -1,6 +1,6 @@
 """Creator-role rule, partial-rebind rollback and OrcaHub v1.32.0's sync body, through the sync route.
 
-The creator-role cases (`test_decision_14_*`) run the real AuthentikSyncService against Authentik's
+The creator-role cases (`test_creator_role_*`) run the real AuthentikSyncService against Authentik's
 HTTP answers: every group the request path resolves to Admin never rebinds, and every answer that
 does not confirm a role is unknown and never rebinds. The rollback cases refuse a later cluster in
 the share audit. The OrcaHub cases send the body its cluster sync builds: with a buyer org in it the
@@ -80,7 +80,7 @@ GROUP_SETS = [[n] for n in _ADMIN_NAMES] + [
 
 
 @pytest.mark.parametrize("groups", GROUP_SETS, ids=[repr(g) for g in GROUP_SETS])
-async def test_decision_14_matches_the_request_path_resolver(
+async def test_creator_role_matches_the_request_path_resolver(
     world: Dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,  # noqa: F811
     groups: List[str],
 ) -> None:
@@ -143,7 +143,7 @@ SEARCH_UNKNOWN = [
 
 
 @pytest.mark.parametrize("answer, reason", [c[1:] for c in SEARCH_UNKNOWN], ids=[c[0] for c in SEARCH_UNKNOWN])
-async def test_decision_14_a_search_that_confirms_no_role_rebinds_nothing(
+async def test_creator_role_a_search_that_confirms_no_role_rebinds_nothing(
     world: Dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,  # noqa: F811
     answer: Handler, reason: str,
 ) -> None:
@@ -174,7 +174,7 @@ DETAIL_UNKNOWN = [
 
 
 @pytest.mark.parametrize("answer, reason", [c[1:] for c in DETAIL_UNKNOWN], ids=[c[0] for c in DETAIL_UNKNOWN])
-async def test_decision_14_a_detail_read_that_confirms_no_role_rebinds_nothing(
+async def test_creator_role_a_detail_read_that_confirms_no_role_rebinds_nothing(
     world: Dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,  # noqa: F811
     answer: Handler, reason: str,
 ) -> None:
@@ -187,7 +187,7 @@ async def test_decision_14_a_detail_read_that_confirms_no_role_rebinds_nothing(
     assert f"could not be read ({reason})" in warning
 
 
-async def test_decision_14_unconfigured_authentik_rebinds_nothing_and_asks_nothing(
+async def test_creator_role_unconfigured_authentik_rebinds_nothing_and_asks_nothing(
     world: Dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,  # noqa: F811
 ) -> None:
     seen = real_authentik(monkeypatch, directory({C: ["role_partner"]}))
@@ -207,7 +207,7 @@ CONFIRMED = [
 
 
 @pytest.mark.parametrize("answer", [c[1] for c in CONFIRMED], ids=[c[0] for c in CONFIRMED])
-async def test_decision_14_a_confirmed_partner_still_rebinds(
+async def test_creator_role_a_confirmed_partner_still_rebinds(
     world: Dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,  # noqa: F811
     answer: Handler,
 ) -> None:
@@ -217,7 +217,7 @@ async def test_decision_14_a_confirmed_partner_still_rebinds(
     await assert_bound_to(db, world, "partner")
 
 
-async def test_decision_14_open_item_an_alias_admin_is_granted_partner_but_keeps_its_clusters(
+async def test_creator_role_an_alias_admin_is_granted_partner_but_keeps_its_clusters(
     world: Dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,  # noqa: F811
 ) -> None:
     """Known gap: the member sync reads the lenient groups, so it adds role_partner."""

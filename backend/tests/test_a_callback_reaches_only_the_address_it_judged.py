@@ -67,7 +67,7 @@ def test_a_get_goes_to_the_judged_address(public_name) -> None:
     assert seen == [PUBLIC]
 
 
-@pytest.mark.parametrize("address", ["127.0.0.1", "10.0.0.5", "169.254.169.254", "100.73.127.75"])
+@pytest.mark.parametrize("address", ["127.0.0.1", "10.0.0.5", "169.254.169.254", "100.64.0.10"])
 def test_a_name_that_answers_a_private_address_is_refused_before_any_request(monkeypatch, address) -> None:
     monkeypatch.setattr("app.core.url_safety.socket.getaddrinfo", _resolve_to(address))
     with pytest.raises(SafeHTTPError):

@@ -14,7 +14,7 @@ from app.services.lxd.lxd_service import LXDService
 from app.services.lxd.projects import ProjectManager
 
 
-HOST = "C2"
+HOST = "C7"
 
 
 class _Response:

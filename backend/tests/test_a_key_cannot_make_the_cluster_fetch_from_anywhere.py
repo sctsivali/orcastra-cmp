@@ -95,11 +95,11 @@ def test_a_registered_cluster_matches_on_the_port_the_daemon_would_dial(monkeypa
 
     from app.core import key_pull_sources
 
-    vault = SimpleNamespace(vault_read=lambda path, use_cache=True: {"endpoint": "https://10.1.1.242:8443"})
+    vault = SimpleNamespace(vault_read=lambda path, use_cache=True: {"endpoint": "https://10.9.8.242:8443"})
     manager = SimpleNamespace(list_clusters=lambda: ["incus-lab"], vault=vault, clusters_path="secret/data/clusters")
     monkeypatch.setattr("app.services.lxd_service.get_lxd_service", lambda: SimpleNamespace(cert_manager=manager))
-    assert key_pull_sources._is_registered_cluster("https://10.1.1.242:8443") is True
-    assert key_pull_sources._is_registered_cluster("https://10.1.1.242") is False
+    assert key_pull_sources._is_registered_cluster("https://10.9.8.242:8443") is True
+    assert key_pull_sources._is_registered_cluster("https://10.9.8.242") is False
 
 
 def test_the_first_class_create_reads_the_same_rule():
@@ -113,10 +113,10 @@ def test_an_image_copied_from_a_cluster_registered_here_is_allowed(monkeypatch):
     """Copying an image between the dashboard's own clusters names another cluster as the server."""
     from app.core import key_pull_sources
 
-    monkeypatch.setattr(key_pull_sources, "_is_registered_cluster", lambda server: server == "https://10.1.1.242:8443")
-    body = {"source": {"type": "image", "fingerprint": "a" * 64, "server": "https://10.1.1.242:8443", "protocol": "lxd"}}
+    monkeypatch.setattr(key_pull_sources, "_is_registered_cluster", lambda server: server == "https://10.9.8.242:8443")
+    body = {"source": {"type": "image", "fingerprint": "a" * 64, "server": "https://10.9.8.242:8443", "protocol": "lxd"}}
     assert pull_source_refusal("POST", body) is None
-    body["source"]["server"] = "https://10.1.1.250:8443"
+    body["source"]["server"] = "https://10.9.8.250:8443"
     assert "registered in this dashboard" in pull_source_refusal("POST", body)
 
 

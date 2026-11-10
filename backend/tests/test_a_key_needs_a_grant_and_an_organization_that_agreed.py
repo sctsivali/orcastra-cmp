@@ -164,7 +164,7 @@ async def test_turning_the_feature_off_clears_the_input_consent() -> None:
     row = DesktopControlPolicy(organization_id=6, enabled=True, allow_input=True)
     session = _Session(row)
     result = await set_consent(
-        session, 6, enabled=False, allow_input=True, updated_by="ops@sivali.co.id"
+        session, 6, enabled=False, allow_input=True, updated_by="ops@sigma.example"
     )
     assert result.enabled is False
     assert result.allow_input is False
@@ -174,7 +174,7 @@ async def test_turning_the_feature_off_clears_the_input_consent() -> None:
 @pytest.mark.asyncio
 async def test_the_first_decision_creates_the_row() -> None:
     session = _Session(None)
-    await set_consent(session, 9, enabled=True, allow_input=False, updated_by="ops@sivali.co.id")
+    await set_consent(session, 9, enabled=True, allow_input=False, updated_by="ops@sigma.example")
     assert len(session.added) == 1
     assert session.added[0].organization_id == 9
     assert session.commits == 1
@@ -308,7 +308,7 @@ async def test_a_grant_can_name_a_key_instead_of_a_person(_no_org_lookup) -> Non
     session = _GrantSession()
     grant = await _no_org_lookup.create_grant(
         session,
-        created_by="ops@sivali.co.id",
+        created_by="ops@sigma.example",
         api_key_id="oak_abc",
         cluster_id="nuc2",
         reason="agent triage of a stuck desktop",
@@ -326,12 +326,12 @@ async def test_the_human_who_issued_it_is_recorded_apart_from_the_grantee(_no_or
     would leave a key grant with no accountable person on it."""
     grant = await _no_org_lookup.create_grant(
         _GrantSession(),
-        created_by="ops@sivali.co.id",
+        created_by="ops@sigma.example",
         api_key_id="oak_abc",
         cluster_id="nuc2",
         reason="why",
     )
-    assert grant.created_by == "ops@sivali.co.id"
+    assert grant.created_by == "ops@sigma.example"
     assert grant.api_key_id == "oak_abc"
 
 
@@ -349,7 +349,7 @@ async def test_a_grant_with_both_grantees_or_neither_is_refused(_no_org_lookup, 
     with pytest.raises(HTTPException) as raised:
         await _no_org_lookup.create_grant(
             _GrantSession(),
-            created_by="ops@sivali.co.id",
+            created_by="ops@sigma.example",
             cluster_id="nuc2",
             reason="why",
             **kwargs,
@@ -364,7 +364,7 @@ async def test_a_reason_is_still_mandatory_for_a_key(_no_org_lookup) -> None:
     with pytest.raises(HTTPException):
         await _no_org_lookup.create_grant(
             _GrantSession(),
-            created_by="ops@sivali.co.id",
+            created_by="ops@sigma.example",
             api_key_id="oak_abc",
             cluster_id="nuc2",
             reason="   ",
@@ -386,7 +386,7 @@ def test_a_key_grant_can_be_serialized_back() -> None:
         cluster_id="nuc2",
         reason="why",
         status="active",
-        created_by="ops@sivali.co.id",
+        created_by="ops@sigma.example",
         created_at=_now(),
         expires_at=_now() + timedelta(hours=1),
     )
@@ -507,7 +507,7 @@ def test_the_budget_is_keyed_per_guest_not_per_key() -> None:
 
     a = bucket_key("actions", "oak_x", "nuc2", "default", "vm-a")
     b = bucket_key("actions", "oak_x", "nuc2", "default", "vm-b")
-    c = bucket_key("actions", "oak_x", "pandora", "default", "vm-a")
+    c = bucket_key("actions", "oak_x", "panda", "default", "vm-a")
     assert len({a, b, c}) == 3
     assert bucket_key("captures", "oak_x", "nuc2", "default", "vm-a") != a
 

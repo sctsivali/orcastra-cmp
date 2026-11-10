@@ -189,7 +189,7 @@ class ForeignKeyOwnershipTests(_RegistryKnowsNuc2):
     """
 
     def test_an_org_owned_by_another_key_is_refused_by_name(self):
-        owner = _ExistingOrg(slug="suka-hati", api_key_id="oak_someone_else")
+        owner = _ExistingOrg(slug="sundial", api_key_id="oak_someone_else")
         db = _OwnedElsewhereSession(owner)
 
         with self.assertRaises(HTTPException) as caught:
@@ -197,7 +197,7 @@ class ForeignKeyOwnershipTests(_RegistryKnowsNuc2):
 
         detail = str(caught.exception.detail)
         self.assertEqual(caught.exception.status_code, 409)
-        self.assertIn("suka-hati", detail)
+        self.assertIn("sundial", detail)
         self.assertIn("different integration key", detail)
         self.assertEqual(
             db.added, [], "nothing may be staged once the organisation is known to be owned"
@@ -205,7 +205,7 @@ class ForeignKeyOwnershipTests(_RegistryKnowsNuc2):
 
     def test_an_unclaimed_org_still_provisions(self):
         """A row no key has claimed must not be refused, which is sync's rule too."""
-        owner = _ExistingOrg(slug="suka-hati", api_key_id=None)
+        owner = _ExistingOrg(slug="sundial", api_key_id=None)
         db = _OwnedElsewhereSession(owner)
 
         # Reaches the create, so the fake's flush raises the duplicate-slug IntegrityError
@@ -226,14 +226,14 @@ class RevokeOwnershipTests(unittest.TestCase):
     """
 
     def test_an_org_owned_by_another_key_is_refused(self):
-        owner = _ExistingOrg(slug="suka-hati", api_key_id="oak_someone_else")
+        owner = _ExistingOrg(slug="sundial", api_key_id="oak_someone_else")
         db = _OwnedElsewhereSession(owner)
 
         with self.assertRaises(HTTPException) as caught:
             asyncio.run(revoke_tenant_access(body=_Body(), api_key=_api_key(), db=db))
 
         self.assertEqual(caught.exception.status_code, 409)
-        self.assertIn("suka-hati", str(caught.exception.detail))
+        self.assertIn("sundial", str(caught.exception.detail))
 
     def test_no_such_org_is_still_an_idempotent_success(self):
         """Revoking an organisation that does not exist stays a success."""

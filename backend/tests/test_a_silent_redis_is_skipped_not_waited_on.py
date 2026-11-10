@@ -413,7 +413,7 @@ def test_dead_cluster_verdicts_stop_being_shared_while_redis_is_skipped(manager,
     client.fail = RedisTimeoutError("t")
     cache.get("lists", "a")
     assert breaker_sync.shared_mode() is False
-    assert breaker_sync.adopt_shared("pandora") is False
+    assert breaker_sync.adopt_shared("panda") is False
 
 
 def test_a_plain_client_without_a_guard_still_counts_as_answering():

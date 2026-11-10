@@ -90,7 +90,7 @@ def _run_with_database_authority(
         if owner_affiliated:
             connection.execute(
                 text("INSERT INTO organization_members VALUES (1, 6, :email)"),
-                {"email": "ops@sivali.co.id"},
+                {"email": "ops@sigma.example"},
             )
         bindings = []
         if organization_bound:

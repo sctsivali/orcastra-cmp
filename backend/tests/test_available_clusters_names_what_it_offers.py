@@ -20,8 +20,8 @@ from datetime import datetime, timezone
 # What Vault stores for a cluster: no `name`, `server_type` or `status` key.
 VAULT = {
     "nuc2": {"display_name": "NUC 2", "endpoint": "https://nuc2:8443", "type": "microcloud"},
-    "blitz01": {"display_name": "VDC", "endpoint": "https://blitz01:8443", "type": "incus"},
-    "central1-argon": {"display_name": "", "endpoint": "https://c1:8443", "type": "lxd"},
+    "bliss01": {"display_name": "VDC", "endpoint": "https://bliss01:8443", "type": "incus"},
+    "center1-alpha": {"display_name": "", "endpoint": "https://c1:8443", "type": "lxd"},
 }
 
 
@@ -84,8 +84,8 @@ def _call(service, rows=None, monkeypatch=None, explode=None):
 
 THREE_STATES = [
     ("an answering cluster", "nuc2", ClusterStatus.ONLINE),
-    ("a host that never answered", "blitz01", ClusterStatus.OFFLINE),
-    ("a trust handshake that never finished", "central1-argon", ClusterStatus.NOT_AUTHORIZED),
+    ("a host that never answered", "bliss01", ClusterStatus.OFFLINE),
+    ("a trust handshake that never finished", "center1-alpha", ClusterStatus.NOT_AUTHORIZED),
 ]
 
 
@@ -101,8 +101,8 @@ def test_a_cluster_is_listed_whatever_its_state(label, cluster_id, status, monke
 
 
 def test_every_status_is_a_member_of_the_enum_or_null(monkeypatch):
-    rows = [_row("nuc2", ClusterStatus.ONLINE), _row("blitz01", ClusterStatus.ERROR),
-            _row("central1-argon", ClusterStatus.PENDING)]
+    rows = [_row("nuc2", ClusterStatus.ONLINE), _row("bliss01", ClusterStatus.ERROR),
+            _row("center1-alpha", ClusterStatus.PENDING)]
     body = _call(_Service(), rows, monkeypatch=monkeypatch)
     allowed = {s.value for s in ClusterStatus}
     for cluster in body.clusters:
@@ -116,9 +116,9 @@ def test_the_name_is_the_display_name_and_the_type_is_the_registered_one(monkeyp
 
     assert listed["nuc2"].name == "NUC 2"
     assert listed["nuc2"].server_type == "microcloud"
-    assert listed["blitz01"].server_type == "incus"
+    assert listed["bliss01"].server_type == "incus"
     # An empty display name falls back to the id rather than rendering as a blank row.
-    assert listed["central1-argon"].name == "central1-argon"
+    assert listed["center1-alpha"].name == "center1-alpha"
 
 
 def test_reachability_failing_does_not_empty_the_picker(monkeypatch):
@@ -134,23 +134,23 @@ def test_reachability_failing_does_not_empty_the_picker(monkeypatch):
     assert all(c.status is None for c in body.clusters)
     assert all(c.available is None for c in body.clusters)
     # The fallback still names them correctly rather than dropping back to raw ids.
-    assert {c.name for c in body.clusters} == {"NUC 2", "VDC", "central1-argon"}
+    assert {c.name for c in body.clusters} == {"NUC 2", "VDC", "center1-alpha"}
 
 
 def test_available_is_tri_state(monkeypatch):
-    rows = [_row("nuc2", ClusterStatus.ONLINE), _row("blitz01", ClusterStatus.OFFLINE)]
-    body = _call(_Service(names=["nuc2", "blitz01"]), rows, monkeypatch=monkeypatch)
+    rows = [_row("nuc2", ClusterStatus.ONLINE), _row("bliss01", ClusterStatus.OFFLINE)]
+    body = _call(_Service(names=["nuc2", "bliss01"]), rows, monkeypatch=monkeypatch)
     by_id = {c.id: c for c in body.clusters}
     assert by_id["nuc2"].available is True
-    assert by_id["blitz01"].available is False
+    assert by_id["bliss01"].available is False
 
 
 def test_a_registered_cluster_absent_from_the_sweep_is_still_listed(monkeypatch):
     body = _call(_Service(), [_row("nuc2", ClusterStatus.ONLINE)], monkeypatch=monkeypatch)
     listed = {c.id: c for c in body.clusters}
     assert set(listed) == set(VAULT)
-    assert listed["blitz01"].status is None
-    assert listed["blitz01"].name == "VDC"
+    assert listed["bliss01"].status is None
+    assert listed["bliss01"].name == "VDC"
 
 
 def test_the_literal_unknown_endpoint_is_not_printed_as_one(monkeypatch):
@@ -161,11 +161,11 @@ def test_the_literal_unknown_endpoint_is_not_printed_as_one(monkeypatch):
 
 
 def test_a_failed_metadata_read_does_not_drop_the_cluster(monkeypatch):
-    service = _Service(fail={"blitz01"})
+    service = _Service(fail={"bliss01"})
     body = _call(service, monkeypatch=monkeypatch, explode=RuntimeError("no reachability"))
     listed = {c.id: c for c in body.clusters}
     assert set(listed) == set(VAULT)
-    assert listed["blitz01"].name == "blitz01"
+    assert listed["bliss01"].name == "bliss01"
 
 
 def test_an_empty_scope_answers_an_empty_list_without_probing(monkeypatch):

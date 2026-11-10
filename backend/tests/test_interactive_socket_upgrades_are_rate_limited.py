@@ -126,7 +126,7 @@ def test_behind_a_trusted_proxy_the_forwarded_client_is_counted():
     proxy = "172.18.0.2"  # the edge proxy's container address, trusted by the default TRUSTED_PROXY_CIDRS
     # Public addresses: a documentation range (203.0.113.0/24) counts as private, and a private
     # forwarded address is ignored unless ALLOW_PRIVATE_FORWARDED_IPS says otherwise.
-    first, second = "195.178.110.104", "142.132.147.94"
+    first, second = "93.184.215.15", "93.184.215.14"
 
     assert _Upgrade(limiter, TERMINAL, proxy, headers=[("CF-Connecting-IP", first)]).reached
     assert not _Upgrade(limiter, TERMINAL, proxy, headers=[("CF-Connecting-IP", first)]).reached
@@ -137,10 +137,10 @@ def test_behind_a_trusted_proxy_the_forwarded_client_is_counted():
 
 def test_an_untrusted_client_cannot_spread_itself_over_forged_headers():
     limiter = _middleware(limit=1)
-    direct = "195.178.110.104"  # public, so not a trusted proxy
+    direct = "93.184.215.15"  # public, so not a trusted proxy
 
-    assert _Upgrade(limiter, TERMINAL, direct, headers=[("X-Forwarded-For", "142.132.147.94")]).reached
-    assert not _Upgrade(limiter, TERMINAL, direct, headers=[("X-Forwarded-For", "142.132.147.95")]).reached
+    assert _Upgrade(limiter, TERMINAL, direct, headers=[("X-Forwarded-For", "93.184.215.14")]).reached
+    assert not _Upgrade(limiter, TERMINAL, direct, headers=[("X-Forwarded-For", "93.184.215.16")]).reached
 
 
 def test_feeds_and_http_requests_are_not_counted():

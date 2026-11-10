@@ -24,7 +24,7 @@ from app.services import key_grant_hygiene
 from app.services.lxd import registry as cluster_registry
 from app.services.lxd_certs.types import LXDCertManagerError
 
-REGISTERED = frozenset({"nuc2", "blitz001"})
+REGISTERED = frozenset({"nuc2", "bliss001"})
 
 
 @pytest.fixture
@@ -44,8 +44,8 @@ def registry(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_a_stale_id_stays_in_what_the_key_reports_and_is_marked(registry) -> None:
-    unregistered = await integrations._unregistered_cluster_ids(["nuc2", "nuc-2", "blitz01"])
-    assert unregistered == frozenset({"nuc-2", "blitz01"})
+    unregistered = await integrations._unregistered_cluster_ids(["nuc2", "nuc-2", "bliss01"])
+    assert unregistered == frozenset({"nuc-2", "bliss01"})
     grant = {"cluster_id": "nuc-2", "permissions": ["read"], "projects": ["default"]}
     reported = integrations.ClusterPermission(**integrations._reported_grant(grant, unregistered))
     assert reported.model_dump()["registered"] is False
@@ -80,11 +80,11 @@ async def test_a_fan_out_reports_a_stale_id_as_not_registered_without_looking_it
         fetched.append(cluster_id)
         return [{"cluster_id": cluster_id}]
 
-    fanout = await integrations._gather_per_cluster(fetch, None, {"nuc2", "nuc-2", "blitz01"}, "projects")
+    fanout = await integrations._gather_per_cluster(fetch, None, {"nuc2", "nuc-2", "bliss01"}, "projects")
     assert fetched == ["nuc2"]
     assert fanout.items == [{"cluster_id": "nuc2"}]
     assert sorted(fanout.unreachable, key=lambda m: m["cluster_id"]) == [
-        {"cluster_id": "blitz01", "reason": "not registered"},
+        {"cluster_id": "bliss01", "reason": "not registered"},
         {"cluster_id": "nuc-2", "reason": "not registered"},
     ]
 
@@ -152,7 +152,7 @@ async def test_a_new_grant_to_an_unregistered_id_is_refused_from_a_fresh_registr
         await integrations._refuse_new_grants_to_unregistered_clusters(["nuc2", "nuc-9"])
     assert refused.value.status_code == 422
     assert refused.value.detail["code"] == "cluster_not_registered"
-    assert "nuc-9" in refused.value.detail["message"] and "blitz001" not in refused.value.detail["message"]
+    assert "nuc-9" in refused.value.detail["message"] and "bliss001" not in refused.value.detail["message"]
     assert registry["fresh"] == [True]
 
 
@@ -188,8 +188,8 @@ def _stale(grant) -> bool:
 
 
 def test_the_plan_drops_only_unregistered_ids_and_reports_what_it_will_not_touch() -> None:
-    plan = key_grant_hygiene.plan_cleanup("oak_1", _metadata("nuc2", "nuc-2", "blitz01"), _stale)
-    assert plan.drop == ["blitz01", "nuc-2"] and plan.writable
+    plan = key_grant_hygiene.plan_cleanup("oak_1", _metadata("nuc2", "nuc-2", "bliss01"), _stale)
+    assert plan.drop == ["bliss01", "nuc-2"] and plan.writable
     assert key_grant_hygiene.plan_cleanup("oak_2", _metadata("nuc2"), _stale) is None
     add_on = key_grant_hygiene.plan_cleanup("key_3", _metadata("nuc2", "nuc-2", add_on=True), _stale)
     assert add_on.add_on and not add_on.writable

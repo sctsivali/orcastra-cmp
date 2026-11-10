@@ -24,7 +24,7 @@ from tests._sqlite_session import sqlite_session
 # The real reader, captured before conftest's default (every grant matches) replaces it per test.
 REAL_CURRENT = gens.current
 LIVE = gens.Generation("nuc2", "reg-2", legacy=False)
-OLD = gens.Generation("pandora", "reg-old", legacy=True)
+OLD = gens.Generation("panda", "reg-old", legacy=True)
 
 
 def _state(closed: bool = True, **active: gens.Generation) -> gens.Generations:
@@ -59,11 +59,11 @@ def _rows(db) -> List[ClusterRegistration]:
 
 
 def test_a_grant_matches_only_its_own_registration() -> None:
-    state = _state(nuc2=LIVE, pandora=OLD)
+    state = _state(nuc2=LIVE, panda=OLD)
     assert state.matches({"cluster_id": "nuc2", "registration_id": "reg-2"})
     assert not state.matches({"cluster_id": "nuc2", "registration_id": "reg-1"}), "an ended registration's grant"
     assert not state.matches({"cluster_id": "nuc2"}), "unstamped grants match only a legacy registration"
-    assert state.matches({"cluster_id": "pandora"}), "a grant from before generations, on its legacy registration"
+    assert state.matches({"cluster_id": "panda"}), "a grant from before generations, on its legacy registration"
     assert not state.matches({"cluster_id": "gone"}), "an id with no active registration reaches nothing"
     assert _state(closed=False).matches({"cluster_id": "not-yet-adopted"}), (
         "until the backfill closes adoption, an id without a row keeps matching as before"
@@ -71,32 +71,32 @@ def test_a_grant_matches_only_its_own_registration() -> None:
 
 
 def test_binding_a_key_is_a_copy_so_the_validation_cache_keeps_the_whole_document() -> None:
-    held = [{"cluster_id": "nuc2", "registration_id": "reg-1"}, {"cluster_id": "pandora"}]
+    held = [{"cluster_id": "nuc2", "registration_id": "reg-1"}, {"cluster_id": "panda"}]
     stored = {"id": "oak_x", "cluster_permissions": held}
-    bound = gens.bind(stored, _state(nuc2=LIVE, pandora=OLD))
-    assert [g["cluster_id"] for g in bound["cluster_permissions"]] == ["pandora"]
+    bound = gens.bind(stored, _state(nuc2=LIVE, panda=OLD))
+    assert [g["cluster_id"] for g in bound["cluster_permissions"]] == ["panda"]
     assert bound["_held_cluster_permissions"] == held
     assert stored["cluster_permissions"] is held and len(held) == 2, "the cached document is untouched"
-    unchanged = {"id": "oak_y", "cluster_permissions": [{"cluster_id": "pandora"}]}
-    assert gens.bind(unchanged, _state(pandora=OLD)) is unchanged
+    unchanged = {"id": "oak_y", "cluster_permissions": [{"cluster_id": "panda"}]}
+    assert gens.bind(unchanged, _state(panda=OLD)) is unchanged
 
 
 # ── what a write stores ──────────────────────────────────────────────────────────────────────
 
 
 def test_the_server_stamps_every_grant_and_ignores_a_stamp_the_caller_sent() -> None:
-    state = _state(nuc2=LIVE, pandora=OLD)
+    state = _state(nuc2=LIVE, panda=OLD)
     stored = gens.stamp(
         [
             {"cluster_id": "nuc2", "permissions": ["read"], "registration_id": "forged", "registered": False, "rebindable": True},
-            {"cluster_id": "pandora", "permissions": ["write"]},
+            {"cluster_id": "panda", "permissions": ["write"]},
         ],
         [],
         state,
     )
     assert stored == [
         {"cluster_id": "nuc2", "permissions": ["read"], "registration_id": "reg-2"},
-        {"cluster_id": "pandora", "permissions": ["write"], "registration_id": "reg-old"},
+        {"cluster_id": "panda", "permissions": ["write"], "registration_id": "reg-old"},
     ]
     with pytest.raises(HTTPException) as refused:
         gens.stamp([{"cluster_id": "gone"}], [], state)
@@ -116,13 +116,13 @@ def test_an_edit_keeps_a_paused_grant_paused_unless_it_is_granted_again() -> Non
 
 
 def test_a_reader_never_sees_the_stamp_and_sees_a_paused_grant_as_such() -> None:
-    state = _state(nuc2=LIVE, pandora=OLD)
-    grants = [{"cluster_id": "nuc2", "registration_id": "reg-1"}, {"cluster_id": "pandora", "registration_id": "reg-old"}]
+    state = _state(nuc2=LIVE, panda=OLD)
+    grants = [{"cluster_id": "nuc2", "registration_id": "reg-1"}, {"cluster_id": "panda", "registration_id": "reg-old"}]
     assert gens.annotate(grants, state, for_managers=True) == [
         {"cluster_id": "nuc2", "registered": False, "rebindable": True},
-        {"cluster_id": "pandora"},
+        {"cluster_id": "panda"},
     ]
-    assert gens.annotate(grants, state) == [{"cluster_id": "nuc2", "registered": False}, {"cluster_id": "pandora"}], (
+    assert gens.annotate(grants, state) == [{"cluster_id": "nuc2", "registered": False}, {"cluster_id": "panda"}], (
         "the key holder is not told the id is registered again, possibly by someone else"
     )
 
@@ -159,18 +159,18 @@ async def test_an_active_row_left_by_an_unfinished_deregistration_ends_on_the_ne
 @pytest.mark.asyncio
 async def test_adoption_is_for_clusters_from_before_generations_and_closes_for_good(registrations) -> None:
     # Registered again before the backfill reached it: adopted, so its old grants keep working.
-    adopted = await gens.begin_registration(registrations, "pandora", live=True)
+    adopted = await gens.begin_registration(registrations, "panda", live=True)
     assert adopted.legacy is True
     # Deregistered before the backfill: an ended legacy row, so nothing can adopt it later.
     tomb = await gens.end_registration(registrations, "never-adopted")
     assert tomb.legacy is True
     registrations.sync.commit()  # the routes commit their transaction; these two only flush into it
 
-    read = SimpleNamespace(source="vault", cluster_ids=["pandora", "nuc2", "never-adopted"])
+    read = SimpleNamespace(source="vault", cluster_ids=["panda", "nuc2", "never-adopted"])
     assert await gens.backfill_legacy(lambda: read) == 1, "only nuc2 had no row at all"
     assert await gens.backfill_legacy(lambda: read) == 0, "closed: a second run adopts nothing"
     state = await gens.current(fresh=True)
-    assert state.closed and set(state.active) == {"pandora", "nuc2"}
+    assert state.closed and set(state.active) == {"panda", "nuc2"}
     assert state.active["nuc2"].legacy is True
 
     late = await gens.begin_registration(registrations, "brand-new", live=True)
@@ -252,15 +252,15 @@ async def test_every_validated_key_is_bound_after_the_cache(monkeypatch) -> None
 def test_a_paused_grant_makes_no_one_a_manager_of_the_key_and_routes_no_event() -> None:
     from app.routers import integrations
 
-    key = {"cluster_permissions": [{"cluster_id": "nuc2", "registration_id": "reg-1"}, {"cluster_id": "pandora"}]}
-    state = _state(nuc2=LIVE, pandora=OLD)
-    assert integrations._key_clusters(key, state) == {"pandora"}, (
+    key = {"cluster_permissions": [{"cluster_id": "nuc2", "registration_id": "reg-1"}, {"cluster_id": "panda"}]}
+    state = _state(nuc2=LIVE, panda=OLD)
+    assert integrations._key_clusters(key, state) == {"panda"}, (
         "the organization now holding nuc2 must not manage a key granted to the earlier nuc2"
     )
     with pytest.raises(HTTPException):
         integrations._assert_key_in_scope(key, {"nuc2"}, state)
-    assert gens.reachable(key["cluster_permissions"], state) == {"pandora"}
-    assert gens.reachable(key["cluster_permissions"], None) == {"nuc2", "pandora"}
+    assert gens.reachable(key["cluster_permissions"], state) == {"panda"}
+    assert gens.reachable(key["cluster_permissions"], None) == {"nuc2", "panda"}
 
 
 def test_registration_and_deregistration_settle_the_generation_before_touching_vault() -> None:
@@ -285,7 +285,7 @@ def test_a_deregistration_strips_only_the_grants_made_for_the_registration_that_
     assert not stale({"cluster_id": "nuc2", "registration_id": "reg-2"}), "a quick re-register's grant stays"
     assert not stale({"cluster_id": "nuc2"}), "unstamped grants were not made for a non-legacy registration"
     assert made_for("nuc2", gens.Generation("nuc2", "reg-0", legacy=True))({"cluster_id": "nuc2"})
-    assert not stale({"cluster_id": "pandora", "registration_id": "reg-1"})
+    assert not stale({"cluster_id": "panda", "registration_id": "reg-1"})
 
 
 def test_every_grant_write_goes_through_the_stamp() -> None:

@@ -52,7 +52,7 @@ def _create(monkeypatch, refusal: str) -> HTTPException:
     monkeypatch.setattr(projects_router, "assert_project_not_migration_fenced", no_fence)
     monkeypatch.setattr(projects_router, "org_to_hold_project_grant", grant_owner)
     monkeypatch.setattr(projects_router, "activity_logger", SimpleNamespace(log_activity=lambda **_k: None))
-    request = ProjectCreateRequest(name="qa-rc5-bz", host=HOST, description="", config={}, max_cpu=2,
+    request = ProjectCreateRequest(name="qa-taken", host=HOST, description="", config={}, max_cpu=2,
                                    max_ram="2GiB", max_storage="20GiB")
     user = AuthenticatedUser(user_id="p", email="p@example.test", roles=["role_partner"], groups=["role_partner"])
     with pytest.raises(HTTPException) as caught:
@@ -62,7 +62,7 @@ def _create(monkeypatch, refusal: str) -> HTTPException:
 
 
 def test_a_taken_name_is_a_conflict(monkeypatch) -> None:
-    refused = _create(monkeypatch, 'Could not create project: Project "qa-rc5-bz" already exists')
+    refused = _create(monkeypatch, 'Could not create project: Project "qa-taken" already exists')
     assert refused.status_code == 409
 
 

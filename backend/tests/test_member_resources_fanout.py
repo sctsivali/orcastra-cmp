@@ -175,7 +175,7 @@ class FakeClient:
 
 
 def _collect(client: FakeClient, member: str = "microcloud20") -> mr.MemberFanout:
-    return asyncio.run(mr.collect_member_fanout(client, "central2", member))
+    return asyncio.run(mr.collect_member_fanout(client, "center2", member))
 
 
 def test_the_fake_reproduces_the_lazy_sync_defect():

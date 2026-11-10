@@ -92,7 +92,7 @@ def test_a_missing_uplink_is_refused_before_the_daemon_sees_it():
 
 def test_a_name_that_does_not_exist_is_refused():
     with pytest.raises(HTTPException) as exc:
-        validate_uplink(ovn("ovn-uat-hermes"), FIELD_NETWORKS)
+        validate_uplink(ovn("ovn-uat-herald"), FIELD_NETWORKS)
     assert "does not exist" in exc.value.detail
 
 

@@ -78,7 +78,7 @@ def test_a_plain_http_endpoint_is_never_pinned(monkeypatch) -> None:
 
 def test_a_publicly_trusted_certificate_is_pinned_as_public_ca(monkeypatch) -> None:
     _live(monkeypatch, OLD, OLD)
-    decision = decide_pin("hetzner", ENDPOINT, {})
+    decision = decide_pin("hexa", ENDPOINT, {})
     assert decision.outcome == "pinned"
     assert decision.fingerprint == OLD
     assert decision.update[TRUST_FIELD] == TRUST_PUBLIC_CA
@@ -97,7 +97,7 @@ def test_a_self_signed_certificate_is_pinned_on_first_use(monkeypatch) -> None:
 def test_a_renewal_is_accepted_and_the_old_pin_is_kept_in_the_lineage(monkeypatch, caplog) -> None:
     _live(monkeypatch, NEW, NEW)
     with caplog.at_level(logging.WARNING, logger=pinning.logger.name):
-        decision = decide_pin("hetzner", ENDPOINT, _public_pin())
+        decision = decide_pin("hexa", ENDPOINT, _public_pin())
     assert decision.outcome == "renewed"
     assert decision.fingerprint == NEW
     assert decision.update[FINGERPRINT_FIELD] == NEW
@@ -114,7 +114,7 @@ def test_the_lineage_is_bounded(monkeypatch) -> None:
         for index in range(1, MAX_PREVIOUS + 1)
     ]
     _live(monkeypatch, NEW, NEW)
-    decision = decide_pin("hetzner", ENDPOINT, _public_pin(previous=previous))
+    decision = decide_pin("hexa", ENDPOINT, _public_pin(previous=previous))
     lineage = decision.update[PREVIOUS_FIELD]
     assert len(lineage) == MAX_PREVIOUS
     assert lineage[0]["fingerprint"] == OLD, "newest first"
@@ -122,8 +122,8 @@ def test_the_lineage_is_bounded(monkeypatch) -> None:
 
 def test_a_renewed_pin_matches_on_the_next_connection_without_a_write(monkeypatch) -> None:
     _live(monkeypatch, NEW, NEW)
-    renewed = {**_public_pin(), **decide_pin("hetzner", ENDPOINT, _public_pin()).update}
-    again = decide_pin("hetzner", ENDPOINT, renewed)
+    renewed = {**_public_pin(), **decide_pin("hexa", ENDPOINT, _public_pin()).update}
+    again = decide_pin("hexa", ENDPOINT, renewed)
     assert again.outcome == "match"
     assert again.update is None
 
@@ -132,7 +132,7 @@ def test_a_public_ca_cluster_presenting_a_self_signed_certificate_is_refused(mon
     """A downgrade is the shape an interception takes, so it is never read as a renewal."""
     _live(monkeypatch, NEW, None)
     with pytest.raises(LXDCertificatePinError):
-        decide_pin("hetzner", ENDPOINT, _public_pin())
+        decide_pin("hexa", ENDPOINT, _public_pin())
 
 
 def test_a_self_signed_cluster_presenting_a_public_certificate_is_refused(monkeypatch) -> None:
@@ -154,21 +154,21 @@ def test_a_certificate_on_another_port_of_the_same_host_is_refused(monkeypatch) 
     """Another TLS service on the same name has its own valid certificate and is not the API."""
     _live(monkeypatch, NEW, NEW)
     with pytest.raises(LXDCertificatePinError):
-        decide_pin("hetzner", "https://vdc.example.org:8443", _public_pin())
+        decide_pin("hexa", "https://vdc.example.org:8443", _public_pin())
 
 
 def test_a_certificate_for_another_host_is_refused(monkeypatch) -> None:
     """The endpoint can be edited while the pin survives, so the host is part of the promise."""
     _live(monkeypatch, NEW, NEW)
     with pytest.raises(LXDCertificatePinError):
-        decide_pin("hetzner", "https://other.example.org", _public_pin())
+        decide_pin("hexa", "https://other.example.org", _public_pin())
 
 
 def test_a_renewal_presented_by_a_different_socket_is_refused(monkeypatch) -> None:
     """Both handshakes have to have seen the same certificate, or the check proves nothing."""
     _live(monkeypatch, NEW, OTHER)
     with pytest.raises(LXDCertificatePinError):
-        decide_pin("hetzner", ENDPOINT, _public_pin())
+        decide_pin("hexa", ENDPOINT, _public_pin())
 
 
 def test_an_ip_endpoint_is_never_classified_public_ca(monkeypatch) -> None:
@@ -183,7 +183,7 @@ def test_an_ip_endpoint_is_never_classified_public_ca(monkeypatch) -> None:
 def test_a_legacy_pin_is_classified_once(monkeypatch) -> None:
     legacy = {FINGERPRINT_FIELD: OLD, PINNED_AT_FIELD: "2026-08-29T00:00:00+00:00"}
     _live(monkeypatch, OLD, OLD)
-    decision = decide_pin("hetzner", ENDPOINT, legacy)
+    decision = decide_pin("hexa", ENDPOINT, legacy)
     assert decision.outcome == "match"
     assert decision.update == {
         TRUST_FIELD: TRUST_PUBLIC_CA,
@@ -203,8 +203,8 @@ def test_an_unreadable_certificate_keeps_the_stored_pin_and_warns_once(monkeypat
     _live(monkeypatch, None, None)
     pinning._reset_unavailable_warnings()
     with caplog.at_level(logging.WARNING, logger=pinning.logger.name):
-        first = decide_pin("hetzner", ENDPOINT, _public_pin())
-        decide_pin("hetzner", ENDPOINT, _public_pin())
+        first = decide_pin("hexa", ENDPOINT, _public_pin())
+        decide_pin("hexa", ENDPOINT, _public_pin())
     assert first.outcome == "unavailable"
     assert first.fingerprint == OLD, "the real socket must still be held to the stored pin"
     assert first.update is None
@@ -216,11 +216,11 @@ def test_the_unavailable_warning_is_rearmed_after_a_success(monkeypatch, caplog)
     pinning._reset_unavailable_warnings()
     with caplog.at_level(logging.WARNING, logger=pinning.logger.name):
         _live(monkeypatch, None, None)
-        decide_pin("hetzner", ENDPOINT, _public_pin())
+        decide_pin("hexa", ENDPOINT, _public_pin())
         _live(monkeypatch, OLD, OLD)
-        decide_pin("hetzner", ENDPOINT, _public_pin())
+        decide_pin("hexa", ENDPOINT, _public_pin())
         _live(monkeypatch, None, None)
-        decide_pin("hetzner", ENDPOINT, _public_pin())
+        decide_pin("hexa", ENDPOINT, _public_pin())
     warnings = [r for r in caplog.records if "vdc.example.org:443" in r.getMessage()]
     assert len(warnings) == 2
 
@@ -301,14 +301,14 @@ def _manager_with_vault(monkeypatch, vault):
 
 
 def test_a_renewal_is_written_with_the_rest_of_the_metadata_and_audited(monkeypatch) -> None:
-    vault = _Vault({**_public_pin(), "display_name": "Hetzner"})
+    vault = _Vault({**_public_pin(), "display_name": "Hexa"})
     manager, audits = _manager_with_vault(monkeypatch, vault)
     manager._write_cluster_pin(
-        "hetzner", compared=OLD, update={FINGERPRINT_FIELD: NEW}, outcome="renewed",
+        "hexa", compared=OLD, update={FINGERPRINT_FIELD: NEW}, outcome="renewed",
         endpoint=ENDPOINT,
     )
     assert vault.writes[0][FINGERPRINT_FIELD] == NEW
-    assert vault.writes[0]["display_name"] == "Hetzner", "a pin write must not drop other fields"
+    assert vault.writes[0]["display_name"] == "Hexa", "a pin write must not drop other fields"
     assert audits[0]["action"] == "cluster.server_certificate.renew"
     assert audits[0]["details"]["previous_fingerprint"] == OLD[:16]
 
@@ -317,7 +317,7 @@ def test_a_concurrent_repin_is_not_overwritten(monkeypatch) -> None:
     vault = _Vault(_public_pin(fingerprint=OTHER))
     manager, audits = _manager_with_vault(monkeypatch, vault)
     manager._write_cluster_pin(
-        "hetzner", compared=OLD, update={FINGERPRINT_FIELD: NEW}, outcome="renewed",
+        "hexa", compared=OLD, update={FINGERPRINT_FIELD: NEW}, outcome="renewed",
         endpoint=ENDPOINT,
     )
     assert vault.writes == []
@@ -328,7 +328,7 @@ def test_a_renewal_another_worker_already_recorded_is_not_written_twice(monkeypa
     vault = _Vault(_public_pin(fingerprint=NEW))
     manager, audits = _manager_with_vault(monkeypatch, vault)
     manager._write_cluster_pin(
-        "hetzner", compared=OLD, update={FINGERPRINT_FIELD: NEW}, outcome="renewed",
+        "hexa", compared=OLD, update={FINGERPRINT_FIELD: NEW}, outcome="renewed",
         endpoint=ENDPOINT,
     )
     assert vault.writes == []
@@ -347,7 +347,7 @@ def test_a_pooled_client_bound_to_a_superseded_pin_is_replaced(monkeypatch) -> N
     stale.api = type("Api", (), {"_api_endpoint": "https://vdc.example.org", "session": session})()
 
     manager = connection_module.LXDConnectionManager()
-    manager._clients["hetzner"] = stale
+    manager._clients["hexa"] = stale
     monkeypatch.setattr(connection_module.health, "is_tripped", lambda cluster_id: False)
     monkeypatch.setattr(
         "app.core.org_scope.get_current_allowed_clusters", lambda: None
@@ -358,8 +358,8 @@ def test_a_pooled_client_bound_to_a_superseded_pin_is_replaced(monkeypatch) -> N
         "_auto_reconnect",
         lambda cluster_id, **kwargs: reconnects.append(kwargs) or "fresh",
     )
-    assert manager.get_client("hetzner", expected_server_fingerprint=NEW) == "fresh"
-    assert "hetzner" not in manager._clients
+    assert manager.get_client("hexa", expected_server_fingerprint=NEW) == "fresh"
+    assert "hexa" not in manager._clients
     assert reconnects == [{"expected_server_fingerprint": NEW}]
 
 
@@ -379,7 +379,7 @@ def test_a_write_that_loses_a_check_and_set_race_is_not_recorded(monkeypatch) ->
     vault = _Vault(_public_pin(), lose_cas_to=_public_pin(fingerprint=OTHER))
     manager, audits = _manager_with_vault(monkeypatch, vault)
     stored = manager._write_cluster_pin(
-        "hetzner", compared=OLD, update={FINGERPRINT_FIELD: NEW}, outcome="renewed",
+        "hexa", compared=OLD, update={FINGERPRINT_FIELD: NEW}, outcome="renewed",
         endpoint=ENDPOINT,
     )
     assert stored == OTHER, "the caller learns which pin won"
@@ -394,7 +394,7 @@ def test_a_connection_that_lost_the_pin_race_is_refused(monkeypatch) -> None:
     vault = _Vault({"endpoint": ENDPOINT}, lose_cas_to={FINGERPRINT_FIELD: OTHER, TRUST_FIELD: TRUST_TOFU})
     manager, _audits = _manager_with_vault(monkeypatch, vault)
     with pytest.raises(LXDCertificatePinError):
-        manager._enforce_certificate_pin("hetzner", "https://10.0.0.5:8443")
+        manager._enforce_certificate_pin("hexa", "https://10.0.0.5:8443")
 
 
 def test_a_vault_outage_holds_the_socket_to_the_last_pin_seen(monkeypatch) -> None:

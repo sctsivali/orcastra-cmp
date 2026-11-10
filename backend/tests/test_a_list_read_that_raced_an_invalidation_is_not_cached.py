@@ -47,7 +47,7 @@ class _Service:
         if self.invalidate_during_read:
             self.manager.invalidate_instance_cache()
         vm = VMInfo(name="web01", status=VMStatus.STOPPED, status_code=102, host="mc-lab",
-                    host_endpoint="https://lab:9444", project="UAT-Hermes", type="container", architecture="x86_64")
+                    host_endpoint="https://lab:9444", project="UAT-Herald", type="container", architecture="x86_64")
         return [vm], ["mc-lab"], []
 
     async def read_fleet_inventory(self):
@@ -60,7 +60,7 @@ class _Service:
         return self._read()
 
     async def list_vms_in_project_with_failures(self, host, project):
-        assert (host, project) == ("mc-lab", "UAT-Hermes")
+        assert (host, project) == ("mc-lab", "UAT-Herald")
         return self._read()
 
 
@@ -161,11 +161,11 @@ def test_a_scoped_read_that_raced_an_invalidation_is_not_cached(monkeypatch):
     service = _Service(manager, invalidate_during_read=True)
     client = _client(manager, service, monkeypatch)
 
-    response = client.get("/instances?host=mc-lab&project=UAT-Hermes")
+    response = client.get("/instances?host=mc-lab&project=UAT-Herald")
 
     assert response.status_code == 200, response.text
     assert _cached_lists(manager) == 0
-    assert client.get("/instances?host=mc-lab&project=UAT-Hermes").status_code == 200
+    assert client.get("/instances?host=mc-lab&project=UAT-Herald").status_code == 200
     assert service.reads == 2, "the next scoped read must not use a stale cache entry"
 
 

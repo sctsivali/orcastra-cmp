@@ -42,10 +42,10 @@ OPEN_IN_READ_ONLY: dict[tuple[str, str], str] = {
     ("system.py", "clear_cache"): "cache only",
     # Open by product policy.
     ("host_health.py", "unseal_vault"): "a sealed Vault must be unsealable in any mode",
-    ("migrations.py", "create_plan"): "planning is allowed read-only (owner 2026-11-04); execution is not",
+    ("migrations.py", "create_plan"): "planning is allowed read-only; execution is not",
     ("migrations.py", "patch_plan"): "planning, as above",
     ("migrations.py", "discard_plan"): "discarding a draft, as above",
-    ("integrations.py", "sync_data"): "OrcaHub sync (owner 2026-11-05)",
+    ("integrations.py", "sync_data"): "OrcaHub sync",
     ("integrations.py", "refresh_organizations"): "OrcaHub sync, pulled",
     ("integrations.py", "enroll_owner_key"): "OrcaHub owner-key enrolment",
     ("integrations.py", "remove_own_owner_key"): "OrcaHub owner-key removal",

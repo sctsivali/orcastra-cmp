@@ -45,20 +45,20 @@ class _Node:
 
 PROJECTS = [
     {"name": "default", "config": {}},
-    {"name": "UAT-Hermes", "config": {"features.networks": "true"}},
+    {"name": "UAT-Herald", "config": {"features.networks": "true"}},
 ]
 NETWORKS = [
     {"name": "lxdbr0", "project": "default", "type": "bridge",
      "config": {"ipv4.address": "10.22.114.1/24", "ipv6.address": "none"}},
-    {"name": "ovn-uat-hermes", "project": "UAT-Hermes", "type": "ovn",
+    {"name": "ovn-uat-herald", "project": "UAT-Herald", "type": "ovn",
      "config": {"ipv4.address": "192.168.3.1/24", "ipv6.address": "none"}},
 ]
 INSTANCES = [
     {"name": "qahf-nic-test", "project": "default",
      "expanded_devices": {"eth1": {"type": "nic", "nictype": "bridged", "parent": "lxdbr0",
                                    "ipv4.address": "10.22.114.231"}}},
-    {"name": "hermes-c1", "project": "UAT-Hermes",
-     "expanded_devices": {"eth0": {"type": "nic", "network": "ovn-uat-hermes"}}},
+    {"name": "herald-c1", "project": "UAT-Herald",
+     "expanded_devices": {"eth0": {"type": "nic", "network": "ovn-uat-herald"}}},
 ]
 ALLOCATIONS: Dict[str, List[Dict[str, Any]]] = {
     "default": [
@@ -67,9 +67,9 @@ ALLOCATIONS: Dict[str, List[Dict[str, Any]]] = {
         {"addresses": "10.22.114.231/24", "type": "instance", "hwaddr": "00:16:3e:00:00:01",
          "used_by": "/1.0/instances/qahf-nic-test", "network": "lxdbr0"},
     ],
-    "UAT-Hermes": [
+    "UAT-Herald": [
         {"addresses": "192.168.3.12/24", "type": "instance", "hwaddr": "00:16:3e:00:00:02",
-         "used_by": "/1.0/instances/hermes-c1?project=UAT-Hermes", "network": "ovn-uat-hermes"},
+         "used_by": "/1.0/instances/herald-c1?project=UAT-Herald", "network": "ovn-uat-herald"},
     ],
 }
 
@@ -152,7 +152,7 @@ def test_every_row_names_its_pin_state_network_type_and_subnet(monkeypatch) -> N
     leased = rows["192.168.3.12"]
     assert leased["allocation"] == "dhcp"
     assert leased["network_type"] == "ovn"
-    assert leased["network_project"] == "UAT-Hermes"
+    assert leased["network_project"] == "UAT-Herald"
     assert leased["subnet_ipv4"] == "192.168.3.1/24"
     assert rows["10.22.114.1"]["allocation"] == "gateway"
     body = r.json()
@@ -213,7 +213,7 @@ def test_a_failed_project_read_does_not_name_the_project_to_the_caller(monkeypat
 
         @staticmethod
         def _allocations(url: str, timeout=None):
-            if "project=UAT-Hermes" in url:
+            if "project=UAT-Herald" in url:
                 raise RuntimeError("read timed out")
             project = url.split("project=")[1].split("&")[0]
             return _Response({"metadata": ALLOCATIONS.get(project, [])})
@@ -222,11 +222,11 @@ def test_a_failed_project_read_does_not_name_the_project_to_the_caller(monkeypat
             return {"networks": _Node(NETWORKS), "instances": _Node(INSTANCES)}[key]
 
     client = SimpleNamespace(api=_Api(), host_info={"api_extensions": ["networks_all_projects", "instance_all_projects"]}, project=None)
-    monkeypatch.setattr(ipam_module, "_read_join_sources", lambda c, n, r: ({"default": {}, "UAT-Hermes": {"features.networks": "true"}}, {}, {}, True))
+    monkeypatch.setattr(ipam_module, "_read_join_sources", lambda c, n, r: ({"default": {}, "UAT-Herald": {"features.networks": "true"}}, {}, {}, True))
     svc = SimpleNamespace(connection_manager=SimpleNamespace(get_client=lambda node: client))
     result = ipam_module._fetch_ipam_for_node(svc, HOST, None)
     assert result.problems, "the failed project read must be named as a problem"
-    assert all("UAT-Hermes" not in p for p in result.problems), result.problems
+    assert all("UAT-Herald" not in p for p in result.problems), result.problems
     assert any("RuntimeError" in p for p in result.problems), result.problems
 
 

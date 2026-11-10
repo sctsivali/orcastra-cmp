@@ -21,7 +21,7 @@ from app.services.lxd.instance import InstanceManager
 from app.services.lxd.resources import ResourceManager
 
 
-HOST = "blitz01"
+HOST = "bliss01"
 
 
 class _BreakerTrippedConnectionManager:

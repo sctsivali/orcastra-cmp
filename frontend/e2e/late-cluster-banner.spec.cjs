@@ -10,11 +10,11 @@ const volumes = ({ late = [], role = "admin" } = {}) => ({
   total: 1,
   volumes: [
     {
-      name: "vol-1", type: "custom", pool: "pool-a", node: "blitzkrieg", project: "default",
+      name: "vol-1", type: "custom", pool: "pool-a", node: "blizzard", project: "default",
       content_type: "filesystem", size: 21474836480, used_by: [], config: {}, description: "",
     },
   ],
-  nodes: ["blitzkrieg", "central-1"],
+  nodes: ["blizzard", "center-1"],
   unreachable_nodes: [],
   partial_nodes: [],
   late_nodes: late,
@@ -39,14 +39,14 @@ async function open(page, context, role, respond) {
 
 for (const role of ["admin", "partner"]) {
   test(`${role}: a cluster still loading has its own sentence and row`, async ({ page, context }) => {
-    const { banner } = await open(page, context, role, () => volumes({ late: ["central-1"], role }));
+    const { banner } = await open(page, context, role, () => volumes({ late: ["center-1"], role }));
     await expect(banner.getByRole("status")).toHaveText(
       "Still loading 1 cluster. Its storage volumes are shown when it answers.",
     );
     await expect(banner).not.toContainText("Could not reach");
     await banner.getByRole("button", { name: "Show Details" }).click();
     await expect(banner.getByRole("listitem")).toHaveText([
-      "central-1Still loading · still reading after 15 s, shown when it finishes",
+      "center-1Still loading · still reading after 15 s, shown when it finishes",
     ]);
     await expect(banner).not.toContainText("late:");
   });
@@ -54,7 +54,7 @@ for (const role of ["admin", "partner"]) {
 
 test("the list asks again on its own and the banner leaves once the rows arrive", async ({ page, context }) => {
   const { banner, reads } = await open(page, context, "admin", (n) =>
-    n === 1 ? volumes({ late: ["central-1"] }) : volumes(),
+    n === 1 ? volumes({ late: ["center-1"] }) : volumes(),
   );
   await expect(banner).toBeVisible();
   // STALE_FOLLOW_UP_DELAYS_MS: the first look is 5 s after the late answer.
@@ -63,9 +63,9 @@ test("the list asks again on its own and the banner leaves once the rows arrive"
 });
 
 test("tenant: told the list is incomplete, never which cluster", async ({ page, context }) => {
-  const { banner } = await open(page, context, "tenant", () => volumes({ late: ["central-1"], role: "tenant" }));
+  const { banner } = await open(page, context, "tenant", () => volumes({ late: ["center-1"], role: "tenant" }));
   await expect(banner.getByRole("status")).toHaveText(
     "Some storage volumes could not be loaded right now, so this list may be incomplete.",
   );
-  await expect(banner).not.toContainText("central-1");
+  await expect(banner).not.toContainText("center-1");
 });

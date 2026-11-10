@@ -22,10 +22,10 @@ from tests._snapshot_fakes import (
 )
 
 OURS = "ops-target-20260908T000000Z"
-# Realistic hand-taken names. `pre-atlas-...` starts with `pre-` yet is not `pre-restore-`, which
+# Realistic hand-taken names. `pre-app-...` starts with `pre-` yet is not `pre-restore-`, which
 # is the distinction under test.
-MANUAL = "pre-atlas-guacamole-20260901T134000Z"
-OTHER_MANUAL = "c35-cia-pre-20260906T050115Z"
+MANUAL = "pre-app-upgrade-20260901T134000Z"
+OTHER_MANUAL = "c35-db-pre-20260906T050115Z"
 UPSTREAM = "snap-20260908-0130"
 
 
@@ -224,7 +224,7 @@ def test_acknowledging_the_bill_does_not_acknowledge_the_owner():
 
 
 @pytest.mark.parametrize(
-    "prefix", ["ops-", "pre-atlas-", "snap-"], ids=["operator", "manual", "upstream"]
+    "prefix", ["ops-", "pre-app-", "snap-"], ids=["operator", "manual", "upstream"]
 )
 @pytest.mark.parametrize(
     "shape",

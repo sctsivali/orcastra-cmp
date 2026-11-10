@@ -23,16 +23,16 @@ from app.services.lxd import breaker_sync, health
 from app.services.lxd.exceptions import LXDTransportPinError
 
 APP = Path(__file__).resolve().parents[1] / "app"
-CLUSTER = "pandora"
+CLUSTER = "panda"
 
 
 @pytest.fixture(autouse=True)
 def _clean():
-    for cid in (CLUSTER, "blitz001", "live"):
+    for cid in (CLUSTER, "bliss001", "live"):
         health.clear(cid)
         health._cleared_at.pop(cid, None)
     yield
-    for cid in (CLUSTER, "blitz001", "live"):
+    for cid in (CLUSTER, "bliss001", "live"):
         health.clear(cid)
         health._cleared_at.pop(cid, None)
 
@@ -163,15 +163,15 @@ class _Service:
 def test_the_probe_redials_past_the_trip_and_publishes_what_it_saw(shared, monkeypatch):
     monkeypatch.setattr(shared, "invalidate_cluster_reachability", lambda *ids: None, raising=False)
     health.record_failure(CLUSTER, "old", kind=health.KIND_OFFLINE)
-    health.record_failure("blitz001", "old", kind=health.KIND_UNAUTHORIZED)
+    health.record_failure("bliss001", "old", kind=health.KIND_UNAUTHORIZED)
     health.record_failure("live", "old", kind=health.KIND_OFFLINE)
-    service = _Service({CLUSTER: health.KIND_OFFLINE, "blitz001": health.KIND_UNAUTHORIZED, "live": True})
+    service = _Service({CLUSTER: health.KIND_OFFLINE, "bliss001": health.KIND_UNAUTHORIZED, "live": True})
     started = time.time()
     assert breaker_sync.probe_dead_once(service) == ["live"]
-    assert sorted(service.calls) == [("blitz001", True), ("live", True), (CLUSTER, True)]
+    assert sorted(service.calls) == [("bliss001", True), ("live", True), (CLUSTER, True)]
     down = shared.get(breaker_sync.DOWN_NAMESPACE, CLUSTER)
     assert down["kind"] == "offline" and down["at"] >= started - 1
-    assert shared.get(breaker_sync.DOWN_NAMESPACE, "blitz001")["kind"] == "unauthorized"
+    assert shared.get(breaker_sync.DOWN_NAMESPACE, "bliss001")["kind"] == "unauthorized"
     assert shared.get(breaker_sync.DOWN_NAMESPACE, "live") is None
 
 

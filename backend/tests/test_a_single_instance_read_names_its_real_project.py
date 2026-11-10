@@ -14,7 +14,7 @@ import pytest
 from app.services.lxd import instance as instance_module
 from app.services.lxd.instance import InstanceManager
 
-REAL_PROJECT = "central2-rehearsal"
+REAL_PROJECT = "center2-rehearsal"
 NAME = "acme-a20"
 HOST = "nuc1"
 

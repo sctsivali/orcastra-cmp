@@ -91,15 +91,15 @@ def test_a_later_success_clears_the_condition():
     storage.list_clusters()
     assert vault_status.registry_readable() is False
 
-    storage.vault = _Vault(result=["nuc2", "central2"])
-    assert storage.list_clusters() == ["nuc2", "central2"]
+    storage.vault = _Vault(result=["nuc2", "center2"])
+    assert storage.list_clusters() == ["nuc2", "center2"]
     assert vault_status.registry_readable() is True
 
 
 def test_trailing_slashes_are_stripped_on_the_success_path():
     """Vault LIST returns keys with a trailing slash; the whitelist compares exact ids."""
-    storage = _Storage(_Vault(result=["nuc2/", "central2/"]))
-    assert storage.list_clusters() == ["nuc2", "central2"]
+    storage = _Storage(_Vault(result=["nuc2/", "center2/"]))
+    assert storage.list_clusters() == ["nuc2", "center2"]
 
 
 def test_the_snapshot_shape_is_what_health_renders():
@@ -118,8 +118,8 @@ def test_startup_refuses_to_sync_a_whitelist_it_never_received():
     from app.services.lxd.connection import LXDConnectionManager
 
     manager = LXDConnectionManager()
-    manager.sync_registered_clusters(["nuc2", "central2"])
-    assert manager._registered_clusters == {"nuc2", "central2"}
+    manager.sync_registered_clusters(["nuc2", "center2"])
+    assert manager._registered_clusters == {"nuc2", "center2"}
 
     storage = _Storage(_Vault(error=VaultClientError("sealed")))
     cluster_ids = storage.list_clusters()
@@ -128,7 +128,7 @@ def test_startup_refuses_to_sync_a_whitelist_it_never_received():
     if vault_status.registry_readable() is not False:
         manager.sync_registered_clusters(cluster_ids)
 
-    assert manager._registered_clusters == {"nuc2", "central2"}, (
+    assert manager._registered_clusters == {"nuc2", "center2"}, (
         "an unreadable registry emptied the whitelist, so get_node_names() intersected against "
         "the empty set and every cluster vanished from the API"
     )

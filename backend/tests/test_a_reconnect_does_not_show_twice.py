@@ -38,7 +38,7 @@ def test_the_key_is_the_same_tuple_register_matches_on():
     # A different instance, host or user makes a separate session.
     a = _session("op-a", 100.0, instance="web-1")
     b = _session("op-b", 100.0, instance="web-2")
-    c = _session("op-c", 100.0, host="pandora")
+    c = _session("op-c", 100.0, host="panda")
     d = _session("op-d", 100.0, email="other@example.com")
 
     kept = dedupe_sessions([a, b, c, d])

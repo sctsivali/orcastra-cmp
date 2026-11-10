@@ -24,19 +24,19 @@ def _boom():
 
 def test_a_failure_is_remembered_and_the_next_read_fails_at_once():
     with pytest.raises(RuntimeError):
-        failures.read("blitzkrieg", "central-pool", _boom)
+        failures.read("blizzard", "central-pool", _boom)
     calls = []
     with pytest.raises(failures.PoolResourcesUnavailable):
-        failures.read("blitzkrieg", "central-pool", lambda: calls.append(1))
+        failures.read("blizzard", "central-pool", lambda: calls.append(1))
     assert calls == []
 
 
 def test_the_memory_lapses(monkeypatch):
     with pytest.raises(RuntimeError):
-        failures.read("blitzkrieg", "central-pool", _boom)
+        failures.read("blizzard", "central-pool", _boom)
     real = failures.time.monotonic
     monkeypatch.setattr(failures.time, "monotonic", lambda: real() + failures.FAILURE_TTL_S + 1)
-    assert failures.read("blitzkrieg", "central-pool", lambda: "space") == "space"
+    assert failures.read("blizzard", "central-pool", lambda: "space") == "space"
 
 
 def test_a_success_is_never_cached_and_clears_the_failure():
@@ -48,18 +48,18 @@ def test_a_success_is_never_cached_and_clears_the_failure():
 
 def test_other_pools_and_clusters_are_unaffected():
     with pytest.raises(RuntimeError):
-        failures.read("blitzkrieg", "central-pool", _boom)
-    assert failures.read("blitzkrieg", "default", lambda: "ok") == "ok"
+        failures.read("blizzard", "central-pool", _boom)
+    assert failures.read("blizzard", "default", lambda: "ok") == "ok"
     assert failures.read("nuc2", "central-pool", lambda: "ok") == "ok"
-    failures.forget("blitzkrieg")
-    assert failures.read("blitzkrieg", "central-pool", lambda: "ok") == "ok"
+    failures.forget("blizzard")
+    assert failures.read("blizzard", "central-pool", lambda: "ok") == "ok"
 
 
 def test_the_message_names_no_endpoint():
     with pytest.raises(RuntimeError):
-        failures.read("blitzkrieg", "central-pool", _boom)
+        failures.read("blizzard", "central-pool", _boom)
     with pytest.raises(failures.PoolResourcesUnavailable) as caught:
-        failures.read("blitzkrieg", "central-pool", _boom)
+        failures.read("blizzard", "central-pool", _boom)
     assert "zfs" not in str(caught.value) and "RuntimeError" in str(caught.value)
 
 

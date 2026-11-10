@@ -28,14 +28,14 @@ NODES_BODY = {
                           "gpu_total": 2, "gpu_cards_total": 4, "gpu_cards": [{"pci": "00:1f"}]},
         },
         {
-            "name": "blitzkrieg", "endpoint": "https://142.132.147.94:8443", "connected": False,
+            "name": "blizzard", "endpoint": "https://93.184.215.14:8443", "connected": False,
             "reachable": False, "node_type": None, "display_name": None,
             "server_version": None, "api_version": None, "auth": None,
             "error": "Cannot connect to LXD endpoint. Check if server is running.",
             "tags": [], "environment": None, "resources": None,
         },
         {
-            "name": "central1-argon", "endpoint": "https://central1:8443", "connected": False,
+            "name": "center1-alpha", "endpoint": "https://center1:8443", "connected": False,
             "reachable": True, "node_type": None, "display_name": None,
             "server_version": None, "api_version": None, "auth": "untrusted",
             "error": "Certificate not trusted", "tags": [], "environment": None,
@@ -103,9 +103,9 @@ def test_the_projection_preserves_the_three_states(client):
     tc, _ = client
     by_name = {r["name"]: r for r in tc.get("/nodes/availability").json()["clusters"]}
     assert by_name["nuc2"]["status"] == ClusterStatus.ONLINE.value
-    assert by_name["blitzkrieg"]["status"] == ClusterStatus.OFFLINE.value
+    assert by_name["blizzard"]["status"] == ClusterStatus.OFFLINE.value
     # Answered but refused the client certificate: a different problem with a different fix.
-    assert by_name["central1-argon"]["status"] == ClusterStatus.NOT_AUTHORIZED.value
+    assert by_name["center1-alpha"]["status"] == ClusterStatus.NOT_AUTHORIZED.value
 
 
 def test_the_payload_carries_no_hardware_inventory(client):
@@ -121,7 +121,7 @@ def test_display_name_falls_back_to_the_id(client):
     tc, _ = client
     by_name = {r["name"]: r for r in tc.get("/nodes/availability").json()["clusters"]}
     assert by_name["nuc2"]["display_name"] == "NUC 2"
-    assert by_name["blitzkrieg"]["display_name"] == "blitzkrieg"
+    assert by_name["blizzard"]["display_name"] == "blizzard"
 
 
 def test_the_projection_is_cached_so_the_next_read_is_one_get(client):

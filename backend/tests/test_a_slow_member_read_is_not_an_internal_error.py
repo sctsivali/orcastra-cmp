@@ -23,7 +23,7 @@ from urllib3.exceptions import MaxRetryError
 from app.services.lxd.lxd_service import LXDService
 
 
-HOST = "central2-qa"
+HOST = "center2-qa"
 
 
 def _pooled_read_timeout() -> Exception:
@@ -31,7 +31,7 @@ def _pooled_read_timeout() -> Exception:
     return requests_exc.ConnectionError(
         MaxRetryError(
             None,
-            "https://central2:8443/1.0/resources",
+            "https://center2:8443/1.0/resources",
             reason=urllib3_exc.ReadTimeoutError(None, "u", "Read timed out."),
         )
     )
@@ -41,7 +41,7 @@ def _connect_refused() -> Exception:
     return requests_exc.ConnectionError(
         MaxRetryError(
             None,
-            "https://central2:8443/1.0",
+            "https://center2:8443/1.0",
             reason=urllib3_exc.NewConnectionError(None, "Connection refused"),
         )
     )

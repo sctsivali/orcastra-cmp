@@ -24,7 +24,7 @@ from app.services.lxd.member_resources import count_member_instances, parse_cpu_
 
 TIB = 1024 ** 4
 GIB = 1024 ** 3
-NODE = "C2"
+NODE = "C7"
 MEMBERS = ["member-a", "member-b", "member-c"]
 
 
@@ -85,9 +85,9 @@ SPACE = {
     "sata-ssd": {m: {"total": int(5.3 * TIB), "used": int(3.5 * TIB)} for m in MEMBERS},
 }
 INSTANCES = [
-    {"name": "web01", "project": "uat-hermes", "location": "member-a", "status": "Running",
+    {"name": "web01", "project": "uat-herald", "location": "member-a", "status": "Running",
      "config": {"limits.cpu": "4"}, "expanded_config": {"limits.cpu": "4"}, "expanded_devices": {}},
-    {"name": "db01", "project": "uat-hermes", "location": "member-a", "status": "Running",
+    {"name": "db01", "project": "uat-herald", "location": "member-a", "status": "Running",
      "config": {}, "expanded_config": {}, "expanded_devices": {}},
     {"name": "old", "project": "default", "location": "member-a", "status": "Stopped",
      "config": {"limits.cpu": "0-3"}, "expanded_config": {}, "expanded_devices": {}},

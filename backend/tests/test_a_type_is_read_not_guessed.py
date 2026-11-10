@@ -53,7 +53,7 @@ LXD_CLUSTER = {
 STANDALONE = {
     "auth": "trusted",
     "api_extensions": [],
-    "environment": {"server": "lxd", "server_clustered": False, "server_name": "pandora"},
+    "environment": {"server": "lxd", "server_clustered": False, "server_name": "panda"},
 }
 
 INCUS_UNTRUSTED = {

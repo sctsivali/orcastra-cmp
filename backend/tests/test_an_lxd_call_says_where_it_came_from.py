@@ -35,14 +35,14 @@ def _hook(session: requests.Session):
 
 def test_a_slow_request_logs_its_cluster_call_and_time(caplog):
     session = requests.Session()
-    telemetry.install_slow_request_log(session, "blitzkrieg")
+    telemetry.install_slow_request_log(session, "blizzard")
     url = "https://10.0.0.5:8443/1.0/instances?recursion=2&all-projects=true&filter=x"
     with caplog.at_level(logging.INFO, logger="app.services.lxd.telemetry"):
         _hook(session)(_response(2400, url))
     [record] = caplog.records
     fields = record.extra_fields["lxd_request"]
     assert fields == {
-        "cluster": "blitzkrieg",
+        "cluster": "blizzard",
         "method": "GET",
         "target": "/1.0/instances?recursion=2&all-projects=true",
         "status": 200,
@@ -102,7 +102,7 @@ def test_origin_follows_the_worker_thread():
 
 def test_dial_fields_carry_no_free_text():
     started = time.monotonic() - 0.25
-    fields = telemetry.dial_fields("pandora", started, "offline")["extra_fields"]["lxd_dial"]
+    fields = telemetry.dial_fields("panda", started, "offline")["extra_fields"]["lxd_dial"]
     assert set(fields) == {"cluster", "origin", "ms", "outcome"}
-    assert fields["cluster"] == "pandora" and fields["outcome"] == "offline"
+    assert fields["cluster"] == "panda" and fields["outcome"] == "offline"
     assert 200 <= fields["ms"] <= 2000

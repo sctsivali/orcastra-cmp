@@ -68,7 +68,7 @@ def test_the_import_session_does_not_retry():
 
 def test_transport_selection_prefers_native_migration_across_clusters():
     assert mobility.choose_transport("nuc2", "nuc2") == mobility.TRANSPORT_COPY
-    assert mobility.choose_transport("nuc2", "pandora") == mobility.TRANSPORT_MIGRATION
+    assert mobility.choose_transport("nuc2", "panda") == mobility.TRANSPORT_MIGRATION
 
 
 def test_only_a_reachability_failure_falls_back_to_streaming():
@@ -172,12 +172,12 @@ def test_the_migration_operation_url_is_absolute():
     class _Client:
         class api:
             instances = _Instances()
-            _api_endpoint = "https://100.66.12.102:8443/1.0"
+            _api_endpoint = "https://100.64.12.102:8443/1.0"
 
     url, secrets = mobility.begin_source_migration(
         _Client(), instance_name="ct-x", project="p"
     )
-    assert url == "https://100.66.12.102:8443/1.0/operations/abc-123", url
+    assert url == "https://100.64.12.102:8443/1.0/operations/abc-123", url
     assert url.startswith("https://"), "a relative path leaves the target nothing to resolve"
     assert secrets == {"control": "c", "fs": "f"}
 
@@ -202,7 +202,7 @@ def test_an_absolute_url_from_another_origin_is_refused():
     class _Client:
         class api:
             instances = _Instances()
-            _api_endpoint = "https://100.66.12.102:8443/1.0"
+            _api_endpoint = "https://100.64.12.102:8443/1.0"
 
     try:
         mobility.begin_source_migration(_Client(), instance_name="ct-x", project="p")
@@ -219,7 +219,7 @@ def test_an_absolute_url_on_the_registered_origin_is_allowed():
                 @staticmethod
                 def json():
                     return {
-                        "operation": "https://100.66.12.102:8443/1.0/operations/z",
+                        "operation": "https://100.64.12.102:8443/1.0/operations/z",
                         "metadata": {"metadata": {"control": "c"}},
                     }
 
@@ -232,10 +232,10 @@ def test_an_absolute_url_on_the_registered_origin_is_allowed():
     class _Client:
         class api:
             instances = _Instances()
-            _api_endpoint = "https://100.66.12.102:8443/1.0"
+            _api_endpoint = "https://100.64.12.102:8443/1.0"
 
     url, _ = mobility.begin_source_migration(_Client(), instance_name="ct-x", project="p")
-    assert url == "https://100.66.12.102:8443/1.0/operations/z"
+    assert url == "https://100.64.12.102:8443/1.0/operations/z"
 
 
 def test_operation_url_rejects_query_fragment_credentials_and_wrong_path():

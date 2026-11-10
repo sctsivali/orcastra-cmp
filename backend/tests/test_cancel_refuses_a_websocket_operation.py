@@ -219,7 +219,7 @@ def test_a_tenant_is_refused_before_any_load(monkeypatch) -> None:
 
 def test_a_row_outside_the_callers_scope_reads_as_absent(monkeypatch) -> None:
     """404, never 403: an id must not confirm that another organisation's task exists."""
-    client = _client(monkeypatch, _row(cluster_id="vdc-hetzner"), groups=PARTNER, allowed={"nuc1"})
+    client = _client(monkeypatch, _row(cluster_id="vdc-hexa"), groups=PARTNER, allowed={"nuc1"})
     response = client.delete(f"/tasks/{TASK_ID}")
     assert response.status_code == 404, response.text
     absent = _client(monkeypatch, None, groups=PARTNER, allowed={"nuc1"})
@@ -252,7 +252,7 @@ def test_the_predicate_is_judged_under_the_request_context() -> None:
     def judge() -> bool:
         org_scope._allowed_clusters_var.set({"nuc1"})
         org_scope._tenant_acl_var.set(None)
-        return task_is_visible(_row(cluster_id="vdc-hetzner"))
+        return task_is_visible(_row(cluster_id="vdc-hexa"))
 
     assert contextvars.copy_context().run(judge) is False
-    assert task_is_visible(_row(cluster_id="vdc-hetzner")) is True
+    assert task_is_visible(_row(cluster_id="vdc-hexa")) is True

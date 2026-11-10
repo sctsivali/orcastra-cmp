@@ -14,8 +14,8 @@ from fastapi.testclient import TestClient
 from app.models.cluster_status import ClusterStatus
 from app.services.lxd_cert_manager import ConnectionProbe
 
-DEAD = "blitzkrieg"
-UNTRUSTED = "central1-argon"
+DEAD = "blizzard"
+UNTRUSTED = "center1-alpha"
 
 
 class _Vault:

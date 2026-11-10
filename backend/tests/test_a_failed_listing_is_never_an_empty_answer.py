@@ -28,7 +28,7 @@ from app.services.lxd.exceptions import (
 )
 from app.services.lxd.lxd_service import LXDService
 
-HOST = "C2"
+HOST = "C7"
 
 
 class _Resp:
@@ -373,20 +373,20 @@ def test_volumes_and_warnings_hold_a_partner_to_the_project_bound(monkeypatch):
             return _Resp(200, {"metadata": ["/1.0/storage-pools/local"]})
         if path == "/1.0/storage-pools/local/volumes":
             return _Resp(200, {"metadata": [
-                {"name": "mine", "type": "custom", "content_type": "filesystem", "project": "sivali-prod", "location": "none", "config": {}, "used_by": []},
+                {"name": "mine", "type": "custom", "content_type": "filesystem", "project": "sigma-prod", "location": "none", "config": {}, "used_by": []},
                 {"name": "theirs", "type": "custom", "content_type": "filesystem", "project": "other-org", "location": "none", "config": {}, "used_by": []},
                 {"name": "shared", "type": "custom", "content_type": "filesystem", "project": "default", "location": "none", "config": {}, "used_by": []},
             ]})
         if path == "/1.0/warnings":
             return _Resp(200, {"metadata": [
-                {"uuid": "w-mine", "project": "sivali-prod", "location": "m1", "type": "t", "count": 1},
+                {"uuid": "w-mine", "project": "sigma-prod", "location": "m1", "type": "t", "count": 1},
                 {"uuid": "w-theirs", "project": "other-org", "location": "m1", "type": "t", "count": 1},
                 {"uuid": "w-default", "project": "default", "location": "m1", "type": "t", "count": 1},
             ]})
         raise AssertionError(path)
 
     def run():
-        org_scope._visible_projects_var.set({HOST: {"default", "sivali-prod"}})
+        org_scope._visible_projects_var.set({HOST: {"default", "sigma-prod"}})
         out = {}
         for module, path, key, name in ((storage_volumes, "/storage/volumes", "volumes", "name"), (lxd_warnings, "/warnings", "warnings", "uuid")):
             app = _app(module, _Client(cluster, extensions=["storage_volumes_all_projects", "warnings"]), monkeypatch, _CacheSpy())

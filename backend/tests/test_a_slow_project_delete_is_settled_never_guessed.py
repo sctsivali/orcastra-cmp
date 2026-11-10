@@ -38,7 +38,7 @@ from app.services.shared_cluster_audit import ClusterConfigurationBusy
 from tests._project_grant_fakes import GrantSession, Rule, partner, projects_client
 
 HOST = "nuc2"
-LEAK = "HTTPSConnectionPool(host='100.66.12.102', port=8443): Read timed out. (read timeout=8)"
+LEAK = "HTTPSConnectionPool(host='100.64.12.102', port=8443): Read timed out. (read timeout=8)"
 
 
 class _Response:
@@ -101,7 +101,7 @@ def test_a_read_timeout_after_the_delete_was_sent_is_unknown_never_a_failure() -
     node = _ProjectNode(delete=_raise(requests.exceptions.ConnectionError(LEAK)), get=lambda: _Response(200))
     with pytest.raises(LXDOperationUnknownError) as raised:
         project_delete.delete_project_sync(_client_for(node), HOST, "web")
-    assert "100.66" not in str(raised.value)
+    assert "100.64.12" not in str(raised.value)
 
 
 def test_lxds_own_refusal_keeps_its_sentence() -> None:
@@ -191,7 +191,7 @@ def test_an_unknown_outcome_is_503_and_leaves_a_pending_row_with_the_captured_ru
 
     assert r.status_code == 503, r.text
     assert r.json()["detail"]["code"] == "project_write_unknown"
-    assert "100.66" not in r.text and "HTTPSConnectionPool" not in r.text
+    assert "100.64.12" not in r.text and "HTTPSConnectionPool" not in r.text
     rows = client.deletes.rows()
     assert [(row.state, row.rule_ids, row.origin, row.requester) for row in rows] == [
         ("pending", [rule.id], "route", "qa-partner")
@@ -284,7 +284,7 @@ def test_a_transport_failure_never_reaches_the_body(monkeypatch) -> None:
     client = projects_client(_Service(LXDConnectionError(LEAK)), monkeypatch, GrantSession(), user=partner())
     r = client.delete(f"/projects/{HOST}/web")
     assert r.status_code == 503
-    assert "100.66" not in r.text
+    assert "100.64.12" not in r.text
     assert client.deletes.rows() == []
 
 
@@ -563,8 +563,8 @@ def test_a_proxy_failure_never_carries_transport_text() -> None:
     from app.routers.integrations import _proxy_error_text
 
     timeout = requests.exceptions.ConnectionError(LEAK)
-    assert "100.66" not in _proxy_error_text(timeout, "timeout", "delete_project", HOST)
-    assert "100.66" not in _proxy_error_text(RuntimeError(LEAK), "operation_failed", "stop_instance", HOST)
+    assert "100.64.12" not in _proxy_error_text(timeout, "timeout", "delete_project", HOST)
+    assert "100.64.12" not in _proxy_error_text(RuntimeError(LEAK), "operation_failed", "stop_instance", HOST)
     refusal = _api_error(400, "Only empty projects can be removed")
     assert "Only empty projects" in _proxy_error_text(refusal, "invalid_request", "delete_project", HOST)
 

@@ -374,7 +374,7 @@ def test_a_frame_that_cannot_be_noted_never_raises():
 @pytest.mark.parametrize("enabled", [True, False])
 async def test_the_leader_subscribes_every_cluster_and_lets_go_on_step_down(monkeypatch, enabled):
     async def ids():
-        return frozenset({"nuc1", "C2"})
+        return frozenset({"nuc1", "C7"})
 
     recorder = Recorder()
     monkeypatch.setattr(registry, "registered_cluster_ids", ids)
@@ -388,7 +388,7 @@ async def test_the_leader_subscribes_every_cluster_and_lets_go_on_step_down(monk
     hub = FakeHub()
     follower = JournalFollower(
         FakeSessionMaker(), lambda: None, retry_seconds=7, database_url="postgresql+asyncpg://x",
-        hub=hub, identities=NoIdentities(), excluded=frozenset({"c2"}),
+        hub=hub, identities=NoIdentities(), excluded=frozenset({"c7"}),
     )
 
     leading = asyncio.create_task(follower.lead())

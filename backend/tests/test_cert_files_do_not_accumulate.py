@@ -59,7 +59,7 @@ class MaterializeIsBounded(CertFileIsolation):
             results = [
                 future.result()
                 for future in [
-                    pool.submit(cert_files.materialize, "blitz01", CERT_PEM, KEY_PEM)
+                    pool.submit(cert_files.materialize, "bliss01", CERT_PEM, KEY_PEM)
                     for _ in range(64)
                 ]
             ]
@@ -95,13 +95,13 @@ class MaterializeIsBounded(CertFileIsolation):
         self.assertEqual(len(self._cert_files_on_disk()), 2 * len(clusters))
 
     def test_the_path_is_a_pure_function_of_the_cluster_id(self):
-        first = cert_files.paths_for("pandora-semanan")
-        second = cert_files.paths_for("pandora-semanan")
+        first = cert_files.paths_for("panda-east")
+        second = cert_files.paths_for("panda-east")
         self.assertEqual(first, second)
-        self.assertNotEqual(first, cert_files.paths_for("pandora"))
+        self.assertNotEqual(first, cert_files.paths_for("panda"))
 
     def test_permissions_stay_owner_only(self):
-        cert_path, key_path = cert_files.materialize("central1-argon", CERT_PEM, KEY_PEM)
+        cert_path, key_path = cert_files.materialize("center1-alpha", CERT_PEM, KEY_PEM)
         for path in (cert_path, key_path):
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600, path)
 
@@ -117,7 +117,7 @@ class MaterializeIsBounded(CertFileIsolation):
                 )
 
     def test_discard_removes_the_pair(self):
-        cert_path, key_path = cert_files.materialize("zbook-semanan", CERT_PEM, KEY_PEM)
+        cert_path, key_path = cert_files.materialize("zbook-east", CERT_PEM, KEY_PEM)
         cert_files.discard(cert_path, key_path)
         self.assertEqual(self._cert_files_on_disk(), [])
         cert_files.discard(cert_path, key_path)  # second call must be a quiet no-op
@@ -138,7 +138,7 @@ class ExitedWorkersDoNotStrandDirectories(CertFileIsolation):
     def _sibling(self, pid: str) -> str:
         path = os.path.join(os.path.dirname(cert_files.cert_root()), pid)
         os.makedirs(path, exist_ok=True)
-        with open(os.path.join(path, "blitz01-deadbeef.crt"), "w") as handle:
+        with open(os.path.join(path, "bliss01-deadbeef.crt"), "w") as handle:
             handle.write(CERT_PEM)
         return path
 
@@ -159,7 +159,7 @@ class ExitedWorkersDoNotStrandDirectories(CertFileIsolation):
         live = self._sibling("1")  # pid 1 is uvicorn itself, always alive in the container
         cert_files._last_sweep = float("-inf")
 
-        cert_files.materialize("pandora", CERT_PEM, KEY_PEM)
+        cert_files.materialize("panda", CERT_PEM, KEY_PEM)
 
         self.assertTrue(os.path.isdir(live), "a live process had its certificates removed")
 
@@ -173,7 +173,7 @@ class ExitedWorkersDoNotStrandDirectories(CertFileIsolation):
 
         os.path.isdir = no_proc
         try:
-            cert_files.materialize("central1-argon", CERT_PEM, KEY_PEM)
+            cert_files.materialize("center1-alpha", CERT_PEM, KEY_PEM)
         finally:
             os.path.isdir = real_isdir
 
@@ -191,7 +191,7 @@ class StorageFailureIsNotAClusterVerdict(CertFileIsolation):
         tempfile.mkstemp = self._fail_with(OSError(errno.ENOSPC, "No space left on device"))
         try:
             with self.assertRaises(LXDLocalStorageError) as caught:
-                cert_files.materialize("blitz001", CERT_PEM, KEY_PEM)
+                cert_files.materialize("bliss001", CERT_PEM, KEY_PEM)
         finally:
             tempfile.mkstemp = original
 
@@ -205,14 +205,14 @@ class StorageFailureIsNotAClusterVerdict(CertFileIsolation):
     def test_a_storage_failure_does_not_trip_the_circuit_breaker(self):
         """The breaker decides whether a cluster is skipped. A local disk fault must not vote."""
         manager = LXDConnectionManager()
-        health.clear("blitz01")
+        health.clear("bliss01")
 
         original = tempfile.mkstemp
         tempfile.mkstemp = self._fail_with(OSError(errno.ENOSPC, "No space left on device"))
         try:
             with self.assertRaises(LXDLocalStorageError):
                 manager.connect_with_vault_cert(
-                    cluster_id="blitz01",
+                    cluster_id="bliss01",
                     endpoint="https://198.51.100.7:8443",
                     cert_content=CERT_PEM,
                     key_content=KEY_PEM,
@@ -220,10 +220,10 @@ class StorageFailureIsNotAClusterVerdict(CertFileIsolation):
                 )
         finally:
             tempfile.mkstemp = original
-            health.clear("blitz01")
+            health.clear("bliss01")
 
         self.assertFalse(
-            health.is_tripped("blitz01"),
+            health.is_tripped("bliss01"),
             "ENOSPC recorded the cluster as offline for the breaker TTL, which both mislabelled a "
             "healthy host and suppressed the retries that would have corrected it",
         )

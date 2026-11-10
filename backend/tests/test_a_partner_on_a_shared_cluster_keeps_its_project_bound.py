@@ -123,10 +123,10 @@ def test_a_partner_on_a_shared_cluster_is_held_to_default_plus_their_own_policie
     session = FakeSession(
         shared_clusters=["nuc2"],
         org_ids=[6],
-        rules_by_cluster={"nuc2": ["sivali-prod", "sivali-uat"]},
+        rules_by_cluster={"nuc2": ["sigma-prod", "sigma-uat"]},
     )
     mapping = _run(get_visible_projects(_as("partner"), session))
-    assert mapping == {"nuc2": {"default", "sivali-prod", "sivali-uat"}}
+    assert mapping == {"nuc2": {"default", "sigma-prod", "sigma-uat"}}
 
 
 def test_policy_projects_require_the_policy_org_to_still_bind_the_shared_cluster():
@@ -295,10 +295,10 @@ def test_a_wildcard_rule_does_not_lift_the_bound():
 
 def test_a_wildcard_beside_named_projects_contributes_nothing_of_its_own():
     session = FakeSession(
-        shared_clusters=["nuc2"], org_ids=[6], rules_by_cluster={"nuc2": ["*", "sivali-prod"]}
+        shared_clusters=["nuc2"], org_ids=[6], rules_by_cluster={"nuc2": ["*", "sigma-prod"]}
     )
     assert _run(get_visible_projects(_as("partner"), session)) == {
-        "nuc2": {"default", "sivali-prod"}
+        "nuc2": {"default", "sigma-prod"}
     }
 
 

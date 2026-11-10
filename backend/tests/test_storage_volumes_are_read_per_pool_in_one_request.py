@@ -18,7 +18,7 @@ from app.routers.storage_volumes import _fetch_volumes_for_node
 from app.services.lxd.fanout import NodeRead
 from app.services.lxd.project_scope import list_pool_volumes
 
-HOST = "C2"
+HOST = "C7"
 
 
 class _Resp:
@@ -73,8 +73,8 @@ LOCAL_ROWS = [
      "location": "member-a", "config": {}, "used_by": []},
     {"name": "backups", "type": "custom", "content_type": "filesystem", "project": "default",
      "location": "member-b", "config": {}, "used_by": []},
-    {"name": "web01", "type": "container", "content_type": "filesystem", "project": "uat-hermes",
-     "location": "member-c", "config": {}, "used_by": ["/1.0/instances/web01?project=uat-hermes"]},
+    {"name": "web01", "type": "container", "content_type": "filesystem", "project": "uat-herald",
+     "location": "member-c", "config": {}, "used_by": ["/1.0/instances/web01?project=uat-herald"]},
 ]
 REMOTE_ROWS = [
     {"name": "FreeBSD-14.2.iso", "type": "custom", "content_type": "iso", "project": "default",
@@ -105,7 +105,7 @@ def test_one_request_per_pool_with_project_and_member_on_every_row():
     rows = {(r.pool, r.type, r.name, r.location, r.project) for r in read.rows}
     assert ("local", "custom", "backups", "member-a", "default") in rows
     assert ("local", "custom", "backups", "member-b", "default") in rows
-    assert ("local", "container", "web01", "member-c", "uat-hermes") in rows
+    assert ("local", "container", "web01", "member-c", "uat-herald") in rows
     assert ("remote", "custom", "FreeBSD-14.2.iso", "", "default") in rows, "shared pool: location is empty, not 'none'"
     iso = [r for r in read.rows if r.content_type == "iso"]
     assert [r.name for r in iso] == ["FreeBSD-14.2.iso"]

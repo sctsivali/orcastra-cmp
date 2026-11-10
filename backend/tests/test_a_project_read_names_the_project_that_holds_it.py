@@ -131,12 +131,12 @@ def test_one_request_answers_when_the_daemon_supports_it():
     client = FakeClient(
         all_projects_rows=[
             {"name": "lxdbr0", "project": DEFAULT_PROJECT},
-            {"name": "ovn-uat-hermes", "project": "UAT-Hermes"},
+            {"name": "ovn-uat-herald", "project": "UAT-Herald"},
         ]
     )
     rows, complete = list_across_projects(client, "networks")
     assert complete is True
-    assert {r["name"] for r in rows} == {"lxdbr0", "ovn-uat-hermes"}
+    assert {r["name"] for r in rows} == {"lxdbr0", "ovn-uat-herald"}
     assert [c for c in client.calls if c[0] == "networks"] == [
         ("networks", {"recursion": 1, "all-projects": "true"})
     ]
@@ -174,7 +174,7 @@ def test_an_inherited_project_does_not_return_the_same_record_twice():
 def test_a_project_that_owns_its_networks_is_read_on_its_own():
     projects = {
         DEFAULT_PROJECT: {"features.networks": "true"},
-        "UAT-Hermes": {"features.networks": "true"},
+        "UAT-Herald": {"features.networks": "true"},
         "shared": {"features.networks": "false"},
     }
     client = FakeClient(
@@ -182,14 +182,14 @@ def test_a_project_that_owns_its_networks_is_read_on_its_own():
         projects=projects,
         per_project={
             DEFAULT_PROJECT: [{"name": "br-uplink"}],
-            "UAT-Hermes": [{"name": "ovn-uat-hermes"}],
+            "UAT-Herald": [{"name": "ovn-uat-herald"}],
         },
     )
     rows, complete = list_across_projects(client, "networks")
     assert complete is True
     assert {(r["name"], r["project"]) for r in rows} == {
         ("br-uplink", DEFAULT_PROJECT),
-        ("ovn-uat-hermes", "UAT-Hermes"),
+        ("ovn-uat-herald", "UAT-Herald"),
     }
 
 

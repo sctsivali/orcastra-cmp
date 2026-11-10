@@ -154,9 +154,9 @@ class TestWritingItBack:
 
     def test_a_non_default_project_is_named_on_both_the_read_and_the_write(self):
         client = FakeClient(record(devices={"eth0": OWN_NIC}))
-        set_nic_address_sync(client, "db-1", "UAT-Hermes", "eth0", "10.0.5.7")
-        assert client.reads[0] == {"project": "UAT-Hermes"}
-        assert client.writes[0][1] == {"project": "UAT-Hermes"}
+        set_nic_address_sync(client, "db-1", "UAT-Herald", "eth0", "10.0.5.7")
+        assert client.reads[0] == {"project": "UAT-Herald"}
+        assert client.writes[0][1] == {"project": "UAT-Herald"}
 
     def test_the_default_project_is_left_off_the_query(self):
         client = FakeClient(record(devices={"eth0": OWN_NIC}))

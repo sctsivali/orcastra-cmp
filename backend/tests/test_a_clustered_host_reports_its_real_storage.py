@@ -134,7 +134,7 @@ def _no_cache(monkeypatch):
 
 
 def _aggregate(client: FakeClient):
-    return nr.aggregate_microcloud_resources(client, "central2", {})
+    return nr.aggregate_microcloud_resources(client, "center2", {})
 
 
 def test_a_clustered_host_no_longer_reports_zero_storage():
@@ -225,7 +225,7 @@ class OneAnswerPerHost(unittest.TestCase):
         from app.services.lxd.gpu import GpuInventory
 
         result = nr.resources_for_host(
-            FakeClient(), "central2", self._own_reading(), GpuInventory.empty(), True
+            FakeClient(), "center2", self._own_reading(), GpuInventory.empty(), True
         )
         self.assertEqual(1050 * GB, result.storage_total)
         self.assertEqual(24, result.cpu_total, "three members of 8, not the one we connected to")
@@ -250,6 +250,6 @@ class OneAnswerPerHost(unittest.TestCase):
                 return super().handle(parts, params)
 
         result = nr.resources_for_host(
-            _NoMembers(), "central2", self._own_reading(), GpuInventory.empty(), True
+            _NoMembers(), "center2", self._own_reading(), GpuInventory.empty(), True
         )
         self.assertEqual(600 * GB, result.storage_total)

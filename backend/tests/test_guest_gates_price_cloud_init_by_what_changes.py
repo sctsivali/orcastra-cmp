@@ -368,7 +368,7 @@ RAW_TARGETS = [("POST", f"/1.0/{family}", {"name": "c1", "source": {"type": "non
 
 @pytest.mark.parametrize("item", list(HOST_REACH))
 @pytest.mark.parametrize("method,path,base", RAW_TARGETS, ids=[*FAMILIES, "patch", "profile-create", "profile-put"])
-def test_decision3_a_star_key_sends_host_reaching_config_on_the_raw_proxy(door: Any, method: str, path: str, base: Any,
+def test_a_star_key_sends_host_reaching_config_on_the_raw_proxy(door: Any, method: str, path: str, base: Any,
                                                                           item: str) -> None:
     config, devices = HOST_REACH[item]
     body = {**base, "config": config, "devices": devices}
@@ -376,7 +376,7 @@ def test_decision3_a_star_key_sends_host_reaching_config_on_the_raw_proxy(door: 
 
 
 @pytest.mark.parametrize("item", list(HOST_REACH))
-def test_decision3_proxy_keeps_devs_price_for_host_reaching_config(door: Any, item: str) -> None:
+def test_the_proxy_keeps_its_price_for_host_reaching_config(door: Any, item: str) -> None:
     config, devices = HOST_REACH[item]
     seen = door.proxy(NO_GUEST, "create_instance", {"name": "c1", "source": {"type": "none"}, "config": config,
                                                     "devices": devices})

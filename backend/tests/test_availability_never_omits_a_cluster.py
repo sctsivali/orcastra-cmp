@@ -14,8 +14,8 @@ from fastapi.testclient import TestClient
 from app.models.cluster_status import ClusterStatus
 from app.services.lxd import health
 
-ALIVE = ["nuc2", "pandora-semanan"]
-DEAD = ["blitzkrieg", "local-cluster", "franklin-lxd"]
+ALIVE = ["nuc2", "panda-east"]
+DEAD = ["blizzard", "local-cluster", "frank-lxd"]
 ALL = sorted(ALIVE + DEAD)
 
 

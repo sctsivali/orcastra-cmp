@@ -27,15 +27,15 @@ def _client(found_in: str):
                                        "architecture": "x86_64", "type": "container", "config": {},
                                        "devices": {}, "expanded_devices": {}, "profiles": ["default"]}})
     api = SimpleNamespace(instances={"web01": SimpleNamespace(get=get)})
-    projects = SimpleNamespace(all=lambda: [SimpleNamespace(name="default"), SimpleNamespace(name="UAT-Hermes")])
+    projects = SimpleNamespace(all=lambda: [SimpleNamespace(name="default"), SimpleNamespace(name="UAT-Herald")])
     return SimpleNamespace(api=api, projects=projects)
 
 
 def test_the_wrapper_names_the_project_it_was_found_in():
-    instance, project = find_instance_in_projects(_client("UAT-Hermes"), "web01")
-    assert project == "UAT-Hermes"
+    instance, project = find_instance_in_projects(_client("UAT-Herald"), "web01")
+    assert project == "UAT-Herald"
     assert isinstance(instance, InstanceWrapper)
-    assert getattr(instance, "project", None) == "UAT-Hermes", "the VMInfo conversion reads `project`"
+    assert getattr(instance, "project", None) == "UAT-Herald", "the VMInfo conversion reads `project`"
 
 
 def test_the_default_project_is_still_named_as_such():

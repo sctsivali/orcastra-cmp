@@ -21,7 +21,7 @@ JETSON = JETSON_ORIN_NX_RESOURCES
 def test_stopped_instances_hold_nothing() -> None:
     """Two stopped containers on a one-GPU host allocate nothing."""
     instances = [
-        FakeInstance("ct-alimrugi-qa-bcv-s-013a70bf", status="Stopped"),
+        FakeInstance("ct-alphaco-qa-bcv-s-013a70bf", status="Stopped"),
         FakeInstance("ct-suka-hat-qa-gpu-h-531ac9f3", status="Stopped"),
     ]
 
@@ -132,7 +132,7 @@ def test_an_unclustered_instance_belongs_to_the_member_being_asked_about() -> No
     """A standalone LXD host reports location "none", not null."""
     for location in ("none", "", None):
         instance = FakeInstance("ct", location=location, config={"nvidia.runtime": "true"})
-        inventory = build_gpu_inventory(JETSON, [instance], member="pandora")
+        inventory = build_gpu_inventory(JETSON, [instance], member="panda")
         assert inventory.gpu_used == 1, f"location={location!r} was dropped"
 
 

@@ -82,38 +82,38 @@ class RequestSecurityInspectionTests(unittest.TestCase):
 
 class ClientIpTrustTests(unittest.TestCase):
     def test_ignores_forwarded_for_from_untrusted_client(self) -> None:
-        request = make_request({"x-forwarded-for": "195.178.110.104"}, "142.132.147.94")
+        request = make_request({"x-forwarded-for": "93.184.215.15"}, "93.184.215.14")
 
-        self.assertEqual(get_client_ip(request), "142.132.147.94")
+        self.assertEqual(get_client_ip(request), "93.184.215.14")
 
     def test_accepts_forwarded_for_from_private_proxy(self) -> None:
-        request = make_request({"x-forwarded-for": "195.178.110.104, 172.18.0.2"}, "172.18.0.2")
+        request = make_request({"x-forwarded-for": "93.184.215.15, 172.18.0.2"}, "172.18.0.2")
 
-        self.assertEqual(get_client_ip(request), "195.178.110.104")
+        self.assertEqual(get_client_ip(request), "93.184.215.15")
 
     def test_prefers_cloudflare_header_from_trusted_proxy(self) -> None:
         request = make_request(
             {
-                "cf-connecting-ip": "142.132.147.94",
-                "x-forwarded-for": "195.178.110.104",
+                "cf-connecting-ip": "93.184.215.14",
+                "x-forwarded-for": "93.184.215.15",
             },
             "172.18.0.2",
         )
 
-        self.assertEqual(get_client_ip(request), "142.132.147.94")
+        self.assertEqual(get_client_ip(request), "93.184.215.14")
 
     def test_prefers_internal_orcastra_client_ip_from_trusted_proxy(self) -> None:
         request = make_request(
             {
-                "x-orcastra-client-ip": "195.178.110.104",
-                "cf-connecting-ip": "142.132.147.94",
+                "x-orcastra-client-ip": "93.184.215.15",
+                "cf-connecting-ip": "93.184.215.14",
             },
             "172.18.0.2",
         )
 
         resolution = resolve_client_ip(request)
 
-        self.assertEqual(resolution.client_ip, "195.178.110.104")
+        self.assertEqual(resolution.client_ip, "93.184.215.15")
         self.assertEqual(resolution.direct_ip, "172.18.0.2")
         self.assertEqual(resolution.source, "x-orcastra-client-ip")
         self.assertTrue(resolution.trusted_proxy)
@@ -121,7 +121,7 @@ class ClientIpTrustTests(unittest.TestCase):
     def test_a_configured_list_replaces_the_default(self) -> None:
         # A configured list replaces the default instead of extending it, so it can narrow trust as
         # well as widen it.
-        request = make_request({"x-orcastra-client-ip": "195.178.110.104"}, "172.18.0.5")
+        request = make_request({"x-orcastra-client-ip": "93.184.215.15"}, "172.18.0.5")
 
         self.assertEqual(
             get_client_ip(request, trusted_proxy_cidrs="173.245.48.0/20,103.21.244.0/22"),
@@ -130,10 +130,10 @@ class ClientIpTrustTests(unittest.TestCase):
 
     def test_the_installer_value_trusts_its_compose_network_and_nothing_else_private(self) -> None:
         installer = "127.0.0.0/8,::1/128,172.20.0.0/14"
-        from_compose = make_request({"x-orcastra-client-ip": "195.178.110.104"}, "172.21.0.3")
-        from_the_lan = make_request({"x-orcastra-client-ip": "195.178.110.104"}, "192.168.1.20")
+        from_compose = make_request({"x-orcastra-client-ip": "93.184.215.15"}, "172.21.0.3")
+        from_the_lan = make_request({"x-orcastra-client-ip": "93.184.215.15"}, "192.168.1.20")
 
-        self.assertEqual(get_client_ip(from_compose, trusted_proxy_cidrs=installer), "195.178.110.104")
+        self.assertEqual(get_client_ip(from_compose, trusted_proxy_cidrs=installer), "93.184.215.15")
         self.assertEqual(get_client_ip(from_the_lan, trusted_proxy_cidrs=installer), "192.168.1.20")
 
     def test_loopback_is_trusted_whatever_the_list_says(self) -> None:
@@ -165,12 +165,12 @@ class ClientIpTrustTests(unittest.TestCase):
         self.assertEqual(get_client_ip(request, allow_private_forwarded_ips=True), "172.18.0.5")
 
     def test_accepts_standard_forwarded_header_from_trusted_proxy(self) -> None:
-        request = make_request({"forwarded": "for=195.178.110.104;proto=https"}, "172.18.0.2")
+        request = make_request({"forwarded": "for=93.184.215.15;proto=https"}, "172.18.0.2")
 
-        self.assertEqual(get_client_ip(request), "195.178.110.104")
+        self.assertEqual(get_client_ip(request), "93.184.215.15")
 
     def test_generates_ipv4_subnet_bucket(self) -> None:
-        self.assertEqual(get_client_subnet("195.178.110.104"), "195.178.110.0/24")
+        self.assertEqual(get_client_subnet("93.184.215.15"), "93.184.215.0/24")
 
 
 class RateLimiterTests(unittest.TestCase):

@@ -18,9 +18,9 @@ from fastapi.testclient import TestClient
 from app.models.cluster_status import ClusterStatus
 from app.services.lxd_cert_manager import ConnectionProbe
 
-MICROCLOUD = "central2"
-STANDALONE = "pandora"
-UNTRUSTED = "vdc-hetzner"
+MICROCLOUD = "center2"
+STANDALONE = "panda"
+UNTRUSTED = "vdc-hexa"
 NO_LOCATION = "qa-no-location"
 
 HOST_INFO = {
@@ -44,7 +44,7 @@ HOST_INFO = {
         "environment": {
             "server": "lxd",
             "server_clustered": False,
-            "server_name": "pandora",
+            "server_name": "panda",
         },
     },
 }

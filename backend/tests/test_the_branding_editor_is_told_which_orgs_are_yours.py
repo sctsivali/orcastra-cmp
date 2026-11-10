@@ -39,10 +39,10 @@ def test_the_response_declares_whether_the_caller_belongs_to_the_org():
 
 
 def test_is_member_answers_about_the_caller_not_about_the_organization():
-    org = _Org(122, "ALIMRUGI", ["someone@customer.example"])
+    org = _Org(122, "ALPHACO", ["someone@customer.example"])
 
     mine = _org_to_response(org, "someone@customer.example")
-    theirs = _org_to_response(org, "operator@sivali.co.id")
+    theirs = _org_to_response(org, "operator@sigma.example")
 
     assert mine.is_member is True
     assert theirs.is_member is False, (
@@ -54,8 +54,8 @@ def test_is_member_answers_about_the_caller_not_about_the_organization():
 
 
 def test_the_address_comparison_ignores_case():
-    org = _Org(6, "Sivali Cloud Technology", ["Ops@Sivali.co.id"])
-    assert _org_to_response(org, "ops@sivali.co.id").is_member is True
+    org = _Org(6, "Sigma Cloud Technology", ["Ops@Sigma.example"])
+    assert _org_to_response(org, "ops@sigma.example").is_member is True
 
 
 def test_an_unauthenticated_conversion_defaults_to_not_a_member():

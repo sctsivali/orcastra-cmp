@@ -13,7 +13,7 @@ import pytest
 from app.services.lxd import health
 from app.services.lxd.connection import LXDConnectionManager
 
-CLUSTER = "central-1"
+CLUSTER = "center-1"
 
 
 @pytest.fixture

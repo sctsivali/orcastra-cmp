@@ -28,10 +28,10 @@ HOST = "nuc1"
 @pytest.fixture(autouse=True)
 def _clean_breaker():
     # The breaker is process-wide; an unreachable read here must not trip the next test's host.
-    for host in (HOST, "pandora"):
+    for host in (HOST, "panda"):
         health.clear(host)
     yield
-    for host in (HOST, "pandora"):
+    for host in (HOST, "panda"):
         health.clear(host)
 
 
@@ -227,12 +227,12 @@ async def test_the_reconcile_sweep_skips_a_tripped_cluster(monkeypatch):
         FakeSessionMaker(), lambda: None, retry_seconds=15, database_url="x",
         hub=FakeHub(), engine_factory=lambda url: None, identities=NoIdentities(), excluded=frozenset(),
     )
-    follower._cluster_state = {"nuc1": "connected", "pandora": "connected", "dead": "disconnected"}
-    health.record_failure("pandora", "refused")
+    follower._cluster_state = {"nuc1": "connected", "panda": "connected", "dead": "disconnected"}
+    health.record_failure("panda", "refused")
     try:
         await follower.run_sweep("reconcile")
     finally:
-        health.clear("pandora")
+        health.clear("panda")
 
     assert calls == ["nuc1"], "connected and not tripped is the only shape that is read"
 

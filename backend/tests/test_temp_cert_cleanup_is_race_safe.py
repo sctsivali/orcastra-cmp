@@ -35,17 +35,17 @@ class TempCertCleanupRaceTests(unittest.TestCase):
     def test_a_second_cleanup_after_the_entry_is_gone_is_a_no_op(self):
         """The loser of the race returns quietly instead of raising."""
         mgr = LXDConnectionManager()
-        cert_path, key_path = _seed(mgr, "blitz01")
+        cert_path, key_path = _seed(mgr, "bliss01")
 
         # The winner completes first.
-        mgr._cleanup_temp_cert_files("blitz01")
-        self.assertNotIn("blitz01", mgr._temp_cert_paths)
+        mgr._cleanup_temp_cert_files("bliss01")
+        self.assertNotIn("bliss01", mgr._temp_cert_paths)
         self.assertFalse(os.path.exists(cert_path))
         self.assertFalse(os.path.exists(key_path))
 
         # The loser arrives after the entry is gone.
         try:
-            mgr._cleanup_temp_cert_files("blitz01")
+            mgr._cleanup_temp_cert_files("bliss01")
         except KeyError as exc:
             self.fail(
                 f"cleanup raised KeyError({exc}) for an entry another caller already "
@@ -60,7 +60,7 @@ class TempCertCleanupRaceTests(unittest.TestCase):
         through the first filesystem call the body makes.
         """
         mgr = LXDConnectionManager()
-        _seed(mgr, "pandora-semanan")
+        _seed(mgr, "panda-east")
 
         real_exists = os.path.exists
         removed = threading.Event()
@@ -69,12 +69,12 @@ class TempCertCleanupRaceTests(unittest.TestCase):
             # The other thread finishes its own cleanup right here.
             if not removed.is_set():
                 removed.set()
-                mgr._temp_cert_paths.pop("pandora-semanan", None)
+                mgr._temp_cert_paths.pop("panda-east", None)
             return real_exists(path)
 
         os.path.exists = exists_then_steal
         try:
-            mgr._cleanup_temp_cert_files("pandora-semanan")
+            mgr._cleanup_temp_cert_files("panda-east")
         except KeyError as exc:
             self.fail(f"cleanup raised KeyError({exc}) when the entry was stolen mid-body")
         finally:

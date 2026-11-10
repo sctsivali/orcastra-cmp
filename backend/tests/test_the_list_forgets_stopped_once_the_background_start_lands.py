@@ -41,7 +41,7 @@ def test_the_list_cache_is_cleared_after_the_background_start(monkeypatch) -> No
     cache = _CacheSpy()
     monkeypatch.setattr("app.core.cache.get_cache_manager", lambda: cache)
     started: list = []
-    asyncio.run(_service()._finalize_and_start(_client(started), "web01", "op-1", "mc-lab", "UAT-Hermes"))
+    asyncio.run(_service()._finalize_and_start(_client(started), "web01", "op-1", "mc-lab", "UAT-Herald"))
     assert started == [True]
     assert cache.invalidations == 1, "the row must not read Stopped for a TTL after the start"
 
@@ -54,7 +54,7 @@ def test_a_failed_start_clears_nothing_and_still_reports(monkeypatch) -> None:
         "app.services.activity_logger.get_activity_logger",
         lambda: SimpleNamespace(log_activity=lambda **kw: logged.append(kw)),
     )
-    asyncio.run(_service()._finalize_and_start(_client([], fail_start=True), "web01", "op-1", "mc-lab", "UAT-Hermes"))
+    asyncio.run(_service()._finalize_and_start(_client([], fail_start=True), "web01", "op-1", "mc-lab", "UAT-Herald"))
     assert cache.invalidations == 0
     # The create is judged and recorded first (instance.create, success); the start failure is
     # its own record.

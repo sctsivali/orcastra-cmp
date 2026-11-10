@@ -37,17 +37,17 @@ class TestTheEncoder:
 
     def test_an_ordinary_name_is_unchanged(self):
         """Encoding must not break the normal case, or every read starts 404ing."""
-        for name in ("br-uplink", "ovn-uat-hermes", "lxdbr0", "web-tier", "eth0"):
+        for name in ("br-uplink", "ovn-uat-herald", "lxdbr0", "web-tier", "eth0"):
             assert safe_segment(name) == name
 
-    def test_the_injection_from_the_review_is_neutralised(self):
+    def test_a_known_injection_is_neutralised(self):
         assert safe_segment("br0?project=orgA") == "br0%3Fproject%3DorgA"
 
     @pytest.mark.parametrize(
         "name,valid",
         [
             ("br-uplink", True),
-            ("ovn-uat-hermes", True),
+            ("ovn-uat-herald", True),
             ("br0?project=orgA", False),
             ("../escape", False),
             ("", False),

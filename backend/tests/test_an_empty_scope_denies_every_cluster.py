@@ -21,7 +21,7 @@ from app.core.org_scope import (
     verify_cluster_access,
 )
 
-FLEET = ["nuc1", "nuc2", "blitz01"]
+FLEET = ["nuc1", "nuc2", "bliss01"]
 
 
 @pytest.fixture
@@ -78,7 +78,7 @@ def _key_under(allowed: Optional[set], acl: Optional[dict]) -> str:
 def test_an_empty_scope_gets_its_own_cache_key() -> None:
     """A tenant whose scope shrank must not read the payload written under the wider one."""
     empty = _key_under(set(), {})
-    org_wide = _key_under({"nuc1", "nuc2", "blitz01"}, {})
+    org_wide = _key_under({"nuc1", "nuc2", "bliss01"}, {})
     unrestricted = _key_under(None, None)
 
     assert empty == "instances:list:scope=empty"

@@ -53,9 +53,9 @@ def test_a_fullwidth_asterisk_is_refused_rather_than_folded_into_a_wildcard():
 
 
 def test_case_is_preserved_because_enforcement_compares_exactly():
-    """Two clusters can hold `Ryo-Labs` and `ryo-labs`; each is granted as spelled."""
-    assert _grant(["Ryo-Labs"]).projects == ["Ryo-Labs"]
-    assert _grant(["Ryo-Labs", "ryo-labs"]).projects == ["Ryo-Labs", "ryo-labs"]
+    """Two clusters can hold `Rye-Labs` and `ryo-labs`; each is granted as spelled."""
+    assert _grant(["Rye-Labs"]).projects == ["Rye-Labs"]
+    assert _grant(["Rye-Labs", "ryo-labs"]).projects == ["Rye-Labs", "ryo-labs"]
 
 
 def test_surrounding_whitespace_is_trimmed():
@@ -216,12 +216,12 @@ def test_a_project_on_only_one_of_the_selected_clusters_is_accepted(monkeypatch)
     do not hold identical project sets.
     """
     permissions = [
-        ClusterPermissionRequest(cluster_id="nuc2", projects=["SCT-OPS"]),
-        ClusterPermissionRequest(cluster_id="central2", projects=["SCT-OPS"]),
+        ClusterPermissionRequest(cluster_id="nuc2", projects=["SCX-OPS"]),
+        ClusterPermissionRequest(cluster_id="center2", projects=["SCX-OPS"]),
     ]
     _check(
         permissions,
-        {"nuc2": ["SCT-OPS", "default"], "central2": ["default"]},
+        {"nuc2": ["SCX-OPS", "default"], "center2": ["default"]},
         monkeypatch=monkeypatch,
     )
 
@@ -234,12 +234,12 @@ def test_an_unknown_name_is_accepted_when_a_selected_cluster_stayed_silent(monke
     """
     permissions = [
         ClusterPermissionRequest(cluster_id="nuc2", projects=["only-on-the-dead-one"]),
-        ClusterPermissionRequest(cluster_id="blitz001", projects=["only-on-the-dead-one"]),
+        ClusterPermissionRequest(cluster_id="bliss001", projects=["only-on-the-dead-one"]),
     ]
     _check(
         permissions,
         {"nuc2": ["default"]},
-        silent=["blitz001"],
+        silent=["bliss001"],
         monkeypatch=monkeypatch,
     )
 

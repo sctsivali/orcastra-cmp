@@ -15,8 +15,8 @@ from app.models.cluster_status import ClusterStatus
 from app.models.schemas import NodeResources, NodeStatus
 from app.services.lxd.instance import FleetInventory
 
-DEAD = "blitzkrieg"
-UNTRUSTED = "central1-argon"
+DEAD = "blizzard"
+UNTRUSTED = "center1-alpha"
 ONLINE = "nuc2"
 
 

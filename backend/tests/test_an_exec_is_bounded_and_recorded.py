@@ -287,9 +287,9 @@ def test_a_timed_out_exec_says_the_command_survived_and_names_no_host() -> None:
         and "timeout" in ast.unparse(node.test)
     ]
     assert branches, (
-        "a timed-out guest call returns the transport's own message verbatim. Keyed on the SET, "
-        "because written for `exec_instance` alone it left every other guest-reaching operation "
-        "returning the raw urllib3 string with the LXD host's address in it."
+        "a timed-out guest call returns the transport's own message verbatim. The branch is keyed "
+        "on the whole set, so no guest-reaching operation returns the raw urllib3 string with the "
+        "LXD host's address in it."
     )
     body = ast.unparse(branches[0])
     assert "still" in body and "running" in body, "the caller is not told the command survived"

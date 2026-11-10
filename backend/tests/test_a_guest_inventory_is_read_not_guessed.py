@@ -118,7 +118,7 @@ def test_sshd_that_cannot_answer_is_unknown_and_odd_settings_are_noted():
 
 
 def test_addresses_carry_an_honest_label():
-    assert [sshd.label(a) for a in ("10.1.2.3", "192.168.1.5", "100.73.127.75", "203.0.113.9", "8.8.8.8",
+    assert [sshd.label(a) for a in ("10.1.2.3", "192.168.1.5", "100.64.0.10", "203.0.113.9", "8.8.8.8",
                                      "fd00::1", "fe80::1", "2001:4860::8888", "not-an-ip")] == [
         "private", "private", "shared", "private", "public", "private", "link_local", "public", "unknown",
     ]

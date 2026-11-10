@@ -46,7 +46,7 @@ def _task(**overrides):
         "source": "dashboard",
         "request_id": "req-1",
         "target_organization_id": 6,
-        "target_organization_slug": "sivali",
+        "target_organization_slug": "sigma",
         "metadata": {
             "requestor": {"username": "ops", "protocol": "tls", "address": "10.0.0.9:51234"},
             "location": "nuc1-member-2",
@@ -109,7 +109,7 @@ def test_admin_sees_everything_that_is_stored() -> None:
     out = present.task_row(_task(), tier="admin", now=NOW)
     TaskRecord(**out)
     assert out["target_organization_id"] == 6
-    assert out["target_organization_slug"] == "sivali"
+    assert out["target_organization_slug"] == "sigma"
     assert out["requestor"] == {"username": "ops", "protocol": "tls", "address": "10.0.0.9:51234"}
     assert out["location"] == "nuc1-member-2"
     assert out["metadata"] == {

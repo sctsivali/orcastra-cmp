@@ -31,7 +31,7 @@ class FakeSchedule:
     weekday: Optional[int] = None
     keep_last: int = 3
     expiry_days: int = 7
-    owner_email: str = "ops@sivali.co.id"
+    owner_email: str = "ops@sigma.example"
     organization_id: Optional[int] = 6
     state: str = "active"
     paused_reason: Optional[str] = None

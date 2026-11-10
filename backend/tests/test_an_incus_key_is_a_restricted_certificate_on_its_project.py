@@ -173,7 +173,7 @@ def test_a_refused_certificate_raises_with_nothing_created():
     "failure",
     [
         lxd_exceptions.LXDAPIException(
-            _Response(500, {"error": "failed to notify peer 10.1.1.243:8443: The provided certificate isn't valid yet"})
+            _Response(500, {"error": "failed to notify peer 10.9.8.243:8443: The provided certificate isn't valid yet"})
         ),
         requests.exceptions.ReadTimeout("read timed out"),
     ],

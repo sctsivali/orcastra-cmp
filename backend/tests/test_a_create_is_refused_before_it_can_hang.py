@@ -124,7 +124,7 @@ def bridge(name, subnet="10.0.5.1/24", managed=True):
 
 ISOLATED = {
     DEFAULT_PROJECT: {"features.networks": "true", "features.profiles": "true"},
-    "UAT-Hermes": {"features.networks": "true", "features.profiles": "true"},
+    "UAT-Herald": {"features.networks": "true", "features.profiles": "true"},
 }
 
 
@@ -133,41 +133,41 @@ def client_with_isolated_project():
         projects=ISOLATED,
         networks={
             DEFAULT_PROJECT: [bridge("br-uplink"), bridge("lxdbr0")],
-            "UAT-Hermes": [bridge("ovn-uat-hermes", "192.168.3.1/24")],
+            "UAT-Herald": [bridge("ovn-uat-herald", "192.168.3.1/24")],
         },
         profiles={
             DEFAULT_PROJECT: [{"name": "default", "devices": {}}],
-            "UAT-Hermes": [{"name": "default", "devices": {}}],
+            "UAT-Herald": [{"name": "default", "devices": {}}],
         },
     )
 
 
 class TestTheCasesTheAuditFiled:
     def test_a_network_from_another_project_is_refused(self):
-        """Create in UAT-Hermes with br-uplink, a network only the `default` project has."""
+        """Create in UAT-Herald with br-uplink, a network only the `default` project has."""
         client = client_with_isolated_project()
         with pytest.raises(NicPreflightError) as exc:
             check_nics(
                 client,
-                "UAT-Hermes",
+                "UAT-Herald",
                 {"eth0": {"type": "nic", "network": "br-uplink"}},
                 ["default"],
             )
         assert "br-uplink" in str(exc.value)
-        assert "does not exist in project 'UAT-Hermes'" in str(exc.value)
+        assert "does not exist in project 'UAT-Herald'" in str(exc.value)
 
     def test_the_refusal_names_what_the_project_can_actually_use(self):
         client = client_with_isolated_project()
         with pytest.raises(NicPreflightError) as exc:
-            check_nics(client, "UAT-Hermes", {"eth0": {"type": "nic", "network": "lxdbr0"}}, ["default"])
-        assert "ovn-uat-hermes" in str(exc.value)
+            check_nics(client, "UAT-Herald", {"eth0": {"type": "nic", "network": "lxdbr0"}}, ["default"])
+        assert "ovn-uat-herald" in str(exc.value)
 
     def test_the_project_s_own_network_is_accepted(self):
         client = client_with_isolated_project()
         check_nics(
             client,
-            "UAT-Hermes",
-            {"eth0": {"type": "nic", "network": "ovn-uat-hermes"}},
+            "UAT-Herald",
+            {"eth0": {"type": "nic", "network": "ovn-uat-herald"}},
             ["default"],
         )
 
@@ -178,10 +178,10 @@ class TestTheCasesTheAuditFiled:
             projects=ISOLATED,
             networks={
                 DEFAULT_PROJECT: [bridge("br-uplink")],
-                "UAT-Hermes": [bridge("ovn-uat-hermes", "192.168.3.1/24")],
+                "UAT-Herald": [bridge("ovn-uat-herald", "192.168.3.1/24")],
             },
             profiles={
-                "UAT-Hermes": [
+                "UAT-Herald": [
                     {
                         "name": "default",
                         "devices": {"eth0": {"type": "nic", "network": "br-uplink"}},
@@ -190,7 +190,7 @@ class TestTheCasesTheAuditFiled:
             },
         )
         with pytest.raises(NicPreflightError) as exc:
-            check_nics(client, "UAT-Hermes", None, ["default"])
+            check_nics(client, "UAT-Herald", None, ["default"])
         assert "br-uplink" in str(exc.value)
 
     def test_a_nic_naming_its_network_with_parent_is_checked_too(self):
@@ -199,7 +199,7 @@ class TestTheCasesTheAuditFiled:
         with pytest.raises(NicPreflightError):
             check_nics(
                 client,
-                "UAT-Hermes",
+                "UAT-Herald",
                 {"eth0": {"type": "nic", "parent": "br-uplink"}},
                 ["default"],
             )
@@ -216,7 +216,7 @@ class TestTheCasesTheAuditFiled:
         client = client_with_isolated_project()
         check_nics(
             client,
-            "UAT-Hermes",
+            "UAT-Herald",
             {"eth0": {"type": "nic", "nictype": nictype, "parent": "enp86s0"}},
             ["default"],
         )
@@ -246,7 +246,7 @@ class TestTheCasesTheAuditFiled:
         with pytest.raises(NicPreflightError):
             check_nics(
                 client,
-                "UAT-Hermes",
+                "UAT-Herald",
                 {"eth0": {"type": "nic", "network": "lxdbr0"}},
                 ["default"],
             )
@@ -385,7 +385,7 @@ class TestNotInventingRefusals:
         assert "no IPv4 subnet" not in str(exc.value)
 
     def test_a_create_with_no_nic_at_all_is_left_alone(self):
-        check_nics(client_with_isolated_project(), "UAT-Hermes", {}, ["default"])
+        check_nics(client_with_isolated_project(), "UAT-Herald", {}, ["default"])
 
     def test_a_failed_network_read_does_not_become_a_refusal(self):
         """An unreadable cluster is not a bad NIC. Let LXD answer rather than inventing a
@@ -429,8 +429,8 @@ class TestTheRefusalReachesTheCallerAsAClientError:
         client = client_with_isolated_project()
         empty = FakeClient(
             projects=ISOLATED,
-            networks={DEFAULT_PROJECT: [bridge("br-uplink")], "UAT-Hermes": []},
-            profiles={"UAT-Hermes": [{"name": "default", "devices": {}}]},
+            networks={DEFAULT_PROJECT: [bridge("br-uplink")], "UAT-Herald": []},
+            profiles={"UAT-Herald": [{"name": "default", "devices": {}}]},
         )
         subnet_client = FakeClient(
             projects={DEFAULT_PROJECT: {}},
@@ -438,8 +438,8 @@ class TestTheRefusalReachesTheCallerAsAClientError:
             profiles={DEFAULT_PROJECT: [{"name": "default", "devices": {}}]},
         )
         cases = [
-            (client, "UAT-Hermes", {"eth0": {"type": "nic", "network": "br-uplink"}}),
-            (empty, "UAT-Hermes", {"eth0": {"type": "nic", "network": "br-uplink"}}),
+            (client, "UAT-Herald", {"eth0": {"type": "nic", "network": "br-uplink"}}),
+            (empty, "UAT-Herald", {"eth0": {"type": "nic", "network": "br-uplink"}}),
             (subnet_client, None, {"eth0": {"type": "nic", "network": "lxdbr0", "ipv4.address": "9.9.9.9"}}),
             (subnet_client, None, {"eth0": {"type": "nic", "network": "lxdbr0", "ipv4.address": "nope"}}),
             (subnet_client, None, {"eth0": {"type": "nic", "network": "lxdbr0", "ipv4.address": "10.0.5.0"}}),

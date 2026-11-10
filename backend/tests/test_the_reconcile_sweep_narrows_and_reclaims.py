@@ -189,7 +189,7 @@ def test_a_grant_that_still_fits_is_left_alone(monkeypatch) -> None:
     install = FakeInstall(
         id=3, organization_id=3, api_key_id="k3", granted_scope=[{"cluster_id": "nuc2"}],
     )
-    db = ScopeDB(installs=[install], bindings={3: {"nuc2", "pandora"}})
+    db = ScopeDB(installs=[install], bindings={3: {"nuc2", "panda"}})
 
     changed, store = _run_scope_pass(db, monkeypatch)
     assert changed == 0

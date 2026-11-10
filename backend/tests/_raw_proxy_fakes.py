@@ -183,7 +183,7 @@ ORCAHUB_READS = [
     "/1.0/instances/web-1/snapshots",
     "/1.0/instances/web-1/snapshots?recursion=1",
     "/1.0/instances/web-1/snapshots/snap0",
-    "/1.0/instances/ATLAS-Semanan/snapshots/snap-%25Y%25m0-%25H%25M",
+    "/1.0/instances/ATLAS-East/snapshots/snap-%25Y%25m0-%25H%25M",
     "/1.0/projects",
     "/1.0/projects?recursion=1",
     "/1.0/projects/cust-buyer-0f3c9a",

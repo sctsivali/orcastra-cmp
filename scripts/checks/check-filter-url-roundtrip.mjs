@@ -128,7 +128,7 @@ check('text predicate: inactive matches everything', matchesText(null, INACTIVE_
 // These call the real serialiseFacet/parseFacet. A copy of the encoding here would agree with
 // itself and miss a defect in the real function, such as a missing tilde escape.
 const ENUM_VALUES = ['nuc2', 'bridge', 'Created', 'virtual-machine', 'x86_64', 'zfs', 'default',
-                     'cust-suka-hati-84426622', 'SCT-OPS', 'critical',
+                     'cust-sundial-84426622', 'SCX-OPS', 'critical',
                      // The adversarial half: separator, sigils, escapes and the sentinel itself.
                      EMPTY_FACET_PARAM, 'a,b', 'a..b', 'n:2', 'd:last7d', 't:x', '100%', '%zz',
                      'has space', 'ünïcødé', '~', '~~', '~none~', 'default~none'];
@@ -153,7 +153,7 @@ check('a literal ~none does not become the sentinel',
 
 // Multi-select, including the sentinel alongside real values, and order preservation.
 const MULTI = [
-  ['nuc2', 'blitz01'],
+  ['nuc2', 'bliss01'],
   [EMPTY_FACET, 'nuc2'],
   ['a,b', 'c'],
   [EMPTY_FACET_PARAM, EMPTY_FACET],

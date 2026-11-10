@@ -63,23 +63,23 @@ def test_an_absent_projects_field_means_default_only() -> None:
 
 def test_a_row_from_a_cluster_outside_the_grant_is_dropped() -> None:
     """A second check: the fan-out already iterates only granted clusters."""
-    assert _within_granted_projects(_key(["*"]), [_row("default", cluster_id="pandora")]) == []
+    assert _within_granted_projects(_key(["*"]), [_row("default", cluster_id="panda")]) == []
 
 
 def test_the_allow_list_is_per_cluster() -> None:
     key = {
         "cluster_permissions": [
             {"cluster_id": "nuc2", "projects": ["tenant-a"]},
-            {"cluster_id": "pandora", "projects": ["*"]},
+            {"cluster_id": "panda", "projects": ["*"]},
         ]
     }
     rows = [
         _row("tenant-a", "nuc2"), _row("tenant-b", "nuc2"),
-        _row("tenant-b", "pandora"),
+        _row("tenant-b", "panda"),
     ]
     kept = _within_granted_projects(key, rows)
     assert [(r["cluster_id"], r["project"]) for r in kept] == [
-        ("nuc2", "tenant-a"), ("pandora", "tenant-b")
+        ("nuc2", "tenant-a"), ("panda", "tenant-b")
     ]
 
 

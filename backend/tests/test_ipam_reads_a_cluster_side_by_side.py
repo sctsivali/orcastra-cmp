@@ -28,7 +28,7 @@ def test_the_three_reads_overlap_and_join_as_before(monkeypatch):
     monkeypatch.setattr(ipam, "list_instance_records", _slow(([record], True)))
     read = NodeRead()
     started = time.monotonic()
-    configs, networks, records, instances_ok = ipam._read_join_sources(object(), "central-1", read)
+    configs, networks, records, instances_ok = ipam._read_join_sources(object(), "center-1", read)
     elapsed = time.monotonic() - started
     assert elapsed < 0.6, f"the reads did not overlap: {elapsed:.2f} s"
     assert set(configs) == {"default", "tenant-a"}
@@ -45,7 +45,7 @@ def test_a_failed_read_is_named_and_the_others_still_join(monkeypatch):
     monkeypatch.setattr(ipam, "list_across_projects", boom)
     monkeypatch.setattr(ipam, "list_instance_records", _slow(([], False), 0))
     read = NodeRead()
-    configs, networks, records, instances_ok = ipam._read_join_sources(object(), "central-1", read)
+    configs, networks, records, instances_ok = ipam._read_join_sources(object(), "center-1", read)
     assert networks == {} and configs == {"default": {}}
     assert instances_ok is False
     assert sorted(read.problems) == ["instances: partial read", "networks: TimeoutError"]

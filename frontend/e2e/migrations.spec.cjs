@@ -611,7 +611,7 @@ test("a dir-pool source the target cannot bound waits for the operator to accept
   await dialog.getByRole("button", { name: "Continue" }).click();
   await expect(dialog.getByRole("heading", { name: "Approve execution" })).toBeVisible();
 
-  await page.getByLabel("Reason for This Migration").fill("Copy within Pandora's pool");
+  await page.getByLabel("Reason for This Migration").fill("Copy within the shared pool");
   for (const label of [
     "I reviewed the transfer impact. The copy is a new, independent instance.",
     "I reviewed snapshot schedule and billing impact for every source workload.",

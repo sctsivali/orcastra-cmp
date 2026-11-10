@@ -32,7 +32,7 @@ RAW_ENVIRONMENT = {
     "kernel": "Linux",
     "certificate": "-----BEGIN CERTIFICATE-----\nMIIB...\n-----END CERTIFICATE-----",
     "certificate_fingerprint": "a3f9" * 16,
-    "addresses": ["10.0.0.5:8443", "100.73.127.75:8443"],
+    "addresses": ["10.0.0.5:8443", "100.64.0.10:8443"],
     "server_pid": 4242,
 }
 

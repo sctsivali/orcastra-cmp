@@ -10,7 +10,7 @@ from typing import Any
 from app.routers.storage_pools import _fetch_pools_for_node
 from app.services.lxd.fanout import NodeRead
 
-HOST = "C2"
+HOST = "C7"
 
 
 class _Resp:

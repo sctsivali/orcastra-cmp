@@ -18,7 +18,7 @@ from app.services.lxd.instance import InstanceManager
 from app.services.lxd.resources import ResourceManager
 
 
-HOST = "blitz01"
+HOST = "bliss01"
 
 
 class _BreakerTrippedConnectionManager:
@@ -175,7 +175,7 @@ def test_a_blank_cluster_id_is_refused_before_it_reaches_vault():
     try:
         verify_cluster_access("nuc2")
         with pytest.raises(HTTPException) as caught:
-            verify_cluster_access("blitz01")
+            verify_cluster_access("bliss01")
         assert caught.value.status_code == 403
     finally:
         set_allowed_clusters(None)

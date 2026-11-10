@@ -64,7 +64,7 @@ async def test_three_subscribers_on_one_worker_each_get_their_own_view() -> None
     tailer = TaskFeedTailer(run_loop=False)
     accept = partial(tasks_ws.feed_frame_is_visible, caller_email="ops@example.test")
     admin = await _subscribe_under(tailer, None, None, accept)
-    foreign = await _subscribe_under(tailer, {"vdc-hetzner"}, None, accept)
+    foreign = await _subscribe_under(tailer, {"vdc-hexa"}, None, accept)
     tenant = await _subscribe_under(tailer, {"nuc1"}, {"nuc1": {("cust-a", "*"): {"view"}}}, accept)
     assert tailer.subscriber_count == 3
 

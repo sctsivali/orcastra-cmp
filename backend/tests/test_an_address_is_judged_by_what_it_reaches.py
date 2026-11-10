@@ -4,7 +4,7 @@ Python answers False, rather than raising, when asked whether an `IPv6Address` i
 `IPv4Network`, so every IPv4-mapped or tunnelled literal is unwrapped before it is judged:
 
     https://[::ffff:127.0.0.1]/          -> loopback
-    https://[0:0:0:0:0:ffff:6449:7f4b]/  -> carrier-grade NAT (100.64.0.0/10)
+    https://[0:0:0:0:0:ffff:6440:a]/  -> carrier-grade NAT (100.64.0.0/10)
     https://[::ffff:169.254.169.254]/    -> the cloud metadata service
 
 The explicit prefix list is backed by `is_global`, so an unlisted range is refused too. A URL
@@ -60,7 +60,7 @@ def _documented_public_host_resolves(monkeypatch: pytest.MonkeyPatch) -> None:
         "https://[::ffff:10.0.0.1]/",
         "https://[::ffff:192.168.1.1]/",
         "https://[::ffff:169.254.169.254]/latest/meta-data/",
-        "https://[0:0:0:0:0:ffff:6449:7f4b]/",   # IPv4-mapped, inside 100.64.0.0/10
+        "https://[0:0:0:0:0:ffff:6440:a]/",   # IPv4-mapped, inside 100.64.0.0/10
         "https://[2002:c0a8:0101::1]/",          # 6to4 wrapping 192.168.1.1
         "https://[2001::1]/",                    # Teredo
         "https://[64:ff9b::8.8.8.8]/",           # NAT64
@@ -99,7 +99,7 @@ def test_carrier_grade_nat_is_still_refused_by_the_explicit_list() -> None:
     Python does not classify it as private, and Tailscale hosts sit on it, so `is_global` alone
     would leave it open.
     """
-    assert not is_url_safe("https://100.73.127.75/", require_https=True)
+    assert not is_url_safe("https://100.64.0.10/", require_https=True)
     assert any(str(net) == "100.64.0.0/10" for net in PRIVATE_NETWORKS)
 
 
@@ -132,7 +132,7 @@ def test_a_public_callback_is_still_accepted() -> None:
 
 def test_the_refusal_never_names_the_address() -> None:
     """The refusal gives the reason and leaks no address from the internal network."""
-    for url in ("https://127.0.0.1/", "https://[::ffff:127.0.0.1]/", "https://100.73.127.75/"):
+    for url in ("https://127.0.0.1/", "https://[::ffff:127.0.0.1]/", "https://100.64.0.10/"):
         reason = describe_url_risk(url, require_https=True)
         assert reason
         assert "127.0.0.1" not in reason

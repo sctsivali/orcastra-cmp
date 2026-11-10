@@ -25,9 +25,9 @@ from tests._journal_fakes import FakeSessionMaker  # noqa: E402
     "raw,expected",
     [
         ("", frozenset()),
-        ("C2", frozenset({"c2"})),
-        (" C2 , nuc-old ,, ", frozenset({"c2", "nuc-old"})),
-        ("central2,CENTRAL2", frozenset({"central2"})),
+        ("C7", frozenset({"c7"})),
+        (" C7 , nuc-old ,, ", frozenset({"c7", "nuc-old"})),
+        ("center2,CENTER2", frozenset({"center2"})),
     ],
 )
 def test_the_exclude_list_is_a_trimmed_case_insensitive_csv(raw, expected):
@@ -36,9 +36,9 @@ def test_the_exclude_list_is_a_trimmed_case_insensitive_csv(raw, expected):
 
 def test_the_default_reads_the_setting(monkeypatch):
     settings = follower_module.get_settings()
-    monkeypatch.setattr(settings, "task_journal_exclude_clusters", " C2 ")
+    monkeypatch.setattr(settings, "task_journal_exclude_clusters", " C7 ")
     monkeypatch.setattr(follower_module, "get_settings", lambda: settings)
-    assert excluded_clusters() == frozenset({"c2"})
+    assert excluded_clusters() == frozenset({"c7"})
 
 
 def _follower(hub, maker, excluded):
@@ -50,31 +50,31 @@ def _follower(hub, maker, excluded):
 
 async def test_an_excluded_cluster_is_never_subscribed_seeded_or_state_tracked(monkeypatch):
     async def ids():
-        return frozenset({"nuc1", "C2"})
+        return frozenset({"nuc1", "C7"})
 
     monkeypatch.setattr(registry, "registered_cluster_ids", ids)
     hub = FakeHub()
     maker = FakeSessionMaker()
-    follower = _follower(hub, maker, frozenset({"c2"}))
+    follower = _follower(hub, maker, frozenset({"c7"}))
 
     await follower.sync_registry()
 
     assert [h for h, _, _ in hub.subscribed] == ["nuc1"]
-    assert "C2" not in follower._queues and "C2" not in follower._consumers
-    assert follower.is_excluded("C2") and follower.is_excluded(" c2 ")
-    assert not any("C2" in str(p) for db in maker.sessions for _, p in db.calls), (
+    assert "C7" not in follower._queues and "C7" not in follower._consumers
+    assert follower.is_excluded("C7") and follower.is_excluded(" c7 ")
+    assert not any("C7" in str(p) for db in maker.sessions for _, p in db.calls), (
         "no state row, no seed, no log line names the excluded cluster"
     )
     await follower.step_down(graceful=True)
 
 
 async def test_the_constructor_reads_the_exclude_list_from_settings(monkeypatch):
-    monkeypatch.setattr(follower_module, "excluded_clusters", lambda raw=None: frozenset({"c2"}))
+    monkeypatch.setattr(follower_module, "excluded_clusters", lambda raw=None: frozenset({"c7"}))
     follower = JournalFollower(
         FakeSessionMaker(), lambda: None, retry_seconds=15, database_url="x",
         hub=FakeHub(), engine_factory=lambda url: None, identities=NoIdentities(),
     )
-    assert follower.is_excluded("C2") and not follower.is_excluded("nuc1")
+    assert follower.is_excluded("C7") and not follower.is_excluded("nuc1")
 
 
 def test_the_sweeps_only_visit_hosts_the_follower_tracks():

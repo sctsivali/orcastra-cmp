@@ -80,7 +80,7 @@ def test_a_refusal_names_what_the_key_holds() -> None:
 
 def test_a_cluster_outside_the_grant_is_refused_before_any_level_check() -> None:
     with pytest.raises(HTTPException) as raised:
-        assert_cluster_permission(_key(["admin"], cluster_id="nuc2"), "pandora", "read")
+        assert_cluster_permission(_key(["admin"], cluster_id="nuc2"), "panda", "read")
     assert raised.value.status_code == 403
 
 

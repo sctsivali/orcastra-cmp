@@ -8,7 +8,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 HOST = "nuc2"
-OTHER_HOST = "pandora"
+OTHER_HOST = "panda"
 PROJECT = "cust-qa-abcdef01"
 INSTANCE = "ct-qa-fixture-0001"
 

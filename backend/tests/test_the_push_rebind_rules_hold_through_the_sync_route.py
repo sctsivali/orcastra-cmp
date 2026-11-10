@@ -162,7 +162,7 @@ NAMES_NONE = "its push names 0 organizations, exactly one is required"
 
 # Id, setup, pushes [(key id, orgs, members)], destination slug or None, count warned (or the warning's
 # own words) or None.
-D15 = [
+DESTINATION_CASES = [
     ("own_org_as_partner", None, [(K_PARTNER, [P], [m(C, P, "PARTNER")])], "partner", None),
     ("two_claimed_orgs_as_partner", None,
      [(K_PARTNER, [P, Q], [m(C, P, "PARTNER"), m(C, Q, "PARTNER")])], None, 2),
@@ -208,8 +208,8 @@ D15 = [
 ]
 
 
-@pytest.mark.parametrize("setup, pushes, dest, warned", [c[1:] for c in D15], ids=[c[0] for c in D15])
-async def test_decision_15_destination(
+@pytest.mark.parametrize("setup, pushes, dest, warned", [c[1:] for c in DESTINATION_CASES], ids=[c[0] for c in DESTINATION_CASES])
+async def test_destination_rule(
     world: Dict[str, Any], caplog: pytest.LogCaptureFixture, setup: Any,  # noqa: F811
     pushes: List[Tuple[str, List[str], List[Dict[str, Any]]]], dest: Optional[str], warned: Union[int, str, None],
 ) -> None:
@@ -242,7 +242,7 @@ PUSHED_ROLES = [("PARTNER", True), ("partner", True), ("Partner", True), ("pArTn
 
 
 @pytest.mark.parametrize("role, moves", PUSHED_ROLES, ids=[repr(r) for r, _ in PUSHED_ROLES])
-async def test_decision_15_pushed_role_spellings(world: Dict[str, Any], role: str, moves: bool) -> None:  # noqa: F811
+async def test_destination_pushed_role_spellings(world: Dict[str, Any], role: str, moves: bool) -> None:  # noqa: F811
     db = sqlite_session(*org_tables())
     await personal_cluster(db, "c-cluster", C)
     assert (await push(db, K_PARTNER, [P], [m(C, P, role)])).status_code == 200
@@ -299,7 +299,7 @@ READ_BACK = [
 
 @pytest.mark.parametrize("claims, rows, members, failing, dest, warned", [c[1:] for c in READ_BACK],
                          ids=[c[0] for c in READ_BACK])
-async def test_decision_15_reads_the_member_rows_back(
+async def test_destination_reads_the_member_rows_back(
     world: Dict[str, Any], caplog: pytest.LogCaptureFixture, claims: List[str],  # noqa: F811
     rows: List[Tuple[str, str, str]], members: List[Dict[str, Any]], failing: Tuple[str, str],
     dest: Optional[str], warned: Optional[int],

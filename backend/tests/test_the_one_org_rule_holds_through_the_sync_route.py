@@ -297,7 +297,7 @@ async def test_only_the_exact_remove_spelling_removes(hub: Dict[str, Any], actio
 # The creator-role rule inside the one-org rule: an Admin or unknown creator is refused, and an
 # add-on credential never rebinds. The count comes first, so two orgs never ask Authentik.
 
-D14 = [
+CREATOR_ROLE_CASES = [
     ("partner_one_org", {ROLE_PARTNER}, ["own"], {}, "own", None),
     ("tenant_one_org", {ROLE_TENANT}, ["own"], {}, "own", None),
     ("no_group_one_org", set(), ["own"], {}, "own", None),
@@ -312,8 +312,8 @@ D14 = [
 ]
 
 
-@pytest.mark.parametrize("groups, orgs, extra, dest, warn", [c[1:] for c in D14], ids=[c[0] for c in D14])
-async def test_decision_14_after_the_count(
+@pytest.mark.parametrize("groups, orgs, extra, dest, warn", [c[1:] for c in CREATOR_ROLE_CASES], ids=[c[0] for c in CREATOR_ROLE_CASES])
+async def test_creator_role_after_the_count(
     hub: Dict[str, Any], groups: Optional[set], orgs: List[str], extra: Dict[str, Any], dest: Optional[str],
     warn: Optional[Tuple[str, ...]],
 ) -> None:
@@ -324,7 +324,7 @@ async def test_decision_14_after_the_count(
 
 # The destination rule inside the one org: named in this push, as partner, in that org, row read back.
 
-D15 = [
+DESTINATION_CASES = [
     ("named_user_in_the_only_org", [], one(["own"], [U(CO, "own"), U(C, "own", "USER")]), None, ("dest", 0)),
     ("named_tenant_in_the_only_org", [], one(["own"], [U(C, "own", "TENANT")]), None, ("dest", 0)),
     ("absent_from_the_push", [S("own", rows=[(C, "partner")])], one(["own"], [U(CO, "own")]), None, None),
@@ -343,8 +343,8 @@ D15 = [
 ]
 
 
-@pytest.mark.parametrize("seeds, pushes, dest, warn", [c[1:] for c in D15], ids=[c[0] for c in D15])
-async def test_decision_15_inside_the_one_org(
+@pytest.mark.parametrize("seeds, pushes, dest, warn", [c[1:] for c in DESTINATION_CASES], ids=[c[0] for c in DESTINATION_CASES])
+async def test_destination_inside_the_one_org(
     hub: Dict[str, Any], seeds: Any, pushes: Any, dest: Optional[str], warn: Optional[Tuple[str, Any]],
 ) -> None:
     db = await run(hub, seeds, pushes)

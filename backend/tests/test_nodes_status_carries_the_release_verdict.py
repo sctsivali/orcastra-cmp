@@ -86,15 +86,15 @@ def _get_nodes(monkeypatch, statuses):
 
 def test_each_cluster_is_told_about_its_own_track(stored, enabled, monkeypatch) -> None:
     response = _get_nodes(monkeypatch, [
-        _node("blitzkrieg", "5.21.5"),
+        _node("blizzard", "5.21.5"),
         _node("console-lab", "5.21.9"),
         _node("incus-lab", "6.0.4", node_type="Incus", lts=None),
         _node("offline", "5.21.5", connected=False),
     ])
     by_name = {n.name: n.hypervisor_release for n in response.nodes}
 
-    assert by_name["blitzkrieg"].status == "update_available"
-    assert by_name["blitzkrieg"].latest_version == "5.21.9"
+    assert by_name["blizzard"].status == "update_available"
+    assert by_name["blizzard"].latest_version == "5.21.9"
     assert by_name["console-lab"].status == "latest"
     assert by_name["console-lab"].newer_track.version == "6.10.1"
     assert (by_name["incus-lab"].status, by_name["incus-lab"].channel) == ("update_available", "lts-6.0")
@@ -106,7 +106,7 @@ def test_each_cluster_is_told_about_its_own_track(stored, enabled, monkeypatch) 
 
 def test_turned_off_every_cluster_says_nothing(stored, enabled, monkeypatch) -> None:
     enabled(False)
-    response = _get_nodes(monkeypatch, [_node("blitzkrieg", "5.21.5")])
+    response = _get_nodes(monkeypatch, [_node("blizzard", "5.21.5")])
     assert response.nodes[0].hypervisor_release is None
 
 
@@ -116,7 +116,7 @@ def test_an_unreadable_store_reads_as_not_checked_not_as_a_failure(stored, enabl
             raise RuntimeError("redis is down")
 
     monkeypatch.setattr(service, "get_store", lambda: Broken())
-    response = _get_nodes(monkeypatch, [_node("blitzkrieg", "5.21.5")])
+    response = _get_nodes(monkeypatch, [_node("blizzard", "5.21.5")])
     verdict = response.nodes[0].hypervisor_release
     assert (verdict.status, verdict.reason) == ("not_checked", "feed_unreachable")
 
@@ -130,7 +130,7 @@ def test_an_unreadable_store_reads_as_not_checked_not_as_a_failure(stored, enabl
 def test_a_tampered_store_never_turns_the_page_into_a_500(stored, enabled, monkeypatch, state) -> None:
     # Redis is shared: whatever was written under the key, the Clusters page still answers.
     stored.write(state)
-    response = _get_nodes(monkeypatch, [_node("blitzkrieg", "5.21.5")])
+    response = _get_nodes(monkeypatch, [_node("blizzard", "5.21.5")])
     verdict = response.nodes[0].hypervisor_release
     assert verdict is not None and verdict.status in ("not_checked", "update_available")
     response.model_dump(mode="json")

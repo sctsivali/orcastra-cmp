@@ -43,7 +43,7 @@ async def test_org_scope_excludes_a_cluster_the_caller_does_not_own():
     install_fake_registry()
     tracker = get_session_tracker()
     _register(tracker, "op-ours", "a@example.com", host="nuc2")
-    _register(tracker, "op-foreign", "c@example.com", host="vdc-hetzner")
+    _register(tracker, "op-foreign", "c@example.com", host="vdc-hexa")
 
     sessions, _ = await tracker.list_active(allowed_clusters={"nuc2"})
 
@@ -65,7 +65,7 @@ async def test_an_admin_is_unrestricted_by_cluster():
     install_fake_registry()
     tracker = get_session_tracker()
     _register(tracker, "op-a", "a@example.com", host="nuc2")
-    _register(tracker, "op-b", "c@example.com", host="vdc-hetzner")
+    _register(tracker, "op-b", "c@example.com", host="vdc-hexa")
 
     sessions, _ = await tracker.list_active(allowed_clusters=None)
 
@@ -80,7 +80,7 @@ async def test_isolation_holds_for_sessions_published_by_another_worker():
     registry = get_session_registry()
 
     other = SessionTracker()
-    _register(other, "op-foreign", "c@example.com", host="vdc-hetzner")
+    _register(other, "op-foreign", "c@example.com", host="vdc-hexa")
     _register(other, "op-ours", "a@example.com", host="nuc2")
     await registry.publish(
         [s.to_snapshot("w2", time.time()) for s in other.live_sessions()], ttl_seconds=10

@@ -70,7 +70,7 @@ class ProbeUrlTests(unittest.TestCase):
                    return_value=("/tmp/c.crt", "/tmp/c.key")), \
              patch("app.services.lxd_certs.connectivity.health.is_tripped", return_value=False), \
              patch("app.services.lxd_certs.connectivity.health.clear"):
-            manager.probe_connection("central2", use_breaker=False)
+            manager.probe_connection("center2", use_breaker=False)
         return seen["url"]
 
     def test_no_spelling_produces_a_double_slash(self):
@@ -91,7 +91,7 @@ class ProbeUrlTests(unittest.TestCase):
                    return_value=("/tmp/c.crt", "/tmp/c.key")), \
              patch("app.services.lxd_certs.connectivity.health.is_tripped", return_value=False), \
              patch("app.services.lxd_certs.connectivity.health.clear"):
-            probe = manager.probe_connection("central2", use_breaker=False)
+            probe = manager.probe_connection("center2", use_breaker=False)
 
         self.assertTrue(probe.reachable)
         self.assertFalse(probe.trusted)

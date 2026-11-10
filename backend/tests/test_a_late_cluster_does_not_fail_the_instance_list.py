@@ -27,7 +27,7 @@ from app.services.lxd.lxd_service import LXDService
 from app.services.lxd_service import get_lxd_service
 from tests.test_a_failed_listing_is_never_an_empty_answer import _CacheSpy
 
-FAST, LATE = "nuc2", "central-1"
+FAST, LATE = "nuc2", "center-1"
 
 
 class _ListCacheSpy(_CacheSpy):

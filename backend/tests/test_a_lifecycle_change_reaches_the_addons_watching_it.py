@@ -119,7 +119,7 @@ def test_a_subscription_that_did_not_ask_for_it_hears_nothing(monkeypatch) -> No
 def test_an_installation_that_no_longer_reaches_the_cluster_hears_nothing(monkeypatch) -> None:
     """The reconcile sweep narrows a grant when an organization loses a cluster. An add-on must
     stop hearing about the cluster it lost, or the narrowing leaks through the event stream."""
-    install = FakeInstall(id=1, granted_scope=[{"cluster_id": "pandora"}])
+    install = FakeInstall(id=1, granted_scope=[{"cluster_id": "panda"}])
     sub = FakeSubscription(id=10, installation_id=1, event_types=["orcastra.instance.created.v1"])
 
     count, _ = _run([(sub, install)], monkeypatch=monkeypatch)

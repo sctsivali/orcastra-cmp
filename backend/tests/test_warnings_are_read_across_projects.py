@@ -11,7 +11,7 @@ from pylxd.exceptions import LXDAPIException
 
 from app.routers.lxd_warnings import _fetch_warnings_for_node
 
-HOST = "C2"
+HOST = "C7"
 
 
 class _Resp:
@@ -55,7 +55,7 @@ class _Service:
 
 
 ROW = {"uuid": "u1", "type": "Instance type not operational", "status": "new", "severity": "moderate",
-       "location": "member-b", "project": "uat-hermes", "count": 3,
+       "location": "member-b", "project": "uat-herald", "count": 3,
        "first_seen_at": "2026-09-01T00:00:00Z", "last_seen_at": "2026-09-11T00:00:00Z", "last_message": "m"}
 
 
@@ -70,7 +70,7 @@ def test_every_project_is_asked_for_and_the_row_keeps_its_project():
     read = _fetch_warnings_for_node(_Service(_Client(handler)), HOST)
     assert calls == [{"recursion": "1", "all-projects": "true"}]
     assert [(w.uuid, w.project, w.location, w.source_node, w.count) for w in read.rows] == [
-        ("u1", "uat-hermes", "member-b", HOST, 3)
+        ("u1", "uat-herald", "member-b", HOST, 3)
     ]
     assert read.complete
 

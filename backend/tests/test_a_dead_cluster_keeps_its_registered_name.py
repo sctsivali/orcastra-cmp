@@ -18,7 +18,7 @@ from app.services.lxd.lxd_service import LXDService
 SETTINGS = SimpleNamespace(vault_clusters_path="secret/data/clusters")
 
 REGISTERED = {
-    "blitz001": {"display_name": "BSD Lab", "endpoint": "https://10.1.1.49:9443", "type": "LXD"},
+    "bliss001": {"display_name": "BSD Lab", "endpoint": "https://10.9.8.49:9443", "type": "LXD"},
     "orin": {"display_name": "Jetson Orin", "endpoint": "https://orin:8443", "type": "Incus"},
     "bare": {"endpoint": "https://bare:8443"},
 }
@@ -45,8 +45,8 @@ def _registry(name, fail=()):
 
 
 def test_the_registration_is_read_whatever_the_cluster_is_doing():
-    assert _registry("blitz001") == {
-        "endpoint": "https://10.1.1.49:9443",
+    assert _registry("bliss001") == {
+        "endpoint": "https://10.9.8.49:9443",
         "display_name": "BSD Lab",
         "node_type": "lxd",
         "clustered": None,
@@ -61,7 +61,7 @@ def test_the_type_is_normalised_but_only_when_one_was_recorded():
 
 
 def test_an_unreadable_registration_says_so_rather_than_guessing():
-    unknown = _registry("blitz001", fail={"blitz001"})
+    unknown = _registry("bliss001", fail={"bliss001"})
     assert unknown == {
         "endpoint": "unknown",
         "display_name": None,
@@ -81,7 +81,7 @@ def test_the_clustering_state_rides_along_on_a_read_that_already_happens():
     not be coerced into one.
     """
     REGISTERED["clustered-host"] = {
-        "endpoint": "https://10.1.1.60:8443",
+        "endpoint": "https://10.9.8.60:8443",
         "display_name": "Clustered Host",
         "type": "MicroCloud",
         "clustered": True,
@@ -90,7 +90,7 @@ def test_the_clustering_state_rides_along_on_a_read_that_already_happens():
     try:
         assert _registry("clustered-host")["clustered"] is True
         assert _registry("stringly")["clustered"] is None
-        assert _registry("blitz001")["clustered"] is None
+        assert _registry("bliss001")["clustered"] is None
     finally:
         del REGISTERED["clustered-host"]
         del REGISTERED["stringly"]
@@ -98,20 +98,20 @@ def test_the_clustering_state_rides_along_on_a_read_that_already_happens():
 
 @pytest.fixture
 def tripped():
-    health.record_failure("blitz001", "connection refused")
+    health.record_failure("bliss001", "connection refused")
     yield
-    health.clear("blitz001")
+    health.clear("bliss001")
 
 
 def test_a_breaker_tripped_cluster_still_carries_its_name_and_type(tripped):
-    """The picker shows "BSD Lab", not the raw id `blitz001`."""
-    status = LXDService._check_single_node_status(_service(), "blitz001", SETTINGS)
+    """The picker shows "BSD Lab", not the raw id `bliss001`."""
+    status = LXDService._check_single_node_status(_service(), "bliss001", SETTINGS)
 
     assert isinstance(status, NodeStatus)
     assert status.connected is False
     assert status.display_name == "BSD Lab"
     assert status.node_type == "lxd"
-    assert status.endpoint == "https://10.1.1.49:9443"
+    assert status.endpoint == "https://10.9.8.49:9443"
 
 
 def test_a_cluster_with_no_client_still_carries_its_name_and_type():

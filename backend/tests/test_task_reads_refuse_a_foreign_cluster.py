@@ -42,7 +42,7 @@ def _task(row_id: str, **overrides: Any) -> Dict[str, Any]:
         "status": "running", "status_code": 103, "progress": None, "error": None, "may_cancel": True,
         "actor_email": "ops@example.test", "actor_role": "partner", "actor_kind": "user",
         "api_key_id": None, "source": "dashboard", "request_id": None, "target_organization_id": 6,
-        "target_organization_slug": "sivali", "metadata": {"location": "m1"}, "lxd_created_at": None,
+        "target_organization_slug": "sigma", "metadata": {"location": "m1"}, "lxd_created_at": None,
         "lxd_updated_at": None, "started_at": None, "finished_at": None, "created_at": STAMP,
         "updated_at": STAMP,
     }
@@ -65,12 +65,12 @@ def _log(row_id: int, **overrides: Any) -> Dict[str, Any]:
 
 TASK_ROWS = [
     _task(MINE),
-    _task(THEIRS, cluster_id="vdc-hetzner"),
+    _task(THEIRS, cluster_id="vdc-hexa"),
     _task(NETWORK, resource_type="network", resource_name="br0"),
 ]
 LOG_ROWS = [
     _log(1),
-    _log(2, cluster_id="vdc-hetzner"),
+    _log(2, cluster_id="vdc-hexa"),
     _log(3, resource_type="network", resource_name="br0", kind="lifecycle"),
     _log(4, cluster_id=None, actor_email="ops@example.test", action="api_key.create"),
     _log(5, cluster_id=None, actor_email="other@example.test", action="api_key.create"),
@@ -104,7 +104,7 @@ def _client(
             return FakeResult(scalar=True)
         if "task_follower_clusters" in sql:
             return FakeResult(rows=[{"cluster_id": "nuc1", "state": "connected"},
-                                    {"cluster_id": "vdc-hetzner", "state": "disconnected"}])
+                                    {"cluster_id": "vdc-hexa", "state": "disconnected"}])
         if "count(" in sql:
             return FakeResult(scalar=len(tasks) if "task_journal" in sql else len(logs))
         if "FROM task_journal" in sql:
@@ -173,7 +173,7 @@ def test_an_admin_receives_every_row_and_the_organisation() -> None:
     body = client.get("/tasks").json()
     assert sorted(t["id"] for t in body["tasks"]) == sorted([MINE, THEIRS, NETWORK])
     assert body["tasks"][0]["target_organization_id"] == 6
-    assert body["disconnected_clusters"] == ["vdc-hetzner"]
+    assert body["disconnected_clusters"] == ["vdc-hexa"]
     page = next(s for s in recorder.statements if "FROM task_journal" in s and "count(" not in s)
     assert "cluster_id IN" not in page
 
@@ -181,7 +181,7 @@ def test_an_admin_receives_every_row_and_the_organisation() -> None:
 @pytest.mark.parametrize("path", ["/tasks", "/cluster-log"])
 def test_a_foreign_cluster_filter_is_403(path: str) -> None:
     client, recorder = _client(**PARTNER)
-    response = client.get(path, params={"cluster_id": "vdc-hetzner"})
+    response = client.get(path, params={"cluster_id": "vdc-hexa"})
     assert response.status_code == 403, response.text
     assert recorder.statements == [], "refused before any query"
     assert client.get(path, params={"cluster_id": "nuc1"}).status_code == 200
@@ -219,7 +219,7 @@ def test_limit_zero_answers_the_counts_only() -> None:
 
 
 def test_a_foreign_task_detail_reads_as_absent() -> None:
-    client, _recorder = _client(**PARTNER, task_rows=[_task(THEIRS, cluster_id="vdc-hetzner")])
+    client, _recorder = _client(**PARTNER, task_rows=[_task(THEIRS, cluster_id="vdc-hexa")])
     assert client.get(f"/tasks/{THEIRS}").status_code == 404
     mine, _recorder = _client(**PARTNER, task_rows=[_task(MINE)], log_rows=[_log(1, task_id=MINE)])
     response = mine.get(f"/tasks/{MINE}")
@@ -247,7 +247,7 @@ def test_the_cluster_log_keeps_hostless_rows_to_admin_and_their_own_actor() -> N
 
 
 def test_the_queue_groups_open_rows_per_visible_cluster() -> None:
-    client, _recorder = _client(**PARTNER, task_rows=[_task(MINE), _task(THEIRS, cluster_id="vdc-hetzner"),
+    client, _recorder = _client(**PARTNER, task_rows=[_task(MINE), _task(THEIRS, cluster_id="vdc-hexa"),
                                                      _task(NETWORK, status="pending")])
     response = client.get("/tasks/queue")
     assert response.status_code == 200, response.text

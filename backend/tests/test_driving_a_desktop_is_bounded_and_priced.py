@@ -336,7 +336,7 @@ def test_a_session_id_is_derived_so_it_grants_nothing() -> None:
     target = Target("nuc2", "default", "vm-a")
     assert session_id(target) == session_id(Target("nuc2", "default", "vm-a"))
     assert session_id(target) != session_id(Target("nuc2", "default", "vm-b"))
-    assert session_id(target) != session_id(Target("pandora", "default", "vm-a"))
+    assert session_id(target) != session_id(Target("panda", "default", "vm-a"))
 
 
 def test_a_guest_coordinate_comes_back_in_screenshot_pixels() -> None:

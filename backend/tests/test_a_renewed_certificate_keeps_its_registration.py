@@ -50,7 +50,7 @@ class _Session:
 def _grant(fingerprint):
     return BreakGlassGrant(
         api_key_id="oak_a",
-        cluster_id="hetzner",
+        cluster_id="hexa",
         cluster_fingerprint=fingerprint,
         reason="support",
         created_by="ops",
@@ -61,20 +61,20 @@ def _grant(fingerprint):
 @pytest.mark.asyncio
 async def test_a_key_grant_survives_a_public_ca_renewal() -> None:
     grant = _grant(OLD)
-    assert await get_active_key_grant(_Session(grant), "oak_a", "hetzner", pin_state=RENEWED) is grant
+    assert await get_active_key_grant(_Session(grant), "oak_a", "hexa", pin_state=RENEWED) is grant
 
 
 @pytest.mark.asyncio
 async def test_a_key_grant_for_another_registration_is_still_refused() -> None:
     grant = _grant(OTHER)
-    assert await get_active_key_grant(_Session(grant), "oak_a", "hetzner", pin_state=RENEWED) is None
+    assert await get_active_key_grant(_Session(grant), "oak_a", "hexa", pin_state=RENEWED) is None
 
 
 @pytest.mark.asyncio
 async def test_a_self_signed_change_still_ends_a_key_grant() -> None:
     grant = _grant(OLD)
     assert (
-        await get_active_key_grant(_Session(grant), "oak_a", "hetzner", pin_state=SELF_SIGNED)
+        await get_active_key_grant(_Session(grant), "oak_a", "hexa", pin_state=SELF_SIGNED)
         is None
     )
 
@@ -114,8 +114,8 @@ def _request(**overrides: Any) -> MigrationPlanCreateRequest:
     payload = {
         "scope": "instance",
         "intent": "copy",
-        "source": {"cluster_id": "hetzner", "project": "qa-src", "resource_name": "web"},
-        "target": {"cluster_id": "hetzner", "project": "qa-dst", "resource_name": "web-copy"},
+        "source": {"cluster_id": "hexa", "project": "qa-src", "resource_name": "web"},
+        "target": {"cluster_id": "hexa", "project": "qa-dst", "resource_name": "web-copy"},
         "mappings": {},
     }
     payload["source"].update(overrides.get("source", {}))
@@ -156,10 +156,10 @@ def _planner(monkeypatch, manager, *, pinning_on=True):
 @pytest.mark.asyncio
 async def test_a_plan_records_a_missing_pin_before_refusing(monkeypatch) -> None:
     """A cluster that was never pinned is pinned on demand instead of refusing every plan."""
-    manager = _Manager({}, pin_on_refresh={"hetzner": RENEWED})
+    manager = _Manager({}, pin_on_refresh={"hexa": RENEWED})
     service_ = _planner(monkeypatch, manager)
     assert await service_._fingerprints(_request()) == (NEW, NEW)
-    assert manager.refreshed == ["hetzner"]
+    assert manager.refreshed == ["hexa"]
 
 
 @pytest.mark.asyncio
@@ -169,7 +169,7 @@ async def test_a_plan_names_the_cluster_it_cannot_prove(monkeypatch) -> None:
     with pytest.raises(MigrationConflict) as raised:
         await service_._fingerprints(_request(target={"cluster_id": "nuc2"}))
     message = str(raised.value)
-    assert "<hetzner>" in message and "<nuc2>" not in message
+    assert "<hexa>" in message and "<nuc2>" not in message
     assert "re-pin" in message
 
 
@@ -185,7 +185,7 @@ async def test_a_plan_says_when_pinning_is_off(monkeypatch) -> None:
 async def test_a_plan_on_a_cluster_presenting_a_changed_certificate_is_refused_plainly(
     monkeypatch,
 ) -> None:
-    service_ = _planner(monkeypatch, _Manager({"hetzner": RENEWED}, refuse=True))
+    service_ = _planner(monkeypatch, _Manager({"hexa": RENEWED}, refuse=True))
     with pytest.raises(MigrationConflict) as raised:
         await service_._fingerprints(_request())
     assert "different server certificate" in str(raised.value)
@@ -193,21 +193,21 @@ async def test_a_plan_on_a_cluster_presenting_a_changed_certificate_is_refused_p
 
 @pytest.mark.asyncio
 async def test_a_selected_pre_renewal_fingerprint_is_still_the_same_cluster(monkeypatch) -> None:
-    service_ = _planner(monkeypatch, _Manager({"hetzner": RENEWED}))
+    service_ = _planner(monkeypatch, _Manager({"hexa": RENEWED}))
     request = _request(source={"cluster_fingerprint": OLD}, target={"cluster_fingerprint": OLD})
     assert await service_._fingerprints(request) == (NEW, NEW)
 
 
 @pytest.mark.asyncio
 async def test_a_selected_fingerprint_of_another_registration_is_refused(monkeypatch) -> None:
-    service_ = _planner(monkeypatch, _Manager({"hetzner": RENEWED}))
+    service_ = _planner(monkeypatch, _Manager({"hexa": RENEWED}))
     with pytest.raises(MigrationConflict):
         await service_._fingerprints(_request(source={"cluster_fingerprint": OTHER}))
 
 
 @pytest.mark.asyncio
 async def test_a_plan_approved_before_a_renewal_can_still_execute(monkeypatch) -> None:
-    service_ = _planner(monkeypatch, _Manager({"hetzner": RENEWED}))
+    service_ = _planner(monkeypatch, _Manager({"hexa": RENEWED}))
     plan = SimpleNamespace(source_cluster_fingerprint=OLD, target_cluster_fingerprint=OLD)
     assert await service_._renewed_since(_request(), plan) is True
     plan = SimpleNamespace(source_cluster_fingerprint=OTHER, target_cluster_fingerprint=OLD)
@@ -216,8 +216,8 @@ async def test_a_plan_approved_before_a_renewal_can_still_execute(monkeypatch) -
 
 def _job(fingerprint):
     return SimpleNamespace(
-        source_cluster_id="hetzner",
-        target_cluster_id="hetzner",
+        source_cluster_id="hexa",
+        target_cluster_id="hexa",
         source_cluster_fingerprint=fingerprint,
         target_cluster_fingerprint=fingerprint,
     )
@@ -262,9 +262,9 @@ async def test_a_plan_refresh_runs_on_the_bounded_pool(monkeypatch) -> None:
         calls.append(cluster_id)
         return lxd_service.connection_manager.refresh_pin(cluster_id)
 
-    manager = _Manager({}, pin_on_refresh={"hetzner": RENEWED})
+    manager = _Manager({}, pin_on_refresh={"hexa": RENEWED})
     service_ = _planner(monkeypatch, manager)
     monkeypatch.setattr(planning, "refresh_pin_for", bounded)
     await service_._fingerprints(_request())
-    assert calls == ["hetzner"]
+    assert calls == ["hexa"]
 

@@ -123,7 +123,7 @@ class RevisionGraphTests(unittest.TestCase):
             {"008_image_upload_sessions", "002_org_external_source"},
         )
 
-    def test_the_owner_set_merge_joins_the_hotfix_revision(self) -> None:
+    def test_the_owner_set_merge_joins_the_maintenance_revision(self) -> None:
         # A database from an earlier release line can sit at 015a, which branches from 015. This
         # merge is its only path to head, so both edges are pinned.
         script = _script_directory()

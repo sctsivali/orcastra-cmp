@@ -115,7 +115,7 @@ test("partner: a cluster whose hardware was not read says so instead of showing 
     ...jakarta(null, "lxd"),
     region_id: "id-3674", region_name: "Kota Tangerang Selatan", city: "Tangerang Selatan",
     province: "Banten", latitude: -6.2886, longitude: 106.7179, instance_count: 0, instance_running: 0,
-    nodes: [{ cluster_id: "blitz001", display_name: "BSD Lab", status: "offline", node_type: null, hardware: null }],
+    nodes: [{ cluster_id: "bliss001", display_name: "BSD Lab", status: "offline", node_type: null, hardware: null }],
   };
   const api = await openRegions(page, "partner", { ...PARTNER_BODY, regions: [PARTNER_BODY.regions[0], offline], total_nodes: 2 });
 

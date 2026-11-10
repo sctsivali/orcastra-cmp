@@ -179,14 +179,14 @@ def test_a_generic_failure_never_downgrades_an_authorization_one() -> None:
     from app.services.lxd.exceptions import LXDAuthorizationError
     from app.services.lxd.lxd_service import LXDService
 
-    cluster = "blitz001"
+    cluster = "bliss001"
     health.clear(cluster)
 
     class _Vault:
         # The connect path reads only <cluster>/metadata, never <cluster>/secrets.
         def vault_read(self, path):
             assert path.endswith("/metadata"), f"unexpected Vault read on a connect: {path}"
-            return {"endpoint": "https://10.1.1.49:9443"}
+            return {"endpoint": "https://10.9.8.49:9443"}
 
     class _Certs:
         vault = _Vault()
@@ -225,8 +225,8 @@ def test_a_tripped_cluster_still_reports_its_endpoint() -> None:
     """
     from app.services.lxd.lxd_service import LXDService
 
-    cluster = "blitzkrieg"
-    endpoint = "https://142.132.147.94:8443"
+    cluster = "blizzard"
+    endpoint = "https://93.184.215.14:8443"
 
     class _Vault:
         def vault_read(self, path):

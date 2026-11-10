@@ -17,7 +17,7 @@ from app.services.lxd.connection import LXDConnectionManager, TimeoutHTTPAdapter
 from app.services.lxd.exceptions import LXDConnectionError
 from app.services import metrics_collector as mc
 
-CLUSTER = "C2"
+CLUSTER = "C7"
 
 
 @pytest.fixture(autouse=True)
@@ -38,10 +38,10 @@ def manager(monkeypatch):
 
 def test_the_healer_tick_resyncs_the_whitelist_from_vault(manager, monkeypatch):
     """A worker that booted before the registration must list the cluster once it holds a client."""
-    manager._registered_clusters = {"blitz01"}
+    manager._registered_clusters = {"bliss01"}
     manager._clients[CLUSTER] = object()          # the healer had already connected it
-    manager._clients["blitz01"] = object()
-    assert manager.get_node_names() == ["blitz01"], "precondition: the stale whitelist hides C2"
+    manager._clients["bliss01"] = object()
+    assert manager.get_node_names() == ["bliss01"], "precondition: the stale whitelist hides C7"
 
     settings = types.SimpleNamespace(vault_enabled=True, vault_token="t", vault_addr="http://v", vault_clusters_path="secret/data/clusters")
     monkeypatch.setattr("app.core.config.get_settings", lambda: settings)
@@ -58,7 +58,7 @@ def test_the_healer_tick_resyncs_the_whitelist_from_vault(manager, monkeypatch):
             # only on a read that did, so the fake must say so too or an outage left in the
             # memo by an earlier test would make this cell order-dependent.
             vault_status.mark_readable()
-            return ["blitz01", CLUSTER]
+            return ["bliss01", CLUSTER]
 
     monkeypatch.setattr("app.services.lxd_cert_manager.LXDCertificateManager", _CertManager)
     manager.get_client = lambda cid: manager._clients.get(cid)  # type: ignore[assignment]
@@ -71,7 +71,7 @@ def test_the_healer_tick_resyncs_the_whitelist_from_vault(manager, monkeypatch):
     finally:
         vault_status.reset()
 
-    assert sorted(manager.get_node_names()) == sorted(["blitz01", CLUSTER])
+    assert sorted(manager.get_node_names()) == sorted(["bliss01", CLUSTER])
 
 
 def _sweep_with_registry(manager, monkeypatch, answer, *, readable: bool):
@@ -107,7 +107,7 @@ def _sweep_with_registry(manager, monkeypatch, answer, *, readable: bool):
 
 def test_a_lost_vault_list_does_not_blank_the_whitelist(manager, monkeypatch):
     """A Vault outage must not hide the fleet: the sweep syncs only a list Vault answered."""
-    manager._registered_clusters = {"blitz01", CLUSTER}
+    manager._registered_clusters = {"bliss01", CLUSTER}
     manager._clients[CLUSTER] = object()
 
     _sweep_with_registry(manager, monkeypatch, [], readable=False)
@@ -117,7 +117,7 @@ def test_a_lost_vault_list_does_not_blank_the_whitelist(manager, monkeypatch):
 def test_a_readable_empty_registry_does_clear_the_whitelist(manager, monkeypatch):
     """An empty list that Vault did answer means every cluster is deregistered, so the
     whitelist is cleared rather than left naming clusters that do not exist."""
-    manager._registered_clusters = {"blitz01", CLUSTER}
+    manager._registered_clusters = {"bliss01", CLUSTER}
     manager._clients[CLUSTER] = object()
 
     _sweep_with_registry(manager, monkeypatch, [], readable=True)

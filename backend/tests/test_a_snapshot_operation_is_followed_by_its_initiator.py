@@ -158,7 +158,7 @@ def test_the_daemons_text_is_redacted_in_the_200(cache):
     """A 200 never reaches the 5xx sanitizer, so the route redacts the operation's own text."""
     node = FakeInstanceNode()
     node.operation_status = {OP: "Failure"}
-    node.operation_err = {OP: "Failed to copy https://10.1.1.12:8443/1.0/storage-pools/default from /var/snap/lxd/common/lxd/storage-pools/default/containers/x"}
+    node.operation_err = {OP: "Failed to copy https://10.9.8.12:8443/1.0/storage-pools/default from /var/snap/lxd/common/lxd/storage-pools/default/containers/x"}
     _record()
     err = _read(node).json()["err"]
     assert "https://" not in err and "/var/snap/lxd/common" not in err, err

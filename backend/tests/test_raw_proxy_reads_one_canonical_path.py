@@ -120,8 +120,8 @@ def test_decoding_repeats_until_stable() -> None:
         ("/1.0/instances?Project=tenant-b", "/instances?project=tenant-a"),
         ("/1.0/instances?a%23=1", "/instances?a%23=1&project=tenant-a"),
         ("/1.0/instances#&project=tenant-b", "/instances?project=tenant-a"),
-        ("/1.0/instances/ATLAS-Semanan/snapshots/snap-%25Y%25m0-%25H%25M",
-         "/instances/ATLAS-Semanan/snapshots/snap-%25Y%25m0-%25H%25M?project=tenant-a"),
+        ("/1.0/instances/ATLAS-East/snapshots/snap-%25Y%25m0-%25H%25M",
+         "/instances/ATLAS-East/snapshots/snap-%25Y%25m0-%25H%25M?project=tenant-a"),
         ("/1.0", "/?project=tenant-a"),
     ],
 )

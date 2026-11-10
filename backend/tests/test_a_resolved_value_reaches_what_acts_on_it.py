@@ -47,14 +47,14 @@ async def test_delete_returns_the_project_it_actually_deleted_from(monkeypatch):
     target = SimpleNamespace(name="web-01", status="Stopped", stop=lambda **k: None, delete=lambda **k: None)
     monkeypatch.setattr(
         instance_module, "find_instance_in_projects",
-        lambda client, name, project=None: (target, "central2-rehearsal"),
+        lambda client, name, project=None: (target, "center2-rehearsal"),
     )
     mgr = InstanceManager.__new__(InstanceManager)
     monkeypatch.setattr(InstanceManager, "_get_client_with_reconnect", lambda self, host: object())
     monkeypatch.setattr(InstanceManager, "_rebind_for_wait", lambda self, i, h, p, t: i)
 
     resolved = await mgr.delete_vm("web-01", "nuc1")
-    assert resolved == "central2-rehearsal", (
+    assert resolved == "center2-rehearsal", (
         "the caller stamps tags, a webhook, an upstream event and the audit row with this"
     )
 

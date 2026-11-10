@@ -242,7 +242,7 @@ def test_the_second_config_key_counts_as_a_dependency():
 def test_an_instance_on_another_host_is_not_a_dependency():
     """Fingerprints are per-cluster. A row is (host, fingerprint), and so is the scan."""
     image = _FakeImage()
-    svc = _service(image, vms=[_VM("elsewhere-01", host="central2")])
+    svc = _service(image, vms=[_VM("elsewhere-01", host="center2")])
 
     r = _client(svc).delete(f"/images/{FP}", params={"host": HOST})
 

@@ -25,7 +25,7 @@ def _live_session():
         user_email="a@example.com",
         user_role="tenant",
         target_organization_id=6,
-        target_org_slug="sivali",
+        target_org_slug="sigma",
         break_glass_grant_id=42,
     )
     s.mark_connected()

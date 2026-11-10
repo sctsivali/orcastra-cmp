@@ -44,7 +44,7 @@ KEPT_NODE_FIELDS = (
 def _dashboard() -> MonitoringDashboardResponse:
     node = ClusterMonitoringMetrics(
         node_name="nuc2", node_type="microcloud", is_online=True, cluster_status="online",
-        status_message="Could not reach https://10.1.1.49:9443 on member nuc2-b",
+        status_message="Could not reach https://10.9.8.49:9443 on member nuc2-b",
         cpu_total=64, cpu_used=80, cpu_usage_percent=125.0, cpu_allocated=80,
         cpu_allocation_ratio=1.25, cpu_overcommitted=True, cpu_busy_threads=12.5,
         cpu_busy_percent=19.5, cpu_status="ready", cpu_reporting_instances=4,
@@ -96,7 +96,7 @@ def test_a_tenant_dashboard_carries_no_host_figure():
             continue
         assert value in (None, [], "unavailable"), f"node {field}={value!r} reached a tenant"
     wire = seen.model_dump_json()
-    for leaked in ("microcloud", "A100", "10.1.1.49", "nuc2-b", "zfs"):
+    for leaked in ("microcloud", "A100", "10.9.8.49", "nuc2-b", "zfs"):
         assert leaked not in wire, f"{leaked!r} reached a tenant"
 
 

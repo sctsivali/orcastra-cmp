@@ -87,13 +87,13 @@ def _targets(posts):
 
 def test_an_ovn_network_on_a_cluster_is_one_cluster_wide_post(monkeypatch) -> None:
     client, nets = _app(monkeypatch, clustered=True)
-    r = client.post("/networks", params={"host": "mc-lab", "project": "UAT-Hermes"}, json={
+    r = client.post("/networks", params={"host": "mc-lab", "project": "UAT-Herald"}, json={
         "name": "ovn-qa", "type": "ovn", "config": {"network": "UPLINK", "ipv4.address": "192.168.9.1/24"},
     })
     assert r.status_code == 200, r.text
     assert _targets(nets.posts) == [None], "no per-member define for a type without member config"
     assert nets.posts[0]["json"]["config"]["network"] == "UPLINK"
-    assert nets.posts[0]["params"]["project"] == "UAT-Hermes"
+    assert nets.posts[0]["params"]["project"] == "UAT-Herald"
 
 
 def test_a_bridge_on_a_cluster_is_defined_per_member_then_created(monkeypatch) -> None:

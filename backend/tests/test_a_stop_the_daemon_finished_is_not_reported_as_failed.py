@@ -42,7 +42,7 @@ class _Vm:
 def _manager(vm, monkeypatch) -> InstanceManager:
     mgr = InstanceManager.__new__(InstanceManager)
     monkeypatch.setattr(mgr, "_get_client_with_reconnect", lambda host: object(), raising=False)
-    monkeypatch.setattr(mgr, "_get_node_endpoint", lambda host: "https://10.1.1.242:8443", raising=False)
+    monkeypatch.setattr(mgr, "_get_node_endpoint", lambda host: "https://10.9.8.242:8443", raising=False)
     monkeypatch.setattr(mgr, "_rebind_for_wait", lambda instance, host, project, timeout: instance, raising=False)
     monkeypatch.setattr(mgr, "_instance_to_vm_info", lambda instance, host, endpoint: type("V", (), {"status": instance.status, "project": None})(), raising=False)
     monkeypatch.setattr(instance_module, "find_instance_in_projects", lambda client, name, project: (vm, "default"))
