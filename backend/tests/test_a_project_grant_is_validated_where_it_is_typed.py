@@ -53,9 +53,9 @@ def test_a_fullwidth_asterisk_is_refused_rather_than_folded_into_a_wildcard():
 
 
 def test_case_is_preserved_because_enforcement_compares_exactly():
-    """Two clusters can hold `Rye-Labs` and `ryo-labs`; each is granted as spelled."""
+    """Two clusters can hold `Rye-Labs` and `rye-labs`; each is granted as spelled."""
     assert _grant(["Rye-Labs"]).projects == ["Rye-Labs"]
-    assert _grant(["Rye-Labs", "ryo-labs"]).projects == ["Rye-Labs", "ryo-labs"]
+    assert _grant(["Rye-Labs", "rye-labs"]).projects == ["Rye-Labs", "rye-labs"]
 
 
 def test_surrounding_whitespace_is_trimmed():
