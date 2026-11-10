@@ -4,10 +4,9 @@ services:
     image: postgres:17-alpine
     container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-postgres
     restart: always
-    # important: loopback by default, the same rule as Redis below. The backend reaches Postgres
-    # over the compose network; a bare port published it on every interface, so the LAN and the
-    # tailnet could reach the database login. POSTGRES_PORT keeps its "[address:]port" form for a
-    # deployment that deliberately exposes it (POSTGRES_PORT=0.0.0.0:5432).
+    # important: bound to loopback by default. The backend uses the compose network, and a bare
+    # port would expose the database login on every interface. POSTGRES_PORT accepts
+    # "[address:]port" to expose it on purpose (POSTGRES_PORT=0.0.0.0:5432).
     ports:
       - "${POSTGRES_PORT:-127.0.0.1:5432}:5432"
     environment:
@@ -30,9 +29,8 @@ services:
     image: redis:8-alpine
     container_name: ${CONTAINER_PREFIX:-dev-orcastra-dashboard}-redis
     restart: always
-    # important: loopback only. Redis runs without a password and the backend reaches it over
-    # the compose network; publishing it on every interface let anyone on the LAN read and
-    # write sessions, tickets and cached authorization state.
+    # important: loopback only. Redis has no password, and on a public interface anyone could
+    # read and write sessions, tickets and cached authorization state.
     ports:
       - "127.0.0.1:${REDIS_PORT:-6381}:6379"
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
@@ -47,14 +45,14 @@ services:
     volumes:
       - redis-data:/data
 
-  # Backend API (api.orcastra.io)
+  # Backend API
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
       args:
         - APP_VERSION=${APP_VERSION:-latest}
-        # Provenance: the version string is for humans, the commit is what identifies the code.
+        # The version string is for humans; the commit identifies the code.
         - BUILD_COMMIT=${BUILD_COMMIT:-}
         - BUILD_DATE=${BUILD_DATE:-}
     image: ${CONTAINER_PREFIX:-dev-orcastra-dashboard}-backend:${APP_VERSION:-latest}
@@ -67,10 +65,9 @@ services:
     environment:
       - APP_VERSION=${APP_VERSION:-latest}
       - API_VERSION=${API_VERSION:-latest}
-      # DEBUG intentionally comes only from env_file. Generic host tooling commonly exports a
-      # non-boolean DEBUG value, and Compose interpolation would override the deployment value.
-      # Keep migrations enabled for normal starts. A reviewed application-only rollback across
-      # an additive schema may set this false so an older image does not reject the newer stamp.
+      # DEBUG intentionally comes only from env_file: host tooling often exports a non-boolean
+      # DEBUG that Compose interpolation would pick up. Keep migrations on; set RUN_MIGRATIONS=false only
+      # for an application-only rollback across an additive schema.
       - RUN_MIGRATIONS=${RUN_MIGRATIONS:-true}
       - DATABASE_URL=${DATABASE_URL}
 
@@ -89,17 +86,14 @@ services:
       # OpenSearch Archive (optional - for log archive management API)
       - OPENSEARCH_ARCHIVE_ENABLED=${OPENSEARCH_ARCHIVE_ENABLED:-false}
 
-      # Orcastra's own recurring snapshot schedules, and the loop that runs them. Off by default:
-      # a scheduler that starts taking snapshots on live customer clusters as a side effect of a
-      # deploy is not a deliberate act. The flag gates the routes as well as the loop, so a
-      # deployment that has not turned it on has no surface rather than one that answers and
-      # never fires. Runtime only, no rebuild.
+      # Recurring snapshot schedules. Off by default so a deploy never starts taking snapshots
+      # on live clusters by itself. The flag gates the routes as well as the loop. Runtime only.
       - SNAPSHOT_SCHEDULES_ENABLED=${SNAPSHOT_SCHEDULES_ENABLED:-false}
       - SNAPSHOT_SCHEDULE_TICK_SECONDS=${SNAPSHOT_SCHEDULE_TICK_SECONDS:-30}
       - SNAPSHOT_SCHEDULE_BATCH=${SNAPSHOT_SCHEDULE_BATCH:-8}
-      # Instance copy and move and project relocation are on by default, and each flag below is
-      # a kill switch. PROJECT_RELOCATION_ENABLED gates every project stage at once. Daemon builds
-      # must meet the patched-version policy, or be listed in MIGRATION_BUILD_ALLOW.
+      # Instance copy, move and project relocation are on by default; each flag is a kill
+      # switch, and PROJECT_RELOCATION_ENABLED gates every project stage. Daemon builds must meet
+      # the patched-version policy or be listed in MIGRATION_BUILD_ALLOW.
       - MIGRATION_CENTER_ENABLED=${MIGRATION_CENTER_ENABLED:-true}
       - PROJECT_RELOCATION_ENABLED=${PROJECT_RELOCATION_ENABLED:-true}
       - MIGRATION_DURABLE_COPY_ENABLED=${MIGRATION_DURABLE_COPY_ENABLED:-true}
@@ -147,20 +141,15 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-    # Resource limits: ensures Dashboard Host shows container resources, not the host
-    # Measured, not guessed: four uvicorn workers sat at 587/524/461/446 MB under QA load,
-    # 2018 MB against a 2g cap, and the kernel OOM-killed two of them. That failure is silent
-    # (RestartCount stays 0, the healthcheck passes, no ERROR line is logged) and shows up
-    # only as dropped requests and severed console sessions. vm4 is specified at 8 GB, so the
-    # backend was simply under-provisioned. Scale this up further as clusters are added:
-    # per-worker memory grows with the number of registered clusters.
+    # Resource limits, also what Dashboard Host reports for the container. Four workers use
+    # roughly 2 GB under load, and an OOM-killed worker is silent (RestartCount stays 0, the
+    # healthcheck passes) apart from dropped requests and cut console sessions. Per-worker
+    # memory grows with the number of registered clusters, so raise this as clusters are added.
     mem_limit: ${BACKEND_MEM_LIMIT:-4g}
     cpus: ${BACKEND_CPUS:-2}
     healthcheck:
-      # Kept identical to docker-compose.prod.yml and the Dockerfile HEALTHCHECK, so a probe
-      # verified here is the probe that runs in production. The probe carries its own 3s
-      # timeout: without one, a hung probe is indistinguishable from a hung app, which is the
-      # same defect class this release fixes in the app itself.
+      # Same probe as docker-compose.prod.yml and the Dockerfile HEALTHCHECK. Its own 3s
+      # timeout keeps a hung probe distinguishable from a hung app.
       test: ["CMD", "python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:4050/health', timeout=3).status == 200 else 1)"]
       interval: 15s
       timeout: 5s
@@ -174,7 +163,7 @@ services:
     tmpfs:
       - /tmp:mode=1777,size=${BACKEND_TMPFS_SIZE:-256m}
 
-  # Frontend (app.orcastra.io)
+  # Frontend
   frontend:
     build:
       context: ./frontend
@@ -183,14 +172,13 @@ services:
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
         - NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL=${NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL}
         - APP_VERSION=${APP_VERSION:-latest}
-        # Provenance, same as the backend: the version string is for humans, the commit
-        # identifies the code.
+        # Same as the backend: the commit identifies the code.
         - BUILD_COMMIT=${BUILD_COMMIT:-}
         - BUILD_DATE=${BUILD_DATE:-}
         - AUTHENTIK_ISSUER=${AUTHENTIK_ISSUER}
         - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID}
-        # NOTE: AUTHENTIK_CLIENT_SECRET and NEXTAUTH_SECRET are injected at
-        # runtime via environment: block - never bake secrets into image layers
+        # important: AUTHENTIK_CLIENT_SECRET and NEXTAUTH_SECRET are injected at runtime
+        # through the environment block. Never bake secrets into image layers.
     image: ${CONTAINER_PREFIX:-dev-orcastra-dashboard}-frontend:${APP_VERSION:-latest}
     container_name: ${CONTAINER_PREFIX:-dev-orcastra-dashboard}-frontend
     restart: always
@@ -199,21 +187,19 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
       - NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL=${NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL}
-      # Sidebar support links. Left unset the dashboard uses the Orcastra project's own
-      # issue tracker and community forum, which are baked into the image. Point them at
-      # your own to redirect reports from a fork. Runtime only, no rebuild.
+      # Sidebar support links. Unset, the Orcastra project's issue tracker and forum are used.
+      # Runtime only, no rebuild.
       - NEXT_PUBLIC_BUG_REPORT_URL=${NEXT_PUBLIC_BUG_REPORT_URL:-}
       - NEXT_PUBLIC_COMMUNITY_URL=${NEXT_PUBLIC_COMMUNITY_URL:-}
-      # important: opt-in. This is re-emitted as the client IP the backend trusts, and
-      # this port is reachable directly, so a caller can otherwise choose the address
-      # it is rate-limited and audited by. Set true only behind a real reverse proxy.
+      # important: opt-in. The frontend re-emits these headers as the client IP the backend
+      # trusts, and this port is reachable directly, so enabling it without a real reverse
+      # proxy lets a caller pick the address it is rate-limited and audited by.
       - FORWARD_CLIENT_IP_HEADERS=${FORWARD_CLIENT_IP_HEADERS:-false}
       - TRUSTED_CLIENT_IP_HEADERS=${TRUSTED_CLIENT_IP_HEADERS:-cf-connecting-ip,true-client-ip,cf-connecting-ipv6,x-forwarded-for,x-real-ip}
       # Internal Docker URL for server-side API proxying
       - INTERNAL_BACKEND_URL=http://backend:4050
-      # Regions map basemap. Left unset the dashboard draws the outline map bundled with
-      # the image: no outbound request, no API key, works air-gapped. Point MAP_TILE_URL at
-      # an XYZ tile template to use your own provider instead. Runtime only, no rebuild.
+      # Regions map basemap. Unset, the bundled outline map is drawn (no outbound request,
+      # works air-gapped). MAP_TILE_URL takes an XYZ tile template. Runtime only, no rebuild.
       - MAP_TILE_URL=${MAP_TILE_URL:-}
       - MAP_TILE_URL_DARK=${MAP_TILE_URL_DARK:-}
       - MAP_TILE_ATTRIBUTION=${MAP_TILE_ATTRIBUTION:-}
@@ -241,8 +227,7 @@ services:
       retries: 3
       start_period: 30s
 
-  # Fluent Bit Log Collector (Sidecar)
-  # Runs alongside application to collect and ship logs to OpenSearch
+  # Fluent Bit sidecar: collects container logs and ships them to OpenSearch
   fluent-bit:
     image: fluent/fluent-bit:4.2.2-debug
     container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-fluent-bit
@@ -255,13 +240,13 @@ services:
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/log/containers:/var/log/containers:ro
     environment:
-      # OpenSearch connection (deployed on orcastra-logging VM)
+      # OpenSearch connection
       - OPENSEARCH_HOST=${OPENSEARCH_HOST:?OPENSEARCH_HOST is required}
       - OPENSEARCH_PORT=${OPENSEARCH_PORT:-9200}
       - OPENSEARCH_USER=${OPENSEARCH_USER:-fluentbit}
       - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:?OPENSEARCH_PASSWORD is required}
-      # Disk buffer per log stream while OpenSearch cannot take logs (storage.total_limit_size in
-      # config/fluent-bit/fluent-bit.conf). Size it to the host: the defaults need 14G free.
+      # Disk buffer per log stream while OpenSearch is unavailable (storage.total_limit_size in
+      # config/fluent-bit/fluent-bit.conf). The defaults need 14G free on the host.
       - FLUENT_BIT_ACCESS_BUFFER_LIMIT=${FLUENT_BIT_ACCESS_BUFFER_LIMIT:-2G}
       - FLUENT_BIT_AUDIT_BUFFER_LIMIT=${FLUENT_BIT_AUDIT_BUFFER_LIMIT:-8G}
       - FLUENT_BIT_APP_BUFFER_LIMIT=${FLUENT_BIT_APP_BUFFER_LIMIT:-4G}
@@ -271,13 +256,13 @@ services:
       - backend
       - frontend
     healthcheck:
-      # -debug image includes curl for proper HTTP health check
+      # The -debug image includes curl for the HTTP health check
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:2020/api/v1/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
-    # Optional: Enable log driver forwarding (alternative to volume mount)
+    # Optional: forward through the Docker log driver instead of the volume mount
     # logging:
     #   driver: fluentd
     #   options:

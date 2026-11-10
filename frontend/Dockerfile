@@ -24,22 +24,20 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # Build arguments for version management
-# Empty, not a version: an unstamped build must report "unknown" rather than claim an old release.
+# Empty by default, so an unstamped build reports "unknown" instead of an old release.
 ARG APP_VERSION=""
 
-# Auth build arguments - ONLY public/non-secret values needed at build time
-# Secrets (CLIENT_SECRET, NEXTAUTH_SECRET) are injected at RUNTIME via env vars
+# Build-time auth arguments: public values only. Secrets (CLIENT_SECRET, NEXTAUTH_SECRET) are
+# injected at runtime.
 ARG AUTHENTIK_ISSUER
 ARG AUTHENTIK_CLIENT_ID
 
-# NEXT_PUBLIC_* vars use placeholder URLs at build time.
-# Actual values are injected at container startup via entrypoint.sh
+# NEXT_PUBLIC_* values are placeholders at build time; entrypoint.sh swaps in the real values.
 ENV NEXT_PUBLIC_API_URL=http://NEXT_PUBLIC_API_URL_PLACEHOLDER
 ENV NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL=http://NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL_PLACEHOLDER
-# The two support links below use their real default as the swap pattern rather than an
-# invented placeholder. An ENV set here is truthy during the build, so `process.env.X ||
-# DEFAULT` in the bundle can never fall back; leaving the variable unset at runtime would
-# otherwise ship a link pointing at a placeholder host.
+# The support links use their real default as the swap pattern: an ENV set here is truthy at
+# build time, so `process.env.X || DEFAULT` never falls back, and an unset runtime variable
+# must still leave a working link.
 ENV NEXT_PUBLIC_BUG_REPORT_URL=https://github.com/sctsivali/orcastra-cmp/issues/new
 ENV NEXT_PUBLIC_COMMUNITY_URL=https://discourse.orca.id
 ENV APP_VERSION=$APP_VERSION
@@ -57,13 +55,11 @@ RUN \
   else npm run build; \
   fi
 
-# Production image, copy all the files and run next
+# Production image
 FROM base AS runner
 WORKDIR /app
 
-# Provenance on the artifact, matching the backend image. Without it `docker image inspect` on a
-# running frontend says nothing about which commit produced it, which is exactly the question
-# that matters when a deployed image and the working tree disagree.
+# Image labels, as in the backend image, so `docker image inspect` identifies the build.
 ARG APP_VERSION=latest
 ARG BUILD_COMMIT=""
 ARG BUILD_DATE=""
@@ -86,7 +82,7 @@ COPY --from=builder /app/public ./public
 RUN mkdir .next
 RUN chown nextjs:nodejs .next
 
-# Automatically leverage output traces to reduce image size
+# Standalone output traces keep the image small
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
@@ -101,9 +97,8 @@ EXPOSE 2025
 ENV PORT=2025
 ENV HOSTNAME="0.0.0.0"
 
-# Health check: liveness only, must stay in sync with docker-compose.prod.yml. /healthz answers
-# from the process and calls nothing; Node's http.get never follows a redirect, so an auth 3xx
-# can never turn into a probe of the public edge (that loop restarted a healthy frontend).
+# Liveness only; keep in sync with docker-compose.prod.yml. /healthz answers from the process,
+# and Node's http.get never follows the auth redirect out to the public edge.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD ["node", "-e", "require('http').get({host:'127.0.0.1',port:2025,path:'/healthz',timeout:5000},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1)).on('timeout',()=>process.exit(1))"]
 

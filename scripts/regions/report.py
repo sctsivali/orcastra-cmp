@@ -1,6 +1,6 @@
 """Render the verification report committed next to the catalogue.
 
-Deterministic on purpose: no run timestamps, so `--check` can compare a rebuild byte for byte.
+Deterministic: no run timestamps, so `--check` can compare a rebuild byte for byte.
 """
 
 from __future__ import annotations

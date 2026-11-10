@@ -1,11 +1,11 @@
 # Backend Dockerfile for the Orcastra CMP API
-# note: pinned by digest, so a rebuild does not pick up whatever the floating tag points at that day.
+# Pinned by digest so rebuilds are reproducible.
 FROM python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9 as base
 
 # Build arguments for version management
-# Empty, not a version: an unstamped build must report "unknown" rather than claim an old release.
+# Empty by default, so an unstamped build reports "unknown" instead of an old release.
 ARG APP_VERSION=""
-# Provenance. APP_VERSION is a mutable label, the commit is the truth about what is running.
+# APP_VERSION is a label; the commit identifies what is running.
 ARG BUILD_DATE=""
 ARG BUILD_COMMIT=""
 
@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install dependencies (this layer is cached unless requirements.txt or constraints.txt changes)
+# Dependencies (cached unless requirements.txt or constraints.txt changes)
 COPY requirements.txt constraints.txt ./
 RUN pip install --no-cache-dir --user -r requirements.txt
 
@@ -36,29 +36,22 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 FROM base as runtime
 WORKDIR /app
 
-# Create non-root user first.
+# Non-root user.
 #
-# important: the uid is pinned. It was implicit before, and happened to be 1000, but the
-# uploads directory is a host bind mount (/var/orcastra/uploads in docker-compose.prod.yml) and
-# Docker creates a missing bind-mount source root-owned. The operator therefore has to chown it
-# to this exact uid, and "whatever the base image assigned this build" is not something they can
-# be asked to look up. Pinning it makes the go-live step writable down as a number.
+# important: the uid is pinned. The uploads directory is a host bind mount
+# (/var/orcastra/uploads in docker-compose.prod.yml) that Docker creates root-owned when missing,
+# so operators must chown it to this exact uid.
 RUN useradd --create-home --shell /bin/bash --uid 1000 appuser
 
-# Create the directories the app writes to and hand them to appuser.
-#
-# important: /app/uploads is included even though a bind mount usually covers it. When the mount
-# is present this is harmless; when it is absent, or when the host source did not exist and
-# Docker created it root-owned, the difference is between an upload that works and a bare 500 on
-# the first PATCH that also strands a session row holding one of only two slots.
+# Directories the app writes to, owned by appuser. /app/uploads is included for when the bind
+# mount is absent; otherwise the first upload PATCH fails with a 500 and strands a session slot.
 RUN mkdir -p /app/config /app/uploads \
     && chown appuser:appuser /app/config /app/uploads
 
 # Copy installed dependencies from builder and set ownership
 COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
 
-# Copy Alembic migrations + config so the entrypoint can run `alembic upgrade head`
-# on start (DB schema stays in lockstep with the code on every deploy).
+# Alembic migrations and config, applied by the entrypoint on every start.
 COPY --chown=appuser:appuser alembic.ini ./
 COPY --chown=appuser:appuser alembic ./alembic
 
@@ -75,8 +68,7 @@ USER appuser
 # Make sure pip packages are in PATH
 ENV PATH=/home/appuser/.local/bin:$PATH
 
-# Provenance on the artifact as well as in the app, so the running image can be identified
-# from `docker image inspect` even without reaching the API.
+# Image labels, so `docker image inspect` identifies the build without reaching the API.
 LABEL org.opencontainers.image.title="orcastra-dashboard-backend" \
       org.opencontainers.image.version="${APP_VERSION}" \
       org.opencontainers.image.revision="${BUILD_COMMIT}" \
@@ -85,35 +77,25 @@ LABEL org.opencontainers.image.title="orcastra-dashboard-backend" \
 # Expose port
 EXPOSE 4050
 
-# Health check.
-# The probe MUST carry its own timeout. Relying on Docker's --timeout to SIGKILL a hung probe
-# makes "the probe wedged" and "the app wedged" indistinguishable. 3s sits below the 5s Docker
-# timeout so the probe always self-terminates first and reports a real failure.
-# start-period covers `alembic upgrade head` plus Vault and LXD reconnect on a cold start; the
-# previous 5s marked a normally-booting container unhealthy.
-# Values are kept identical to docker-compose.prod.yml on purpose. Compose wins at runtime,
-# this is what a bare `docker run` of the image gets.
+# Health check, identical to docker-compose.prod.yml (compose overrides it at runtime).
+# The probe's own 3s timeout sits below Docker's 5s, so a hung probe reports a real failure
+# instead of being killed. start-period covers migrations plus Vault and LXD reconnects.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=120s --retries=5 \
     CMD python -c "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:4050/health', timeout=3).status == 200 else 1)" || exit 1
 
-# Worker count comes from WEB_CONCURRENCY (uvicorn's documented fallback for --workers) so it
-# can be tuned from compose or .env during an incident without a rebuild and registry round
-# trip. The default preserves the previous behaviour exactly.
+# Worker count from WEB_CONCURRENCY (uvicorn's fallback for --workers), tunable without a rebuild.
 ENV WEB_CONCURRENCY=4
 
 # Entrypoint applies migrations, then runs the CMD (the app server)
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 # Run the application.
-# --timeout-graceful-shutdown: uvicorn otherwise waits indefinitely for open connections, and
-#   the long-lived WebSocket surfaces (terminal, console, monitoring, events) never close on
-#   their own, so every deploy became a hard SIGKILL that cut live sessions mid-command.
-# --limit-concurrency: memory guard. Beyond this uvicorn returns 503 instead of queueing
-#   without bound. Sized high because WebSocket connections occupy the same budget.
-#   note: this does NOT rescue a wedged worker, a blocked loop cannot return a 503 either.
-# --ws-per-message-deflate false: SPICE frames arrive already compressed (QUIC, LZ, JPEG), and
-#   zlib over every 32 KiB frame ran on the event loop, adding latency to the console's display
-#   and input for no size gain. The JSON feeds are small enough not to need it.
+# --timeout-graceful-shutdown: long-lived WebSockets (terminal, console, monitoring, events)
+#   never close on their own, so without a bound every deploy ends in SIGKILL.
+# --limit-concurrency: memory guard; beyond it uvicorn answers 503 instead of queueing. Sized
+#   high because WebSockets share the budget. It cannot help a worker whose loop is blocked.
+# --ws-per-message-deflate false: SPICE frames are already compressed, and zlib on every frame
+#   would run on the event loop and add console latency for no gain.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "4050", \
      "--timeout-graceful-shutdown", "20", \
      "--limit-concurrency", "200", \

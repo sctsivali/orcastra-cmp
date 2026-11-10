@@ -1,21 +1,8 @@
 # Python lint for backend/app.
 #
-# The scope is deliberately narrow. E9 and F are the bug-shaped rules: syntax errors, undefined
-# names, imports that do not resolve, locals referenced before assignment. They can be green on
-# day one, so the gate means something immediately rather than being a wall of style findings
-# everybody learns to ignore.
-#
-# Adding this found two latent crashes on paths nothing exercised: a NameError on the
-# permission-add retry (routers/permissions.py) and an UnboundLocalError in the certificate
-# expiry branch (routers/lxd_warnings.py), plus a route handler shadowing another of the same
-# name in routers/storage_pools.py.
-#
-# `pylint app/` is deliberately NOT used. There is no pylintrc anywhere, and unconfigured pylint
-# on 42k lines of FastAPI and SQLAlchemy emits thousands of missing-docstring and
-# too-many-arguments findings, so it could not be green without a curated disable-list first.
-#
-# Widening: add rule families one at a time and land the cleanup in its own commit, so a red
-# gate is never the normal state.
+# E9 and F only: syntax errors, undefined names, unresolved imports, locals used before
+# assignment. These find real bugs and stay green, so a failure always means something.
+# Widen one rule family at a time, with its cleanup in its own commit.
 
 target-version = "py312"
 line-length = 120
@@ -24,5 +11,5 @@ line-length = 120
 select = ["E9", "F"]
 
 [lint.per-file-ignores]
-# Alembic revision files carry the generated header and unused imports by convention.
+# Alembic revision files keep the generated imports even when unused.
 "alembic/versions/*.py" = ["F401"]

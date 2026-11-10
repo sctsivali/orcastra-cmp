@@ -1,8 +1,8 @@
-"""The 100 region ids the catalogue shipped with before it covered every kabupaten and kota.
+"""The 100 original region ids, from before the catalogue covered every kabupaten and kota.
 
-Clusters registered back then store those ids in their location metadata, so every one must
-keep resolving: 98 map onto the kota they always meant, and two (the province-wide Jakarta
-entry and IKN) become hidden legacy entries. The comparison rows feed the build report.
+Clusters may store those ids in their location metadata, so every one must keep resolving: 98
+map onto the kota they stand for, and two (the province-wide Jakarta entry and IKN) become
+hidden legacy entries. The comparison rows feed the build report.
 """
 
 from __future__ import annotations

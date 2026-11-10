@@ -26,7 +26,7 @@ def haversine_km(a: LatLng, b: LatLng) -> float:
 
 
 def _point_in_ring(point: LatLng, ring: Sequence[LatLng]) -> bool:
-    # even-odd ray cast along the latitude line through the point
+    # Even-odd ray cast along the latitude line through the point.
     lat, lng = point
     inside = False
     j = len(ring) - 1
@@ -60,8 +60,8 @@ def point_in_rings(point: LatLng, rings: Sequence[Ring]) -> bool:
 
 
 def _segment_distance_km(p: LatLng, a: LatLng, b: LatLng) -> float:
-    # note: local equirectangular projection around p. Exact enough for the few-km
-    # tolerances used here; it is only ever asked "is the point near this edge".
+    # Local equirectangular projection around p. Exact enough for the few-km tolerances used
+    # here; it only answers "is the point near this edge".
     k = math.cos(math.radians(p[0]))
     px, py = 0.0, 0.0
     ax, ay = (a[1] - p[1]) * k, a[0] - p[0]
@@ -96,8 +96,8 @@ def contains(point: LatLng, shape: MultiPolygon, tolerance_km: float = 0.0) -> b
 def ring_area(ring: Sequence[LatLng]) -> float:
     """Shoelace area in square degrees of longitude scaled by cos(latitude).
 
-    Only ever used to rank rings against each other, so a flat projection around the ring's
-    own mean latitude is enough. Unscaled degrees would rank Alaska above most of Europe.
+    Used only to rank rings against each other, so a flat projection around the ring's own
+    mean latitude is enough. Unscaled degrees would rank Alaska above most of Europe.
     """
     if len(ring) < 3:
         return 0.0
@@ -111,8 +111,8 @@ def ring_area(ring: Sequence[LatLng]) -> float:
 
 
 def simplify_ring(ring: Sequence[LatLng], tolerance: float) -> Ring:
-    # iterative Douglas-Peucker (recursion would overflow on the longer coastlines); the same
-    # algorithm frontend/scripts/build-basemap.mjs applies to the basemap
+    # Iterative Douglas-Peucker (recursion would overflow on the longer coastlines); the same
+    # algorithm frontend/scripts/build-basemap.mjs applies to the basemap.
     points = list(ring)
     if len(points) < 3:
         return points

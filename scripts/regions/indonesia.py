@@ -3,8 +3,8 @@
 Kepmendagri is the legal authority for codes, names and seats, so those come from it (with the
 corrections in curation.py). Its coordinate column is not a seat location, though: for a large
 share of rows it is a point somewhere inside the area, up to tens of kilometres from the town.
-So the point comes from the GeoNames populated place that carries the seat's name AND lies
-inside the regency's own geoBoundaries polygon, which is what picks the right Martapura out of
+The point therefore comes from the GeoNames populated place that carries the seat's name and
+lies inside the regency's own geoBoundaries polygon, which picks the right Martapura out of
 several. Every chosen point must then be corroborated by a second source within 10 km.
 """
 
@@ -23,14 +23,14 @@ from geo import LatLng, MultiPolygon, bbox, contains, haversine_km
 from sources import AdminArea, OsmOffice, Place, parse_wkt_point
 
 TZ_BY_UTC_HOURS = {7: "Asia/Jakarta", 8: "Asia/Makassar", 9: "Asia/Jayapura"}
-# note: Kepmendagri 300.2.2-2430 Tahun 2025 totals; a refreshed source that drifts fails the build
+# Kepmendagri 300.2.2-2430 Tahun 2025 totals; a refreshed source that drifts fails the build.
 EXPECTED_COUNTS = {"provinces": 38, "kabupaten": 416, "kota": 98}
 
 POLYGON_TOLERANCE_KM = 1.0
 CORROBORATION_KM = 10.0
-# a mapped regent's or mayor's office is the seat by definition; this only guards a mis-tag
+# A mapped regent's or mayor's office is the seat by definition; this only guards a mis-tag.
 OFFICE_SANITY_KM = 30.0
-# two sources this close did not measure independently; one copied the other
+# Two sources this close did not measure independently; one copied the other.
 SAME_ORIGIN_KM = 0.1
 FUZZY_RATIO = 0.88
 FEATURE_RANK = {"PPLC": 0, "PPLA": 1, "PPLA2": 2, "PPLA3": 3, "PPLA4": 4, "PPL": 5, "PPLX": 6, "ADM3": 8}
@@ -172,8 +172,8 @@ def _seat_candidates(keys: List[str], shape: MultiPolygon, index: PlaceIndex) ->
                 found.append((rank, p, False))
     if found:
         return sorted(found, key=lambda t: t[0])
-    # note: spelling drifts between sources (Taluk/Teluk Kuantan, Nanga/Nangah Pinoh). Fuzzy
-    # matching is safe only because the candidate must also sit inside the polygon.
+    # Spelling drifts between sources (Taluk/Teluk Kuantan, Nanga/Nangah Pinoh). Fuzzy matching
+    # is safe only because the candidate must also sit inside the polygon.
     for p in index.in_box(shape):
         names = {place_key(n) for n in p.names}
         for ki, key in enumerate(keys):
@@ -201,7 +201,7 @@ def _witnesses(
     for pool, rank in ((named, 0), (generic, 1)):
         inside = [o for o in pool if contains((o.lat, o.lng), shape, POLYGON_TOLERANCE_KM)]
         if rank == 1 and len(inside) != 1:
-            continue  # an unnamed office only counts when it is the only one in the polygon
+            continue  # An unnamed office only counts when it is the only one in the polygon.
         for o in sorted(inside, key=lambda o: haversine_km((o.lat, o.lng), kemendagri_point)):
             out.append(Witness("osm-office", f"osm:{o.osm_id} {o.name}", (o.lat, o.lng), rank))
         if inside:
@@ -213,7 +213,7 @@ def _witnesses(
     for r in wd_rows:
         for key, label in (("seatCoord", "wikidata seat"), ("coord", "wikidata kota")):
             if key == "coord" and kind != "kota":
-                continue  # a kabupaten's own P625 is usually its centroid, not its seat
+                continue  # A kabupaten's own P625 is usually its centroid, not its seat.
             point = parse_wkt_point(r.get(key, ""))
             if point and contains(point, shape, POLYGON_TOLERANCE_KM):
                 same = haversine_km(point, kemendagri_point) <= SAME_ORIGIN_KM
@@ -244,11 +244,11 @@ def _choose_point(witnesses: List[Witness]) -> Tuple[Optional[Witness], set, str
 
 
 def _shorten_names(entries: List[Dict[str, object]]) -> None:
-    """Show the place name alone ("Garut", not "Kabupaten Garut").
+    """Show the place name alone: "Garut" for "Kabupaten Garut".
 
-    Only where a kabupaten and a kota share a name (Bogor, Malang, Sorong, 26 pairs) does the
-    kind comes back, in English, as "Bogor (City)" and "Bogor (Regency)", because the two are different places
-    with different points. official_name keeps the Kepmendagri form.
+    Where a kabupaten and a kota share a name (Bogor, Malang, Sorong, 26 pairs), the kind is added
+    in English, "Bogor (City)" and "Bogor (Regency)", because the two are different places with
+    different points. official_name keeps the Kepmendagri form.
     """
     bases = collections.Counter(split_name(str(e["official_name"]))[1] for e in entries)
     for e in entries:
@@ -354,7 +354,7 @@ def build(
             witnesses = _witnesses(kind, base, shape, kemendagri_point, wd_rows, candidates, offices)
             picked, support, reason = _choose_point(witnesses)
             if picked is None and osm_lookup is not None:
-                # last resort, and the only network call per regency: OSM settlement nodes
+                # Last resort, and the only network call per regency: OSM settlement nodes.
                 for query in dict.fromkeys(q for q in [seat, *aliases[0], base if kind == "kota" else None] if q):
                     for osm_id, osm_name, lat, lng in osm_lookup(f"{query}, {base}, Indonesia"):
                         if _names_match(place_key(osm_name), keys) and contains((lat, lng), shape, POLYGON_TOLERANCE_KM):

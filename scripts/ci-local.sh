@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # Run every job of .github/workflows/ci.yml on this machine.
 #
-# Hosted CI runs only on pull requests and by hand (see the note at the top of ci.yml), so this is
-# the gate before a direct push. The guard list, the Node, Python, PostgreSQL and Playwright
-# versions, and the browser job's environment are read from ci.yml rather than copied, so a step
-# added there runs here without editing this file.
+# The gate before a direct push. Guard list, toolchain versions and the browser job's environment
+# are read from ci.yml, so a step added there runs here too.
 #
 #   scripts/ci-local.sh [stage...]   commits guards backend frontend e2e (default: all, in that order)
 #   E2E_PROJECTS="desktop-light"     Playwright projects (default: all four, like a full manual run)
@@ -13,8 +11,8 @@
 #   CI_LOCAL_POSTGRES=skip           skip the throwaway journal database (it needs docker)
 #   CI_LOCAL_PARALLEL=1              run the backend stage alongside the Node stages, as CI runs its jobs
 #
-# note: this tests the working tree while CI tests the commit, so a run with uncommitted or
-# untracked files says so up front. Toolchains live in ~/.cache/orcastra-ci-local, never in the repo.
+# Tests the working tree (CI tests the commit), so uncommitted or untracked files are reported up
+# front. Toolchains live in ~/.cache/orcastra-ci-local.
 set -uo pipefail
 
 ROOT=$(git rev-parse --show-toplevel) || exit 2
@@ -51,7 +49,7 @@ selected() { [[ $STAGES == *" $1 "* ]]; }
 wf() { grep -m1 -oE "$1" "$WF" | sed -E "s|$1|\\1|"; }
 sum256() { if command -v sha256sum > /dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 
-# A failing step never stops the run, the same as the jobs (fail-fast: false).
+# A failing step never stops the run (fail-fast: false, as in CI).
 step() {
   local label=$1 dir=$2 start=$SECONDS
   shift 2
@@ -117,8 +115,7 @@ use_python() {
     && stamp .venv/.ci-local "${reqs[@]}"
 }
 
-# CI gives the journal contracts a disposable PostgreSQL service migrated to head. Here it is a
-# throwaway container on a random loopback port, removed when the run ends.
+# Disposable PostgreSQL for the journal contracts, on a random loopback port, removed at exit.
 journal_db() {
   local image port url
   if [ "${CI_LOCAL_POSTGRES:-}" = skip ] || ! docker info > /dev/null 2>&1; then
@@ -130,7 +127,7 @@ journal_db() {
   step "journal database ($image)" . docker run -d --rm --name "$PG_CONTAINER" -p 127.0.0.1::5432 \
     -e POSTGRES_USER=orcastra_test -e POSTGRES_PASSWORD=orcastra_test -e POSTGRES_DB=orcastra_journal_test \
     "$image" || return 1
-  # TCP rather than the socket: the image's init server answers on the socket and then restarts.
+  # Probe over TCP: the image's init server answers on the socket and then restarts.
   for _ in $(seq 60); do
     docker exec "$PG_CONTAINER" pg_isready -h 127.0.0.1 -U orcastra_test -d orcastra_journal_test > /dev/null 2>&1 && break
     sleep 1
@@ -175,8 +172,7 @@ stage_guards() {
 
 stage_backend() {
   step "backend lint" backend ruff check app/
-  # The isolated-lab contracts live with the lab tooling on the operator VM, outside the
-  # repository; local.mk defines their targets there. Hosted CI never runs them.
+  # Optional lab contracts defined in local.mk, outside the repository; hosted CI never runs them.
   if make -n lint-qa-artifacts > /dev/null 2>&1; then
     step "qa artifact contracts" . make lint-qa-artifacts test-qa-artifacts
   else
@@ -204,7 +200,7 @@ stage_e2e() {
     step "install Playwright $version" . npm install --prefix "$dir" --no-save --no-package-lock "@playwright/test@$version" || return
   fi
   step "install Chromium" . "$dir/node_modules/.bin/playwright" install chromium || return
-  # The browser job's env block, then a free port: CI's 2025 is usually a running dev server here.
+  # The browser job's env block, then a free port, since 2025 may be taken by a dev server.
   while IFS= read -r line; do
     export "${line?}"
   done < <(sed -n '/^  browser-e2e:/,/^    steps:/p' "$WF" | sed -n '/^    env:/,/^    steps:/p' \
@@ -220,8 +216,8 @@ stage_e2e() {
   done
 }
 
-# note: the backend stage gets its own process group (set -m) so the EXIT trap can stop pytest
-# and the journal container with it; its failure count comes back through a file.
+# The backend stage runs in its own process group (set -m) so the EXIT trap can stop pytest and
+# the journal container; its failure count comes back through a file.
 backend_in_background() {
   set -m
   # shellcheck disable=SC2030 # the subshell keeps its own count on purpose

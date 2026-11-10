@@ -57,7 +57,7 @@ def _catalogue_json(regions: List[Dict[str, object]], legacy_entries: List[Dict[
 
     body = {"regions": regions, "legacy": legacy_entries, "aliases": dict(sorted(aliases.items()))}
     version = hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
-    # one entry per line, so a data change reads as a one-line diff in review
+    # One entry per line, so a data change reads as a one-line diff in review.
     parts = [
         "{",
         f'  "schema": {SCHEMA},',

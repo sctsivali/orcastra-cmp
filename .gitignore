@@ -71,28 +71,22 @@ backup-files/
 personal-docs/
 Manual Deployment/
 tasks/
-# Local operator scripts stay out of the repo, but scripts/checks holds the structural guards
-# that make test-frontend and CI run, so that directory is tracked.
-# note: the operator tooling (scripts/orcastra-ops.sh) and the isolated-lab tooling
-# (scripts/qa-hardening/) are deliberately NOT tracked. They are kept on the operator VM, the lab
-# tooling in its own local repository, so the published runbooks document procedures rather than
-# telling readers to fetch a script. The OpenSearch dashboard templates and their import script
-# are published by orcastra-docs (docs/assets/opensearch-dashboards/), their source of truth.
+# Local scripts stay untracked, except the structural guards run by make test-frontend and CI.
+# OpenSearch dashboard templates are published by orcastra-docs (docs/assets/opensearch-dashboards/).
 scripts/*
 !scripts/checks/
-# The region catalogue generator: rebuilding and verifying the catalogue needs it in the repo.
+# Region catalogue generator
 !scripts/regions/
-# The local CI runner behind make ci-local: the gate before a direct push.
+# Local CI runner (make ci-local)
 !scripts/ci-local.sh
 
-# Deployment tooling for hosts outside this product (the central logging host) lives in its own
-# local repository on the operator VM, never in this one.
+# Deployment tooling for hosts outside this product
 /deploy/
 
-# Make targets that drive operator-only tooling (local.mk, loaded by the Makefile when present)
+# Optional operator make targets, loaded by the Makefile when present
 local.mk
 
-# Artefacts orcastra-ops.sh writes when run inside a clone
+# Local operator artefacts
 backups/
 .orcastra-ops.lock/
 config/
@@ -101,11 +95,10 @@ documentation/
 CHANGELOG.md
 .github/instructions/
 
-# Claude Code (local AI tooling - not committed to this public repo)
+# Local tooling, never committed
 .claude/
 CLAUDE.md
 
-# graphify knowledge graph (local tooling, never committed)
 graphify-out/
 .graphifyignore
 

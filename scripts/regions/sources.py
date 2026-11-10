@@ -22,7 +22,7 @@ from geo import MultiPolygon, geojson_to_multipolygon
 
 USER_AGENT = "orcastra-regions-build/1.0 (https://github.com/sctsivali/orcastra-cmp)"
 
-# note: GitHub-hosted sources are pinned to a commit so a rebuild sees the same bytes. GeoNames
+# GitHub-hosted sources are pinned to a commit so a rebuild sees the same bytes. GeoNames
 # publishes daily dumps with no versioned URL; its sha256 is recorded in the report instead.
 SOURCES: Dict[str, Dict[str, str]] = {
     "kemendagri": {
@@ -103,7 +103,7 @@ def sparql(query: str, cache_dir: Path, refresh: bool = False) -> List[Dict[str,
         url = WIKIDATA_SPARQL + "?" + urllib.parse.urlencode({"query": query, "format": "json"})
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/sparql-results+json"})
         last_error: Optional[Exception] = None
-        # retry with backoff - the public endpoint rate-limits and times out under load
+        # Retry with backoff: the public endpoint rate-limits and times out under load.
         for attempt in range(4):
             try:
                 with urllib.request.urlopen(req, timeout=120) as resp:
@@ -135,7 +135,7 @@ def fetch_osm_offices(cache_dir: Path, refresh: bool = False) -> Tuple[List[OsmO
     if refresh or not path.exists():
         body = urllib.parse.urlencode({"data": OSM_OFFICES_QUERY}).encode()
         last_error: Optional[Exception] = None
-        # retry with backoff - the shared Overpass instance answers 429 and 504 under load
+        # Retry with backoff: the shared Overpass instance answers 429 and 504 under load.
         for attempt in range(5):
             try:
                 req = urllib.request.Request(OVERPASS_API, data=body, headers={"User-Agent": USER_AGENT})
@@ -155,7 +155,7 @@ def fetch_osm_offices(cache_dir: Path, refresh: bool = False) -> Tuple[List[OsmO
     for el in json.loads(raw)["elements"]:
         tags = el.get("tags", {})
         name = tags.get("name", "")
-        # residences (rumah jabatan), bus stops and car parks borrow the office's name
+        # Residences (rumah jabatan), bus stops and car parks borrow the office's name.
         if re.search(r"\b(rujab|rumah|jabatan|halte|parkir|wakil)\b", name, re.I):
             continue
         if tags.get("amenity") in {"bus_station", "parking", "parking_entrance"} or "highway" in tags:
@@ -238,7 +238,7 @@ def _rings(raw: Optional[str]) -> Tuple[List[List[tuple]], str]:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        # note: one upstream row (32.79 Kota Banjar) is cut short and only lacks its closing
+        # One upstream row (32.79 Kota Banjar) is cut short and only lacks its closing
         # brackets. Rebalance once; anything still broken is reported as having no polygon.
         try:
             data = json.loads(raw + "]" * (raw.count("[") - raw.count("]")))
@@ -246,7 +246,7 @@ def _rings(raw: Optional[str]) -> Tuple[List[List[tuple]], str]:
             return [], "invalid"
         status = "repaired"
 
-    # note: the path column nests either one ring or a list of rings, as [lat, lng] pairs
+    # The path column nests either one ring or a list of rings, as [lat, lng] pairs.
     def is_point(x: object) -> bool:
         return isinstance(x, list) and len(x) == 2 and all(isinstance(v, (int, float)) for v in x)
 
@@ -345,8 +345,8 @@ class MapUnit:
 def load_natural_earth_units(path: Path) -> Dict[str, List[MapUnit]]:
     """ISO 3166-1 alpha-2 -> map units, so overseas territories stand on their own.
 
-    note: a code can span several units (Australia plus Ashmore and Cartier, Coral Sea; the
-    four nations of the United Kingdom), so every unit is kept and the caller decides.
+    A code can span several units (Australia plus Ashmore and Cartier, Coral Sea; the four
+    nations of the United Kingdom), so every unit is kept and the caller decides.
     """
     units: Dict[str, List[MapUnit]] = {}
     for f in json.loads(path.read_text())["features"]:

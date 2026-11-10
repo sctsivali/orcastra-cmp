@@ -25,7 +25,7 @@ from indonesia import Finding
 from sources import Place, parse_wkt_point
 
 CAPITAL_AGREEMENT_KM = 25.0
-# note: atoll and coastal capitals sit a few km off a 1:10m outline (Tarawa 4 km, Flying Fish Cove 2 km)
+# Atoll and coastal capitals sit a few km off a 1:10m outline (Tarawa 4 km, Flying Fish Cove 2 km).
 POLYGON_TOLERANCE_KM = 5.0
 CONTINENTS = {"AF", "AN", "AS", "EU", "NA", "OC", "SA"}
 
@@ -45,8 +45,8 @@ def _norm(text: str) -> str:
 def _capital_place(capital: str, in_country: List[Place]) -> Optional[Place]:
     named = [p for p in in_country if p.fclass == "P" and _norm(capital) in {_norm(n) for n in p.names}]
     seats = [p for p in in_country if p.fcode == "PPLC"]
-    # a country can carry more than one PPLC (seat of government vs constitutional capital), so
-    # the place the capital name points at wins, then any PPLC, each by population
+    # A country can carry more than one PPLC (seat of government vs constitutional capital), so
+    # the place the capital name points at wins, then any PPLC, each by population.
     for pool in ([p for p in seats if p in named], named, seats):
         if pool:
             return max(pool, key=lambda p: p.population)
@@ -60,7 +60,7 @@ class CountryPoint:
     point: LatLng
     capital: str
     km_from_capital: float
-    moved: Optional[str]  # why the point is not Natural Earth's label point, if it is not
+    moved: Optional[str]  # Why the point moved off Natural Earth's label point, or None.
 
 
 def build(
@@ -108,7 +108,7 @@ def build(
             continue
         point = (place.lat, place.lng)
 
-        # two independent witnesses for the capital: Wikidata P36 and Natural Earth's capitals
+        # Two independent witnesses for the capital: Wikidata P36 and Natural Earth's capitals.
         witnesses = [("wikidata " + label, p) for label, p in capitals.get(iso, [])]
         witnesses += [("natural earth " + n, (lat, lng)) for n, lat, lng in ne_capitals.get(iso, [])]
         agreeing = sorted({w[0].split()[0] + " " + w[0].split()[1] if w[0].startswith("natural") else "wikidata"
@@ -136,8 +136,8 @@ def build(
 
         raw, moved = representative_point(country)
         where = (round(raw[0], 4), round(raw[1], 4))
-        # strict: the point stands for the country itself, so unlike a coastal capital it gets no
-        # tolerance, and rounding must not have nudged it over a border or into the sea
+        # Strict: the point stands for the country itself, so unlike a coastal capital it gets no
+        # tolerance, and rounding must not have nudged it over a border or into the sea.
         if not point_in_multipolygon(where, country.shape):
             fail(f"representative point {where} lies outside the country's outline")
             continue

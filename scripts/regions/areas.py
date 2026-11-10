@@ -32,15 +32,15 @@ from sources import MapUnit
 # important: /geo/* is served with an immutable one-year cache (frontend/next.config.js), so any
 # change to this file's content must ship under a new version in the name.
 AREAS_FILE = "country-areas.v1.json"
-# the basemap's own simplification (frontend/scripts/build-basemap.mjs), so outlines and coast agree
+# The basemap's simplification (frontend/scripts/build-basemap.mjs), so outlines and coast agree.
 TOLERANCE_DEG = 0.05
 PRECISION = 2
-# a micro-state (Monaco, Vatican, Gibraltar) collapses at the basemap tolerance. Its largest ring
+# A micro-state (Monaco, Vatican, Gibraltar) collapses at the basemap tolerance. Its largest ring
 # is a dozen points or fewer as published, so it is kept unsimplified at this precision instead of
 # vanishing from the map.
 TINY_PRECISION = 4
 MIN_RING_POINTS = 4
-# the map frames a country on its main landmasses: polygons at least this share of the largest.
+# The map frames a country on its main landmasses: polygons at least this share of the largest.
 # 0.25 frames Japan on Honshu and Hokkaido, the Philippines on Luzon and Mindanao, and the United
 # States on the lower 48 rather than a box stretched to Alaska.
 FOCUS_SHARE = 0.25
@@ -112,7 +112,7 @@ def _round_ring(ring: Ring, tolerance: float, precision: int) -> Optional[List[L
     out: List[List[float]] = []
     for lat, lng in simplify_ring(ring, tolerance):
         point = [round(lng, precision), round(lat, precision)]
-        # rounding collapses neighbours onto each other; a duplicate draws nothing
+        # Rounding collapses neighbours onto each other; a duplicate draws nothing.
         if not out or out[-1] != point:
             out.append(point)
     if len(out) >= 3 and out[0] != out[-1]:
@@ -124,7 +124,7 @@ def _simplified(shape: MultiPolygon) -> List[List[List[List[float]]]]:
     polygons = []
     for polygon in shape:
         rings = [_round_ring(ring, TOLERANCE_DEG, PRECISION) for ring in polygon]
-        if rings and rings[0] is not None:  # holes mean nothing once the outer ring has collapsed
+        if rings and rings[0] is not None:  # Holes mean nothing once the outer ring has collapsed.
             polygons.append([r for r in rings if r is not None])
     return polygons
 
@@ -134,7 +134,7 @@ def _focus(shape: MultiPolygon, point: LatLng) -> List[float]:
     main = [p for p in shape if _polygon_area(p) >= largest * FOCUS_SHARE]
     s, w, n, e = bbox(main)
     s, w, n, e = min(s, point[0]), min(w, point[1]), max(n, point[0]), max(e, point[1])
-    # rounded outward, so the box never cuts a sliver off the country it frames
+    # Rounded outward, so the box never cuts a sliver off the country it frames.
     return [math.floor(s * 100) / 100, math.floor(w * 100) / 100, math.ceil(n * 100) / 100, math.ceil(e * 100) / 100]
 
 
