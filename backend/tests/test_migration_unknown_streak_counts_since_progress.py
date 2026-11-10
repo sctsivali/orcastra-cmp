@@ -1,10 +1,9 @@
 """The unknown streak counts inconclusive outcomes since the job last made progress.
 
-It counted every unknown over a job's life, so a 20-instance project relocation that met five
-separate, resolved blips stopped in manual recovery although no two were in a row. A reset on any
-claim instead would let a target start that keeps failing loop forever (the loop fixed on
-2026-11-04), because that loop changes nothing in the journal. Progress is therefore read from
-the journal: resource states and the markers they record.
+Counting every unknown over a job's life would stop a large project relocation in manual recovery
+after a few separate, resolved blips. Resetting on any claim would let a target start that keeps
+failing loop forever, since that loop changes nothing in the journal. Progress is therefore read
+from the journal: resource states and the markers they record.
 """
 
 from __future__ import annotations
@@ -86,8 +85,8 @@ async def test_the_worker_backs_off_with_the_journal_it_reads_now(monkeypatch: p
 
 
 def test_a_journal_that_swings_back_and_forth_does_not_reset_the_count() -> None:
-    # Security review 2026-11-05: a step that fails (A), an inconclusive reconcile (B), then the same
-    # failure (A) again would reset on every pass if any change counted as progress.
+    # A step that fails (A), an inconclusive reconcile (B), then the same failure (A) again would
+    # reset on every pass if any change counted as progress.
     state: dict[str, object] = {}
     values: dict[str, object] = {}
     for progress in ("A", "B", "A", "B", "A", "B"):

@@ -139,7 +139,7 @@ def test_container_shared_memory_counts_as_used_not_available():
 
 
 def test_a_container_holding_only_shmem_is_not_read_as_idle():
-    """The live case: 200 MiB in /dev/shm of a 1 GiB container read as 2 MiB used."""
+    """200 MiB in /dev/shm of a 1 GiB container must not read as 2 MiB used."""
     mib = 1024 * 1024
     series = InstanceSeries(
         instance_type="container",
@@ -160,7 +160,7 @@ def test_honest_memory_needs_a_total_and_its_inputs():
 
 
 def test_a_hostile_line_parses_in_linear_time():
-    """A run of name characters with no `=\"` made the old label regex quadratic."""
+    """A run of name characters with no `=\"` must not make the label regex quadratic."""
     import time
 
     body = "lxd_cpu_effective_total{" + "a" * 1_000_000 + "} 1\n"

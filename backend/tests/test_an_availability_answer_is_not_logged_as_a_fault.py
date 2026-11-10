@@ -1,7 +1,8 @@
-"""A deliberate 502/503/504 is logged as a warning; a genuine 500 is still an error.
+"""An intentional 502/503/504 is logged as a warning; a genuine 500 is still an error.
 
-One caller polling a cluster known to be down wrote 577 "Server fault" ERROR lines an hour,
-which buried the faults worth paging on. The answer to the caller is unchanged either way.
+A caller polling a cluster that is down would otherwise fill the log with "Server fault"
+ERROR lines and bury the faults worth paging on. The answer to the caller is the same
+either way.
 """
 
 import logging

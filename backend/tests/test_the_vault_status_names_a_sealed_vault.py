@@ -1,10 +1,10 @@
 """The dashboard's Vault notice reads Vault's own answer, cheaply, and says nothing it should not.
 
-Issue #15: a sealed Vault after a reboot read as "no clusters". `sys/seal-status` answers even
-while sealed, so one probe tells sealed, uninitialized and unreachable apart. The probe must cost
-one request (the client session's retry adapter made a dead Vault cost about ten seconds), be
-shared by a burst of callers, keep its answer briefly, never put a Vault address in front of a
-browser, and never run from /health, which the container healthcheck keys on.
+A Vault sealed after a reboot must not read as "no clusters". `sys/seal-status` answers even while
+sealed, so one probe tells sealed, uninitialized and unreachable apart. The probe costs one request
+(the client session's retry adapter would make a dead Vault cost about ten seconds), is shared by a
+burst of callers, keeps its answer briefly, never shows a Vault address to a browser, and never
+runs from /health, which the container healthcheck keys on.
 """
 
 import threading

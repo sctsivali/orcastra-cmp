@@ -157,8 +157,8 @@ def _reference(row: Dict[str, Any]) -> bool:
 
 
 def _sql_ids(engine, model, conditions: List[Any]) -> set:
-    # note: `id` is a UUID column and the corpus uses plain labels, so the column is read as
-    # bare text rather than through the UUID result processor.
+    # `id` is a UUID column and the corpus uses plain labels, so the column is read as bare
+    # text rather than through the UUID result processor.
     stmt = select(literal_column("id")).select_from(model.__table__).where(*conditions)
     with engine.connect() as conn:
         return {r[0] for r in conn.execute(stmt).all()}
@@ -187,7 +187,7 @@ def test_the_partner_bound_drops_the_other_organisations_projects(engine) -> Non
         if row["cluster_id"] == "nuc2":
             judged = (row["resource_name"] or row["project"]) if row["resource_type"] == "project" else row["project"]
             assert judged in ("default", "cust-a"), row
-    # nuc1 carries no bound, so every project passes there.
+    # A cluster missing from the bound map carries no bound, so every project passes there.
     assert any(rows[i]["cluster_id"] == "nuc1" and rows[i]["project"] == "cust-c" for i in ids)
     # A project row is judged by the project it names: the Partner's own `cust-a` create (run
     # in default) is theirs, another organisation's `cust-b` create (also run in default) is not.
@@ -219,15 +219,15 @@ def test_a_tenant_with_an_instance_rule_sees_that_instance_and_the_default_proje
     assert ("nuc1", "default", "project", "cust-a") in seen
     default_row = {"cluster_id": "nuc1", "project": "default", "resource_type": "project", "resource_name": None}
     assert _under("tenant_instance", lambda: task_scope.task_is_visible(default_row)) is True
-    # The instance wildcard on nuc2 names db-01 in every project.
+    # The `("*", "db-01")` rule names db-01 in every project of its cluster.
     assert ("nuc2", "cust-c", "instance", "db-01") in seen
     assert ("nuc2", "cust-c", "instance", "web-01") not in seen
 
 
 def test_a_project_row_with_no_resource_name_is_judged_by_its_project() -> None:
     # LXD's project-created, -updated and -deleted events carry no `name`, so the lifecycle row
-    # holds the project in `project` alone. Read as `default`, it passed every tenant on the
-    # cluster and every Partner bound to `default`, and printed another customer's project name.
+    # holds the project in `project` alone. Read as `default`, it would pass every tenant on the
+    # cluster and every Partner bound to `default`, and show another customer's project name.
     def row(row_id: str, cluster: str, project: str) -> Dict[str, Any]:
         return {
             "id": row_id, "seq": 1, "kind": "lifecycle", "cluster_id": cluster, "project": project,

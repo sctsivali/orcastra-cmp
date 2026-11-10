@@ -1,8 +1,8 @@
-"""LXD refusing a group create reaches the caller with LXD's status and message, not a 500.
+"""LXD refusing a group create reaches the caller with LXD's status and message.
 
-pylxd raises LXDAPIException on a 4xx. The route's generic handler turned that into a 500, so a
+pylxd raises LXDAPIException on a 4xx. A generic handler would turn that into a 500, so a
 permission naming a resource in a project the group cannot view (LXD: "references project X,
-but the project cannot be viewed by the group") read as a server fault in the dialog.
+but the project cannot be viewed by the group") would read as a server fault in the dialog.
 """
 
 from types import SimpleNamespace

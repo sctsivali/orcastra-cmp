@@ -1,21 +1,16 @@
-"""
-A key granted specific projects on a cluster stays inside them on the raw proxy, /proxy and /sync.
+"""A key granted specific projects on a cluster stays inside them on the raw proxy, /proxy and /sync.
 
-The raw proxy bound only `request.project`. A key granted `projects: ["tenant-a"]` could still read
-every project with `all-projects=true` in any spelling, and a double-encoded `project` query key
-survived the one-decode pop: `%2570roject` was decoded once to `%70roject`, re-emitted, and
-requests unescaped it to `project`, so LXD answered for another project. A decoded `&` or `#` in a
-query name, joined back raw, added a key LXD read or turned the authorised `&project=` into a
-fragment requests never sends. A `*` grant, which the integrator's connection keys carry, is
-untouched.
+Bounding `request.project` alone is not enough. A narrow key must not read every project with
+`all-projects=true` in any spelling, and a double-encoded `project` query key (`%2570roject`) must
+not survive one decode, be re-emitted, and reach LXD as `project` once requests unescapes it. A
+decoded `&` or `#` in a query name, joined back raw, would add a key LXD reads or turn the
+authorised `&project=` into a fragment requests never sends. A `*` grant, which the integrator's
+connection keys carry, is untouched.
 
-A narrow key could also change anything outside the four prefixes this line refused (the server
-config, the cluster, network ACLs and zones, warnings, and every resource LXD adds above
-projects). The write rule is now an allowlist: instances, images and operations.
-
-Ported from the RC4-hotfix2 line and adapted to this line: /proxy list_projects and /sync were
-already narrowed here (`_within_granted_projects`), and /sync reads instances from every project,
-so the tests assert the effect on this line's shapes.
+Writes follow an allowlist: instances, images and operations. Everything else (the server config,
+the cluster, network ACLs and zones, warnings, and every resource LXD adds above projects) is
+refused. /proxy list_projects and /sync narrow through `_within_granted_projects`; /sync reads
+instances from every project, so those tests assert the filtered result.
 """
 
 from types import SimpleNamespace
@@ -92,7 +87,7 @@ async def test_a_smuggled_project_key_never_reaches_lxd(path: str) -> None:
 
 
 # A name or fragment that changes the query once raw_proxy has decoded it. `x%26all-projects` is
-# one longer name, while the old join wrote it back as `x&all-projects`, and a `#` turned the
+# one longer name and must not be written back as `x&all-projects`, and a `#` must not turn the
 # authorised `&project=tenant-a` into a fragment.
 SMUGGLED_QUERIES = [
     "/1.0/instances?x%26all-projects=true",
@@ -127,8 +122,8 @@ async def test_a_glued_version_never_reaches_an_unbounded_resource(method: str, 
         assert resource not in ("projects", "profiles", "networks", "storage-pools"), url
 
 
-# This line's four-prefix rule, read through the canonical path: a fragment, a dot or an encoded
-# spelling no longer steps around it.
+# The write rule reads the canonical path, so a fragment, a dot or an encoded spelling does not
+# step around it.
 @pytest.mark.parametrize(
     "method,path",
     [
@@ -241,13 +236,13 @@ class _OwnOperationCluster(RecordingSession):
 
 @pytest.mark.parametrize("method,path", BOUNDED_WRITES)
 async def test_a_narrow_key_may_change_what_its_project_bounds(method: str, path: str) -> None:
-    # note: an operation id is cluster-wide, so for /operations/<id> the bound is the operation's
-    # owner, read first (test_a_raw_operation_read_is_bounded_by_its_owner.py), not ?project=.
+    # An operation id is cluster-wide, so for /operations/<id> the bound is the operation's owner,
+    # read first (test_a_raw_operation_read_is_bounded_by_its_owner.py), rather than ?project=.
     outcome, session = await call_raw_proxy(
         NARROW, method, path, project="tenant-a", session=_OwnOperationCluster()
     )
     assert outcome.status_code == 200
-    # note: a create first reads the profile it applies, see test_an_applied_profile_cannot_reach_the_host
+    # A create first reads the profile it applies, see test_an_applied_profile_cannot_reach_the_host.
     writes = [url for verb, url, _ in session.calls if verb == method]
     assert len(writes) == 1
     segments, query = lxd_reads(writes[0], method)
@@ -348,7 +343,7 @@ async def test_sync_follows_a_grant_that_covers_default() -> None:
     assert [i["name"] for i in result.instances] == ["web-default", "web-tenant-a"]
 
 
-# -- the body cannot take a project-limited key out of its project (a335b0d, 441213a) ---------------
+# -- the body cannot take a project-limited key out of its project ----------------------------------
 
 
 class _PlainCluster(RecordingSession):
@@ -395,7 +390,7 @@ PLAIN_BODIES = [
                                                             "path": "/data"}}}),
     ("PATCH", "/1.0/instances/web", {"devices": {"eth0": {"type": "nic", "network": "lxdbr0"}}}),
     ("PUT", "/1.0/instances/web/state", {"action": "stop", "force": True}),
-    # a GPU, a switch set off and a VM's own config drive do not reach the host
+    # A GPU, a switch set off and a VM's own config drive do not reach the host.
     ("PATCH", "/1.0/instances/web", {"devices": {"g": {"type": "gpu"}}}),
     ("PATCH", "/1.0/instances/web", {"config": {"security.privileged": "false", "security.idmap.isolated": "true"}}),
     ("PATCH", "/1.0/instances/web", {"devices": {"cloud": {"type": "disk", "source": "cloud-init:config"}}}),
@@ -436,7 +431,7 @@ async def test_a_wildcard_key_naming_a_target_is_refused_like_any_key(method: st
     assert session.calls == []
 
 
-# The value table the rule is judged by (441213a): a switch is refused only when it is not off,
+# The value table the rule is judged by: a switch is refused only when it is not off,
 # raw.*, kernel modules and an idmap base or size whenever set, a disk from outside a storage pool
 # for any source but LXD's own VM drives, and a GPU stays allowed.
 REACHING = [
@@ -480,7 +475,7 @@ def test_a_setting_that_does_not_reach_the_host_passes_whatever_its_key(body: Di
     assert host_reach(body) is None
 
 
-# -- /proxy create_instance sends params as the instance body (6bcae64) --------------------------
+# -- /proxy create_instance sends params as the instance body ------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -496,7 +491,7 @@ async def test_proxy_create_holds_a_narrow_key_to_the_body_rule(monkeypatch, par
                                                                reason: str) -> None:
     sent: List[Any] = []
     monkeypatch.setattr(integrations, "execute_proxy_operation", lambda *a, **_k: sent.append(a) or {"ok": True})
-    # note: exec and files are granted so the body rule is what refuses, not the guest-capability price
+    # Exec and files are granted so the body rule refuses rather than the guest-capability price.
     narrow = key(["tenant-a"], capabilities=["lxd.proxy", "instance.exec", "instance.files"])
     with pytest.raises(HTTPException) as caught:
         await proxy_operation(

@@ -1,10 +1,10 @@
 """The Admin check on a rebind reads Authentik strictly and resolves groups the way RBAC does.
 
-The check read get_user_role_groups, which answers an empty set for a user search that did not
-answer 200, for an email the search did not return and for the first of two accounts with the
-email, and which keeps only the exact role_* names. Each of those read as "holds no role", so an
-Admin through an expired token, a 429, a proxy 502, a duplicate account or an alias group such as
-"authentik Admins" had their personal clusters moved and a rebind record written.
+get_user_role_groups answers an empty set for a user search that did not answer 200, for an email
+the search did not return and for the first of two accounts with the email, and keeps only the
+exact role_* names. Read as "holds no role", each of those would move the personal clusters of an
+Admin seen through an expired token, a 429, a proxy 502, a duplicate account or an alias group such
+as "authentik Admins", and write a rebind record. The rebind uses the strict read_current_roles.
 
 These run the real AuthentikSyncService against Authentik's HTTP answers (httpx MockTransport).
 Every request it makes is recorded.
@@ -148,7 +148,7 @@ async def test_an_admin_through_any_group_rbac_maps_to_admin_never_rebinds(
     world: Dict[str, Any], monkeypatch: pytest.MonkeyPatch, creator_db: Any,  # noqa: F811
     caplog: pytest.LogCaptureFixture, group: str,
 ) -> None:
-    # note: the request path's resolver makes this login an Admin, so require_partner let it mint the key
+    # The request path's resolver makes this login an Admin, so require_partner lets it mint the key.
     assert Role.ADMIN in _resolve_roles_uncached(AuthenticatedUser("u", email=CREATOR, groups=[group]))
     seen = real_authentik(monkeypatch, directory({CREATOR: [group]}))
     await personal_cluster(creator_db, "creator-cluster", CREATOR)
@@ -226,7 +226,7 @@ async def test_two_accounts_carrying_the_creators_email_rebind_nothing(
     world: Dict[str, Any], monkeypatch: pytest.MonkeyPatch, creator_db: Any,  # noqa: F811
     caplog: pytest.LogCaptureFixture, order: str,
 ) -> None:
-    """The role was read from whichever account the search listed first."""
+    """Reading the role from whichever account the search lists first would be a guess."""
     accounts = [{"pk": 2, "email": "Creator@Example.test"}, {"pk": 1, "email": CREATOR}]
     if order == "admin_first":
         accounts.reverse()
@@ -314,7 +314,7 @@ async def test_a_detail_body_it_cannot_read_rebinds_nothing(
 # ── the existing callers keep their reading ────────────────────────────────────────────────────
 
 async def test_get_user_role_groups_keeps_its_answers_for_the_member_sync(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The member sync's grant decisions read these answers, so the strict read is a new method."""
+    """The member sync's grant decisions read these answers, so the strict read is a separate method."""
     real_authentik(monkeypatch, directory({CREATOR: ["authentik Admins", "role_partner"]}, search_status=503))
     svc = authentik_sync.get_authentik_sync()
     assert await svc.get_user_role_groups(CREATOR) == set()

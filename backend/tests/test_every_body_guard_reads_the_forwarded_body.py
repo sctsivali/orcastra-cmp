@@ -3,10 +3,9 @@ Ratchet: every body guard on the raw proxy and /proxy reads the body LXD is sent
 held to one spelling.
 
 LXD reads body field names without regard to case (Go's encoding/json, with Unicode folding), so
-a guard that read the caller's body before core/api_key_body refused a misspelled field judged a
-different request from the one LXD served: `{"action": "stop", "Action": "restart"}` took the
-migration fence's stop exemption and restarted the instance, and `Config` on a /proxy create
-reached LXD as config without the instance.exec price. This holds the order structurally:
+a guard that reads the caller's body before core/api_key_body refuses a misspelled field judges a
+different request from the one LXD serves: `{"action": "stop", "Action": "restart"}` would take
+the migration fence's stop exemption and restart the instance. The order is held structurally:
 
 - raw_proxy replaces `request` with the canonical body once, and reads `request.body`, or hands
   `request` to a guard, only after that line;

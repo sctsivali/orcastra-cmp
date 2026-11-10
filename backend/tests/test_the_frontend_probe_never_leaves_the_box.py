@@ -1,24 +1,15 @@
-"""Ratchet: the frontend liveness probe must depend on nothing outside the process.
+"""The frontend liveness probe must depend on nothing outside the process.
 
-The production compose probed `/` with BusyBox wget, which follows redirects. `/` is an
-auth-gated page whose redirect carried the public origin (next-auth rewrites the request origin
-to NEXTAUTH_URL), so the probe left the container, went through the edge and the tunnel, and
-judged the frontend by whatever answered there. One edge 502 marked a working container
-unhealthy; autoheal (5 s interval, no backoff) restarted it; every restart was an outage plus a
-window in which the page chunks 502'd. The report read "frontend unhealthy, backend fine".
-
-Three things hold the fix in place and this test pins each of them:
+`/` is auth-gated and its redirect carries the public origin (next-auth rewrites the request
+origin to NEXTAUTH_URL), so a probe that follows it leaves the container, and one edge 502
+marks a working container unhealthy for autoheal to restart. Checked structurally:
 
   * the probe targets /healthz, a route that calls nothing (not /health, the readiness proxy,
     which would restart the frontend whenever the backend restarts);
   * the probe client cannot follow a redirect (Node's http.get), has its own timeout, and the
     compose and Dockerfile copies are the same bytes;
-  * an auth redirect built for a loopback request stays on loopback, so an image pulled onto
-    the OLD compose is safe too: wget follows the 302 to 127.0.0.1 and the sign-in page
-    answers 200 without a backend call.
-
-Structural on purpose: the failure only exists in a running container behind a real edge,
-which no unit test reaches, and the previous probe passed every local check for months.
+  * an auth redirect built for a loopback request stays on loopback, so a redirect-following
+    probe (ex; BusyBox wget) lands on the sign-in page at 127.0.0.1 without a backend call.
 """
 
 import re
@@ -105,8 +96,8 @@ class TheFrontendProbeNeverLeavesTheBox(unittest.TestCase):
         self.assertLessEqual(internal_ms / 1000, _seconds(self.hc["timeout"]))
 
     def test_retries_times_interval_covers_a_minute(self):
-        # note: autoheal acts on Docker's `unhealthy`, which needs `retries` consecutive
-        # failures. Below a minute a single slow GC pause could cost a restart.
+        # Autoheal acts on Docker's `unhealthy`, which needs `retries` consecutive failures.
+        # Below a minute a single slow GC pause could cost a restart.
         self.assertGreaterEqual(int(self.hc["retries"]) * _seconds(self.hc["interval"]), 60)
         self.assertGreaterEqual(_seconds(self.hc["start_period"]), 60)
 

@@ -1,22 +1,19 @@
 """The shared LXD error to HTTP status mapper, at its substring boundaries.
 
-`app/core/lxd_errors.py` classifies an LXD refusal by matching substrings of its message,
-because pylxd surfaces most failures as a bare exception with prose in it. That is deliberate
-and stays broad: a miss costs a 400 carrying the real text, never a wrong success. What it must
-not do is match prose that means something else, because a wrong 4xx sends the operator to the
-wrong remedy.
+`app/core/lxd_errors.py` matches substrings of the message because pylxd surfaces most failures
+as a bare exception with prose in it. A miss costs a 400 with the real text; a match on prose
+that means something else sends the operator to the wrong remedy.
 """
 
 from app.core.lxd_errors import lxd_http_error
 
 
 class TestTheInUseMatchIsNotTooLoose:
-    """`used by` as a bare substring matches prose that is not a conflict at all.
+    """`used by` as a bare substring matches prose that is not a conflict.
 
-    Observed live: starting a VM whose image is unsigned answers
-    "The image used by this instance is incompatible with secureboot. Please set
-    security.secureboot=false", and the loose match turned that into a 409. A 409 tells the
-    operator to wait for something else to finish; the real remedy was to change a config key.
+    Starting a VM from an unsigned image answers "The image used by this instance is
+    incompatible with secureboot ...". A 409 would tell the operator to wait; the remedy is a
+    config change.
     """
 
     def test_a_genuine_in_use_refusal_is_still_409(self):

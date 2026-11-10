@@ -1,9 +1,9 @@
 """A list row that lost a cluster says so in the words every other list uses.
 
-/projects and /images report one row per cluster rather than unreachable_nodes, so they sat outside
-complete_reasons and `error` carried str(exc). The list services wrap what they caught in a sentence
-that repeats it, which put the cluster's address in a 200 a Tenant can read, and the Images banner
-printed it under Show Details.
+/projects and /images report one row per cluster rather than unreachable_nodes, so complete_reasons
+does not cover them and each row's `error` goes through `failure_text`. The list services wrap what
+they caught in a sentence that repeats it, so str(exc) would put the cluster's address in a 200 a
+Tenant can read and in the Images banner under Show Details.
 """
 
 import ast

@@ -1,20 +1,14 @@
 """Ownership of an organization decides who may rewrite its members and its access policies.
 
-Two places got that ownership test wrong in opposite directions, and both are reachable by any
-integration key holding the relevant capability.
+In `_upsert_synced_organizations`, Pass 1 refuses an organization owned by another key. Pass 2
+re-links a row whose slug matches and whose OrcaHub identity looks retired, reassigning
+`api_key_id`, so it checks the owner too; otherwise reusing a victim's slug with a fresh
+external_id transfers ownership, and with it the member sync, which propagates role changes into
+Authentik as global system roles.
 
-`_upsert_synced_organizations` runs in two passes. Pass 1 refuses to touch an organization owned
-by another key, and says so in a comment. Pass 2 re-links a row whose slug matches and whose
-OrcaHub identity looks retired, and it reassigned `api_key_id` outright without ever asking who
-held it. Pushing an organization that merely reuses a victim's slug with a fresh external_id
-therefore transferred ownership. Owning it then satisfies every later check, including the member
-sync, which propagates role changes into Authentik as global system roles.
-
-`sync_policies_from_external` had the mirror-image bug. `if org.api_key_id and org.api_key_id !=
-api_key_id` skips the comparison entirely when nobody owns the row, so an unclaimed organization
-was writable by any key with `tenant.provision`, and what it writes is tenant access policies. Its
-lookup also omitted the `source == "orcahub"` filter that every sibling lookup in the file
-carries, which widened the target set to locally created organizations.
+`sync_policies_from_external` writes tenant access policies, so it refuses an unclaimed
+organization instead of adopting it, and its lookup filters on `source == "orcahub"` like every
+sibling lookup in the file.
 """
 
 import ast
@@ -49,7 +43,7 @@ def _pass_two_branch() -> ast.If:
 
 
 def test_the_relink_branch_checks_who_owns_the_row() -> None:
-    """The takeover. Pass 1 has this test; Pass 2 did not, and Pass 2 is the one that reassigns."""
+    """Pass 2 reassigns ownership, so like Pass 1 it checks who owns the row."""
     condition = ast.unparse(_pass_two_branch().test)
     assert "api_key_id" in condition, (
         "Pass 2 re-links a slug-owning organization and reassigns api_key_id without asking who "
@@ -83,32 +77,32 @@ def test_an_unclaimed_organization_can_still_be_adopted() -> None:
     assert _relink_allowed(owner_key=None, caller_key="oak_mine")
 
 
-# ── the policy sync, where the same rule had to point the other way ────────────────────────────
+# ── the policy sync, where the rule points the other way ───────────────────────────────────────
 
 def _policy_sync_source() -> str:
     return inspect.getsource(module.sync_policies_from_external)
 
 
 def test_the_policy_sync_refuses_an_unclaimed_organization() -> None:
-    """Opposite of the re-link rule, deliberately, because this one WRITES authorization data.
+    """Opposite of the re-link rule, because this one WRITES authorization data.
 
-    Adopting an unclaimed org is reasonable when the act is "record who syncs you". Granting
-    tenants operate and console access to clusters is not the same act, and `if org.api_key_id
-    and ...` skipped the comparison for exactly the rows nobody was protecting.
+    Adopting an unclaimed org is reasonable for recording who syncs it; granting tenants operate
+    and console access to clusters is not. `if org.api_key_id and ...` would skip the comparison
+    for exactly the unclaimed rows.
     """
     source = _policy_sync_source()
     assert "if org.api_key_id and org.api_key_id != api_key_id" not in source, (
         "a NULL owner skips the ownership comparison entirely, which is an open door and not a "
         "closed one on an endpoint that writes tenant access"
     )
-    # note: owner sets. is_owner answers no for an unclaimed organization (organization_owners.is_owner).
+    # is_owner reads the owner set and answers no for an unclaimed organization (organization_owners).
     assert "if not await is_owner(db, org, api_key_id)" in source
 
 
 def test_the_policy_sync_only_looks_at_orcahub_organizations() -> None:
-    """Every sibling lookup in this file filters on source; this one did not.
+    """Every sibling lookup in this file filters on source, and so does this one.
 
-    Without it a dashboard-created organization carrying an external_id was a valid target.
+    Without it a dashboard-created organization carrying an external_id is a valid target.
     """
     source = _policy_sync_source()
     assert 'Organization.source == "orcahub"' in source, (

@@ -1,22 +1,13 @@
-"""A delivery has to leave this process, cross a socket, and verify on the other side.
+"""A signed delivery crosses a real socket and verifies on the receiving side.
 
-Everything else about the webhook subsystem can be asserted against fakes. This cannot: the
-property that matters is that the bytes a receiver reads are the bytes we signed, and a fake
-transport is precisely where that stops being true. So this file stands up a real HTTP server on
-loopback and sends a real request through the real client.
+The property under test is that the bytes a receiver reads are the bytes that were signed, which a
+fake transport cannot show, so this file runs a real HTTP server on loopback and sends through the
+real client. It also pins two receiver bugs: verifying a re-serialised body (the sender uses compact
+separators and sorted keys, so `json.dumps(json.loads(body))` differs from what was signed) and
+accepting any timestamp, which lets a signature captured from logs replay forever.
 
-Two receiver bugs are the reason it is written this way, and both are documented as rules rather
-than discovered later:
-
-  * verifying against a re-serialised body instead of the raw bytes. The sender emits compact
-    separators and sorted keys, so `json.dumps(json.loads(body))` differs from what was signed in
-    almost every language's defaults. Asserted below in both directions.
-  * accepting any timestamp. A signature captured from a receiver's own logs otherwise replays
-    forever.
-
-The delivery address is loopback, which the SSRF filter refuses by design. That is not worked
-around here: the DEBUG-gated exemption is switched on for the test the same way it is for the QA
-harness, and a companion test asserts the exemption produces nothing when DEBUG is off.
+The SSRF filter refuses loopback. The tests switch on the DEBUG-gated exemption, and a companion
+test asserts the exemption does nothing when DEBUG is off.
 """
 
 import asyncio
@@ -56,8 +47,7 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler's contract
         length = int(self.headers.get("content-length", 0))
         raw = self.rfile.read(length)
-        # important: the RAW bytes are captured before anything parses them. A receiver that
-        # parses first has already lost the thing it needs to verify.
+        # Capture the raw bytes before anything parses them; a parsed body cannot be verified.
         CAPTURED.requests.append(
             {"raw": raw, "headers": {k.lower(): v for k, v in self.headers.items()}}
         )
@@ -83,7 +73,7 @@ def receiver():
 
 @pytest.fixture
 def dev_deployment(monkeypatch):
-    """Loopback is refused by design, so the delivery test opts in the way the QA harness does."""
+    """Opt in to loopback delivery through the DEBUG-gated exemption."""
     monkeypatch.setenv("DEBUG", "true")
     monkeypatch.setenv("WEBHOOK_DEST_ALLOWLIST_CIDRS", "127.0.0.0/8")
     monkeypatch.setenv("WEBHOOK_ALLOW_HTTP", "true")
@@ -135,7 +125,7 @@ def test_a_signed_delivery_arrives_and_verifies_over_the_raw_bytes(receiver, dev
 
 
 def test_verifying_a_re_serialised_body_fails(receiver, dev_deployment):
-    """The single most common receiver bug, asserted so the documentation can state it as a rule."""
+    """The most common receiver bug: verifying a re-serialised body instead of the raw bytes."""
     CAPTURED.requests.clear()
     RESPOND_WITH["status"] = 200
     payload = {"specversion": "1.0", "id": "evt_reserialise", "type": "x", "data": {}}
@@ -232,12 +222,11 @@ class _RotatingVault:
 
 
 def test_a_rotation_keeps_the_old_secret_valid_for_a_window() -> None:
-    """The header is a list so a receiver can switch at its own pace, and nothing used that.
+    """After a rotation the superseded secret stays valid for a window.
 
-    Only one secret was ever stored, rotation overwrote it in place, and the sender sent one
-    entry. So every receiver that had not already been handed the new value began rejecting on
-    the very next delivery and walked toward AUTO_SUSPEND_AFTER. That is the exact failure the
-    list format exists to prevent, built and never connected.
+    The signature header is a list so a receiver can switch at its own pace. With a single entry,
+    every receiver not yet holding the new value would reject the next delivery and move toward
+    AUTO_SUSPEND_AFTER.
     """
     from app.services.extension_credentials import (
         read_signing_secrets,
@@ -259,8 +248,7 @@ def test_a_rotation_keeps_the_old_secret_valid_for_a_window() -> None:
 
 
 def test_the_overlap_ends(monkeypatch) -> None:
-    """The positive twin above would pass just as well if the old secret were kept forever, which
-    is not a rotation. This is the half that makes it one."""
+    """The overlap ends; the test above would also pass if the superseded secret never expired."""
     from app.services.extension_credentials import (
         SIGNING_OVERLAP_SECONDS,
         read_signing_secrets,

@@ -1,10 +1,9 @@
 """An Admin names which organization owns an instance in an ambiguous `default`.
 
-`default` on a cluster several organizations hold names no owner, so Migration Center refused to
-move anything out of it, Admins included: "Source project ownership is ambiguous" (RC5 acceptance
-FU-5, 2026-11-06). An Admin now names the owner. It is never picked for them, it must be an
-organization bound to the source cluster that also owns the target (a plan's source and target
-belong to one organization), and partners still cannot move out of a view-only `default`.
+`default` on a cluster several organizations hold names no owner, so Migration Center cannot
+resolve one for a move out of it. An Admin names the owner. It is never picked for them, it must
+be an organization bound to the source cluster that also owns the target (a plan's source and
+target belong to one organization), and partners still cannot move out of a view-only `default`.
 """
 
 from __future__ import annotations

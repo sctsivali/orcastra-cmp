@@ -1,10 +1,11 @@
 """A caller's name that is empty, `.` or `..` is refused with 400 before any cluster call.
 
-requests folds a dot segment out of a URL path, so `..` as an instance name addressed the instance
-collection, and for a delete the server root. /proxy puts the instance name, an operation id and a
-network, storage pool or project name into the path pylxd requests (services/lxd/proxy_path_params.py),
-and a project-limited key's write plan reads the copy source, snapshot, profiles and image its body
-names (services/lxd/limited_write_reach.py). Each goes through core/lxd_segment.lxd_segment.
+requests folds a dot segment out of a URL path, so `..` as an instance name would address the
+instance collection, and for a delete the server root. /proxy puts the instance name, an operation
+id and a network, storage pool or project name into the path pylxd requests
+(services/lxd/proxy_path_params.py), and a project-limited key's write plan reads the copy source,
+snapshot, profiles and image its body names (services/lxd/limited_write_reach.py). Each goes
+through core/lxd_segment.lxd_segment.
 
 The service records a client being built as a cluster call, since the real one revalidates the pooled
 connection with a request, and the session records every request pylxd's own path builder sends.

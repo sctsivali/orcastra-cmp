@@ -1,10 +1,10 @@
 """A route that cannot read the cluster registry says so instead of answering an empty fleet.
 
-Issue #15: after a reboot Vault came back sealed, the registry LIST failed, nothing was known from
-before, and /nodes, /projects, /instances, /monitoring/dashboard, /regions and /clusters answered
-200 with nothing in them. /nodes cached that for 180 s with all_connected=True and /regions for
-120 s. Each now answers one 503 body, before any cache write. A readable empty registry is a fresh
-install and still answers 200 with an empty list, and a served last-known registry is real data.
+When the registry LIST fails (Vault sealed, for example after a reboot) and nothing is known from
+before, /nodes, /projects, /instances, /monitoring/dashboard, /regions and /clusters each answer one
+503 body before any cache write. An empty 200 there would be cached and shown as an empty fleet. A
+readable empty registry is a fresh install and still answers 200 with an empty list, and a served
+last-known registry is real data.
 """
 
 import asyncio
@@ -86,8 +86,8 @@ class _Fleet:
         return []
 
     async def read_fleet_inventory(self):
-        # The instance list reads the fleet through this since 2026-10-29; it names a late
-        # cluster instead of raising, which these doubles never produce.
+        # The instance list reads the fleet through this. It names a late cluster instead of
+        # raising, which these doubles never produce.
         vms, connected, incomplete = await self.list_all_vms_with_failures()
         return FleetInventory(vms, connected, incomplete, {})
 

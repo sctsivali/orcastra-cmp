@@ -1,6 +1,5 @@
-"""
-The dot-name rules on the one-instance read, MCP orcastra_get_instance, snapshot create and rename bodies,
-an image create's alias entries, and the helpers the widened caller-name ratchet names.
+"""The dot-name rules on the one-instance read, MCP orcastra_get_instance, snapshot create and rename bodies,
+an image create's alias entries, and the helpers the caller-name ratchet names.
 
 Every case goes through the real route (tests/_guest_gate_doors.py) or the real helper, with fakes that
 record what would have left the process. Literal and double-encoded dot paths are sent through the ASGI app
@@ -39,7 +38,7 @@ def _no_request(cluster: Cluster) -> None:
     assert cluster.session.calls == [], cluster.session.calls
 
 
-# note: the one-instance read through the TestClient (single-encoded spellings reach the route decoded once)
+# The one-instance read through the TestClient (single-encoded spellings reach the route decoded once).
 
 
 @pytest.mark.parametrize("with_cluster", [True, False], ids=["cluster-id", "every-cluster"])
@@ -55,7 +54,7 @@ def test_instance_read_refuses_every_dot_spelling(door: Any, monkeypatch: pytest
     _no_request(cluster)
 
 
-# note: the same read with the path decoded once, as uvicorn hands it to the app
+# The same read with the path decoded once, as uvicorn hands it to the app.
 
 
 async def _asgi_get(raw_path: bytes, query: bytes) -> Tuple[int, Any]:
@@ -100,7 +99,7 @@ async def test_a_double_encoded_dot_name_is_a_literal_name_and_never_reads_the_r
     assert [url for _verb, url, _kw in cluster.session.calls] == [f"{ENDPOINT}/instances/%252E%252E?project=tenant-a"]
 
 
-# note: MCP orcastra_get_instance
+# MCP orcastra_get_instance.
 
 
 @pytest.mark.parametrize("api_key,project", [(NARROW, "tenant-a"), (EVERY, None), (TWO, None), (LEGACY, None)],
@@ -128,7 +127,7 @@ async def test_mcp_instance_read_sends_a_near_dot_name_encoded_and_never_reads_t
     assert len(urls) == 1 and not urls[0].startswith(f"{ENDPOINT}/?") and "/instances/" in urls[0], urls
 
 
-# note: the helpers the widened ratchet names
+# The helpers the caller-name ratchet names.
 
 
 class _Projects:
@@ -194,7 +193,7 @@ def test_proxy_cloud_init_compare_refuses_a_dot_name_before_the_read(door: Any, 
 
 
 def test_proxy_update_with_an_empty_name_and_cloud_init_is_refused_and_untouched(door: Any) -> None:
-    """Observed: priced like a create (403 exec plus a record), not the 400 an empty name gets elsewhere."""
+    """Priced like a create (403 exec plus a record) instead of the 400 an empty name gets elsewhere."""
     seen = door.proxy(NO_GUEST, "update_instance", {"name": "", "config": {"cloud-init.ssh-keys.root": "x"}})
     assert seen.status in (400, 403) and seen.cluster.untouched, (seen.status, seen.text)
 
@@ -207,7 +206,7 @@ def test_assert_path_params_refuses_a_dot_snapshot_name(operation: str, value: s
     assert refused.value.status_code == 400 and "Snapshot name" in str(refused.value.detail)
 
 
-# note: snapshot create and rename bodies on the raw proxy
+# Snapshot create and rename bodies on the raw proxy.
 
 FAMILIES = ["instances", "containers", "virtual-machines"]
 VOLUME_TYPES = ["custom", "container", "virtual-machine"]
@@ -319,7 +318,7 @@ def test_a_case_folded_snapshot_name_is_refused_by_the_body_rule(door: Any, case
     assert [reason for reason, _ in seen.refusals] == ["field_name_not_canonical"]
 
 
-# note: the image create's alias entries share the rule (core/lxd_body_names.py). LXD decodes an alias entry
+# The image create's alias entries share the rule (core/lxd_body_names.py). LXD decodes an alias entry
 # with Go's encoding/json, which folds case and keeps the last spelling, so each entry below names a dot or
 # nothing. The body rule refuses the entry's odd field name first, so the name rule reads the only spelling.
 
@@ -364,7 +363,7 @@ def test_map_keys_beside_an_alias_entry_keep_their_case(door: Any) -> None:
     _sent(door.raw(EVERY, "POST", "/1.0/instances", body=instance))
 
 
-# note: /proxy and MCP snapshot create
+# /proxy and MCP snapshot create.
 
 
 def _proxy_wait(door: Any, api_key: Dict[str, Any], params: Dict[str, Any], wait: bool, project: str = "default",
@@ -399,7 +398,7 @@ def test_proxy_create_snapshot_without_waiting_posts_the_name_in_the_body(door: 
 
 
 def test_proxy_create_snapshot_sends_an_encoded_dot_name_literally(door: Any) -> None:
-    """Observed: /proxy never decodes a name, so %2e%2e is a literal name there (/proxy delete_snapshot reaches it)."""
+    """/proxy never decodes a name, so %2e%2e is a literal name there (/proxy delete_snapshot reaches it)."""
     seen = _proxy_wait(door, EVERY, {"name": "web", "snapshot_name": "%2e%2e"}, True)
     assert seen.status == 200 and seen.cluster.client.sent == [("snapshot", "web", "%2e%2e")], seen.text
 
@@ -418,7 +417,7 @@ def test_no_proxy_operation_or_mcp_tool_renames_a_snapshot() -> None:
     assert "lxd_rename_snapshot" not in dir(tools_write)
 
 
-# note: OrcaHub v1.32.0's own named bodies (orcastra.client-snapshot.js, -image.js, -volume.js) are still sent
+# OrcaHub v1.32.0's own named bodies (orcastra.client-snapshot.js, -image.js, -volume.js) are sent.
 
 ORCAHUB_NAMED = [
     ("/1.0/instances/vm-7/snapshots", {"name": "snap-1", "stateful": False, "expires_at": "2026-10-01T00:00:00.000Z"}),

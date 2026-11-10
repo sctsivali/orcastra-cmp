@@ -1,16 +1,11 @@
 """Structural guards on the Alembic revision graph. No database is touched.
 
-Two whole classes of production incident are covered here.
+Ordering: `002_org_external_source` ALTERs `organizations`, which `002_rbac_orgs` creates.
+Without that dependency Alembic takes the branch order from the tuple in `009_merge_org_heads`,
+and a fresh install can fail on `relation "organizations" does not exist`.
 
-The first is ordering. `002_org_external_source` ALTERs `organizations`, which
-`002_rbac_orgs` creates, and for a while it declared no dependency on it. With one head,
-Alembic takes the branch order from the tuple in `009_merge_org_heads`, so the ALTER ran
-first and every fresh install died on `relation "organizations" does not exist`.
-
-The second is drift. `user_preferences` lived in the ORM for months with no migration and
-only existed in production because startup ran `Base.metadata.create_all`. Now that
-`create_all` is retired, a model without a migration means a table that never gets
-created, so the parity check below is load-bearing rather than cosmetic.
+Drift: startup does not run `Base.metadata.create_all`, so a model without a migration is a
+table that never gets created. The parity check below catches that.
 """
 
 import ast
@@ -61,10 +56,8 @@ def _created_tables() -> set:
 def _model_modules() -> list:
     """Every module under app/models that declares a table.
 
-    important: this used to import `db_models` by name. A model module added beside it was
-    invisible to the parity check, so a new table could ship with no migration and the guard that
-    exists to catch exactly that would stay green. Discovering them removes the one step a person
-    has to remember.
+    Discovered rather than named, so a model module added beside `db_models` cannot slip past
+    the parity check with no migration.
     """
     import importlib
 
@@ -85,7 +78,7 @@ def _model_modules() -> list:
 def _model_tables() -> set:
     from app.core.database import Base
 
-    _model_modules()  # importing them is what registers the tables on Base
+    _model_modules()  # Importing them registers the tables on Base.
     return set(Base.metadata.tables)
 
 
@@ -112,9 +105,8 @@ class RevisionGraphTests(unittest.TestCase):
         self.assertEqual(allrevs - reachable, set(), "orphaned revisions are unreachable on upgrade")
 
     def test_org_external_source_depends_on_the_revision_that_creates_organizations(self) -> None:
-        # The regression guard. 002_org_external_source only ALTERs `organizations`;
-        # 002_rbac_orgs creates it. Without this edge, branch order decides whether a
-        # fresh install works, and it decided wrong.
+        # 002_org_external_source only ALTERs `organizations`; 002_rbac_orgs creates it.
+        # Without this edge, branch order decides whether a fresh install works.
         script = _script_directory()
         ancestors = {rev.revision for rev in script.iterate_revisions("002_org_external_source", "base")}
         self.assertIn(
@@ -132,8 +124,8 @@ class RevisionGraphTests(unittest.TestCase):
         )
 
     def test_the_owner_set_merge_joins_the_hotfix_revision(self) -> None:
-        # Production on the 1.0.0-RC4 hotfix line sits at 015a, which branches from 015. This merge
-        # is its only path to head, so both edges are pinned.
+        # A database from an earlier release line can sit at 015a, which branches from 015. This
+        # merge is its only path to head, so both edges are pinned.
         script = _script_directory()
         self.assertEqual(
             set(script.get_revision("038_organization_owner_keys").down_revision),
@@ -145,7 +137,7 @@ class RevisionGraphTests(unittest.TestCase):
         )
 
     def test_only_015a_creates_the_owner_set(self) -> None:
-        # A database from the hotfix line already ran 015a, so DDL in the merge, or a second
+        # A database from that line already ran 015a, so DDL in the merge, or a second
         # create_table of the same table, would fail its upgrade.
         merge = next(VERSIONS_DIR.glob("*_038_organization_owner_keys.py"))
         calls = [node for node in ast.walk(ast.parse(merge.read_text())) if isinstance(node, ast.Call)]
@@ -179,10 +171,8 @@ class MetadataRegistrationTests(unittest.TestCase):
     def test_alembic_env_imports_every_model_module(self) -> None:
         """A module Base.metadata never sees produces no autogenerate diff and no parity failure.
 
-        `alembic/env.py` imported `db_models` by name. Adding `extension_models` beside it meant
-        its tables existed in the ORM and in a hand-written migration but were invisible to
-        autogenerate, so the next person to run it would have been offered a diff that dropped
-        them. Naming each module is fine; forgetting to is what this catches.
+        `alembic/env.py` names each model module. A module it misses has tables autogenerate
+        cannot see, so a later autogenerate run would offer a diff that drops them.
         """
         env = (BACKEND_DIR / "alembic" / "env.py").read_text()
         missing = [m for m in _model_modules() if f"import {m}" not in env]

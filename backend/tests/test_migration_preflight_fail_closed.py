@@ -1,4 +1,4 @@
-"""Fail-closed regression coverage for migration planning inventory."""
+"""Migration planning inventory fails closed."""
 
 from __future__ import annotations
 
@@ -617,7 +617,7 @@ def test_a_migration_between_lxd_and_incus_is_refused_with_its_reason(
     monkeypatch: pytest.MonkeyPatch, source_engine: str, target_engine: str
 ) -> None:
     """The two engines' migration protocols are not interchangeable, so a cross-engine move or copy
-    is blocked at preflight with a code the plan names, in both directions (owner, 2026-11-07)."""
+    is blocked at preflight with a code the plan names, in both directions."""
     source, target = _patch_inspect(monkeypatch)
     monkeypatch.setattr(
         preflight,

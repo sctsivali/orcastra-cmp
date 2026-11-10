@@ -1,16 +1,13 @@
 """The push rebind rules, sent through the real POST /api/v1/integrations/sync route.
 
-Decision 19: the key must claim exactly one org after the push, active or not, so a key that also
-claims a buyer org rebinds nothing and the warning names the key id and the count. Decision 15:
-that org is the destination only while it is active and this push names the creator a partner
-there (pushed role and stored row), read back after the member writes. Decision 14: a creator the
-dashboard resolves to Admin, or whose role Authentik cannot confirm, never rebinds. A rebind that
-fails partway leaves nothing. OrcaHub v1.32.0's sync body binds the partner into its own org only
-while the key holds no buyer org.
+The key must claim exactly one org after the push, active or not, so a key that also claims a
+buyer org rebinds nothing and the warning names the key id and the count. That org is the
+destination only while it is active and this push names the creator a partner there (pushed role
+and stored row), read back after the member writes. A creator the dashboard resolves to Admin, or
+whose role Authentik cannot confirm, never rebinds. A rebind that fails partway leaves nothing.
 
 Every case asserts the status, the detail, the rebind record, what reached the share audit (the
-call that reads the cluster), and the committed binding. The fakes are the existing ones, and each
-records the side effect the real call makes.
+call that reads the cluster), and the committed binding.
 """
 
 import json
@@ -43,7 +40,7 @@ from tests.test_a_push_rebinds_only_into_the_org_its_key_claimed import (
     world,  # noqa: F401
 )
 
-_HTTP = httpx.AsyncClient  # note: the real class, captured before real_authentik replaces it
+_HTTP = httpx.AsyncClient  # The real class, captured before real_authentik replaces it.
 
 SYNC = "/api/v1/integrations/sync"
 C = PARTNER
@@ -135,7 +132,7 @@ async def assert_unmoved(db: Any, world: Dict[str, Any], cluster: str = "c-clust
     assert world["shares"] == [] and world["log"].calls == []
 
 
-# note: decisions 15 and 19: the destination
+# The destination, under the one-org rule.
 
 async def _inactive(db: Any) -> Dict[str, int]:
     return {P: await claimed(db, P, active=False)}
@@ -163,8 +160,8 @@ async def _local_org(db: Any) -> Dict[str, int]:
 
 NAMES_NONE = "its push names 0 organizations, exactly one is required"
 
-# note: id, setup, pushes [(key id, orgs, members)], destination slug or None, count warned (or the warning's
-# own words) or None
+# Id, setup, pushes [(key id, orgs, members)], destination slug or None, count warned (or the warning's
+# own words) or None.
 D15 = [
     ("own_org_as_partner", None, [(K_PARTNER, [P], [m(C, P, "PARTNER")])], "partner", None),
     ("two_claimed_orgs_as_partner", None,
@@ -276,9 +273,9 @@ class FailingMemberWrites(AsyncSessionFacade):
         self.sync.commit()
 
 
-# note: id, orgs the key claimed, rows before the push (org, email, role), members pushed, the creator's
+# Id, orgs the key claimed, rows before the push (org, email, role), members pushed, the creator's
 # write that fails (org, role or "delete"), destination, count warned. With two claimed orgs a failed write
-# never leaves one destination (decision 19). With one, the rows read back decide (decision 15).
+# never leaves one destination. With one, the rows read back decide.
 READ_BACK = [
     ("second_org_member_write_failed", [P, Q], [], [m(C, P, "PARTNER"), m(C, Q, "PARTNER")],
      (Q, "partner"), None, 2),
@@ -327,7 +324,7 @@ async def test_decision_15_reads_the_member_rows_back(
         assert f" {warned} organizations" in warning and K_PARTNER in warning and "@" not in warning
 
 
-# note: who triggers a rebind
+# Who triggers a rebind.
 
 @pytest.mark.parametrize("pushed", [CO, C.upper(), f" {C}", f"{C} ", "Partner@Example.test"])
 async def test_only_the_exact_creator_triggers_a_rebind(world: Dict[str, Any], pushed: str) -> None:  # noqa: F811

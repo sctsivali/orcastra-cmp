@@ -1,13 +1,8 @@
 """An audit trail must not lose its tail to a page size.
 
-GET /console/sessions/audit took `limit` and nothing else. The Sessions page asked for 500
-while the table held 660 rows, so the oldest 160 were unreachable from the UI and the pager on
-that screen was paging a set that had already been truncated underneath it. Nothing said so:
-the response was a bare array, so a short page and a lost page looked identical.
-
-These pin the two halves of the fix. `offset` has to reach rows past `limit`, and `total` has
-to be counted over the same filters as the page rather than inferred from the rows returned,
-because `len(rows)` is exactly the number that cannot tell those two cases apart.
+GET /console/sessions/audit takes `limit` and `offset` and answers with a page envelope.
+`offset` has to reach rows past `limit`, and `total` has to be counted over the same filters as
+the page: `len(rows)` cannot tell a short last page from a truncated one.
 """
 
 import asyncio
@@ -55,9 +50,8 @@ class _Result:
 class _FakeDB:
     """Answers the count query with a fixed total and the page query by slicing.
 
-    important: it reads offset and limit off the compiled statement rather than trusting the
-    handler to have been called correctly. A fake that returned a fixed page would pass whether
-    or not offset was ever applied, which is the failure this file exists to catch.
+    It reads offset and limit off the statement itself. A fake that returned a fixed page would
+    pass whether or not offset was ever applied.
     """
 
     def __init__(self, total):
@@ -136,7 +130,7 @@ def test_has_more_marks_the_last_page_and_only_the_last_page(monkeypatch, offset
 
 
 def test_the_response_is_a_page_envelope_and_not_a_bare_array(monkeypatch):
-    # A revert to the old shape would break every caller silently, because a list is truthy.
+    # A bare list would break every caller silently, because a list is truthy.
     db = _FakeDB(total=3)
 
     page = _call(db, monkeypatch, limit=100, offset=0)

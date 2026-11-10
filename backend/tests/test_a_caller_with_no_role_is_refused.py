@@ -1,12 +1,12 @@
-"""A signed-in caller whose groups map to no Orcastra role is refused, not served an empty fleet.
+"""A signed-in caller whose groups map to no Orcastra role is refused with 403.
 
-Issue #17: Authentik signs in anyone it knows, and a caller with no role_* group used to resolve to
-Tenant. Every scoped route then answered 200 with nothing in it, which reads as a broken or emptied
-deployment rather than as "you have not been given access yet". Each RBAC dependency now refuses
-such a caller with 403 and a machine-readable reason the dashboard turns into its access notice.
+Authentik signs in anyone it knows. Resolving a caller with no role_* group to Tenant would answer
+every scoped route with 200 and nothing in it, which reads as an emptied deployment. Each RBAC
+dependency refuses such a caller with 403 and a machine-readable reason the dashboard turns into
+its access notice.
 
 The refusal is pinned on all three dependencies and through the real application, so the
-structured detail survives the error sanitizer on its way out.
+structured detail survives the error sanitizer.
 """
 
 import asyncio

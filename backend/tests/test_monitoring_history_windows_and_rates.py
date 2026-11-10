@@ -26,7 +26,7 @@ def test_points_carry_network_rates_and_a_new_instance_adds_no_spike():
     usages = _usages(
         [
             row("a", rx=3_000, tx=1_500, read_at=1030.0),
-            # first seen this sweep with a huge lifetime counter: no rate yet, so no spike
+            # First seen this sweep with a huge lifetime counter: no rate yet, so no spike.
             row("new", rx=10**12, tx=10**12, read_at=1030.0),
         ]
     )
@@ -51,7 +51,7 @@ def test_points_carry_network_rates_and_a_new_instance_adds_no_spike():
 
 
 def test_a_point_carries_the_gauge_memory_not_the_instances_sum():
-    """The chart sits under the gauge; summing instance memory added the page cache to it."""
+    """The chart sits under the gauge; an instance sum would add page cache to it."""
     usages = _usages([row("big", memory=900, read_at=1000.0), row("small", memory=50, read_at=1000.0)])
     busy = node("c1", threads=8, running=2).model_copy(update={"memory_usage_percent": 41.25})
     idle = node("c2", threads=8, running=0).model_copy(update={"memory_usage_percent": 3.5})

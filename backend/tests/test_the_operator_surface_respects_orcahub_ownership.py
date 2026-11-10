@@ -1,15 +1,14 @@
 """Orcastra's snapshot console must not damage the paid product running on the same instances.
 
-OrcaHub sells snapshots and drives them through this same cluster. Three boundaries keep the two
-from corrupting each other, and each one is here because breaking it has a concrete cost:
+OrcaHub sells snapshots and drives them through the same cluster. Three boundaries keep them apart:
 
-* `pre-restore-` is OrcaHub's prefix and its rolling prune physically DELETES what matches. An
-  Orcastra safety snapshot named that way would be removed by another product without warning,
-  which is worse than not taking one, because the operator believes they have a rollback point.
+* `pre-restore-` is OrcaHub's prefix, and its rolling prune deletes what matches. An Orcastra
+  safety snapshot named that way would be removed without warning while the operator believes
+  they have a rollback point.
 * `snap-` is the pattern OrcaHub's LXD-native schedules generate. Reusing it makes an operator
-  snapshot indistinguishable from a paid one in every surface that looks at the cluster.
-* `snapshots.schedule` and `snapshots.expiry` are how OrcaHub implements a retention a tenant is
-  paying for. Writing them from here leaves its ledger disagreeing with the cluster.
+  snapshot indistinguishable from a paid one.
+* `snapshots.schedule` and `snapshots.expiry` implement a retention a tenant pays for. Writing
+  them from here leaves OrcaHub's ledger disagreeing with the cluster.
 """
 
 import pytest
@@ -74,8 +73,8 @@ def test_restore_never_writes_the_schedule_keys():
             "host": HOST,
             "project": PROJECT,
             "confirm_name": INSTANCE,
-            # The instance is deliberately managed here, so the restore has to pass the gate to
-            # reach the behaviour this test is actually about.
+            # The instance is managed, so the restore must pass the billing gate to reach the
+            # behaviour under test.
             "reason": "verifying the schedule keys are never written",
             "acknowledge_billing_impact": True,
         },
@@ -90,13 +89,12 @@ def test_restore_never_writes_the_schedule_keys():
 
 
 def test_every_action_on_a_managed_instance_is_refused_without_acknowledgement():
-    """A source under a paid schedule is metered by the storage it occupies, not by counting
-    snapshots, so anything this console does there moves a number that can pause a schedule a
-    customer pays for. Default deny, and proceeding is a deliberate, attributable act.
+    """A source under a paid schedule is metered by the storage it occupies, so anything this
+    console does there can pause a schedule a customer pays for. Default deny; proceeding is an
+    explicit, attributable act.
 
-    Refused BEFORE the daemon is touched on every path. A restore that refused after taking its
-    safety snapshot would leave a snapshot behind on storage someone else is billed for, which is
-    the cost the refusal exists to avoid.
+    The refusal comes before the daemon is touched on every path: a restore refused after taking
+    its safety snapshot would leave that snapshot on storage someone else is billed for.
     """
     managed = {"snapshots.schedule": "@hourly", "snapshots.expiry": "7d"}
     target = "ops-target-20260908T000000Z"
@@ -169,8 +167,8 @@ def test_an_acknowledged_action_proceeds_and_is_audited_separately():
 
 
 def test_an_acknowledgement_without_a_reason_is_still_refused():
-    # A tick box with no words is not attribution. The reason is what makes the audit row worth
-    # keeping, so the acknowledgement alone does not open the gate.
+    # The acknowledgement alone does not open the gate: the reason is what makes the audit row
+    # attributable.
     node = FakeInstanceNode(config={"snapshots.schedule": "@hourly"})
     response = _client(service(FakeClient(node))).post(
         f"/instances/{INSTANCE}/snapshots",
@@ -195,10 +193,9 @@ def test_an_unmanaged_instance_needs_no_acknowledgement():
 
 
 def test_the_console_refuses_to_delete_an_upstream_snapshot_unacknowledged():
-    # A tenant pays to keep these. Removing one is now possible, but only behind an
-    # acknowledgement and a typed reason: this request carries neither, so it is still refused
-    # and the daemon is still never asked. A snapshot taken by hand is a different class and
-    # goes through a typed confirmation instead; see
+    # A tenant pays to keep these. Removing one needs an acknowledgement and a typed reason; this
+    # request carries neither, so it is refused before the daemon is asked. A snapshot taken by
+    # hand goes through a typed confirmation instead; see
     # test_a_snapshot_taken_on_the_host_is_the_operators_own.py.
     node = FakeInstanceNode(snapshots=[{"name": "snap-20260908-0200"}])
     response = _client(service(FakeClient(node))).request(

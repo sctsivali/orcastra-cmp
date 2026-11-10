@@ -1,14 +1,14 @@
 """A cluster behind a publicly trusted certificate keeps its pin across renewals.
 
-Two clusters on this fleet answer on a DNS name over 443 with a Let's Encrypt certificate, which
-is replaced roughly every 60 days. A plain leaf pin would refuse each of them at every renewal
-until an Administrator re-pinned it, so the owner chose (2026-10-29) to accept a renewal when the
-cluster was first pinned as public-CA and the new certificate is publicly trusted for the same
-hostname. A self-signed LXD certificate keeps the strict rule: any change is refused.
+A cluster can answer on a DNS name over 443 with a Let's Encrypt certificate, which is replaced
+roughly every 60 days. A plain leaf pin would refuse it at every renewal until an Administrator
+re-pinned it, so a renewal is accepted when the cluster was first pinned as public-CA and the new
+certificate is publicly trusted for the same hostname. A self-signed LXD certificate keeps the
+strict rule: any change is refused.
 
-The pin also never got recorded for those two clusters at all: the probe defaulted a portless
-endpoint to 8443 while the real client connected on 443, so every Migration Center plan was
-refused with "Both clusters need pinned certificate fingerprints".
+A portless endpoint is probed on 443, the port the client connects on. Probing 8443 instead would
+record no pin, and every Migration Center plan would be refused with "Both clusters need pinned
+certificate fingerprints".
 """
 
 import logging
@@ -277,7 +277,7 @@ class _Vault:
         from app.core.vault_client import VaultCASConflict
 
         if self.lose_cas_to is not None:
-            # Another writer lands between our read and our write.
+            # Another writer lands between this read and this write.
             self.stored = dict(self.lose_cas_to)
             self.version += 1
             self.lose_cas_to = None

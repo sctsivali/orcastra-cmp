@@ -1,9 +1,8 @@
 """Shared fakes for the limited-key body and write-plan tests: a cluster that answers per project.
 
-The session records every call (verb, URL, project) the way the real session turns it into a
-request on the wire, and answers the reads a write plan makes from per-project tables. The client
-records what the /proxy operations would send (a create, an instance save, a restore), which is
-the side effect the real pylxd calls turn into a write.
+The session records every call (verb, URL, project) and answers the reads a write plan makes from
+per-project tables. The client records what the /proxy operations would send through pylxd (a
+create, an instance save, a restore).
 """
 
 from types import SimpleNamespace

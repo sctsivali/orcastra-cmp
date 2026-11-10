@@ -2,8 +2,8 @@
 
 A move in retention holds only the exact lock on its stopped source, so the rest of the cluster
 stays writable for the whole window. Once a rollback or cleanup starts mutating daemons again,
-its locks must fence the project and the cluster like any running migration. The sweep must
-also honour the rollback contract the operator approved, not only today's global flag.
+its locks must fence the project and the cluster like any running migration. The sweep honours
+the rollback contract the operator approved as well as the current global flag.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def db() -> Iterator[AsyncSessionFacade]:
             if isinstance(column.type, JSONB):
                 column.type = JSON()
             if column.primary_key and isinstance(column.type, BigInteger):
-                column.type = Integer()  # SQLite autoincrements INTEGER PRIMARY KEY only
+                column.type = Integer()  # SQLite autoincrements INTEGER PRIMARY KEY only.
             # Postgres casts such as '{}'::jsonb are not SQLite syntax; every insert here is explicit.
             if column.server_default is not None and "::" in str(getattr(column.server_default, "arg", "")):
                 column.server_default = None
@@ -186,8 +186,8 @@ async def test_expired_retention_deletes_automatically_only_when_the_plan_approv
 
 
 async def test_a_project_plan_waits_for_a_retained_move_into_that_project(db: AsyncSessionFacade) -> None:
-    """Security review pass 2: a retained instance move locks only its source, yet its live
-    target in the other project is still its rollback object."""
+    """A retained instance move locks only its source, yet its live target in the other project
+    is still its rollback object."""
     _seed(db, "job-1", phase="source_retained")
     request = MigrationPlanCreateRequest.model_validate(
         {

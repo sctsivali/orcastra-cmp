@@ -1,10 +1,10 @@
 """A My Keys record that names an owner is that owner's alone, on every route that reads it.
 
-`list_keys` already filtered by `owner_email`, but `_authorize_key`, which guards the PFX
-download and the delete, checked only that the caller could reach the key's cluster. On a cluster
-two partners share, partner B could name partner A's key id and receive A's private key, which may
-carry an `admin` LXD identity, or delete it. Answering 404 keeps "not yours" indistinguishable from
-"does not exist", the same shape the record-without-a-node branch already uses.
+`list_keys` filters by `owner_email`, and `_authorize_key`, which guards the PFX download and the
+delete, must check the owner too, not only that the caller can reach the key's cluster. Otherwise,
+on a cluster two partners share, partner B could name partner A's key id and receive A's private
+key, which may carry an `admin` LXD identity, or delete it. Answering 404 keeps "not yours"
+indistinguishable from "does not exist", the same shape the record-without-a-node branch uses.
 """
 
 from typing import Any, Dict, Optional
@@ -77,7 +77,7 @@ async def test_a_record_that_predates_the_owner_field_stays_on_cluster_scope(vau
 
 
 async def test_on_a_cluster_several_organizations_share_an_ownerless_key_is_an_administrators(vault, partner_scope):
-    """Security review 2026-10-27: nobody else can tell whose a pre-owner key is on a shared cluster."""
+    """On a cluster several organizations share, an ownerless key is left to an Administrator."""
     token = org_scope._visible_projects_var.set({SHARED: {"default"}})
     try:
         with pytest.raises(HTTPException) as caught:

@@ -1,10 +1,9 @@
-"""Migration 045 runs the old fallback one last time, for organizations with no row of their own.
+"""Migration 045 promotes a creator's personal row only for organizations with no row of their own.
 
-Before it, such an organization showed the personal row of whoever created it. Every personal row
-carries a full settings object, mostly the defaults of the build that wrote it, so promoting all of
-them would freeze a buyer founder's defaults over its seller's branding, which is the bug item 4
-reported. Only a row someone actually branded is promoted. A tagline alone does not count: older
-builds shipped other default taglines.
+Every personal row carries a full settings object, mostly the defaults of the build that wrote it,
+so promoting all of them would freeze a buyer founder's defaults over its seller's branding. Only a
+row someone branded is promoted. A tagline alone does not count: older builds wrote other
+default taglines.
 """
 
 import importlib.util

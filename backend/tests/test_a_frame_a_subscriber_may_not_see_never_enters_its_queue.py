@@ -1,11 +1,11 @@
 """A frame a subscriber may not see is judged before it is queued, under that subscriber's scope.
 
-The hub fans a node's frames out from the node's reader task, which was created under the
-FIRST subscriber's context. Judging a frame there with the scope contextvars would apply one
+The hub fans a node's frames out from the node's reader task, which runs under the first
+subscriber's context. Judging a frame there with the scope contextvars would apply one
 subscriber's rights to everyone, so each subscriber carries a copy of its own context taken
 when it subscribed, and the predicate runs under that copy. A frame that fails the check
-never costs the subscriber a queue slot, which is what kept a tenant's queue on a busy shared
-host from filling with neighbours' frames and evicting its own.
+never takes a queue slot, so a tenant's queue on a busy shared host does not fill with
+neighbours' frames and evict its own.
 """
 import asyncio
 import contextvars

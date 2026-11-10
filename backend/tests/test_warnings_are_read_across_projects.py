@@ -1,8 +1,8 @@
-"""Warnings are read from every project, and a daemon that cannot is asked the old way.
+"""Warnings are read from every project; a daemon that refuses `all-projects` is asked without it.
 
-`/1.0/warnings` without `all-projects` answers about the default project only. A warning LXD
-raised in a customer's project never reached the page, which showed 0 for a cluster carrying
-five. The row keeps the project LXD stamps on it, which the tenant filter already keys on.
+`/1.0/warnings` without `all-projects` answers about the default project only, so a warning in
+any other project would never reach the page. The row keeps the project LXD stamps on it, which
+the tenant filter keys on.
 """
 
 from typing import Any

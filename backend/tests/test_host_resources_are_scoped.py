@@ -1,11 +1,9 @@
-"""Host resources panel: two honest scopes.
+"""Host resources panel: a host scope and a container scope.
 
-The old /system/resource-usage answer mixed scopes: the cgroup memory limit was reported as
-memory.total, the cpu quota as cpu.count_logical, the bind-mounted /etc/hosts as a disk, and
-the only process shown was whichever uvicorn worker answered. The new answer keeps every one
-of those legacy keys byte-for-byte and adds `host` (the kernel's view) and `container` (the
-cgroup scope with its limits, the docker stats memory formula, a cpu percent of the quota
-and the worker set).
+The legacy /system/resource-usage keys keep their shape: memory.total is the cgroup memory
+limit, cpu.count_logical the cpu quota, and process the worker that answered. `host` adds the
+kernel's view, and `container` gains the cgroup scope with its limits, the docker stats memory
+formula, a cpu percent of the quota and the worker set.
 
 Hermetic: a fake cgroup tree under tmp_path, a fake psutil module backed by a dict process
 tree, a monkeypatched monotonic clock, the real router with get_current_user overridden.
@@ -228,7 +226,7 @@ def fake_psutil(monkeypatch) -> SimpleNamespace:
 
 
 def _make_process_class(tree: Dict[int, Dict[str, Any]]):
-    # note: _self_process() checks isinstance against psutil.Process, so the fake needs a class.
+    # _self_process() checks isinstance against psutil.Process, so the fake needs a class.
     class Process(_FakeProcess):
         def __init__(self, pid: Optional[int] = None):
             super().__init__(tree, pid)
@@ -294,7 +292,7 @@ def test_a_poll_inside_the_counter_resolution_repeats_the_last_window_not_zero()
     assert sampler.sample(busy=10.0, total=100.0) is None
     first = sampler.sample(busy=15.0, total=110.0)
     assert first is not None and first[0] == 50.0
-    # the same counters again: nothing moved, so the last answer stands and the baseline stays
+    # The same counters again: nothing moved, so the last answer stands and the baseline stays.
     assert sampler.sample(busy=15.0, total=110.0) == first
     later = sampler.sample(busy=25.0, total=120.0)
     assert later is not None and later[0] == 100.0
@@ -398,7 +396,7 @@ def test_a_missing_cgroup_file_is_a_null_not_a_500(fake_cgroup, fake_psutil):
 def test_an_unlimited_container_in_the_host_cgroup_namespace_reads_its_own_cgroup(tmp_path, monkeypatch, fake_psutil):
     # cgroupns=host: the root is the whole machine, the process lives under /docker/<id>, and
     # no cpu.max or memory.max is set anywhere. The fallback must land on the container's own
-    # cgroup, not the machine's.
+    # cgroup instead of the root.
     root = tmp_path / "sys/fs/cgroup"
     own = root / "docker" / "abc123"
     _write(root / "cgroup.controllers", "cpuset cpu io memory pids\n")

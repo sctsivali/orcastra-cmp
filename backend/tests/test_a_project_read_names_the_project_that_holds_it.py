@@ -1,11 +1,10 @@
-"""The project-scoped reader must name the project a record really lives in.
+"""The project-scoped reader must name the project a record lives in.
 
-Six reported findings came from one fact: the pooled pylxd client is bound to
-LXD's `default` project, so every read answered about one project and the answer was presented
-as the whole cluster. These tests pin the reader that replaces it, including the two ways it
-can quietly go wrong: asking a project-bound client for every project (LXD 400s the cluster),
-and walking projects that inherit `default`'s records so the same row comes back once per
-project.
+The pooled pylxd client is bound to LXD's `default` project, so a plain read answers about
+one project while looking like the whole cluster. These tests pin the reader used instead,
+including two ways it can go wrong: asking a project-bound client for every project (LXD
+answers 400), and walking projects that inherit `default`'s records so the same row comes
+back once per project.
 """
 
 import pytest
@@ -111,7 +110,7 @@ def test_a_daemon_that_reports_no_extensions_at_all_is_not_a_crash():
 )
 def test_a_project_owns_its_networks_only_when_the_feature_says_so(flag, expected):
     """Unset means false. LXD documents false as the default for every features.* option,
-    and projects on this fleet omit the key rather than setting it."""
+    and projects commonly omit the key."""
     config = {} if flag is None else {"features.networks": flag}
     assert effective_project("networks", "tenant-a", {"tenant-a": config}) == expected
 
@@ -123,8 +122,8 @@ def test_acls_follow_the_networks_feature_because_lxd_gives_them_no_key_of_their
 
 
 def test_an_unknown_project_is_asked_about_as_named_rather_than_guessed():
-    """A project we hold no config for must not be silently rewritten to default; LXD's 404
-    is the answer the caller needs to see."""
+    """A project with no known config is not rewritten to default; LXD's 404 is the answer
+    the caller needs to see."""
     assert effective_project("networks", "ghost", {}) == "ghost"
 
 
@@ -153,8 +152,8 @@ def test_a_project_bound_client_is_refused_before_it_reaches_the_daemon():
 
 
 def test_an_inherited_project_does_not_return_the_same_record_twice():
-    """47 projects with features.networks unset all see default's networks. Walking them
-    naively returns one bridge 47 times and makes the total a lie."""
+    """47 projects with features.networks unset all see default's networks. Reading each
+    would return one bridge 47 times and inflate the total."""
     projects = {DEFAULT_PROJECT: {"features.networks": "true"}}
     for i in range(47):
         projects[f"inherit-{i}"] = {"features.networks": "false"}
@@ -167,7 +166,7 @@ def test_an_inherited_project_does_not_return_the_same_record_twice():
     assert complete is True
     assert [r["name"] for r in rows] == ["lxdbr0"]
     assert all(r["project"] == DEFAULT_PROJECT for r in rows)
-    # default read once, not 48 times
+    # `default` is read once, not 48 times.
     reads = [c for c in client.calls if c[0] == "networks"]
     assert len(reads) == 1, reads
 

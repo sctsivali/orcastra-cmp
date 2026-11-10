@@ -30,7 +30,7 @@ CUSTOM = {
     "longitude": -77.4874, "timezone": "America/New_York", "continent": "NA",
 }
 
-# how every country location was stored while country entries were placed at the capital
+# A country location stored at its capital, the shape older catalogue country entries produced.
 CAPITAL_ERA_JAPAN = {
     "region_id": "c-jp", "region_name": "Japan", "country_code": "JP", "country_name": "Japan",
     "city": "Tokyo", "latitude": 35.6895, "longitude": 139.6917, "timezone": "Asia/Tokyo",
@@ -65,7 +65,7 @@ class _CertManager:
 
     def save_cluster_metadata(self, cluster_id, endpoint, display_name, zone=None, cluster_type=None,
                               merchant_id=None, location=None, clustered=None):
-        # the real one merges over what is stored, so keys it is not given survive
+        # The real one merges over what is stored, so keys it is not given survive.
         self.store[cluster_id] = {**self.store[cluster_id], "endpoint": endpoint, "display_name": display_name,
                                   "zone": zone, "type": cluster_type, "merchant_id": merchant_id,
                                   "location": location or {}}
@@ -177,7 +177,7 @@ def test_apply_judges_what_is_stored_now_not_what_was_planned():
     store = _fleet()
     manager = _CertManager(store)
     plan = backfill.plan(manager)
-    # an operator re-saves one cluster through the UI between the dry run and --apply
+    # An operator re-saves one cluster through the UI between the dry run and --apply.
     store["drifted"]["location"] = get_region_catalog().canonical_location(OLD_JAKARTA_SELATAN)
     written = backfill.apply(manager, plan)
     assert written == ["custom-zone"]
@@ -191,7 +191,7 @@ def test_an_unreadable_registry_stops_the_run_instead_of_judging_an_empty_fleet(
 
 
 def test_a_stored_location_that_is_not_an_object_is_unreadable_not_fatal():
-    """A string or list under location ended the whole plan; it is now one unreadable cluster."""
+    """A string or list under location marks one cluster unreadable instead of ending the plan."""
     fleet = _fleet()
     fleet["a-string"] = {"display_name": "a-string", "zone": "", "location": "Jakarta"}
     fleet["a-list"] = {"display_name": "a-list", "zone": "", "location": ["id-3174"]}

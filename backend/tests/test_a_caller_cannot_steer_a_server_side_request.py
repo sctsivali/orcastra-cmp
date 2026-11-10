@@ -1,18 +1,13 @@
-"""Four sinks where a caller-supplied string steered something the server did on its behalf.
+"""Four sinks where a caller's string could steer a call the server makes with its credentials.
 
-Grouped because they are one defect class, not four coincidences: a value arrives in a request,
-reaches a path or a URL without a boundary check, and the server acts on it from inside the
-network with its own credentials.
-
-  1. `app_url` is stored per API key and later fetched by three separate outbound calls, one of
-     which carries the key's own PLAINTEXT secret. Unvalidated, it aimed those at the cloud
-     metadata service or at this network's Vault.
-  2. `external_user_id` was interpolated into a Vault KV path. `../../../../clusters/<id>`
-     normalised inside Vault and overwrote a cluster's certificate material.
-  3. `raw_proxy`'s `path` reached LXD verbatim, including `..`, which LXD answered with a
-     redirect that `requests` followed by default with the cluster's client certificate attached.
-  4. The same proxy exposed `/1.0/certificates`, which is not project-scoped, so the per-key
-     project allow-list did not touch it and any read grant enumerated the cluster's trust store.
+  1. `app_url` is stored per API key and fetched by three outbound calls, one carrying the key's
+     plaintext secret: unvalidated, it could aim them at cloud metadata or this network's Vault.
+  2. `external_user_id` goes into a Vault KV path, where `../../../../clusters/<id>` would
+     normalise inside Vault and overwrite a cluster's certificate material.
+  3. `raw_proxy`'s `path` reaches LXD, which answers `..` with a redirect that `requests` follows
+     by default with the cluster's client certificate attached.
+  4. `/1.0/certificates` is not project-scoped, so the per-key project allow-list misses it and a
+     read grant through the proxy would enumerate the cluster's trust store.
 """
 
 import socket
@@ -54,7 +49,7 @@ def test_an_unsafe_callback_is_refused(url: str) -> None:
 
 
 def test_the_refusal_says_why_without_naming_the_address() -> None:
-    """An integrator needs the reason; nobody needs a network map out of an error string."""
+    """An integrator gets the reason, and the error string reveals nothing about the network."""
     reason = describe_url_risk("https://127.0.0.1/", require_https=True)
     assert reason
     assert "127.0.0.1" not in reason and "internal" in reason
@@ -122,7 +117,7 @@ def test_an_ordinary_external_user_id_is_still_accepted() -> None:
     ],
 )
 def test_the_vault_client_refuses_to_build_a_traversing_url(path: str) -> None:
-    """The second half. Either alone leaves the sink reachable from the other direction."""
+    """The Vault client checks the path too, so the sink stays closed for a caller that skips the model."""
     with pytest.raises(VaultClientError):
         _safe_vault_url(VAULT, path)
 
@@ -155,7 +150,7 @@ def test_a_traversing_proxy_path_is_refused(path: str) -> None:
     ["/1.0/certificates", "/certificates", "/1.0/certificates/abc123", "/1.0/CERTIFICATES"],
 )
 def test_the_certificate_store_is_not_reachable_through_the_proxy(path: str) -> None:
-    """Not project-scoped, so the per-key project allow-list never applied to it."""
+    """Not project-scoped, so the per-key project allow-list does not apply to it."""
     with pytest.raises(HTTPException) as exc:
         assert_proxy_path_allowed(path)
     assert exc.value.status_code == 403
@@ -173,7 +168,7 @@ def test_the_certificate_store_is_not_reachable_through_the_proxy(path: str) -> 
     ],
 )
 def test_ordinary_proxy_paths_still_pass(path: str) -> None:
-    """The refusal list is deliberately narrow: an allowlist would break OrcaHub on first use."""
+    """The refusal list is narrow because an allowlist would break the paths OrcaHub uses."""
     assert_proxy_path_allowed(path)
 
 
@@ -183,9 +178,9 @@ def test_a_certificate_lookalike_is_not_over_blocked() -> None:
 
 
 def test_the_proxy_never_follows_a_redirect() -> None:
-    """The other half of the traversal fix, and the one a path check cannot cover.
+    """raw_request refuses redirects on every verb, which a path check cannot cover.
 
-    LXD answers a cleaned path with a 301. Following it carried the cluster's mTLS client
+    LXD answers a cleaned path with a 301, and following it would carry the cluster's mTLS client
     certificate to whatever the redirect named.
     """
     import inspect

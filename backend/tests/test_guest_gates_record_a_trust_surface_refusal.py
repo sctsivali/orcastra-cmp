@@ -1,13 +1,11 @@
-"""
-A raw-proxy refusal on the trust surface leaves an integration refusal record, and its answer is unchanged.
+"""A raw-proxy refusal on the trust surface leaves an integration refusal record; its answer is unchanged.
 
 The trust store and /auth (every method), server and cluster writes, and storage bucket keys are refused for
-every key and grant. They used to answer 403 without a record while the guest gates beside them wrote one,
-so a key probing the trust surface left nothing in the trail an Admin reads. Each case sends one request
-through the real route (tests/_guest_gate_doors.py) and asserts the gate's own answer (status and detail,
-read by calling the gate directly), nothing sent, and one failure record naming the path, the method and
-`refused_for_every_key`. A malformed path is a 400 of the path parser, not a trust-surface refusal, and
-stays unrecorded like every traversal 400.
+every key and grant, and each refusal is recorded like a guest gate's so a key probing the trust surface shows
+in the trail an Admin reads. Each case sends one request through the real route (tests/_guest_gate_doors.py)
+and asserts the gate's own answer (read by calling the gate directly), nothing sent, and one failure record
+naming the path, the method and `refused_for_every_key`. A malformed path is the path parser's 400 and stays
+unrecorded like every traversal 400.
 """
 
 from typing import Any, Callable, Dict, List
@@ -107,8 +105,8 @@ def test_a_malformed_path_is_a_400_without_a_record(
     door: Any, monkeypatch: pytest.MonkeyPatch, path: str, namer: str
 ) -> None:
     if namer == "any-path":
-        # note: the record's action namer parses the path too, so it is replaced to show the gate itself
-        # declines to record the parser's 400.
+        # The record's action namer parses the path too; replacing it shows the gate itself declines to
+        # record the parser's 400.
         monkeypatch.setattr(integrations, "_proxy_audit_action", lambda _method, _path: "integration.proxy.request")
     seen = door.raw(EVERY, "DELETE", path)
     assert seen.status == 400 and "traversal" in seen.text and seen.cluster.untouched

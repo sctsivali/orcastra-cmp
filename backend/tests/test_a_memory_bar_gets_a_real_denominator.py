@@ -1,18 +1,12 @@
 """The instance detail reading must name what it carries, and carry a usable denominator.
 
-`get_resource_usage` filled three fields from an LXD state block and two of them were wrong in a
-way no gate could see, because nothing in this suite touched the function at all.
+`get_resource_usage` fills its fields from an LXD state block. The memory denominator is
+`state.memory["total"]`. `usage_peak` is a cgroup high-water mark that a VM does not keep and
+reports as 0, so it cannot serve as a limit. `cpu_time_ns` is `state.cpu["usage"]`, cumulative
+nanoseconds of CPU time rather than a percentage.
 
-`memory_limit` was `state.memory["usage_peak"]`, a cgroup high-water mark. A VM does not keep
-that counter, so every VM on the fleet reports it as 0 and the detail dialog printed
-"Memory Limit 0" for all of them while the usage figure beside it had nothing to divide into.
-`cpu_usage` was `state.cpu["usage"]`, cumulative nanoseconds of CPU time, declared as a
-percentage and rendered as a bare fifteen-digit counter.
-
-The numbers below are a live read of nuc2 rather than invented ones, so this file and the
-browser suite assert against the same instances: ATLAS-Semanan sits at 78.4 percent of its
-4 GiB, and pf-semanan runs while its guest reports nothing at all, which is the case that must
-not become a confident zero.
+The fixtures are real LXD readings: one instance at 78.4 percent of its 4 GiB, and one running
+guest that reports nothing at all, which must not become a confident zero.
 """
 
 from types import SimpleNamespace
@@ -28,7 +22,7 @@ from app.services.lxd.instance_metrics import (
 from app.services.lxd.resources import ResourceManager
 
 
-# Live values from nuc2. usage_peak is 0 on all of them, which is the whole point.
+# A real LXD reading. usage_peak is 0, so it cannot serve as the denominator.
 ATLAS = {
     "memory": {"usage": 3196878848, "usage_peak": 0, "total": 4078297088, "swap_usage": 0},
     "cpu": {"usage": 56974987602000},
@@ -73,8 +67,8 @@ def test_the_denominator_is_total_not_the_peak(manager):
     assert usage.memory_total == 4078297088, "memory_total must come from state.memory['total']"
     assert usage.memory_usage == 3196878848
 
-    # The bug this file exists for: usage_peak is 0 here, so reading it as the limit produced a
-    # denominator of zero and the card had to print a raw byte count instead of a bar.
+    # usage_peak is 0 here, so reading it as the limit would give a zero denominator and the
+    # card could not draw a bar.
     assert usage.memory_total != ATLAS["memory"]["usage_peak"]
     assert usage.memory_total > usage.memory_usage
 
@@ -87,13 +81,12 @@ def test_cpu_time_is_carried_as_nanoseconds(manager):
 
     assert usage is not None
     assert usage.cpu_time_ns == 56974987602000
-    # 15h 49m of CPU time. If this were ever a percentage it would have to be under 100, and the
-    # field's old name and description both claimed exactly that.
+    # 15h 49m of CPU time; a percentage would be under 100.
     assert usage.cpu_time_ns / 1e9 > 56_000
 
 
 def test_the_retired_names_are_gone(manager):
-    """A field named for an interpretation rather than its source is how this bug survived."""
+    """Fields are named for their source, so the interpretive names stay out of the model."""
     usage = manager.get_resource_usage(_instance(ATLAS))
 
     assert usage is not None
@@ -133,18 +126,18 @@ def _stored(identity):
 
 
 def test_an_idle_instance_still_records_a_cpu_baseline(monkeypatch):
-    """A cumulative zero is a reading, and the metrics path used to drop it as falsy.
+    """A cumulative zero is a reading and must seed the baseline.
 
-    `if state.cpu and state.cpu.get("usage")` skipped the whole block on a cumulative 0, so no
-    percentage was computed and, worse, no baseline sample was stored. An instance that idled
-    through its first poll never began accumulating history and read 0 percent forever after.
+    A falsy check on `state.cpu["usage"]` would skip a cumulative 0, compute no percentage and
+    store no baseline sample, so an instance idle through its first poll would never start
+    accumulating history.
     """
     idle = _instance(SILENT)
     monkeypatch.setattr(metrics_module, "find_instance_in_projects", lambda *a, **k: (idle, "default"))
 
     metrics = read_instance_metrics(object(), "nuc2", "fixture")
 
-    # note: the identity carries the project. A name is unique per project, not per host.
+    # The identity carries the project: a name is unique per project, not per host.
     stored = _stored(instance_rate_identity("nuc2", "default", "fixture", None))
     assert stored is not None, "a zero reading must still seed the baseline"
     assert stored.counters["cpu_ns"] == 0
@@ -154,9 +147,9 @@ def test_an_idle_instance_still_records_a_cpu_baseline(monkeypatch):
 def test_two_instances_of_one_name_in_different_projects_keep_separate_baselines(monkeypatch):
     """The baseline is cumulative CPU nanoseconds, so a shared key subtracts the wrong reading.
 
-    Keyed on host and name alone, `default/web-01` and `acme/web-01` on one host wrote into the
-    same slot. Each poll then computed its delta against the other instance's counter, which
-    produces a percentage belonging to neither and can be negative.
+    Keyed on host and name alone, `default/web-01` and `acme/web-01` on one host would share a
+    slot, and each poll would compute its delta against the other instance's counter, giving a
+    percentage that belongs to neither and can be negative.
     """
     busy = _instance(ATLAS)
 

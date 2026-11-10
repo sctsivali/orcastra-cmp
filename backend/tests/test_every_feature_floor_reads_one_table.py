@@ -1,17 +1,13 @@
 """Every feature whose safety depends on a daemon fix reads its minimum build from one table.
 
-Before this, the file explorer, the migration build policy and nothing at all (keys, the release
-card) each held their own idea of a safe Incus build. Incus had a single feature-track floor for
-files (7.3.0) and no LTS lines, so 6.0.7 and 7.0.2, which carry the 7.3 symlink fixes as
-backports, were refused, while migrations and keys had no Incus baseline at all.
+Each Incus line has its own floor: the LTS builds 6.0.7 and 7.0.2 carry the 7.3 symlink fixes as
+backports, so a single feature-track floor would refuse them.
 
-Evidence for the Incus rows, read from github.com/lxc/incus on 2026-11-07:
-- image symlinks (Incus 7.3.0): on stable-7.0 as 136444d9b and 001bd0657 (2026-07-25/30), before
-  v7.0.2 (2026-10-16); on stable-6.0 as 62d944bf9 (2026-08-31), before v6.0.7 (2026-10-17).
-  v7.0.1 (2026-07-10) predates them.
-- security baseline (the 2026-10-29 advisory batch, ranges "< v7.6.0"): backported to both LTS
-  branches on 2026-10-30, after their newest tags, so the first patched LTS builds are 6.0.8 and
-  7.0.3.
+Evidence for the Incus rows, from github.com/lxc/incus:
+- image symlinks (Incus 7.3.0): on stable-7.0 as 136444d9b and 001bd0657, first tagged in v7.0.2
+  (v7.0.1 predates them); on stable-6.0 as 62d944bf9, first tagged in v6.0.7.
+- security baseline (the advisory batch with ranges "< v7.6.0"): backported to both LTS branches
+  after their newest tags, so the first patched LTS builds are 6.0.8 and 7.0.3.
 """
 
 import pytest

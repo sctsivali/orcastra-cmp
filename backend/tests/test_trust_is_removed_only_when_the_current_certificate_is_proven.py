@@ -1,9 +1,9 @@
 """The sweep removes a superseded trust entry only when that cannot lock the dashboard out.
 
 After a regenerate, Vault holds a certificate the cluster does not trust yet while every worker
-still talks through the old one. Removing the old entry then would cut the dashboard off the
-cluster entirely. So the sweep proves the CURRENT certificate first, re-arms the grace period
-until it can, and never touches a fingerprint that is still current or pending.
+still talks through the superseded one; removing that entry then would cut the dashboard off the
+cluster. The sweep proves the current certificate first, re-arms the grace period until it can,
+and never touches a fingerprint that is still current or pending.
 """
 
 from datetime import timedelta

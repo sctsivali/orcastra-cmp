@@ -1,10 +1,9 @@
 """A guest's READDIR need never end. Every consumer of a walk has to stop anyway.
 
-Reported by the security review with a proof: a tenant who replaced lxd-agent in their VM could
-serve an endless directory and grow a worker past 800 MB in four seconds. `iter_directory` stopped
-only on end of file and each consumer checked its limit between directories, so a worker died and
-took every other tenant's consoles with it. Below that it held a task and a concurrency slot
-forever, because nothing cancelled a handler whose client had left.
+A tenant who replaces lxd-agent in their VM can serve an endless directory. If `iter_directory`
+stopped only on end of file, or a consumer checked its limit only between directories, a worker
+would grow until it died and took every other tenant's consoles with it. A handler whose client
+has left is cancelled, so it does not hold a task and a concurrency slot forever.
 """
 
 import asyncio

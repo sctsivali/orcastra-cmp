@@ -1,16 +1,10 @@
 """One reading of `limits.cpu`, one way to count what a member has allocated.
 
-Three counters used to exist (member dialog, node card, project pre-flight) and they
-disagreed: two read the instance-local `config`, so a limit inherited from a profile counted
-as one core; one summed every instance on the cluster against a single member's threads; a
-mixed set ("0-3,8-11") came out as one core in one place and four in another; a reversed
-range gave a negative number. The partner's MicroCloud showed "307 / 80 cores, 383.8 %" and a
-project create was refused for "exceeding available CPU (-227)".
-
-The rules pinned here follow LXD's own `limits.cpu` grammar: a count, a range, a set, or a
-union of ranges and ids, with duplicates counted once. Anything LXD would refuse to store
-falls back to the default rather than inventing capacity. Allocation reads the expanded
-config, which is what the instance actually runs with.
+The member dialog, the node card and the project pre-flight share this parser, which follows
+LXD's own `limits.cpu` grammar: a count, a range, a set, or a union of ranges and ids, with
+duplicates counted once. Anything LXD would refuse to store falls back to the default rather
+than inventing capacity. Allocation reads the expanded config, so a limit inherited from a
+profile counts, and a member's count includes only the instances placed on it.
 """
 
 import pytest
@@ -115,7 +109,7 @@ def test_over_commit_yields_ratio_and_zero_available():
 
 
 def test_a_huge_range_is_refused_without_building_it():
-    """parse_cpu_limit used to materialise every id; four billion would exhaust a worker."""
+    """Materialising every id of a four-billion range would exhaust a worker."""
     import time
 
     started = time.monotonic()

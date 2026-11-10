@@ -1,15 +1,13 @@
 """
-The server-side upload ceiling has to be enforced, not just advertised.
+The server-side upload ceiling is enforced as well as advertised.
 
-`total_bytes` and `max_bytes` both arrive from the client, and the only check used to be
-`total_bytes > max_bytes` -- comparing one client-supplied number against another, which a
-client controls on both sides. ISO_UPLOAD_MAX_BYTES / IMAGE_UPLOAD_MAX_BYTES were surfaced
-in the tus `Tus-Max-Size` header and then never consulted again, so the effective ceiling
-was free disk minus the headroom. Staging shares a filesystem with the rest of the box.
+`total_bytes` and `max_bytes` both arrive from the client, so comparing them proves nothing.
+The declared size is checked against ISO_UPLOAD_MAX_BYTES / IMAGE_UPLOAD_MAX_BYTES, the same
+value the tus `Tus-Max-Size` header advertises; staging shares a filesystem with the rest of
+the host.
 
-These drive the real handler through the app so the assertion covers the wiring (the route,
-its dependencies and the ordering of the guards), not just a helper in isolation. The
-ceiling check sits ahead of every DB use, which is why a stub session is enough.
+These drive the real handler through the app, covering the route, its dependencies and the
+guard ordering. The ceiling check sits ahead of every DB use, so a stub session is enough.
 """
 
 import pytest
@@ -29,9 +27,8 @@ API_KEY = {
 
 
 async def _stub_db():
-    # The ceiling guard runs before _gc_expired/_ensure_dir, so this is never touched. If a
-    # future edit moves the guard below a query, this stub turns that into a loud failure
-    # rather than a silently weakened check.
+    # The ceiling guard runs before _gc_expired/_ensure_dir, so this is never touched. A guard
+    # moved below a query fails loudly on this stub.
     yield None
 
 
@@ -90,11 +87,8 @@ def test_declared_size_above_the_server_ceiling_is_rejected(module, body_fn) -> 
     ids=["iso", "image"],
 )
 def test_a_generous_client_max_bytes_cannot_raise_the_ceiling(module, body_fn) -> None:
-    """The original guard only compared the two client-supplied numbers against each other.
-
-    Declaring max_bytes above the server ceiling satisfied `total_bytes <= max_bytes` and
-    passed, which is exactly the hole.
-    """
+    """A client max_bytes above the server ceiling satisfies `total_bytes <= max_bytes` but is
+    still refused."""
     resp = _client(module).post(
         f"/api/v1/integrations/{'iso-uploads' if module is iso_uploads else 'image-uploads'}",
         json=body_fn(total_bytes=1024, max_bytes=module.MAX_UPLOAD_BYTES * 4),

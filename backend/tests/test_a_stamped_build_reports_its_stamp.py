@@ -1,16 +1,11 @@
-"""A build that WAS stamped answers with what it was stamped with, through the real endpoints.
+"""A stamped build answers with what it was stamped with, through the real endpoints.
 
-Its sibling proves the unstamped case: empty string in, null out. Nothing proved the other
-direction. Every claim that a stamped deployment reports a real version and commit rested on a
-manual check against one running container, which no longer exists as evidence the moment that
-container is replaced.
-
-This drives the same two surfaces the unstamped test does, with the settings stamped, and asserts
-the split as well as the values: the version reaches the unauthenticated surface, the commit and the
-build date do not.
+The sibling test covers the unstamped case (empty string in, null out). This one drives the same
+two surfaces with the settings stamped and asserts the split as well as the values: the version
+reaches the unauthenticated surface, the commit and the build date do not.
 
 The settings are cached, so the cache is cleared around the override rather than trusting import
-order. No database, no Vault and no network: `TestClient` outside a `with` block runs no lifespan.
+order. No database, Vault or network: `TestClient` outside a `with` block runs no lifespan.
 """
 import sys
 from pathlib import Path

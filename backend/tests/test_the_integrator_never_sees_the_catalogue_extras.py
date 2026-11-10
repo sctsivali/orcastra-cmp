@@ -1,9 +1,9 @@
-"""The integration sync and /integrations/regions keep to the location keys they always sent.
+"""The integration sync and /integrations/regions send only the allowlisted location keys.
 
-A catalogue location carries three keys the integrator never had: `province`, `admin_code` and
-`official_name`. The integrator stores what it is sent and renders it to buyers, so a new key is a
-contract change, not a free addition. Both payloads pass the stored location through one
-allowlist; this pins that the allowlist still holds them back.
+A catalogue location carries three keys outside the integrator contract: `province`, `admin_code`
+and `official_name`. The integrator stores what it is sent and renders it to buyers, so a new key
+is a contract change. Both payloads pass the stored location through one allowlist, which must
+keep holding these back.
 """
 
 from typing import Any, Dict

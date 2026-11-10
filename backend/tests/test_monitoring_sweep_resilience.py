@@ -2,9 +2,9 @@
 
 The fleet list raises when any cluster's read runs past its wall or finds the pool full, which is
 right for the instance pages: a partial list cached as complete would hide that cluster's
-instances. The dashboard used the same list, so one hung cluster answered every viewer with a 503
-and the chart lost its point. The sweep now reads the fleet through a variant that names such a
-cluster instead, and the dashboard shows the rest with that cluster marked partial.
+instances. For the dashboard that would turn one hung cluster into a 503 for every viewer, so the
+sweep reads the fleet through a variant that names such a cluster, and the dashboard shows the
+rest with that cluster marked partial.
 """
 
 import asyncio
@@ -125,7 +125,7 @@ async def test_the_sweep_merges_inventory_and_status_timeouts():
 
 
 def test_the_status_wall_defaults_well_above_the_slowest_measured_cluster():
-    """The slowest cluster's status read measured 5.2 s once its members were read in parallel."""
+    """A clustered status read, its members read in parallel, finishes well inside this wall."""
     assert monitoring_sweep.STATUS_WALL_SECONDS == 20.0
 
 

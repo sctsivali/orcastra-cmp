@@ -1,16 +1,12 @@
-"""Uninstalling has to remove everything, and "everything" is longer than it looks.
+"""Uninstalling an add-on removes every artefact the installation wrote.
 
-An installation writes to Vault, to Redis, to per-process memory on four workers, and to two
-Postgres tables that reference it only by a free-text id. Deleting the row is the part everyone
-remembers. This deployment has already shipped the other shape twice: deleting a cluster reports
-success while leaving rows in five tables, and one of those is a break-glass grant that then
-authorizes into a re-registered cluster owned by somebody else.
+An installation writes to Vault, to Redis, to per-process memory on every worker, and to two
+Postgres tables that reference it only by a free-text id. A leftover break-glass grant, for
+example, would authorize into a re-registered cluster owned by somebody else.
 
-So the artefacts are enumerated in one table in `services/extension_teardown.py`, and three
-things are asserted here. That the teardown actually empties the stores, which is the evidence.
-That an artefact recorded as deliberately kept is on a written list, so "kept" is a decision
-rather than drift. And that a new Vault write cannot appear without somebody adding an entry for
-it, which is the half that survives the next six months.
+The artefacts are enumerated in one table in `services/extension_teardown.py`. Asserted here: the
+teardown empties the stores, an artefact kept on purpose is on a written list, and a new Vault
+write cannot appear without an entry for it.
 """
 
 import ast
@@ -23,7 +19,7 @@ from app.services import extension_credentials as ec
 from app.services import extension_settings as es
 from app.services import extension_teardown as td
 
-# Artefacts that outlive an uninstall on purpose. Anything else with no remover is an omission.
+# Artefacts that outlive an uninstall on purpose; every other artefact needs a remover.
 EXPECTED_KEPT = {
     "redis:api_key_revocation_tombstone",
     "redis:install_tombstone",
@@ -31,8 +27,8 @@ EXPECTED_KEPT = {
     "opensearch:audit_records",
 }
 
-# Every place the extension modules write to Vault. Growing this list without adding an artefact
-# and a remover is the mistake this catches.
+# Every place the extension modules write to Vault. A new writer needs an artefact entry and a
+# remover before it is added here.
 EXPECTED_VAULT_WRITERS = {
     "issue_install_credential",      # the credential, via save_api_key_to_vault
     "rotate_install_credential",     # the next generation, same
@@ -41,7 +37,7 @@ EXPECTED_VAULT_WRITERS = {
     "store_secrets",                 # values for the manifest's secret fields
 }
 
-# Watching one module is how the settings store shipped with no teardown entry for two minutes.
+# Both modules write to Vault, so both are scanned.
 WRITING_MODULES = (ec, es)
 
 
@@ -63,7 +59,7 @@ def test_the_audit_trail_is_kept_deliberately() -> None:
 
 
 def test_a_new_vault_write_forces_a_new_artefact_entry() -> None:
-    """The structural half. No behavioural test can notice a write nobody thought to make."""
+    """The structural half: a behavioural test cannot notice a write nobody listed."""
     writers = set()
     nodes = []
     for module in WRITING_MODULES:
@@ -188,8 +184,8 @@ def test_an_uninstall_clears_the_caches_that_would_still_answer(torn_down) -> No
 
     stale = [k for k in cache.store if k.startswith("vault:") or k.startswith("api_responses:")]
     assert stale == [], f"a cached answer outlived the installation: {stale}"
-    # The tombstone is the one entry that must remain: its whole job is to outlive the row so
-    # the other three workers drop their own copies.
+    # The tombstone is the one entry that must remain: it outlives the row so the other workers
+    # drop their own copies.
     assert cache.get("extension_install_revoked", key_id) is not None
 
 
@@ -208,10 +204,10 @@ def test_an_uninstall_reaches_the_rows_that_reference_only_a_free_text_key(torn_
 
 
 def test_the_row_is_deleted_last(torn_down) -> None:
-    """Order is chosen so the surviving failure mode is denial, not continued access.
+    """The row goes last, so a half-finished teardown fails closed.
 
-    Vault first means a half-finished teardown produces a 401 and a bug report. The other order
-    leaves a live credential with nothing describing it, which nobody notices.
+    With Vault cleared first, an interrupted teardown leaves a key that answers 401. The other
+    order leaves a live credential with nothing describing it.
     """
     import asyncio
 

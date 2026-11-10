@@ -3,15 +3,11 @@ A key write to an existing instance or profile pays instance.exec for cloud-init
 changes a value.
 
 LXD reruns cloud-init when an expanded cloud-init value differs after an update (driver_lxc.go Update
-diffs the expanded config, needsNewInstanceID reads the diff), and a write merges over, or replaces,
-the object's own config. So a value the object's own config already holds changes nothing, and the
-integrator's read-modify-write PUT, which sends back the whole config it read, keeps working on an
-instance the dashboard built or rebuilt with user-data. A new, changed or removed value costs exec,
-and so does any cloud-init key in a create, a copy included. The read happens only for such a body
-from a key without exec, and a read that fails sends nothing and leaves a record.
-
-The cluster is a recording fake (tests/_cloud_init_fakes.py): every read and write is recorded with
-its URL and project, and the /proxy client records the save pylxd would send.
+diffs the expanded config, needsNewInstanceID reads the diff). A value the object already holds
+changes nothing, so the integrator's read-modify-write PUT keeps working on an instance the dashboard
+built with user-data. A new, changed or removed value costs exec, and so does any cloud-init key in a
+create or a copy. The object is read only for such a body from a key without exec; a read that
+fails sends nothing and leaves a record. The cluster is a recording fake (tests/_cloud_init_fakes.py).
 """
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -230,8 +226,8 @@ async def test_the_read_is_made_in_the_authorised_project(audits: List[Dict[str,
     assert session.writes == [("PATCH", body)] and session.calls[-1][1].endswith("?project=tenant-a")
 
 
-# The integrator's read-modify-write PUT (orcastra.client-instance.js updateInstanceLimitsViaProxy, and
-# the GPU and volume edits beside it): it reads the instance and sends back its whole editable form.
+# The integrator's read-modify-write PUT for limit, GPU and volume edits: it reads the instance and
+# sends back its whole editable form.
 ORCAHUB_EDITABLE = {
     "architecture": "aarch64",
     "config": {"limits.cpu": "2", "limits.memory": "2GiB", "volatile.cloud-init.instance-id": "5b1e0a4c",

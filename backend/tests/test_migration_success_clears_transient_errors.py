@@ -1,8 +1,7 @@
 """A job that finishes cleanly does not keep the error of a transient retry on the way.
 
-Found live: an authority retry during a member relocation left
-`authentik_temporarily_unavailable` on a job that then completed with success, so the console
-showed an error on a successful job.
+An authority retry during a member relocation records `authentik_temporarily_unavailable`.
+A job that then completes must not keep it, or the console shows an error on a success.
 """
 
 from __future__ import annotations

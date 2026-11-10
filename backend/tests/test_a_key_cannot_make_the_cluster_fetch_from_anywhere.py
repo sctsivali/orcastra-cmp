@@ -1,20 +1,13 @@
 """An API key cannot make the hypervisor fetch an image, a URL or an instance from an outside host.
 
-Demonstrated on the Incus lab on 2026-11-08 with a key holding only lxd.proxy and read/write on
-one project, through POST /integrations/raw-proxy:
-
-- POST /1.0/instances with source {type: image, server: https://example.invalid}: the daemon tried
-  to fetch https://example.invalid/streams/v1/index.json;
-- POST /1.0/images with source {type: url, url: https://example.invalid/i.tar}: 202, an operation
-  that fetches that URL;
-- POST /1.0/instances with source {type: migration, mode: pull, operation: https://example.invalid}:
-  passed every dashboard guard; only the daemon's own field validation stopped it.
-
-That is a request forgery from the hypervisor to any address it can reach (metadata services,
-internal APIs), and a way to feed a crafted image or instance to an unpatched daemon, which
-core/engine_baseline.py's image_import floor exists to stop. A key may now name only the public
+Through POST /integrations/raw-proxy, a key holding only lxd.proxy and read/write on one project
+could otherwise have the daemon fetch from any server: an image source naming `server`, an image
+with source `type: url`, or a pull migration naming a remote operation. That is a request forgery
+from the hypervisor to any address it can reach (metadata services, internal APIs), and a way to
+feed a crafted image or instance to an unpatched daemon, which
+core/engine_baseline.py's image_import floor exists to stop. A key may name only the public
 catalogues the dashboard trusts (services/remote_image_catalog.py), and never a URL, migration or
-conversion source; migrations go through Migration Center. Owner decision 2026-11-08.
+conversion source; migrations go through Migration Center.
 """
 
 import pytest
@@ -37,7 +30,7 @@ from app.core.key_pull_sources import assert_key_pull_source_allowed, pull_sourc
         ("/1.0/instances", {"name": "x", "source": {"type": "conversion", "mode": "push"}}),
         ("/1.0/storage-pools/default/volumes/custom", {"name": "v", "source": {"type": "migration", "mode": "pull", "operation": "https://x"}}),
         ("/1.0/%2569nstances", {"name": "x", "source": {"type": "url", "url": "https://x"}}),
-        # security review 2026-11-08: a rebuild downloads its image from source.server too
+        # A rebuild downloads its image from source.server too.
         ("/1.0/instances/web-01/rebuild", {"source": {"type": "image", "server": "https://169.254.169.254", "alias": "a"}}),
         ("/1.0/containers/web-01/rebuild", {"source": {"type": "image", "server": "https://evil.example", "alias": "a"}}),
         ("/1.0/storage-pools/default/volumes/custom/v1/rebuild", {"source": {"type": "url", "url": "https://x"}}),
@@ -89,15 +82,15 @@ def test_local_and_trusted_sources_still_pass(path, method, body):
     ],
 )
 def test_a_key_cannot_make_the_cluster_push_to_a_host_either(path, body):
-    """Security review 2026-11-08: the same forgery the other way round. A body target is a host
-    the daemon sends to (a migration operation, an image receiver, a backup bucket)."""
+    """The same forgery in the other direction: a body target is a host the daemon sends to (a
+    migration operation, an image receiver, a backup bucket)."""
     with pytest.raises(HTTPException) as caught:
         assert_key_pull_source_allowed("POST", body)
     assert caught.value.status_code == 403 and caught.value.detail["error"] == "pull_source_not_allowed"
 
 
 def test_a_registered_cluster_matches_on_the_port_the_daemon_would_dial(monkeypatch):
-    """`https://host` is port 443 to the daemon, not the cluster API's 8443."""
+    """The daemon dials `https://host` on 443, so it does not match a cluster API on 8443."""
     from types import SimpleNamespace
 
     from app.core import key_pull_sources

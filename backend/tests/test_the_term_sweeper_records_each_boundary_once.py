@@ -1,8 +1,8 @@
 """Each paid-term boundary is audited once, however many workers sweep it.
 
-The grant query enforces the dates on every request; the sweeper is what writes "this buyer's
-access became read-only" and "this buyer's access ended" into the trail at the moment it happens,
-and clears the lists cached under the old grant.
+The grant query enforces the dates on every request; the sweeper writes "this buyer's access
+became read-only" and "this buyer's access ended" into the trail when it happens, and clears the
+lists cached under the previous grant.
 """
 
 from __future__ import annotations

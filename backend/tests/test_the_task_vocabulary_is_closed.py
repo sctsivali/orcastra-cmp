@@ -1,10 +1,8 @@
 """The journal's vocabulary is closed: every action it can write is one the catalogue knows.
 
-A task row's `action` is the audit action, so the panel, the audit log and the events stream
-name one thing one way. An action the vocabulary can produce that the catalogue has never
-heard of would show in the panel with no category and no severity. The lookup tables are
-pinned here too, because each one is a place a typo turns into a row that quietly says the
-wrong thing.
+A task row's `action` is the audit action, so the panel, the audit log and the events stream use
+one name. An action missing from the catalogue would show in the panel with no category and no
+severity. The lookup tables are pinned too, since a typo in one silently mislabels a row.
 """
 
 import pytest

@@ -1,11 +1,9 @@
 """OrcaHub's hardware totals answer from the cache and read the clusters side by side.
 
-/integrations/regions is polled about every 2.4 minutes. Its totals read each cluster's status one
-after the other on every miss of a plain 120 s cache, so most polls waited 2.4 s on dev (p95
-10.4 s, max 14.6 s), and a read where no cluster answered cached zeros for 120 s. They are now
-served through the stale-while-revalidate layer (owner decision 2026-11-04: 2 minutes fresh plus
-the 3 minute stale window), read concurrently under a wall per cluster, remembered for less when
-a cluster is missing, and not remembered at all when none answered.
+/integrations/regions is polled about every 2.4 minutes, so its totals are served through the
+stale-while-revalidate layer (2 minutes fresh plus the 3 minute stale window). On a miss the
+clusters are read concurrently under a wall per cluster; a result missing a cluster is remembered
+for less time, and one where no cluster answered is not remembered at all.
 """
 
 from __future__ import annotations

@@ -1,9 +1,9 @@
 """The terminal relays PTY bytes intact, bounds what is in flight, and says how a session ended.
 
-- Output used to be decoded per LXD frame with errors="replace": a multibyte character split
-  across two frames (htop's box drawing, CJK, emoji) reached xterm as U+FFFD.
-- Nothing bounded output in flight, so `yes` grew the browser tab until it stalled.
-- Every ending reached the browser as 1006, so a shell that had just exited was reconnected.
+- A multibyte character split across two LXD frames (box drawing, CJK, emoji) must not reach
+  xterm as U+FFFD.
+- Output in flight is bounded, so `yes` cannot grow the browser tab until it stalls.
+- Each ending has its own close code, so a shell that exited is not reconnected.
 """
 
 import asyncio
@@ -154,7 +154,7 @@ async def test_a_session_that_cannot_start_says_why_and_whether_to_retry(lxd, re
 
 
 async def test_a_fenced_instance_closes_with_4423_and_keeps_the_sentence_in_the_frame(lxd):
-    """The page reads the code; the sentence rides in the frame, where 123 bytes do not cut it."""
+    """The page reads the close code; the message rides in a JSON frame, past the 123-byte cap."""
     from app.services.migration_fence import MigrationFenceConflict
 
     lxd["state"]["refuse"] = MigrationFenceConflict("Migration Center is moving this instance")

@@ -1,13 +1,11 @@
 """A fleet read never dials a cluster this worker already knows is down.
 
-Once a dead cluster's 60 s trip lapsed, the next read that reached it paid a whole connect (about
-8 s against a silent host on dev) and its response waited for it. On the dev fleet 29 of the 32
-such dials in one day came from OrcaHub's /integrations/regions poll, which then took up to
-14.6 s. The breaker's verdict outlives the trip (known_unreachable), and the background healer
-redials and clears it, so every fan-out now reports the cluster from that verdict instead:
-/nodes, the instance inventory, /regions, the snapshot fleet, the availability probe, the
-warnings feed and the integration sync. A cluster this worker never saw fail is still dialed
-once, a pooled client still reads, and forced paths still dial.
+Once a dead cluster's breaker trip lapses, a read that dials it pays a whole connect against a
+silent host and its response waits for it. The breaker's verdict outlives the trip
+(known_unreachable), and the background healer redials and clears it, so every fan-out reports
+the cluster from that verdict: /nodes, the instance inventory, /regions, the snapshot fleet, the
+availability probe, the warnings feed and the integration sync. A cluster this worker never saw
+fail is still dialed once, a pooled client still reads, and forced paths still dial.
 """
 
 from __future__ import annotations

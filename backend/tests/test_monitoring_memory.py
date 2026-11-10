@@ -1,10 +1,9 @@
 """Top Consumers memory without reclaimable page cache, from one metrics read per member.
 
-The state the fleet list carries reports a container's cgroup usage and a VM's MemTotal minus
-MemFree, both counting page cache, so the dashboard ranked file I/O as memory while the instance
-dialog, which reads /1.0/metrics, showed the honest figure. These tests pin the sweep's memory
-phase: the dialog's gate, one read per member, a bounded phase, and a flag on every row saying
-which figure it carries.
+The fleet list's state reports a container's cgroup usage and a VM's MemTotal minus MemFree,
+both counting page cache, so ranking from it would count file I/O as memory. The instance dialog
+reads /1.0/metrics instead. These tests pin the sweep's memory phase: the dialog's gate, one
+read per member, a bounded phase, and a flag on every row saying which figure it carries.
 """
 
 import asyncio

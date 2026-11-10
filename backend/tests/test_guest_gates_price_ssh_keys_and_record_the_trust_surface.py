@@ -58,7 +58,7 @@ def _passed(seen: Any) -> None:
     assert len(seen.cluster.writes) == 1
 
 
-# note: creates, on every door, priced without a read
+# Creates, on every door, priced without a read.
 
 
 @pytest.mark.parametrize("value", [KEY_A, "", None, 1, True, [KEY_A]], ids=repr)
@@ -109,7 +109,7 @@ async def test_mcp_create_with_an_ssh_key_costs_exec(door: Any, name: str, wait:
     assert seen.cluster.untouched
 
 
-# note: updates, judged against the object's own config (decision 18)
+# Updates, judged against the object's own config.
 
 UPDATE_TARGETS = [
     *[(method, f"/1.0/{family}/web-1", f"/{family}/web-1") for family in ("instances", "containers", "virtual-machines")
@@ -117,7 +117,7 @@ UPDATE_TARGETS = [
     ("PUT", "/1.0/profiles/p1", "/profiles/p1"), ("PATCH", "/1.0/profiles/p1", "/profiles/p1"),
 ]
 UPDATE_IDS = [f"{m}-{t.strip('/')}" for m, _p, t in UPDATE_TARGETS]
-# note: (id, the object's own config, the config sent, priced)
+# Each is (id, the object's own config, the config sent, priced).
 SSH_COMBOS = [
     ("second-key-added", {ROOT: KEY_A}, {ROOT: KEY_A, DEPLOY: KEY_B}, True),
     ("one-of-two-left-out", {ROOT: KEY_A, DEPLOY: KEY_B}, {ROOT: KEY_A}, False),
@@ -137,8 +137,8 @@ SSH_COMBOS = [
 ]
 
 
-# note: a project-limited key is refused any profile, container or vm write (pinned in round 1d), so it is
-# judged on /instances only.
+# A project-limited key is refused any profile, container or vm write, so it is judged on
+# /instances only.
 KEYED_TARGETS = [(api_key, project, method, path, target) for api_key, project in DENIED
                  for method, path, target in UPDATE_TARGETS if api_key is not NARROW or target.startswith("/instances")]
 KEYED_IDS = [f"{DENIED_IDS[DENIED.index((k, p))]}-{m}-{t.strip('/')}" for k, p, m, _path, t in KEYED_TARGETS]
@@ -220,7 +220,7 @@ async def test_mcp_update_prices_an_ssh_key_by_what_it_changes(door: Any, combo:
         assert seen.status == 200 and [verb for verb, *_ in seen.cluster.writes] == ["save"], seen.text
 
 
-# note: OrcaHub v1.32.0's read-modify-write on an instance the dashboard gave a login key
+# OrcaHub's read-modify-write on an instance the dashboard gave a login key.
 
 EDITABLE = {"architecture": "x86_64", "config": {"limits.cpu": "2", "limits.memory": "2GiB", ROOT: KEY_A,
                                                  "volatile.cloud-init.instance-id": "5b1e0a4c"},
@@ -252,7 +252,7 @@ def test_user_meta_data_costs_exec_like_the_other_cloud_init_keys(door: Any) -> 
     _passed(door.raw(EXEC, "POST", "/1.0/instances", body=body))
 
 
-# note: trust surface refusal records, each answer compared with the gate's own
+# Trust-surface refusal records, each answer compared with the gate's own.
 
 
 def _answer(gate: Callable[[], None]) -> HTTPException:
@@ -364,7 +364,7 @@ def test_a_failing_audit_writer_leaves_the_answer_unchanged(door: Any, monkeypat
         assert (seen.status, seen.text) == (expected.status_code, str(expected.detail)) and seen.cluster.untouched
 
 
-# note: refusals that come before the trust surface stay unrecorded, as before
+# Refusals that come before the trust surface stay unrecorded.
 
 
 def test_refusals_before_the_trust_surface_are_not_recorded(door: Any) -> None:

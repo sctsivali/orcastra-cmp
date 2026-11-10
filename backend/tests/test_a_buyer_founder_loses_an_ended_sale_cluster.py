@@ -1,9 +1,9 @@
 """A cluster reached only through a sale is reached only while that sale is live.
 
-Provisioning binds the seller's cluster to the buyer's organization (registered_by NULL). A buyer
-founder that OrcaHub promoted to role_partner then saw the cluster through that binding for as
-long as it stood, long after the term and the retention window ended. The binding now counts only
-while the organization holds a live access rule on the cluster.
+Provisioning binds the seller's cluster to the buyer's organization (registered_by NULL), and a
+buyer founder OrcaHub promoted to role_partner sees the cluster through that binding. The binding
+counts only while the organization holds a live access rule on the cluster, so the founder loses
+it once the term and the retention window end.
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ async def test_only_a_sale_binding_is_scoped_to_its_sale(kwargs) -> None:
 
 
 async def test_a_local_rule_the_founder_wrote_does_not_keep_the_sale_alive() -> None:
-    """Security review 2026-10-27: only the purchase's own (OrcaHub) policies count."""
+    """Only the purchase's own (OrcaHub) policies count."""
     db = await _world(access_ends_at=NOW - timedelta(minutes=1))
     db.add(TenantAccessPolicy(id=71, organization_id=7, name="founder-rule", source="local", created_by=FOUNDER))
     await db.commit()

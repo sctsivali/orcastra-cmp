@@ -1,4 +1,4 @@
-"""Durable project-delete follow-ups on SQLite, with the announcement recorded instead of sent."""
+"""Durable ProjectDeleteFollowup rows on SQLite, with the announcement recorded instead of sent."""
 
 from __future__ import annotations
 

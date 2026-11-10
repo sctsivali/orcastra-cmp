@@ -1,7 +1,8 @@
 """A rollback that deletes the target project its job created also removes the rules naming it.
 
 Instance moves may run on a shared cluster. Rules added for the new project during retention
-outlived it, so another organization's later project of the same name inherited them.
+would otherwise outlive it, and another organization's later project of the same name would
+inherit them.
 """
 
 from __future__ import annotations

@@ -1,11 +1,10 @@
 """An add-on hears about a project only when its installation reaches that project.
 
-Webhooks were routed by cluster alone, so an add-on a Partner installed on a cluster another
-organization also holds received that party's project, instance and volume names (security review
-of the RC5 follow-up round, 2026-11-06). The event's project must now be in the installation's
-grant for that cluster (owner decision 2026-11-06: filtered per grant on every cluster), the grant
-held to its installer's bound where another party holds the cluster, as its key is
-(services/key_party_bound.py), when the event is queued. A queued event is judged again in
+Routing by cluster alone would send an add-on a Partner installed on a cluster another
+organization also holds that party's project, instance and volume names. When the event is
+queued, its project must be in the installation's grant for that cluster, on every cluster, and
+where another party holds the cluster the grant is held to its installer's bound, as its key is
+(services/key_party_bound.py). A queued event is judged again in
 test_a_queued_addon_event_is_judged_where_it_is_sent_or_shown.py.
 """
 

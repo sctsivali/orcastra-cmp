@@ -1,27 +1,13 @@
 """LXD certificate files on the backend tmpfs must be bounded, whatever the concurrency.
 
-``_create_temp_cert_files`` used to call ``tempfile.mkstemp`` with a random suffix and record the
-result in ``_temp_cert_paths[cluster_id]``, a dict holding exactly one pair per cluster. Nothing
-serialized create-and-assign, and ``get_client`` runs in a thread pool via ``run_blocking``, so two
-threads connecting to the same cluster each minted a pair and each overwrote that slot. Every pair
-but the last was orphaned with no path left anywhere to unlink it.
+``get_client`` runs in a thread pool via ``run_blocking``, so several threads can connect to the
+same cluster at once, and a cluster that never connects is never cached in ``_clients``, so every
+request re-enters ``_auto_reconnect`` and writes its certificates again. Each cluster therefore has
+one fixed pair of paths, replaced atomically, so concurrent writers cannot orphan files.
 
-Observed live on the running stack: 8940 files in ``/tmp`` in the 46 hours since the container
-started, against a 256 MiB tmpfs, at roughly 194 files an hour. Unreachable clusters dominated
-(blitz01 1738 files, blitz001 1316, against nuc2's 70) because a cluster that never connects is
-never cached in ``_clients``, so every request re-enters ``_auto_reconnect``. The orphaning is
-visible in the timestamps: ``local-cluster`` and ``franklin-lxd`` each hold three pairs stamped in
-the same second, which is three concurrent creates and two losers left behind.
-
-When that tmpfs filled, ``mkstemp`` raised ``OSError(28)``, the bare ``except Exception`` in
-``connect_with_vault_cert`` rewrote it as ``LXDConnectionError`` and recorded it against the
-circuit breaker as ``KIND_OFFLINE``. Operators were told every cluster was offline while every
-hypervisor was healthy, and the breaker then suppressed the retries that would have shown it.
-
-``test_temp_cert_cleanup_is_race_safe`` hardened the *cleanup* side of this same dict. Nothing ever
-tested the *create* side, which is where the orphaning happened, so the leak survived that fix.
-Two guarantees are asserted here: the file count cannot grow, and a local storage fault is never
-recorded as a cluster failure.
+A full tmpfs is a local storage fault (``LXDLocalStorageError``). Raised as ``LXDConnectionError``
+it would be recorded against the circuit breaker, report every healthy cluster as offline and
+suppress the retries that would show otherwise.
 """
 
 import errno
@@ -39,7 +25,7 @@ KEY_PEM = "-----BEGIN PRIVATE KEY-----\nnot a real key\n-----END PRIVATE KEY----
 
 
 class CertFileIsolation(unittest.TestCase):
-    """Point gettempdir() at a scratch directory so the suite never touches the real /tmp."""
+    """Point the certificate base at a scratch directory so the suite never touches the real /tmp."""
 
     def setUp(self):
         self._previous = os.environ.get(cert_files.CERT_BASE_ENV)
@@ -68,7 +54,7 @@ class CertFileIsolation(unittest.TestCase):
 
 class MaterializeIsBounded(CertFileIsolation):
     def test_sixty_four_concurrent_writers_leave_exactly_one_pair(self):
-        """The ratchet. Against the old mkstemp scheme this left up to 128 files."""
+        """64 concurrent writers for one cluster leave exactly one pair."""
         with ThreadPoolExecutor(max_workers=16) as pool:
             results = [
                 future.result()
@@ -87,7 +73,7 @@ class MaterializeIsBounded(CertFileIsolation):
         self.assertEqual(len(set(results)), 1, "concurrent callers disagreed on the path")
 
     def test_every_writer_sees_complete_content(self):
-        """os.replace is the point: no reader may observe a half-written certificate."""
+        """Writes go through os.replace, so no reader observes a half-written certificate."""
         with ThreadPoolExecutor(max_workers=16) as pool:
             for future in [
                 pool.submit(cert_files.materialize, "nuc-2", CERT_PEM, KEY_PEM)
@@ -100,7 +86,7 @@ class MaterializeIsBounded(CertFileIsolation):
                     self.assertEqual(handle.read(), KEY_PEM)
 
     def test_repeated_clusters_do_not_each_add_a_pair(self):
-        """Sixteen clusters connecting ten times each is sixteen pairs, not a hundred and sixty."""
+        """Sixteen clusters connecting ten times each leave sixteen pairs."""
         clusters = [f"my-cluster-{index:02d}" for index in range(16)]
         for _ in range(10):
             for cluster_id in clusters:
@@ -138,11 +124,10 @@ class MaterializeIsBounded(CertFileIsolation):
 
 
 class ExitedWorkersDoNotStrandDirectories(CertFileIsolation):
-    """A pid-scoped directory is only bounded if the pids stop coming back.
+    """A pid-scoped directory is only bounded if the directories of exited pids are reclaimed.
 
     The backend runs anyio process-pool workers, and anyio kills one after 300 seconds idle and
-    spawns a replacement with a new pid. Four worker directories existed one minute after boot.
-    Without reclaiming the exited ones, the leak returns in a slower form.
+    spawns a replacement with a new pid, so new pid directories keep appearing.
     """
 
     def setUp(self):
@@ -245,13 +230,11 @@ class StorageFailureIsNotAClusterVerdict(CertFileIsolation):
 
 
 class AProbeMustNotInventAClusterStatus(CertFileIsolation):
-    """A probe that never ran has no verdict to return, and returning one is not harmless.
+    """A probe that never ran has no verdict to return.
 
-    probe_connection used to catch any exception and return ConnectionProbe(None, False, ...).
-    derive_status reads reachable=None and, by a deliberate default documented in
-    cluster_status.py, answers OFFLINE. So under a full tmpfs the check-auth endpoint reported
-    every healthy hypervisor as down. Verified live before this fix: with /tmp at 100 percent,
-    nuc2 came back status=offline while the host was answering normally.
+    derive_status reads reachable=None as OFFLINE, a default documented in cluster_status.py, so
+    a probe returned after a local storage fault would make the check-auth endpoint report every
+    healthy cluster as down. probe_connection raises instead.
     """
 
     def _fail_with(self, error):
@@ -305,8 +288,8 @@ class AProbeMustNotInventAClusterStatus(CertFileIsolation):
     def test_the_bool_wrapper_still_absorbs_it_for_its_loop_callers(self):
         """verify_connection is called per cluster while building warning lists.
 
-        Letting the fault escape there would drop the whole list rather than one entry, so this
-        half deliberately keeps the old shape.
+        Letting the fault escape there would drop the whole list rather than one entry, so the
+        bool wrapper absorbs it.
         """
         manager = self._manager()
 
@@ -323,21 +306,19 @@ class AProbeMustNotInventAClusterStatus(CertFileIsolation):
 
 
 class TheCertificateBaseIsPinned(unittest.TestCase):
-    """A full tmpfs must fail, not quietly relocate the private keys.
+    """A full tmpfs must fail instead of relocating the private keys.
 
     tempfile.gettempdir() probes for a writable directory and falls through to /var/tmp when
     /tmp is full. /tmp is the memory-backed tmpfs the compose file mounts for this material;
-    /var/tmp is the container's disk layer. Using gettempdir() here would therefore start
-    writing TLS private keys to disk at exactly the moment the tmpfs filled, and the operator
-    would see nothing wrong. Observed while testing the ENOSPC path: a fresh process resolved
-    its certificate directory to /var/tmp/orcastra-lxd-certs and the write succeeded.
+    /var/tmp is the container's disk layer, so gettempdir() would silently start writing TLS
+    private keys to disk once the tmpfs filled.
     """
 
     def test_the_default_base_is_the_tmpfs_not_a_probe(self):
         self.assertEqual(cert_files.DEFAULT_CERT_BASE, "/tmp")
 
     def test_an_unusable_base_fails_rather_than_relocating_the_keys(self):
-        """A base that cannot hold the files must raise, not resolve somewhere else.
+        """A base that cannot hold the files must raise instead of resolving somewhere else.
 
         Rooted at a regular file so the failure holds for root too, which is how both the suite
         and the container run.

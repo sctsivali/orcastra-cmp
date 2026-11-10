@@ -191,7 +191,7 @@ def projects_client(service, monkeypatch, session, user=None) -> TestClient:
     app.dependency_overrides[check_read_only_mode] = lambda: None
     app.dependency_overrides[get_db] = _db
     client = TestClient(app, raise_server_exceptions=False)
-    # A delete writes its follow-up row before the DELETE goes out (services/project_delete_store.py).
+    # A delete writes its ProjectDeleteFollowup row before sending (services/project_delete_store.py).
     from tests._project_delete_fakes import durable_deletes
 
     client.deletes = durable_deletes(monkeypatch)

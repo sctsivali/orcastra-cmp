@@ -1,13 +1,11 @@
-"""A schedule that stops has to say so, in a place an operator will look.
+"""A schedule that stops says so, in a place an operator will look.
 
-The pause threshold is five, not the webhook dispatcher's twenty. Twenty is right there because it
-retries a ten-second POST and twenty failures is under an hour. A schedule's tick is hours, so
-twenty would be weeks of silence: five is about thirty hours on every_6_hours and five days on
-daily, both still inside the window where an operator recognises the instance.
+The pause threshold is five, below the webhook dispatcher's twenty, which retries a ten-second POST.
+A schedule ticks every few hours, so twenty failures would be weeks of silence; five is about thirty
+hours on every_6_hours and five days on daily.
 
-`BlockingPoolFull` deliberately counts for nothing. A shed call is this service being busy, not the
-cluster being unhealthy, and letting a busy console pause an operator's backups would be a denial
-of service we did to ourselves.
+`BlockingPoolFull` counts for nothing. A shed call means this service is busy, not that the cluster
+is unhealthy, and a busy console must not pause an operator's backups.
 """
 
 from datetime import datetime, timezone
@@ -44,8 +42,7 @@ def test_the_threshold_failure_pauses_and_names_the_cluster():
 
 
 def test_a_terminal_refusal_pauses_immediately_without_waiting_for_five():
-    """An upstream schedule appearing is not a transient fault. Retrying it four more times would
-    be four more refusals and a day of an operator not being told."""
+    """An upstream schedule appearing is not transient; retrying only delays telling the operator."""
     schedule = FakeSchedule()
     settle_row(
         schedule,
@@ -75,7 +72,7 @@ def test_a_shed_call_is_not_a_failure():
 
 
 def test_a_shed_call_does_not_move_the_next_run_either():
-    """It is our own load, so the schedule is simply tried again on the next tick."""
+    """A shed call is this service's own load; the schedule is tried again on the next tick."""
     schedule = FakeSchedule(due_slot=NOW)
     before = schedule.next_run_at
     settle_row(schedule, RunOutcome(result="deferred"), NOW)

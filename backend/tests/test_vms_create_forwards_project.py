@@ -186,7 +186,7 @@ class _Instance:
     name = NAME
     status = "Stopped"
     status_code = 102
-    # Deliberately wrong, as on pylxd versions that report the bound wrapper's default.
+    # Not the real project: some pylxd versions report the bound wrapper's default here.
     project = "default"
     architecture = "x86_64"
     config = {}

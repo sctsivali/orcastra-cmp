@@ -1,24 +1,16 @@
 """What the key-authenticated read surface returns, and what it admits it missed.
 
-Three defects lived here together, and each one is silent in a way that misleads an unattended
-caller rather than failing it.
+The instance fan-out walks every project. The pooled pylxd client is bound to the `default`
+project, so `client.instances.all()` on it leaves out every other project's instances entirely,
+and an integration that provisions into its own project would see an empty fleet and no error.
 
-The instance fan-out read `client.instances.all()` off the pooled pylxd client, which is bound
-to the `default` project. Instances in every other project were absent from the answer
-entirely, not merely unlabelled, so an integration that provisions into its own project saw an
-empty fleet and no error.
+The grant's `projects` allow-list applies to these reads as it does to the proxy and the raw
+proxy, or a key scoped to one project could enumerate all of them. The image upload router has
+its own test (test_an_image_import_cannot_leave_its_project.py).
 
-The grant's `projects` allow-list was enforced on the proxy and the raw proxy and not on these
-reads. A key scoped to one project could enumerate all of them.
-
-(That sentence used to claim both upload routers enforced it too. Only iso_uploads did.
-image_uploads checked the cluster and discarded the grant it was handed, so the same bypass sat
-there until it was closed separately. See test_an_image_import_cannot_leave_its_project.py.)
-
-And a cluster that did not answer contributed an empty list into a response whose `total` read
-as authoritative. An agent polling for the instance it just created cannot tell that from the
-instance having been deleted, which is the one ambiguity least safe to hand to something that
-acts on the answer.
+A cluster that does not answer is named in `unreachable` instead of adding an empty list to a
+`total` that reads as authoritative. Otherwise an agent polling for the instance it just created
+cannot tell an outage from a deletion.
 """
 
 import ast
@@ -48,7 +40,7 @@ def _row(project, cluster_id="nuc2", name="vm"):
     return {"name": name, "cluster_id": cluster_id, "project": project}
 
 
-# ── the project allow-list ─────────────────────────────────────────────────────────────────
+# ── The project allow-list ─────────────────────────────────────────────────────────────────
 
 
 def test_a_wildcard_grant_sees_every_project() -> None:
@@ -70,7 +62,7 @@ def test_an_absent_projects_field_means_default_only() -> None:
 
 
 def test_a_row_from_a_cluster_outside_the_grant_is_dropped() -> None:
-    """Belt and braces: the fan-out already iterates only granted clusters."""
+    """A second check: the fan-out already iterates only granted clusters."""
     assert _within_granted_projects(_key(["*"]), [_row("default", cluster_id="pandora")]) == []
 
 
@@ -95,7 +87,7 @@ def test_a_missing_project_on_a_row_counts_as_default() -> None:
     assert _within_granted_projects(_key(["default"]), [{"name": "vm", "cluster_id": "nuc2"}])
 
 
-# ── the fan-out envelope ───────────────────────────────────────────────────────────────────
+# ── The fan-out envelope ───────────────────────────────────────────────────────────────────
 
 
 def _gather(fn, cluster_ids):
@@ -122,7 +114,7 @@ def test_a_cluster_that_failed_is_named_rather_than_dropped() -> None:
 
 
 def test_the_clusters_that_did_answer_still_answer() -> None:
-    """One dead cluster must degrade the response, not fail it."""
+    """Clusters that fail are reported in `unreachable`; the call itself does not raise."""
     def fetch(_ctx, cluster_id):
         raise RuntimeError("down")
 
@@ -143,14 +135,14 @@ def test_extra_arguments_reach_the_blocking_half() -> None:
     assert seen == [("a", "vm1", "tenant-a")]
 
 
-# ── the project blindness ──────────────────────────────────────────────────────────────────
+# ── The project blindness ──────────────────────────────────────────────────────────────────
 
 
 def test_the_instance_fan_out_does_not_read_only_the_default_project() -> None:
-    """`client.instances.all()` on the pooled client is the shape that hid whole projects.
+    """`client.instances.all()` on the pooled client reads only the `default` project.
 
-    Structural because it is invisible in any environment whose instances all happen to live in
-    `default`, which is every developer machine and was the deployment this shipped to.
+    Structural, because the defect is invisible wherever every instance lives in `default`, as
+    on most developer machines.
     """
     tree = ast.parse(SOURCE.read_text())
     function = next(
@@ -158,8 +150,8 @@ def test_the_instance_fan_out_does_not_read_only_the_default_project() -> None:
         for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef) and node.name == "_fetch_cluster_instances"
     )
-    # note: the docstring names the old shape to explain the defect, so strip it before
-    # matching or the test fails on its own explanation.
+    # `_fetch_cluster_instances`'s docstring names the forbidden shape, so strip it before
+    # matching.
     statements = function.body[1:] if ast.get_docstring(function) else function.body
     body = "\n".join(ast.unparse(statement) for statement in statements)
     assert "instances.all()" not in body, (
@@ -170,12 +162,9 @@ def test_the_instance_fan_out_does_not_read_only_the_default_project() -> None:
 
 
 def test_every_project_bearing_read_narrows_to_the_grant() -> None:
-    """The helper existing is not the same as the handler calling it.
+    """Every handler that fans out over clusters and returns per-project rows calls the filter.
 
-    An earlier pass of this file tested `_within_granted_projects` directly and stayed green
-    while the endpoint that needed it did not call it at all, which is exactly the shape of the
-    original hole. Handlers that fan out over clusters and return per-project rows have to
-    reach the filter.
+    A test of `_within_granted_projects` alone stays green while an endpoint never calls it.
     """
     # Rows here are cluster-level, not project-level, so there is no project to narrow to. The
     # failover read answers server settings of the cluster itself, which no project owns.
@@ -222,14 +211,12 @@ def test_an_unreachable_cluster_raises_instead_of_looking_empty() -> None:
 
 
 def test_a_project_row_names_itself_in_name_not_project() -> None:
-    """The two row shapes are the trap, and the default kept every project row.
+    """A project row names its project in `name`; an instance row uses `project`.
 
     `_fetch_cluster_projects` returns `{"name": "<project>"}` while `_fetch_cluster_instances`
     returns `{"name": "<instance>", "project": "<project>"}`. Filtering a project listing on
-    `project` therefore read None on every row, defaulted it to "default", and matched a
-    default-scoped grant every time. The filter looked applied and did nothing, which is worse
-    than not calling it: the sync endpoint shipped that way and returned all 30 projects to a
-    key granted one.
+    `project` would read None on every row, default it to "default", and match a default-scoped
+    grant every time, so the filter would look applied and keep every project.
     """
     rows = [
         {"name": "default", "cluster_id": "nuc2"},
@@ -238,16 +225,15 @@ def test_a_project_row_names_itself_in_name_not_project() -> None:
     kept = _within_granted_projects(_key(["default"]), rows, project_field="name")
     assert [row["name"] for row in kept] == ["default"]
 
-    # And the default still reads the instance shape, so the other call sites are unchanged.
+    # The default field still reads the instance shape.
     assert _within_granted_projects(_key(["default"]), [_row("tenant-a")]) == []
 
 
 def test_every_project_listing_states_which_field_names_the_project() -> None:
     """Structural, because the wrong field fails open and no response looks different."""
-    # note: an earlier version keyed on the substring "project" appearing in the argument's
-    # source text. `GET /integrations/projects` passes `fanout.items`, which does not contain
-    # it, so the one handler this rule exists for was never checked and the fail-open could be
-    # reintroduced green. Key on where the rows came from instead.
+    # Key on where the rows came from, not on the substring "project" in the argument's
+    # source text: `GET /integrations/projects` passes `fanout.items`, which does not contain
+    # it, so a substring match would skip the one handler this rule exists for.
     tree = ast.parse(SOURCE.read_text())
     offenders = []
     for enclosing in ast.walk(tree):
@@ -296,11 +282,10 @@ def test_every_project_listing_states_which_field_names_the_project() -> None:
 
 
 def test_the_proxy_list_projects_is_narrowed_too() -> None:
-    """The operation proxy authorises the project it runs IN, which does not bound this one.
+    """The operation proxy authorises the project it runs in, which does not bound this one.
 
-    `list_projects` answers about the whole cluster, so a key granted only `default` passed the
-    project check and read every tenant project name back. Those names carry customer slugs,
-    so it is a cross-tenant disclosure through the door the REST read was just closed on.
+    `list_projects` answers about the whole cluster, so without narrowing a key granted only
+    `default` would read every tenant project name back, and those names carry customer slugs.
     """
     tree = ast.parse(SOURCE.read_text())
     handler = next(

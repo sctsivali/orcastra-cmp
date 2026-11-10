@@ -1,9 +1,9 @@
 """Only Partners and Admins read API keys and their user mappings.
 
-The integrations router admits every tier, and the key list, the key detail and the mapping list
-added nothing on top. A tenant whose clusters overlapped a key could read its cluster and project
-grants and every mapping's external email, name and permissions. The sibling write routes were
-already partner or admin only.
+The integrations router admits every tier, so the key list, the key detail and the mapping list
+carry their own partner-or-admin gate, as the write routes do. Without it a tenant whose clusters
+overlap a key could read its cluster and project grants and every mapping's external email, name
+and permissions.
 """
 
 from typing import Any, Dict, List

@@ -1,9 +1,8 @@
 """The orphaned-group cleanup deletes nothing when it could not read the whole key roster.
 
-`list_keys_from_vault` answered `[]` for a Vault outage (non-200, an exception) and skipped any
-key whose metadata read failed. The cleanup then treated every `key_*` LXD group as an orphan and
-deleted it, which strips the permissions from every live key in the fleet. A partial read is not
-an empty roster, so the cleanup refuses it and says why.
+A Vault outage or a failed metadata read leaves a partial roster, and against it every `key_*` LXD
+group looks orphaned; deleting them would strip the permissions from every live key in the fleet.
+So the cleanup refuses a partial read with a 503 and says why.
 """
 
 from types import SimpleNamespace

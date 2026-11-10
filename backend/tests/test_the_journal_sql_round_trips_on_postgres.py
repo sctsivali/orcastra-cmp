@@ -1,14 +1,13 @@
 """Every journal statement, once, against a real Postgres through asyncpg.
 
-The hermetic suite proves the logic with fakes that bind any Python value; asyncpg does not.
-The first live boot dropped every audit row (`ts` bound as text) and refused the very first
-seed (`inconsistent types deduced for parameter $9`, a bind read as varchar in VALUES and as
-text in a CASE). Neither can be seen without the driver, so this module drives the production
-writers (`JournalSink._write_batch`, `JournalWriter.write_batch`), every sweep, every read and
-the prune against a scratch database migrated to head, and is skipped unless
-`JOURNAL_TEST_DATABASE_URL` names one. Run it from the backend venv against the dev postgres:
+The hermetic suite checks the logic with fakes that bind any Python value; asyncpg does not.
+Bind type errors (ex; a timestamp bound as text, or `inconsistent types deduced for parameter`
+when one bind is read as varchar in VALUES and as text in a CASE) only show with the driver.
+This module drives the production writers (`JournalSink._write_batch`,
+`JournalWriter.write_batch`), every sweep, every read and the prune against a scratch database
+migrated to head, and is skipped unless `JOURNAL_TEST_DATABASE_URL` names one:
 
-    JOURNAL_TEST_DATABASE_URL=postgresql+asyncpg://user:pw@host:5432/qa_journal_scratch \
+    JOURNAL_TEST_DATABASE_URL=postgresql+asyncpg://user:pw@host:5432/journal_scratch \
         python3 -m pytest -q tests/test_the_journal_sql_round_trips_on_postgres.py
 """
 
@@ -28,7 +27,7 @@ URL = os.environ.get("JOURNAL_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="JOURNAL_TEST_DATABASE_URL is not set")
 
 # important: the fixture TRUNCATEs the three journal tables. The database it names must say
-# it is a scratch one, or a mistyped URL empties the dev journal (a review finding).
+# it is a scratch one, or a mistyped URL empties a real journal.
 if URL and not any(word in URL.rsplit("/", 1)[-1].lower() for word in ("scratch", "test")):
     raise RuntimeError("JOURNAL_TEST_DATABASE_URL must name a scratch or test database")
 
@@ -199,8 +198,8 @@ def test_the_sink_writes_an_audit_record_and_the_stream_lands_on_the_same_row(lo
     assert len(life) == 1 and life[0]["actor_kind"] == "external"
     assert life[0]["message"] == "Instance web-01 stopped"
     assert life[0]["event_id"].startswith(f"lifecycle:{HOST}:")
-    # Live: the dashboard had claimed the row, so attach_requestor rightly left the actor
-    # alone, and the lifecycle line must still be linked to the task by key.
+    # The dashboard claimed the row, so attach_requestor leaves the actor alone, and the
+    # lifecycle line must still be linked to the task by key.
     assert life[0]["task_id"] == task_id, "the lifecycle line belongs to the claimed task"
     kept = _run(loop, _one(db, "SELECT actor_email, source, actor_kind FROM task_journal WHERE id = CAST(:id AS uuid)", id=task_id))
     assert (kept.actor_email, kept.source, kept.actor_kind) == ("ops@example.test", "dashboard", "user")
@@ -248,7 +247,7 @@ def test_the_stream_first_then_the_audit_with_the_operation_id(loop, db):
 
 
 def test_an_operation_the_daemon_did_not_name_takes_its_key_from_the_audit(loop, db):
-    """Live: "Creating instance" and "Deleting project" arrive with `resources: {}`."""
+    """LXD sends "Creating instance" and "Deleting project" with `resources: {}`."""
     from app.services.task_journal.follower_writer import JournalWriter
     from app.services.task_journal.sink import JournalSink
 
@@ -290,8 +289,8 @@ def test_an_operation_the_daemon_did_not_name_takes_its_key_from_the_audit(loop,
 
 
 def test_a_lifecycle_line_ahead_of_its_operation_is_linked_by_the_sweep(loop, db):
-    """Live on nuc1: the admin's stop had its `instance-stopped` line unlinked while the
-    partner's was linked, with the same frame order; the sweep makes the link deterministic."""
+    """An `instance-stopped` line that arrives before its operation's task row is left
+    unlinked inline; the sweep links it, so the outcome does not depend on frame timing."""
     from app.services.task_journal.follower_writer import JournalWriter
     from app.services.task_journal.repository_sweeps import link_lifecycle_rows
 
@@ -342,8 +341,8 @@ def test_an_over_long_client_string_does_not_poison_the_batch(loop, db):
 
 
 def test_a_rebuild_job_takes_the_audit_verdict_over_its_one_operation(loop, db):
-    """The LXD rebuild step succeeded (200) and the job's start step then failed: the row is
-    the job, so it reads failure with the job's error, not success with an error beneath."""
+    """When the LXD rebuild step succeeds (200) and the job's start step then fails, the row
+    stands for the job, so it reads failure with the job's error."""
     from app.services.task_journal.follower_writer import JournalWriter
     from app.services.task_journal.sink import JournalSink
 
@@ -521,7 +520,7 @@ def test_every_sweep_and_the_cluster_state_helpers(loop, db):
                 "SELECT id::text AS id, operation_id, actor_email FROM task_journal "
                 "WHERE resource_name = 'web-09'"))).all()
             assert len(left) == 1 and left[0].operation_id and left[0].actor_email == "ops@example.test"
-            assert a  # the action row was the survivor's identity or was folded in; one row either way
+            assert a  # The action row survived or was folded in; one row either way.
 
             # A stale open action expires, a young one does not.
             young = await repository.insert_action(s, kind="dashboard_action",
@@ -534,7 +533,7 @@ def test_every_sweep_and_the_cluster_state_helpers(loop, db):
             lost = (await s.execute(text("SELECT status, error FROM task_journal WHERE id = CAST(:id AS uuid)"), {"id": young})).first()
             assert lost.status == "lost" and lost.error
 
-            # mark_lost: an open stream row the seed no longer sees.
+            # mark_lost: an open stream row missing from the seed's view.
             gone = str(uuid.uuid4())
             await s.execute(text(
                 "INSERT INTO task_journal (kind, cluster_id, project, operation_id, description, status, "

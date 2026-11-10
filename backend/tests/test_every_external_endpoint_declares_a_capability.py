@@ -1,15 +1,9 @@
 """Every API-key-authenticated handler must declare which capability it needs.
 
-`external_router` carries no router-level dependency, so authorization is per handler. That is
-the property `documentation/rbac/external-api-key-scope.md` already names as the standing risk:
-
-    Enforcement is still per handler. A new endpoint on `external_router` that forgets its check
-    will have the same class of gap and nothing will catch it at review time.
-
-Capabilities do not fix that on their own. A new endpoint that depends on `validate_api_key`
-directly is reachable by every key that authenticates, exactly as before. This ratchet is what
-makes forgetting impossible: it is structural, like `test_cluster_scope_ratchet.py`, because the
-failure is invisible at runtime to anyone whose own key happens to carry the capability.
+`external_router` carries no router-level dependency, so authorization is per handler, and a
+new endpoint that depends on `validate_api_key` directly is reachable by every key that
+authenticates. The ratchet is structural, like `test_cluster_scope_ratchet.py`, because the
+failure is invisible at runtime to anyone whose own key carries the capability.
 """
 
 import ast
@@ -128,20 +122,15 @@ def test_the_exempt_list_stays_honest() -> None:
         assert entry in known, f"EXEMPT names {entry}, which is not a routed API-key handler"
 
 
-# ── the MCP surface, which this file could not see ─────────────────────────────────────────────
+# ── the MCP surface ────────────────────────────────────────────────────────────────────────────
 
 def test_every_mcp_tool_funnels_through_a_gate() -> None:
-    """This ratchet walks `app/routers/` and requires a `router.` decorator, so `app/mcp/` was
-    invisible to it and so was `test_cluster_scope_ratchet.py`.
+    """Every MCP tool goes through a gated dispatcher or is listed here with a reason.
 
-    That matters because every MCP tool takes a caller-supplied `cluster_id`, which is exactly
-    what the scope ratchet exists to police. Today they are protected transitively: `call_proxy`
-    and `run_inventory` funnel into `proxy_operation`, which does its own per-cluster check. But
-    that is a property of the current implementation rather than of any test, and a tool that
-    reached a service directly would inherit no coverage from either file.
-
-    So: a tool handler either goes through one of the two dispatchers, or it is listed here with
-    a reason.
+    This file and `test_cluster_scope_ratchet.py` walk `app/routers/` for a `router.` decorator
+    and cannot see `app/mcp/`, yet every MCP tool takes a caller-supplied `cluster_id`.
+    `call_proxy` and `run_inventory` funnel into `proxy_operation`, which does its own per-cluster
+    check; a tool that reached a service directly would be covered by neither file.
     """
     import ast
     from pathlib import Path
@@ -180,7 +169,7 @@ def test_every_mcp_tool_funnels_through_a_gate() -> None:
 
 
 def test_the_mcp_dispatchers_still_enforce() -> None:
-    """The funnel above is only worth anything while the thing it funnels into checks."""
+    """The funnel above holds only while the dispatchers it funnels into still check."""
     import ast
     import inspect
 

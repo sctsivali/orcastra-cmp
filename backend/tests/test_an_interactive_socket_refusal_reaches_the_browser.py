@@ -1,10 +1,10 @@
 """A terminal or console socket that is refused tells the browser why, in a close it can read.
 
-Every connect-time refusal used to close the socket before accept(). uvicorn answers that with
-HTTP 403, so the browser saw 1006 with no reason and a page opened from a deep link could not tell
-an expired ticket from a dropped network: it said "disconnected" and nothing recovered. Starlette's
-TestClient hides the difference (it reports a close before accept as WebSocketDisconnect(1008)),
-so the last test here runs uvicorn on loopback and connects with a real client.
+A connect-time refusal accepts the socket and then closes it with a code and a reason token.
+uvicorn answers a close before accept() with HTTP 403, which the browser sees as 1006 with no
+reason, so a page opened from a deep link could not tell an expired ticket from a dropped network.
+Starlette's TestClient hides the difference (it reports a close before accept as
+WebSocketDisconnect(1008)), so the last test runs uvicorn on loopback with a real client.
 """
 
 import asyncio
@@ -158,7 +158,7 @@ def test_an_anonymous_caller_with_an_unknown_console_type_hears_only_the_sign_in
 
 
 def test_a_spice_channel_is_refused_on_the_subprotocol_it_offered(no_instance_io):
-    """spice-html5 fails a socket that does not echo "binary", which would hide the reason again."""
+    """spice-html5 fails a socket that does not echo "binary", which would hide the reason."""
     events = _open(console.console_websocket, _Socket(subprotocols=["binary"]), user=None)
 
     assert events == [("accept", "binary"), ("close", 4401, "auth_required")]

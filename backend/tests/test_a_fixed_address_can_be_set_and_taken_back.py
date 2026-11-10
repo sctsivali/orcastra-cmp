@@ -1,14 +1,8 @@
 """An operator can pin a NIC's IPv4 from the console, and hand it back to DHCP.
 
-LXD's own web UI has no control for this, so the address of
-a database node or a DNS server was decided by editing YAML on the hypervisor over SSH. Setting
-it at create time is half the answer; an address planned against an IPAM catalogue also has to
-be changeable on an instance that already exists.
-
-The two things worth pinning here are the ones that are easy to get wrong: clearing an address
-has to actually remove the key rather than set it empty, and a NIC inherited from a profile is
-not in the instance's own devices at all, so pinning it has to write the whole device onto the
-instance the way `lxc config device override` does.
+Clearing an address removes the key rather than setting it empty, and a NIC inherited from a
+profile is not in the instance's own devices at all, so pinning it writes the whole device onto
+the instance the way `lxc config device override` does.
 """
 
 import pytest
@@ -122,8 +116,7 @@ class TestApplyingTheAddress:
 
 class TestWritingItBack:
     def test_the_whole_object_is_written_not_merged(self):
-        """A PATCH merges, so it can add a key and never remove one. Clearing an address
-        matters as much as setting it, so the write is a full PUT."""
+        """A PATCH merges and cannot remove a key, so clearing an address needs a full PUT."""
         client = FakeClient(record(devices={"eth0": OWN_NIC}))
         set_nic_address_sync(client, "db-1", "default", "eth0", "10.0.5.7")
         payload, _params = client.writes[0]
@@ -213,7 +206,7 @@ class _OpNode:
 
 
 class _AsyncPutClient:
-    """A daemon that answers the device PUT the way LXD really does: 202 plus an operation."""
+    """A daemon that answers the device PUT as LXD does: 202 plus an operation."""
 
     def __init__(self, outcome):
         self.outcome = outcome
@@ -265,9 +258,8 @@ class _AsyncPutClient:
 class TestTheWriteIsWaitedOn:
     """LXD answers an instance PUT with 202 and does the work afterwards.
 
-    Returning at the 202 reported a refused write as a success: the console said the address
-    was reserved while the background job had failed, so the operator saw Static on a NIC that
-    was still on DHCP. Verified against nuc1, whose device PUT answers
+    Returning at the 202 would report a refused write as a success, and the operator would see
+    Static on a NIC still on DHCP. A device PUT answers
     `{"type":"async","status":"Operation created",...,"operation":"/1.0/operations/..."}`.
     """
 
@@ -286,17 +278,15 @@ class TestTheWriteIsWaitedOn:
 
 
 class TestAnInheritedDeviceIsNotDetachedForNothing:
-    """Overriding a profile device is one way, so it must buy something.
+    """Overriding a profile device cannot be undone from the console, so a no-op must not do it.
 
-    `lxc config device override` copies the profile's device onto the instance and the console
-    has no route that hands it back. A Save on an interface that is already on DHCP changed
-    nothing and detached it anyway, after which edits to the profile's NIC stopped reaching
-    that instance and only a shell on the hypervisor could undo it, which is the thing this
-    feature exists to avoid.
+    `lxc config device override` copies the profile's device onto the instance, after which edits
+    to the profile's NIC stop reaching that instance. Clearing an interface already on DHCP writes
+    nothing.
     """
 
     def _client(self):
-        # the NIC lives only in the expanded set, which is what "inherited" means
+        # The NIC lives only in the expanded set, which is what "inherited" means.
         return FakeClient(
             record(devices={}, expanded={"eth0": {"type": "nic", "network": "lxdbr0"}})
         )
@@ -315,25 +305,19 @@ class TestAnInheritedDeviceIsNotDetachedForNothing:
 
 
 def test_a_slow_cluster_is_answered_as_a_timeout_not_a_server_fault():
-    """The 504 on the NIC address route must catch the shape a timeout really takes here.
+    """The 504 on the NIC address route catches the shape a read timeout takes here.
 
-    Measured against a peer that accepts the connection and never answers:
-
-        bare requests session          -> requests.exceptions.ReadTimeout   (a Timeout)
-        the same call through this repo's adapter -> requests.exceptions.ConnectionError
-
-    The pooled LXD session mounts a urllib3 Retry, and with a Retry object mounted a read
-    timeout surfaces as MaxRetryError, which requests converts to ConnectionError. That is NOT
-    a subclass of Timeout, so an `except requests.exceptions.Timeout` clause never fires and a
-    slow cluster falls through to a bare 500 with no reason in the body. This pins both halves:
-    the class relationship that makes one clause insufficient, and the route catching both.
+    The pooled LXD session mounts a urllib3 Retry, so a read timeout surfaces as MaxRetryError,
+    which requests converts to ConnectionError. That is not a subclass of Timeout, so an
+    `except requests.exceptions.Timeout` clause alone never fires and a slow cluster falls
+    through to a bare 500. This pins the class relationship and the route catching both.
     """
     import ast
     import pathlib
 
     import requests
 
-    # the premise: catching Timeout alone cannot cover the case that actually happens
+    # Catching Timeout alone cannot cover a read timeout through the retrying adapter.
     assert not issubclass(
         requests.exceptions.ConnectionError, requests.exceptions.Timeout
     ), "if this ever changes, the two-name clause below can be simplified"

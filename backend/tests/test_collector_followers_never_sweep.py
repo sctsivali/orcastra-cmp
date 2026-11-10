@@ -1,9 +1,8 @@
 """A collector follower relays the leader's dashboard and never sweeps the fleet itself.
 
-Followers used to call the dashboard with fresh=False, which swept every cluster whenever the
-shared entry had expired, and it expired every cycle. Over a day on the dev fleet the dashboard
-was built three to four times per cycle and about 70% of history points were copies written
-within seconds of each other.
+A follower that builds the dashboard on a cache miss sweeps every cluster whenever the
+shared entry expires, which happens every cycle, and writes duplicate history points
+seconds apart.
 """
 
 import asyncio

@@ -1,8 +1,7 @@
 """A fleet list waits at most CLUSTER_WALL_SECONDS for any one cluster, and a slower one is not lost.
 
-central-1's volume listing takes 17 to 24 s on dev, so the storage volume list's cold read took
-as long. Owner decision 2026-11-04: answer within 15 s and name the cluster as still loading, then
-show it once it answers. gather_clusters returns LateRead for a cluster past its wall and lets the
+One slow cluster must not hold up the whole list: the answer names it as still loading and shows
+it once it answers. gather_clusters returns LateRead for a cluster past its wall and lets the
 read run on; its result then stands in for that cluster in later answers of the same list and
 scope, one background rebuild is scheduled so the rows appear without waiting for a poll to miss,
 and a stand-in that ages is re-read in the background while it keeps answering.

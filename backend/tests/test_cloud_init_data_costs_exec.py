@@ -1,17 +1,13 @@
 """
 A key write carrying cloud-init user-data or vendor-data costs `instance.exec`, for every key.
 
-LXD hands `cloud-init.user-data`, `cloud-init.vendor-data`, `user.user-data` and `user.vendor-data`
-to cloud-init in the guest, and gives the guest a new cloud-init instance-id when one of them changes
-(needsNewInstanceID, lxd/instance/drivers/driver_common.go), so the next boot applies the new data.
-A create carrying one costs exec outright. A write to an existing instance or profile is judged by
-what it changes (tests/test_cloud_init_is_judged_by_what_changes.py), so here the object it writes
-holds other values, read from a recording cluster, and every value is an inert placeholder.
-
-Only these four keys are new for every key: raw.*, security.privileged and host devices keep today's
-rule on each surface, so the integrator's GPU recipe still goes through on a `*` key. The
-integrator's instance and project writes (its client source was read, and it sends no cloud-init
-key) are pinned as still sent.
+LXD gives the guest a new cloud-init instance-id when one of these keys changes (needsNewInstanceID,
+lxd/instance/drivers/driver_common.go), so the next boot applies the new data. A create carrying one
+costs exec outright; a write to an existing object is judged by what it changes
+(tests/test_cloud_init_is_judged_by_what_changes.py), so here the written object holds other values.
+Every value is an inert placeholder. raw.*, security.privileged and host devices keep their own
+rule, so the integrator's GPU recipe still goes through on a `*` key, and the integrator's instance
+and project writes, which carry no cloud-init key, are pinned as still sent.
 """
 
 import inspect
@@ -240,7 +236,7 @@ async def test_the_integrators_config_writes_are_still_sent(
 
     assert outcome.status_code == 200, outcome
     assert [(verb, kwargs.get("json")) for verb, _url, kwargs in session.calls] == [(method, body)]
-    # note: the schedule write also leaves the policy observer's record, which is dev's
+    # The snapshot-schedule write also leaves the policy observer's record, so no count is fixed.
     assert _failures(audits) == [] and audits[-1]["result"] == "success"
 
 

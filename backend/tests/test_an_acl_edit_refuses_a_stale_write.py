@@ -1,10 +1,9 @@
 """
 An ACL edit carries the ETag it was read with, and a stale one is refused with a 412.
 
-Two operators editing one ACL used to end with the later save winning whole: the dialog seeded
-from the list row and the PUT carried no precondition. The single read now answers the daemon's
-ETag, the PUT forwards If-Match, and a mismatch (the daemon's or one the fresh read already
-shows) is a 412 with a sentence an operator can act on, not a 500.
+Without a precondition, two operators editing one ACL end with the later save winning whole.
+The single read answers the daemon's ETag, the PUT forwards If-Match, and a mismatch (the
+daemon's or one the fresh read already shows) is a 412 with a sentence an operator can act on.
 """
 
 from types import SimpleNamespace
@@ -154,7 +153,7 @@ def test_a_stale_etag_the_daemon_refuses_is_a_412_not_a_500(monkeypatch) -> None
     def refused():
         raise pylxd_exceptions.LXDAPIException(
             _Response({"type": "error", "error": "ETag doesn't match: a vs b", "error_code": 412}, 412))
-    # the local comparison passes (same etag), the daemon is the one that refuses
+    # The local comparison passes (same ETag); the daemon is the one that refuses.
     tc, puts, ops = _app(monkeypatch, put_answer=refused)
     r = tc.put("/network-acls/qaacl?host=nuc1", json={"description": "after"},
                headers={"If-Match": '"abc"'})

@@ -1,9 +1,8 @@
 """The regions overview answers from its cache, stale included, and never waits on one slow host.
 
-The Regions page polls every 120 s and the plain cache lived exactly 120 s, so a poll landed just
-after expiry and paid the whole fan-out (about 4 s on dev) nearly every time, and each rebuild
-built a new thread pool. It now goes through swr.serve on one module pool with a wall per
-cluster: a cluster still reading past the wall is left out of that answer, which is remembered
+A plain cache with the same lifetime as the page's poll interval would expire just before each
+poll and pay the whole fan-out. The overview goes through swr.serve on one module pool with a wall
+per cluster: a cluster still reading past the wall is left out of that answer, which is remembered
 for LATE_FRESH_SECONDS only, so the next poll asks it again soon.
 """
 

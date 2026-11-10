@@ -2,14 +2,13 @@
 
 An exec or console operation is websocket class and its metadata holds `fds`, whose values open
 the operation websocket with no further authentication. A token operation holds `secret`, and
-a migration source holds its channel secrets under `control`, `fs` and `criu`. The /operations
-routes copied that metadata verbatim to every caller, and the operation detail dialog printed
-every key, so anyone who could see an operation could take over the session it belonged to.
+a migration source holds its channel secrets under `control`, `fs` and `criu`. Returned as is,
+they would let anyone who can see an operation take over the session it belongs to.
 
-note: dev closed the dashboard half with an allowlist of scalar progress fields, which is stricter
-than a list of secret names: `command` and `interactive` are dropped too. The allowlist now lives
-in services/lxd/operation_metadata.py beside the secret key set the raw proxy strips, and the
-detail route is covered by test_lxd_operation_authorization.py.
+The /operations routes answer through an allowlist of scalar progress fields, which is stricter
+than a list of secret names: `command` and `interactive` are dropped too. The allowlist lives in
+services/lxd/operation_metadata.py beside the secret key set the raw proxy strips, and the detail
+route is covered by test_lxd_operation_authorization.py.
 """
 
 from types import SimpleNamespace

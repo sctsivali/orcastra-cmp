@@ -1,9 +1,9 @@
 """Deleting an organization that owns migration history answers 409 with the reason, never 500.
 
 Migration plans and jobs keep their organization through RESTRICT foreign keys: a migration record
-is audit history. The delete route went straight to the delete, so the database refused it and the
-operator got a bare 500 (found tearing down the migration lab organization). It now counts the
-history first and refuses with what is holding it, and any other foreign key refusal is a 409 too.
+is audit history. The delete route counts that history first and refuses with what is holding the
+organization, instead of letting the database refuse the delete as a bare 500. Any other foreign
+key refusal is a 409 too.
 """
 
 from __future__ import annotations

@@ -1,22 +1,12 @@
-"""An API key granting nothing must be refused, not crash the request.
+"""An API key granting nothing is refused with a 403 rather than crashing the request.
 
-``max()`` over an empty sequence raises ValueError. The per-cluster permission check ran
-``max(hierarchy.get(p, 0) for p in allowed)`` where ``allowed`` came from
-``grant.get("permissions", ["read"])``, and ``.get`` returns its default only when the key is
-ABSENT. A grant stored as ``"permissions": []`` therefore reached ``max()`` empty and the
-generic handler turned the ValueError into HTTP 500.
+``max()`` over an empty sequence raises ValueError, and ``grant.get("permissions", ["read"])``
+returns its default only when the key is ABSENT, so a naive level check over a grant stored as
+``"permissions": []`` surfaces as HTTP 500. The raw proxy and the image and ISO upload routers
+share one helper for the check (app/core/api_key_permissions.py).
 
-That shape is accepted on the way in: ClusterPermission declares
-``permissions: List[str] = Field(default=["read"])`` (`routers/integrations.py:80`) with no
-minimum length, so an empty list is a valid request body rather than corrupted data.
-
-The check existed three times, inline in the raw proxy and copied verbatim into the image and
-ISO upload routers, and all three carried it. That is why the fix is one shared helper rather
-than three patches.
-
-The level of an empty grant is -1, not 0. Zero is the level of "read", so collapsing an empty
-grant to zero would hand out read access nobody granted. This asserts that specifically, because
-it is the difference between a fix and a privilege escalation.
+The level of an empty grant is -1: 0 is the level of "read", so collapsing an empty grant to
+zero would hand out read access nobody granted.
 """
 
 import unittest
@@ -51,7 +41,7 @@ class AnEmptyGrantGrantsNothing(unittest.TestCase):
                 self.assertEqual(caught.exception.status_code, 403)
 
     def test_a_missing_permissions_key_still_defaults_to_read(self):
-        """Only an absent key takes the default. This is the behaviour that must not change."""
+        """Only an absent key takes the read default."""
         grant = assert_cluster_permission(
             {"cluster_permissions": [{"cluster_id": CLUSTER}]}, CLUSTER, "read"
         )
@@ -64,7 +54,7 @@ class AnEmptyGrantGrantsNothing(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 403)
 
     def test_the_old_expression_is_what_crashed(self):
-        """Pins the mechanism, so the docstring above stays checkable rather than folklore."""
+        """Pins the ``max()`` failure the module docstring describes."""
         hierarchy = dict(PERMISSION_LEVELS)
         with self.assertRaises(ValueError):
             max(hierarchy.get(p, 0) for p in [])
@@ -100,12 +90,9 @@ class RealGrantsStillWork(unittest.TestCase):
 class TheBoundaryRefusesTheMistake(unittest.TestCase):
     """The runtime 403 handles stored data; this catches the mistake where it is made.
 
-    Scoped to the request model, and it now really is. This class used to assert against
-    ClusterPermission itself, under a docstring claiming stored keys never passed through that
-    model. They do: `_key_info` builds `APIKeyInfo(**metadata)` straight from Vault JSON, so the
-    rule ran over history too, and one legacy grant raising inside the list comprehension in
-    `list_api_keys` would 500 the entire key list. The validators moved to
-    ClusterPermissionRequest and the claim became true.
+    The validators sit on the request model, ClusterPermissionRequest. Stored keys are read back
+    through ClusterPermission (`_key_info` builds `APIKeyInfo(**metadata)` from Vault JSON),
+    so a validator there would let one legacy grant 500 the entire key list in `list_api_keys`.
     """
 
     def _model(self):
@@ -133,15 +120,14 @@ class TheBoundaryRefusesTheMistake(unittest.TestCase):
         self.assertEqual(self._model()(cluster_id=CLUSTER).permissions, ["read"])
 
     def test_a_stored_grant_with_an_unknown_name_still_authorises(self):
-        """Proof the tightening is boundary-only: the runtime path never sees the validator."""
+        """The validator is boundary-only; the runtime path never sees it."""
         assert_cluster_permission(_key(["read", "legacy-name"]), CLUSTER, "read")
 
     def test_the_read_model_still_accepts_a_grant_that_grants_nothing(self):
-        """The other half of the move, and the reason it was made.
+        """Every stored grant is read back through ClusterPermission, which stays lenient.
 
-        Every stored grant is read back through ClusterPermission. If it refused an empty or
-        unfamiliar grant, a single legacy key would take the whole key list down with a 500
-        rather than showing itself as the broken one.
+        If it refused an empty or unfamiliar grant, a single legacy key would take the whole key
+        list down with a 500 rather than showing itself as the broken one.
         """
         from app.routers.integrations import ClusterPermission
 

@@ -4,9 +4,9 @@ LXD resolves a local image source by version: 5.21 looks it up in the target pro
 (lxd/instances_post.go, getSourceImageFromInstanceSource with targetProject.Name) and later LXD in
 source.project when one is named (lxd/instance.go resolveSourceImageFromCache, localLookupProject).
 Both then read the image's profiles in the target project, and both fail the create when the project
-they look in holds no such image. The plan read the target's record only, so for a key granted both
-projects a create in tenant-a from tenant-b's image was judged by tenant-a's image of the same alias.
-Both records are read now, and the profiles of every one that exists are judged.
+they look in holds no such image. So both records are read and the profiles of every one that exists
+are judged; reading the target's alone would judge a create in tenant-a from tenant-b's image by
+tenant-a's image of the same alias.
 """
 
 from typing import Any, Dict, List

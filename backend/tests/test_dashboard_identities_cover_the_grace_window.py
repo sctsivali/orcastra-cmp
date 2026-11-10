@@ -1,9 +1,9 @@
 """The task journal keeps recognising the dashboard across a certificate rotation.
 
-The identity set was computed once per cluster and kept forever, so after a renewal every operation
-under the new certificate was attributed to an external actor until a restart. It now refreshes,
-and it keeps the superseded fingerprints still tracked for the cluster, because workers that have
-not switched yet, and operations started before the switch, still present the old one.
+The identity set refreshes on an interval, so operations under a renewed certificate are not
+attributed to an external actor. It keeps the superseded fingerprints still tracked for the
+cluster, because workers that have not switched yet, and operations started before the switch,
+still present the old one.
 """
 
 from app.services.task_journal import follower_writer
@@ -39,7 +39,7 @@ async def test_a_rotation_is_picked_up_after_the_refresh_interval(monkeypatch):
 
     assert await identities.for_host("nuc1") == frozenset({OLD})
     current["pem"] = NEW_PEM
-    tracked.add(OLD)  # the renewal recorded the old certificate as superseded
+    tracked.add(OLD)  # the renewal records the old certificate as superseded
     assert await identities.for_host("nuc1") == frozenset({OLD}), "memoised inside the interval"
 
     clock.now += follower_writer.IDENTITY_REFRESH_S + 1
@@ -47,7 +47,7 @@ async def test_a_rotation_is_picked_up_after_the_refresh_interval(monkeypatch):
         "the new certificate is recognised and the old one is kept while it is in its grace period"
     )
 
-    tracked.clear()  # the old entry left the grace window as failed: no longer ours to claim
+    tracked.clear()  # the old entry leaves the grace window as failed, so it is not claimed
     clock.now += follower_writer.IDENTITY_REFRESH_S + 1
     assert await identities.for_host("nuc1") == frozenset({NEW}), "rebuilt, not only grown"
 

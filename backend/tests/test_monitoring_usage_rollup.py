@@ -1,9 +1,8 @@
 """Monitoring CPU is busy hardware threads from the instances' own counters, never a guess.
 
-The old sweep kept its own per-worker baselines, divided by `int(limits.cpu)` from the
-instance-local config (so a range or an inherited limit counted as one vCPU), reported every
-cold instance as 0.0 and flipped the gauge between allocation and usage depending on how many
-Clusters were in scope.
+Dividing by `int(limits.cpu)` from the instance-local config would count a range or an inherited
+limit as one vCPU. A cold instance has no rate yet and reads as calculating, never 0.0, and
+Cluster and fleet CPU are busy hardware threads, never allocation.
 """
 
 import asyncio
@@ -109,7 +108,7 @@ def test_an_idle_cluster_reads_zero_ready():
 
 
 def test_an_idle_cluster_never_vouches_for_a_fleet_still_calculating():
-    """Seen live on the first sweep after a restart: every busy Cluster calculating, one idle."""
+    """The first sweep after a restart: every busy Cluster calculating, one idle."""
     usages = _usage([row("a", cpu_ns=0, read_at=1000.0)])
     nodes = [node("c1", threads=8, running=1), node("idle", threads=16, running=0)]
 
@@ -142,7 +141,7 @@ def test_an_offline_cluster_is_never_rolled_up():
 
 
 def test_each_resource_is_ranked_on_its_own():
-    """Top Storage and Network used to be drawn from the top 20 by CPU."""
+    """Top Storage and Network are not drawn from the top consumers by CPU."""
     vms = [row(f"busy{i}", cpu_ns=0, read_at=1000.0) for i in range(25)]
     vms.append(row("big-disk", cpu_ns=0, disk=10**12, read_at=1000.0))
     vms.append(row("chatty", cpu_ns=0, rx=0, read_at=1000.0))

@@ -1,16 +1,14 @@
 """When LXD refuses a create for a project limit, the answer names the limit and the project.
 
-The daemon's refusal is synchronous and reached the console as free text:
+The daemon's refusal is synchronous free text:
 
     Could not create VM: Failed checking if instance creation allowed: Reached maximum
     aggregate value "4" for "limits.cpu" in project "web-tier"
 
-Read by a person that is clear enough. Read by the form it is nothing: no field to mark, no
-number to compare, no way to tell it from any other 400. The create path now recognises the
-two shapes LXD uses (an aggregate limit, an instance count) and raises a typed error the
-router answers as a 400 whose detail is structured: code, the limit key, the project, the
-maximum, and the daemon's sentence for anyone reading the raw body. Any other 400 keeps its
-free text, so nothing else changes shape.
+A form can neither mark a field nor compare a number from that. The create path recognises
+the two shapes LXD uses (an aggregate limit, an instance count) and raises a typed error the
+router answers as a 400 with a structured detail: code, the limit key, the project, the
+maximum, and the daemon's sentence. Any other 400 keeps its free text.
 """
 
 import asyncio

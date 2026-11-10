@@ -1,11 +1,10 @@
 """An integration push rebinds personal clusters only for the partner who minted the key.
 
-The member sync ran reconcile_personal_clusters for every pushed email. A key that pushed another
-partner's email into its own organization moved that partner's unbound clusters into it, where
-the key's own partner is a member. The share audit it passed through checks configuration, not
-consent. Now only the key's creator (`created_by`, written when the key is minted) triggers a
-rebind, and every rebind leaves a record naming the cluster, where it came from, where it went and
-the key. Nothing else of the key reaches that record.
+Rebinding for every pushed email would let a key push another partner's email into its own
+organization and move that partner's unbound clusters into it; the share audit on the way checks
+configuration and knows nothing of consent. Only the key's creator (`created_by`, written when the
+key is minted) triggers a rebind, and every rebind leaves a record naming the cluster, where it
+came from, where it went and the key. Nothing else of the key reaches that record.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -148,7 +147,7 @@ async def test_another_spelling_of_the_creator_is_not_the_creator(world: Dict[st
     assert (await _bound(db))["other-spelling"] is None
     assert world["shares"] == [] and world["log"].calls == []
 
-    # control: the same push under a key whose creator is that spelling does move it
+    # Control: the same push under a key whose creator is that spelling moves it.
     await _sync(db, _key(created_by=other), [_member(other, "PARTNER")])
     assert (await _bound(db))["other-spelling"] == 1
 

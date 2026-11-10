@@ -1,10 +1,9 @@
-"""A shell or console is re-authorized every minute and closed when access ends, not before.
+"""A shell or console is re-authorized every minute and closed only when access ends.
 
-Authorization used to run once, at connect, so a terminal opened before a tenant's grant was
-revoked or an account was disabled stayed open for as long as the browser kept it. The guard
-re-checks the account (Authentik), the caller's scope and the socket's own access rule, closes
-with 4403 on a definite no, and never on an Authentik outage, which would cut every open shell.
-The close reason says which no it was, so the page can tell the operator.
+A terminal must not outlive a revoked grant or a disabled account. The guard re-checks the account
+(Authentik), the caller's scope and the socket's own access rule, and closes with 4403 on a definite
+no, never on an Authentik outage, which would cut every open shell. The close reason says which no
+it was, so the page can tell the operator.
 """
 
 import asyncio
@@ -188,7 +187,7 @@ def test_a_demoted_caller_is_closed_and_an_unchanged_one_kept(monkeypatch):
 
 
 def _plant_admin_role_for(user_id: str) -> None:
-    """What a Redis writer could do while roles were cached per user: plant Admin under the old key."""
+    """Plant Admin under a per-user role key in Redis, which the guard must never read."""
     from app.core.cache import get_cache_manager
 
     get_cache_manager().set("rbac_user", f"roles:{user_id}", {"roles": ["admin"]}, ttl=60)

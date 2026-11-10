@@ -1,24 +1,16 @@
-"""
-No key surface returns an exec's environment, only an exec key sees its command, and no write answer
-carries a migration source's secrets.
+"""No key surface returns an exec's environment, only an exec key sees its command, and no write
+answer carries a migration source's secrets.
 
-A running exec operation echoes its request: `command` and `environment`, and callers put
-credentials in the environment. A read key without `instance.exec` polled another caller's exec
-through the raw proxy and got `PGPASSWORD=...` back, with `fds` already stripped. And a write's
-answer is the operation it started: `POST /1.0/instances/<n> {"migration": true}` answered with the
-control, fs and criu secrets that stream the instance to whoever presents them.
+A running exec echoes `command` and `environment`, where callers put credentials (ex;
+`PGPASSWORD=...`), and a write answers with the operation it started, so
+`POST /1.0/instances/<n> {"migration": true}` would hand out the control, fs and criu secrets.
 
-- raw GET (and DELETE) under /1.0/operations, in every form: the environment is gone, and the command
-  too unless the key holds `instance.exec`. The A2 secrets stay gone.
-- every raw write answer: control, fs and criu are gone, and so are the exec request fields the key
-  may not see. An exec's `fds` and an image secret stay, because they are the caller's own.
-- the serializing surfaces (/proxy get_operation, GET /integrations/operations/{id}, MCP) return the
-  progress allowlist only, so neither field reaches them, whatever the key holds.
-- status, err and each operation's other metadata are left as LXD wrote them: the integrator reads
-  status, err and metadata.metadata of its own operations.
-
-The raw proxy is driven through its real handler; the session records the request and answers with
-a fixed LXD body.
+- raw GET and DELETE under /1.0/operations, in every form: no environment, no
+  OPERATION_SECRET_KEYS, and no command unless the key holds `instance.exec`.
+- raw write answers: no control, fs or criu, nor exec fields the key may not see. An exec's `fds`
+  and an image secret stay; they are the caller's own.
+- /proxy get_operation, GET /integrations/operations/{id} and MCP return the progress allowlist.
+- status, err and other metadata stay as LXD wrote them; integrators read them.
 """
 
 import copy
@@ -185,7 +177,7 @@ async def test_a_raw_operation_listing_never_returns_an_environment(path: str, a
         ("POST", "/1.0/instances/web-1", {"migration": True}),
         ("POST", "/1.0/instances/web-1/snapshots/snap0", {"migration": True}),
         ("POST", "/1.0/storage-pools/default/volumes/custom/vol1", {"migration": True}),
-        # note: the target side of a push migration is no longer sent for a key at all
+        # The target side of a push migration is never sent for a key
         # (test_a_key_cannot_make_the_cluster_fetch_from_anywhere.py).
     ],
 )

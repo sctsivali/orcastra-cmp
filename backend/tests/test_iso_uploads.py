@@ -1,8 +1,8 @@
 """Unit tests for the pure logic in app.routers.iso_uploads.
 
 Covers the volume-name safety gate, the cluster-permission check, the LXD project qualifier and
-the status payload shape. The tus/import flow (DB + LXD) is exercised separately against a live
-cluster; these tests need no DB or network.
+the status payload shape. The tus/import flow needs a database and a cluster and is not covered
+here; these tests need no DB or network.
 """
 
 import types
@@ -34,7 +34,7 @@ class ClusterPermissionTests(unittest.TestCase):
         return {"cluster_permissions": [{"cluster_id": cluster_id, "permissions": perms}]}
 
     def test_allows_when_level_sufficient(self) -> None:
-        # write required, key has write -> no raise; admin key also satisfies write.
+        # A write grant satisfies write, and so does an admin grant.
         _assert_cluster_permission(self._key("c1", ["write"]), "c1", "write")
         _assert_cluster_permission(self._key("c1", ["admin"]), "c1", "write")
         _assert_cluster_permission(self._key("c1", ["read"]), "c1", "read")

@@ -1,8 +1,8 @@
 """The operator log names which cluster and which call a slow fleet read spent its time on.
 
-Cold fleet reads cost 5 to 27 s on dev and nothing said where: the access log has one latency per
-request. A slow LXD request now logs its cluster, method, path and status, and a connect attempt
-says whether a request or the background healer paid for it. Neither may carry an endpoint or an
+The access log has one latency per request, which does not say where a cold fleet read spent its
+seconds. A slow LXD request logs its cluster, method, path and status, and a connect attempt says
+whether a request or the background healer paid for it. Neither may carry an endpoint or an
 exception's text.
 """
 

@@ -1,29 +1,13 @@
 """A create that LXD accepts and then fails must not stay recorded as a success.
 
 The POST returns as soon as LXD queues the operation, so only synchronous validation reaches
-the caller. Anything failing while the operation runs was silent: the API answered 200 with an
-operation id, the audit trail recorded result=success, and no instance existed. Reproduced live
-by creating from an image fingerprint that had been pruned from the host: the create reported
-success and nothing ever appeared.
+the caller; a failure while the operation runs (ex; an image fingerprint pruned from the host)
+leaves no instance behind. The router records `accepted`, and the terminal verdict comes from one
+shared judge on both branches: `_watch_create_operation` without autostart and
+`_finalize_and_start` with it, which is the create form's default. A create LXD rejects is
+recorded as a create failure with its operation_id, never as an `instance.autostart` failure.
 
-Two things were wrong beyond the silence, and both are pinned here.
-
-The guard did not cover the path that hits the defect. `_watch_create_operation` judged the
-create correctly but only ran when `start_on_create` was false, and the create form defaults it
-to true. That branch logged the same failure as `instance.autostart` and dropped the
-operation_id, so a create LXD rejected was filed as a start problem on an instance that had
-never existed.
-
-And the audit contradicted itself. The router recorded `result=success` when LXD merely
-accepted the request, so a rejected create produced two records with opposite verdicts and
-nothing to say which was final. The router now records `accepted`, and the terminal verdict
-comes from the shared judge.
-
-These are behavioural rather than source-text assertions on purpose. The previous version
-asserted that the literal string `wait_for_operation` appeared inside `_watch_create_operation`,
-which went red the moment the waiting moved into a shared helper that BOTH branches call, even
-though that change is what fixed the defect. A guard that pins a spelling fails on the
-refactor that improves the thing it is guarding.
+The assertions are behavioural so that moving the wait into another helper does not break them.
 """
 
 import inspect
@@ -46,9 +30,8 @@ class _Operations:
 
 
 class _Instance:
-    # note: `name` and `sync` are not decoration. The start path rebinds the instance onto a
-    # client whose read timeout outlives the start, which reads `.name`, and syncs afterwards.
-    # A double without them made the happy path fail inside the rebind's own error handler.
+    # The start path rebinds the instance onto a client whose read timeout outlives the start,
+    # which reads `.name`, and syncs afterwards, so the double needs both.
     def __init__(self, start_error: Exception | None = None, name: str = "web-01"):
         self._start_error = start_error
         self.started = False
@@ -106,9 +89,8 @@ def audit(monkeypatch):
     monkeypatch.setattr(
         "app.services.activity_logger.get_activity_logger", lambda: _Logger()
     )
-    # This unit test owns the create verdict only. Both notification systems open their own
-    # database sessions, so leaving them live turns the happy-path assertion into an integration
-    # test that waits for the developer database rather than testing the watcher.
+    # Only the create verdict is under test. Both notification systems open their own database
+    # sessions, so they are stubbed out.
     monkeypatch.setattr(
         "app.services.webhooks.emitter.emit_resource_event",
         _ignore_extension_event,
@@ -165,11 +147,11 @@ async def test_a_good_create_without_autostart_is_recorded_as_a_success(audit):
     )
 
 
-# --- the autostart branch, which is the one the form actually uses ---------------------------
+# --- the autostart branch, the create form's default -----------------------------------------
 
 @pytest.mark.asyncio
 async def test_a_rejected_create_WITH_autostart_is_recorded_as_a_create_failure(audit):
-    """The regression that mattered: this branch used to file it as instance.autostart."""
+    """A create LXD rejects is a create failure on this branch, never an instance.autostart one."""
     client = _Client(op_error=RuntimeError("Failed creating instance record"))
 
     await _manager()._finalize_and_start(client, "web-01", "op-1", "nuc2", "default")
@@ -220,7 +202,7 @@ async def test_the_happy_path_starts_the_instance(audit):
     assert instance.started is True
 
 
-# --- both branches share one judge, so they cannot drift apart again -------------------------
+# --- both branches share one judge, so they cannot drift apart -------------------------------
 
 @pytest.mark.asyncio
 async def test_both_branches_go_through_the_same_judge(monkeypatch):
@@ -242,7 +224,7 @@ async def test_both_branches_go_through_the_same_judge(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_no_operation_id_is_not_treated_as_a_failure(audit):
-    """A synchronous create answered already; inventing a failure record would be a lie."""
+    """A synchronous create has already answered, so no failure record is written."""
     client = _Client()
 
     await _manager()._watch_create_operation(client, "web-01", None, "nuc2", "default")

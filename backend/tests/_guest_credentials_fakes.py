@@ -1,9 +1,8 @@
-"""A guest in memory for the credentials tests: it answers the package's scripts and commands.
+"""An in-memory guest for the credentials tests that answers the package's scripts and commands.
 
 It keeps passwd, the shadow summary, the sudo group and each account's authorized_keys, and records
-every call with its argv, the uid it ran as and its stdin, so a test can say where a password went
-and who touched a key file. The real scripts are exercised against real shells in
-test_the_guest_scripts_are_fixed_and_never_interpolate.py; this fake checks the Python around them.
+every call's argv, uid and stdin. The scripts themselves run against real shells in
+test_the_guest_scripts_are_fixed_and_never_interpolate.py.
 """
 
 from __future__ import annotations

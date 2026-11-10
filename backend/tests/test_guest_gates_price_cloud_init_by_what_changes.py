@@ -1,19 +1,15 @@
 """
 Cloud-init costs instance.exec by what it changes, on every write path and every door, and a '*' key
-keeps the host-reaching config it had.
+keeps its host-reaching config.
 
-Each case sends one request through the real route (tests/_guest_gate_doors.py) and asserts the
-status, the capability the refusal names, the audit record, what was read and what was written.
-Covered here:
-
-- decisions 16 and 18, and cloud-init.ssh-keys.<name> since the security review: a create carrying a
-  cloud-init key costs exec without a read. A write to an
-  existing instance or profile is compared with the object's own config, read once: an unchanged
-  value is sent, a new, changed or removed value costs exec, and a read that fails sends nothing and
-  leaves a record. A key holding exec is never read for. Raw proxy, /proxy and MCP.
-- decision 3: a '*' key's raw.*, privileged, nesting and host devices keep the answer each door gave
-  before (sent on the raw proxy, dev's price on /proxy).
-- OrcaHub v1.32.0's own instance, volume, snapshot and project bodies, which must still be sent.
+Each case sends one request through the real route (tests/_guest_gate_doors.py: raw proxy, /proxy,
+MCP) and asserts the status, the capability the refusal names, the audit record, what was read and
+what was written. A create carrying a cloud-init key (cloud-init.ssh-keys.<name> included) costs
+exec without a read. A write to an existing instance or profile is compared with the object's own
+config, read once: an unchanged value is sent, a new, changed or removed one costs exec, a failed
+read sends nothing and leaves a record, and a key holding exec is never read for. A '*' key's raw.*,
+privileged, nesting and host devices pass the raw proxy while /proxy keeps PROXY_PRICE. OrcaHub's
+own instance, volume, snapshot and project bodies are still sent.
 """
 
 from typing import Any, Dict, List, Tuple
@@ -60,7 +56,7 @@ def _passed(seen: Any, reads: List[Tuple[str, str]], method: str, body: Any) -> 
     assert seen.refusals == []
 
 
-# note: creates: priced without a read
+# Creates: priced without a read.
 
 CREATES = [
     *[("POST", f"/1.0/{family}", {"name": "c1", "source": {"type": "image", "alias": "ubuntu/24.04"}})
@@ -101,7 +97,7 @@ def test_only_a_key_holding_exec_creates_with_cloud_init(door: Any, api_key: Dic
         _priced(seen, [])
 
 
-# note: updates: judged against the object's own config, read once
+# Updates: judged against the object's own config, read once.
 
 UPDATES = [
     *[(method, f"/1.0/{family}/web-1", f"/{family}/web-1") for family in FAMILIES for method in ("PUT", "PATCH")],
@@ -110,7 +106,7 @@ UPDATES = [
     ("PATCH", "/1.0/profiles/p1", "/profiles/p1"),
 ]
 UPDATE_IDS = [f"{m}-{t.strip('/')}" for m, _p, t in UPDATES]
-# note: each combo is (id, the object's own config, the config sent, priced).
+# Each combo is (id, the object's own config, the config sent, priced).
 COMBOS = [
     ("unchanged", {"@": X}, {"@": X}, False),
     ("unchanged-beside-a-resize", {"@": X, "limits.cpu": "2"}, {"@": X, "limits.cpu": "4"}, False),
@@ -210,7 +206,7 @@ def test_a_read_that_fails_sends_nothing_and_is_recorded(door: Any, method: str,
     assert not health.is_tripped(CLUSTER_ID)
 
 
-# note: /proxy and MCP
+# /proxy and MCP.
 
 PROXY_CREATES = [{"type": "image", "alias": "ubuntu/24.04"}, {"type": "copy", "source": "web"}, {"type": "none"}]
 
@@ -341,7 +337,7 @@ def test_a_key_that_only_looks_like_an_ssh_key_is_not_priced(door: Any, name: st
     _passed(door.raw(NO_GUEST, "POST", "/1.0/instances", body=body), [], "POST", body)
 
 
-# note: decision 3: a '*' key keeps its host-reaching config
+# A '*' key keeps its host-reaching config.
 
 HOST_REACH = {
     "raw.lxc": ({"raw.lxc": "lxc.apparmor.profile=unconfined"}, {}),
@@ -363,7 +359,7 @@ HOST_REACH = {
     "routed": ({}, {"eth1": {"type": "nic", "nictype": "routed", "ipv4.address": "10.0.0.5"}}),
     "tpm": ({}, {"t": {"type": "tpm"}}),
 }
-# note: what /proxy asked for each before this push (config_reaches_inside on dev 4c38020).
+# What /proxy asks for each (api_key_capabilities.config_reaches_inside).
 PROXY_PRICE = {"raw.lxc": "instance.exec", "raw.idmap": "instance.exec", "raw.qemu": "instance.exec",
                "privileged": "instance.exec", "nesting": "instance.exec", "host-path-disk": "instance.files"}
 RAW_TARGETS = [("POST", f"/1.0/{family}", {"name": "c1", "source": {"type": "none"}}) for family in FAMILIES] + [
@@ -391,7 +387,7 @@ def test_decision3_proxy_keeps_devs_price_for_host_reaching_config(door: Any, it
         assert seen.status == 200 and [verb for verb, *_ in seen.cluster.writes] == ["create"] and seen.refusals == []
 
 
-# note: OrcaHub v1.32.0's own bodies are still sent
+# OrcaHub's own bodies are still sent.
 
 GPU_NODES = ["/dev/nvidia0", "/dev/nvidiactl", "/dev/nvmap", "/dev/nvgpu/igpu0/ctrl", "/dev/dri/renderD128"]
 GPU_LIBS = ["/usr/lib/aarch64-linux-gnu/tegra", "/usr/lib/aarch64-linux-gnu/nvidia", "/usr/sbin/nvidia-smi"]

@@ -1,22 +1,13 @@
 """An unreadable cluster registry must not look like a registry with nothing in it.
 
-A sealed Vault answers 503 to LIST. `vault_list` raises, `list_clusters` catches it and returns
-an empty list, and from that point the two facts are indistinguishable:
+A sealed Vault answers 503 to LIST; `vault_list` raises and `list_clusters` returns an empty
+list, which reads exactly like "Found 0 registered clusters in Vault". Handed to
+`sync_registered_clusters`, that list would empty the in-memory whitelist `get_node_names()`
+intersects live clients against, so every cluster would vanish from the API until a restart.
 
-    Found 0 registered clusters in Vault
-    Startup: Connected 0/0 clusters
-    Orcastra CMP API started successfully
-
-Worse than the logs, startup handed that empty list to `sync_registered_clusters`, which sets
-the in-memory whitelist to the empty set. `get_node_names()` intersects live clients against
-that whitelist, so every cluster disappeared from the API even after the metrics collector
-reconnected one. Observed in the field, this state persisted for weeks and only surfaced
-because something happened to restart the process.
-
-`list_clusters` still returns a list rather than raising, because thirteen callers depend on
-that. What changed is that the swallow is now recorded, so the two callers that must tell the
-difference can: startup, which refuses to overwrite the whitelist with a list it never
-received, and `/health`, which reports the condition without changing its status code.
+`list_clusters` still returns a list, because many callers depend on that, but records the
+failure, so startup can refuse to overwrite the whitelist with a list it never received and
+`/health` can report the condition without changing its status code.
 """
 
 import pytest
@@ -59,8 +50,8 @@ def _clean_status(monkeypatch):
 
 
 def test_nothing_attempted_yet_is_not_a_failure():
-    """None, not False. A worker that has not read the registry has not found it broken, and
-    reporting it as broken would make every fresh process look degraded."""
+    """None until the first read. A worker that has not read the registry has not found it
+    broken, and reporting it as broken would make every fresh process look degraded."""
     assert vault_status.registry_readable() is None
     assert vault_status.snapshot()["registry_readable"] is None
 
@@ -93,8 +84,8 @@ def test_the_recorded_error_names_the_cause_without_leaking_the_address():
 
 
 def test_a_later_success_clears_the_condition():
-    """The breaker-shaped property: this must be a condition, not a latch, or one blip marks a
-    healthy deployment degraded until restart."""
+    """A condition, never a latch: one failed read must not mark a healthy deployment degraded
+    until restart."""
     vault = _Vault(error=VaultClientError("sealed"))
     storage = _Storage(vault)
     storage.list_clusters()
@@ -121,9 +112,9 @@ def test_the_snapshot_shape_is_what_health_renders():
 
 
 def test_startup_refuses_to_sync_a_whitelist_it_never_received():
-    """The load-bearing consequence. Reproduces the startup branch rather than importing the
-    lifespan, which would need a live app: an unreadable registry must leave the whitelist
-    alone, because emptying it hides every cluster instead of reporting the fault."""
+    """An unreadable registry must leave the whitelist alone, because emptying it hides every
+    cluster instead of reporting the fault. Reproduces the startup branch, since importing the
+    lifespan would need a live app."""
     from app.services.lxd.connection import LXDConnectionManager
 
     manager = LXDConnectionManager()

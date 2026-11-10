@@ -1,12 +1,9 @@
 """A create that LXD refuses must not tell OrcaHub an instance exists.
 
-The router answers while the create is still queued. Announcing there meant a create LXD then
-rejected still emitted instance.created, with no correction to follow, and on a cluster owned by
-two organisations it said so once per organisation.
-
-Observed live: a create failing with "Image not provided for instance creation" at 01:26:17.266
-emitted instance.created to org 122 at .338 and to org 6 at .468. The add-on event had already
-been moved to the judge for exactly this reason; the OrcaHub one had not.
+The router answers while the create is still queued. Announcing there would emit instance.created
+for a create LXD then rejects, with no correction to follow, and on a cluster owned by two
+organisations once per organisation. The judge of the create operation announces it instead, as it
+does the add-on event.
 """
 
 import ast
@@ -63,10 +60,10 @@ def test_the_judge_announces_it_instead():
 
 
 def test_the_announcement_is_never_reached_from_the_failure_branch():
-    """Both announcement sites must sit on a path that returns True.
+    """No announcement sits inside an except block of the judge.
 
-    The judge returns False for a rejected create. An announcement placed before that return, or
-    inside the except block, would restore the defect while this file still passed.
+    The judge returns False for a rejected create; an announcement on that path would report an
+    instance that does not exist.
     """
     source = (SERVICES / "instance.py").read_text()
     tree = ast.parse(source)
@@ -86,6 +83,6 @@ def test_the_announcement_is_never_reached_from_the_failure_branch():
 
 
 def test_delete_still_announces_from_the_router():
-    # Delete is synchronous by the time the router answers, so its announcement is honest there.
+    # Delete is synchronous by the time the router answers, so its announcement is accurate there.
     source = (ROUTERS / "instances.py").read_text()
     assert "schedule_orcahub_event(\"instance.deleted\"" in source

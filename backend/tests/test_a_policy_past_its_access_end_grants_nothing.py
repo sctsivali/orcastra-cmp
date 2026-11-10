@@ -1,8 +1,8 @@
 """The tenant grant query enforces the paid term on the policy, whatever OrcaHub did or did not send.
 
-A buyer whose revoke never arrived kept the project, and the cluster it sits on, for as long as
-the policy lived. With the term recorded on the policy, the grant query itself narrows a policy
-past its term to viewing and drops a policy past its access end, on the real statement.
+Otherwise a buyer whose revoke never arrived would keep the project, and the cluster it sits on,
+for as long as the policy lived. The grant query narrows a policy past its term to viewing and
+drops a policy past its access end; these tests run the real statement.
 """
 
 from __future__ import annotations

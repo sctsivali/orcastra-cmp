@@ -2,8 +2,8 @@
 
 update_instance merges config and devices into the instance with dict.update, which also takes a
 list of [key, value] pairs, and every guard (the instance.exec price, the limited-key host rule,
-the policy-key observer) reads a dict and skips any other shape. So a pairs-shaped config was judged
-as empty and reached LXD as the settings it carried. The shape is refused with 400 in the canonical
+the policy-key observer) reads a dict and skips any other shape, so a pairs-shaped config would be
+judged empty and reach LXD as the settings it carries. The shape is refused with 400 in the canonical
 params step, before any guard reads the params, for every operation and for MCP, which calls the
 same handler.
 """

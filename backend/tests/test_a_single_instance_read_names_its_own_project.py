@@ -1,9 +1,9 @@
 """GET /instances/{name} searches every project and must say which one held the instance.
 
-The wrapper that read the instance carried the project only as a private field, so the VMInfo
-conversion read `default` for an instance in any other project. The detail dialog prefers that
-single read over the list row, and its Devices tab then sent the fixed-address write to
-`default`, where the cluster answered "Instance not found": the project shape seen in the field.
+The VMInfo conversion reads the wrapper's `project`; without it, an instance in any other
+project reads as `default`. The detail dialog prefers that single read over the list row, so its
+Devices tab would send the fixed-address write to `default`, where the cluster answers "Instance
+not found".
 """
 
 from types import SimpleNamespace

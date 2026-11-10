@@ -1,20 +1,13 @@
 """A grant already in Vault must never be re-judged by a rule written after it.
 
-The `permissions` validator sat on `ClusterPermission` under a docstring asserting that stored
-keys "are read back without passing through this model". They are not. `_key_info` builds
-`APIKeyInfo(**metadata)` straight from raw Vault JSON, and `APIKeyInfo.cluster_permissions` is a
-list of that same model, so the rule ran over every historical grant on every read.
+`_key_info` builds `APIKeyInfo(**metadata)` from raw Vault JSON, and
+`APIKeyInfo.cluster_permissions` is a list of `ClusterPermission`, so a validator on that model
+runs over every stored grant on every read. `list_api_keys` builds every key inside one list
+comprehension under an `except Exception` that answers 500, so a single stored key with
+`permissions: []` or a retired level would take the whole key list down without naming the key.
 
-`list_api_keys` builds every key inside one list comprehension wrapped in a bare
-`except Exception` that answers 500. So a single stored key with `permissions: []`, or with a
-level nobody uses any more, did not show up as the one broken key: it took the entire key list
-down with it, leaving the operator with no key-management surface at all and no clue which key
-caused it.
-
-The fix was structural rather than a loosened rule: validators moved to
-`ClusterPermissionRequest`, which every request model now uses, and the read model went back to
-being lenient. These tests pin both halves, because the failure is invisible until the day
-somebody's Vault happens to hold the wrong shape.
+The validators live on `ClusterPermissionRequest`, which every request model uses, and the read
+model stays lenient. These tests pin both halves.
 """
 
 import asyncio
@@ -70,7 +63,7 @@ def test_the_read_model_does_not_normalise_what_it_reads():
 
 
 def test_one_bad_key_does_not_hide_every_other_key(monkeypatch):
-    """The defect in one sentence: three keys, one malformed, and all three vanish."""
+    """Three keys, one malformed: all three still list."""
     import app.routers.integrations as mod
 
     records = [
@@ -95,7 +88,7 @@ def test_one_bad_key_does_not_hide_every_other_key(monkeypatch):
 
     from app.core.auth import AuthenticatedUser
 
-    # note: an Admin, so which side manages a key never needs the database. Ownership is not read
+    # An Admin, so which side manages a key never needs the database. Ownership is not read
     # either (no session), which leaves its counts null and the list itself untouched.
     admin = AuthenticatedUser(user_id="a1", email="admin@example.test", groups=["role_admin"])
     response = asyncio.run(mod.list_api_keys(user=admin, db=None))
@@ -105,10 +98,10 @@ def test_one_bad_key_does_not_hide_every_other_key(monkeypatch):
 
 
 def test_a_stored_user_mapping_with_a_legacy_grant_still_builds():
-    """`get_user_mappings_from_vault` runs inside the same comprehension as `_key_info`.
+    """`get_user_mappings_from_vault` runs inside the same `try` as `_key_info`.
 
-    So a malformed mapping is a second route to the same whole-list 500, and the mapping model
-    has to stay lenient for the same reason the key model does.
+    A malformed mapping is a second route to the same whole-list 500, so the mapping model stays
+    lenient for the same reason the key model does.
     """
     mapping = ExternalUserMapping(
         external_user_id="u1",
@@ -126,10 +119,10 @@ def test_validate_and_whoami_tolerate_a_legacy_grant():
 
 
 def test_the_response_model_is_not_the_request_model():
-    """A structural guard, because collapsing the two back together is a one-line refactor.
+    """A structural guard: merging the two models back is a one-line refactor.
 
-    It would also be an invisible one: the suite stays green until a real Vault holds a shape
-    the newer rule dislikes, and then the failure is a 500 on a list nobody changed.
+    The rest of the suite would stay green until a stored grant fails the newer rule, and the
+    key list would answer 500.
     """
     assert APIKeyInfo.model_fields["cluster_permissions"].annotation == List[ClusterPermission]
     assert (
@@ -155,7 +148,7 @@ def test_the_request_models_all_use_the_strict_grant():
 
 
 def test_the_update_endpoint_takes_the_strict_grant():
-    """The widening door. Creation validated and the update did not, once before."""
+    """An update can widen a grant, so it validates like creation does."""
     import inspect
 
     from app.routers.integrations import update_api_key_permissions

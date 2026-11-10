@@ -1,19 +1,13 @@
 """Certificate material must never resolve its own directory through tempfile.
 
-``tempfile`` without an explicit ``dir=`` resolves through ``gettempdir()``, which does not
-return a fixed path. It searches for a WRITABLE directory: ``TMPDIR``, then ``/tmp``, then
-``/var/tmp``, then ``/usr/tmp``, and returns the first that accepts a test file. ``/tmp`` in the
-backend container is a 256 MiB tmpfs mounted precisely so this material stays in memory;
-``/var/tmp`` is the container's writable disk layer.
+``tempfile`` without an explicit ``dir=`` resolves through ``gettempdir()``, which returns the
+first WRITABLE directory of ``TMPDIR``, ``/tmp``, ``/var/tmp`` and ``/usr/tmp``. ``/tmp`` in the
+backend container is a tmpfs mounted so this material stays in memory; ``/var/tmp`` is the
+container's writable disk layer. Once the tmpfs fills, an unqualified tempfile call silently puts
+TLS private keys on disk and reports success, and the keys outlive the condition.
 
-So the moment the tmpfs fills, every unqualified tempfile call silently relocates TLS private
-keys onto disk and reports success. Observed while testing the ENOSPC path: a fresh process
-resolved its certificate directory to ``/var/tmp/orcastra-lxd-certs`` and a 50 KB write
-succeeded while ``/tmp`` showed zero blocks free. Nothing in the logs or on ``/health`` would
-have said so, and the keys would have outlived the condition that caused it.
-
-This is a structural guard rather than a behavioural test because the failure has no symptom.
-The rule: inside ``app/services``, a tempfile call that creates something must say where.
+The failure has no symptom, so this is a structural guard. The rule: inside ``app/services``, a
+tempfile call that creates something must say where.
 """
 
 import ast
@@ -68,7 +62,7 @@ class TempfileCallsSayWhere(unittest.TestCase):
 
 class TheBaseIsNotProbed(unittest.TestCase):
     def test_cert_base_ignores_a_tmpdir_that_would_move_the_keys(self):
-        """gettempdir honours TMPDIR. cert_base must not, or the pinning is decorative."""
+        """gettempdir honours TMPDIR; cert_base must not, or TMPDIR could move the keys."""
         import os
 
         from app.services.lxd import cert_files

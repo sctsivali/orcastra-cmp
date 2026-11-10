@@ -1,4 +1,4 @@
-"""The ordinary paths of the client, against a guest that behaves as the lab proved LXD does."""
+"""The ordinary paths of the SFTP client, against a fake guest that behaves as LXD's server does."""
 
 import asyncio
 import hashlib

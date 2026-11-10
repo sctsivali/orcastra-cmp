@@ -2,7 +2,7 @@
 
 Revoking or deleting a key takes it out of every owner set another able owner carries on, and moves the
 primary (the key OrcaHub callbacks use) to the oldest able owner left. Withdrawing a sync capability
-keeps the key in the set but no longer its primary. An organization whose other owners are all ended
+keeps the key in the set but moves the primary off it. An organization whose other owners are all ended
 or unreadable still refuses the end, as a sole owner's does. Two revokes of a set's two keys cannot
 both pass: the organization lock makes the second see the first.
 
@@ -171,7 +171,7 @@ async def test_two_revokes_of_a_two_key_set_cannot_both_pass(co_owned: Dict[str,
     await assert_owner_invariants(db)
 
 
-# note: the Administrator's owner-set routes
+# The Administrator's owner-set routes.
 
 @pytest.fixture
 def multi(monkeypatch: pytest.MonkeyPatch) -> None:

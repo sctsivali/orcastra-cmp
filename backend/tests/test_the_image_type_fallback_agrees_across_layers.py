@@ -1,18 +1,12 @@
 """Both layers must give the same answer for an image whose type LXD did not report.
 
-`ImageInfo.type` carries a default so that one malformed image cannot 500 the whole list, and
-`seedTypeForImage` in the frontend carries a fallback so a row action can still seed the create
-form. They answered the same question in opposite directions for as long as both existed: the
-schema said `virtual-machine`, `prefill.ts` said `container`.
+`ImageInfo.type` carries a default so that one malformed image cannot 500 the whole list
+(`services/lxd/images.py` falls back to it), and `seedTypeForImage` in the frontend carries a
+fallback so a row action can still seed the create form. Both answer the same question, so they
+must agree; nothing else tells someone editing one that the other exists.
 
-Nothing broke, because neither branch can currently fire. `services/lxd/images.py:103` always
-passes the daemon's own value and the frontend declares `type` as a required string. That is
-exactly what made it worth pinning: two dead branches stating contradictory beliefs, with
-nothing to tell the next person editing one that the other exists.
-
-The vocabularies differ on purpose. LXD says `container` / `virtual-machine`; the create form's
-own enum is `container` / `vm`. This maps between them rather than demanding they be spelled the
-same, because the form's enum is what ends up in a URL.
+The vocabularies differ: LXD says `container` / `virtual-machine`; the create form's own enum is
+`container` / `vm` and ends up in a URL. This maps between them.
 """
 
 import pathlib

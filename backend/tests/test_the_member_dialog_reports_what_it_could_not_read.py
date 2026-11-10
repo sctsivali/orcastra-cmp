@@ -1,11 +1,9 @@
 """The member dialog folds shared pools once, reads instances in one request, and never
 presents a failed read as zero.
 
-Seen in production on a three member MicroCloud with MicroCeph: every member reported
-Storage 6.76 TB / 12.37 TB, which is local 1.7 TB plus the two cluster-wide ceph pools
-(5.3 TB each) that every member sees, and Instances "0 / 0 total" with CPU "0 / 88 cores"
-after the instance read timed out, cached for the full TTL with the partial flag the modal
-never rendered.
+On a MicroCloud with MicroCeph every member sees the cluster-wide Ceph pools, so they are
+counted once as shared capacity. A timed-out instance read is marked partial and cached
+briefly; it must not show as "0 / 0 total" for the full TTL.
 
 Hermetic: a fake client shaped like the real daemon's answers, the route driven through the
 app with a cache spy. The fan-out itself lives in services/lxd/member_resources.py; this file
@@ -237,7 +235,7 @@ def test_a_failed_instance_read_is_marked_and_not_rendered_as_zero_capacity(monk
     res = _read(client, monkeypatch)
     assert res["instances_partial"] is True and res["degraded"] is True
     assert (res["instances_count"], res["instances_running"], res["cpu_used"]) == (0, 0, 0)
-    # the storage read is independent and still complete
+    # The storage read is independent and still complete.
     assert res["storage_partial"] is False and res["storage_total"] > 0
 
 
@@ -305,9 +303,8 @@ def test_the_route_reads_the_cluster_off_the_event_loop():
 
 
 def test_an_offline_member_is_refused_at_once_with_the_cluster_s_reason(monkeypatch):
-    """A member was powered off in the field. A read targeted at it hung on the cluster for the
-    pooled read timeout, then a retry, then "No resource data". The cluster's own record says
-    Offline and why, at once."""
+    """A read targeted at a powered-off member hangs for the pooled read timeout and a retry.
+    The cluster's own member record says Offline and why, at once, so the route answers from it."""
     records = {"member-b": {"server_name": "member-b", "status": "Offline",
                             "message": "No heartbeat for 27.88s (2026-09-12 11:17:31 +0000 UTC)"}}
     client = FakeClient(members=records, resources_hang=True)

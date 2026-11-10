@@ -1,18 +1,14 @@
 """Pytest bootstrap for the backend test suite.
 
-``app.core.database`` raises at *import* time when ``DATABASE_URL`` is unset (see
-its module top). Several test modules import router code that transitively pulls
-in ``app.core.database``, so without this the ValueError is raised during
-collection and takes down the entire ``tests/`` directory (19 passing -> 0
-collected). conftest.py is imported before any test module, so setting a default
-here keeps collection working. Tests that need a real database override it via
-their own environment; this default is only a placeholder to satisfy the import.
+``app.core.database`` raises at import time when ``DATABASE_URL`` is unset, and
+several test modules import router code that pulls it in, so collection would fail
+for the whole ``tests/`` directory. conftest.py is imported before any test module,
+so a placeholder default is set here; tests that need a real database set their own.
 
-important: the placeholder must be unreachable. It used to be localhost:5432, which on a
-developer machine is the live dev database: every app lifespan a test starts launches the
-background workers (webhooks, task journal, upload recovery, metrics history), and each one
-logged in as "test", about 470 failed logins per run. Port 1 on loopback refuses at once, so
-those workers fail fast and nothing outside the process is touched.
+important: the placeholder must be unreachable. Every app lifespan a test starts launches the
+background workers (webhooks, task journal, upload recovery, metrics history), and against a
+reachable database such as localhost:5432 each would attempt a login on every run. Port 1 on
+loopback refuses at once, so the workers fail fast and nothing outside the process is touched.
 """
 import os
 
@@ -31,10 +27,9 @@ def _reset_session_singletons(monkeypatch):
     Give every test a clean session tracker and registry.
 
     Both are process-wide module globals, so without this a session registered by one
-    test survives into the next and results depend on collection order - a suite that
-    passes while proving nothing. Audit writes are stubbed out too: they are
-    fire-and-forget tasks that would otherwise reach for a database that is not there
-    and burn the retry backoff on every registration.
+    test survives into the next and results depend on collection order. Audit writes
+    are stubbed out too: they are fire-and-forget tasks that would otherwise reach for
+    a missing database and wait out the retry backoff on every registration.
     """
     from app.services import session_registry, session_tracker
 
@@ -81,7 +76,7 @@ def _grants_match_as_before_generations(monkeypatch):
     """Unit tests have no database for registration generations (services/cluster_generations.py).
 
     The default is the state before the legacy backfill: nothing adopted, adoption open, so every
-    grant matches by id as it always did. Tests of generations put the real reader back.
+    grant matches by id. Tests of generations put the real reader back.
     """
     from app.services import cluster_generations
 
@@ -97,7 +92,7 @@ def _isolate_rate_sampler(monkeypatch):
 
     important: inside the backend container the `redis` hostname resolves, so without this a
     test would read and write real baselines shared with the running app, and its result would
-    depend on what the live dashboard had sampled a second earlier.
+    depend on what the running dashboard had just sampled.
     """
     from app.core import rate_sampler
 
@@ -111,9 +106,9 @@ def _isolate_rate_sampler(monkeypatch):
 def _isolate_vault_status():
     """Every test starts with no registry verdict.
 
-    note: the verdict is module state. A test that drove a registry read into a failure left it
-    "unknown", and a later test whose fixture registry is empty then answered 503: it passed or
-    failed depending on which file pytest happened to collect before it.
+    The verdict is module state. A test that drives a registry read into a failure leaves it
+    "unknown", and a later test whose fixture registry is empty would then answer 503 depending
+    on which file pytest collected before it.
     """
     from app.core import vault_status
 
@@ -161,9 +156,9 @@ def _isolate_pool_resource_failures():
 def _isolate_cluster_breaker():
     """Every test starts with no breaker verdict for any cluster.
 
-    note: fan-out reads skip a cluster this worker last saw fail (fanout.known_down), and that
-    memory has no TTL, so a failure one test recorded for "nuc2" made a later test's read of
-    "nuc2" answer offline without dialing its stub.
+    Fan-out reads skip a cluster this worker last saw fail (fanout.known_down), and that memory
+    has no TTL, so a failure one test recorded for a cluster would make a later test's read of
+    the same cluster answer offline without dialing its stub.
     """
     from app.services.lxd import health
 
@@ -260,14 +255,14 @@ def _isolate_monitoring_history_store():
 def _isolate_ws_tickets():
     """A fresh in-process ticket store and identity cache for every test.
 
-    note: lifespan never runs here, so the store stays the local one a backend without Redis
-    uses; the Redis path is driven explicitly by test_ws_ticket_store.py.
+    Lifespan never runs here, so the store stays the local one a backend without Redis uses;
+    test_ws_ticket_store.py drives the Redis path.
     """
     from app.core.file_ticket import set_file_ticket_store
     from app.core.ws_ticket_store import WsTicketStore, set_ws_ticket_store
     from app.services.ws_identity import forget_identities
 
-    # note: SECRET_KEY is unset here, so the store gets its signing key directly.
+    # SECRET_KEY is unset here, so the store gets its signing key directly.
     set_ws_ticket_store(WsTicketStore(mac_key=b"test-only-signing-key"))
     set_file_ticket_store(
         WsTicketStore(mac_key=b"test-only-file-key", ticket_prefix="orcastra:file_ticket", budget=120)

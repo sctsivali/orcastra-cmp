@@ -1,10 +1,10 @@
 """A worker refused with a certificate that was rotated elsewhere switches instead of failing.
 
 Four workers each hold the certificate they connected with, and nothing tells three of them when
-the fourth renews it. Once the old trust entry is removed, a stale worker is refused. It used to
-evict, trip the breaker and answer 503 for a minute; now it reads the active certificate once and,
-if that is a different one, connects with it. The same certificate, or no answer from Vault, keeps
-the old behaviour exactly (test_untrusted_cert_does_not_seal_its_own_repair).
+the fourth renews it. Once the previous trust entry is removed, a stale worker is refused. Instead
+of evicting, tripping the breaker and answering 503 for a minute, it reads the active certificate
+once and, if that is a different one, connects with it. The same certificate, or no answer from
+Vault, leaves the refusal on the unauthorized path.
 """
 
 import threading

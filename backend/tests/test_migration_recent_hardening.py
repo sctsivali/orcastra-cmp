@@ -1,4 +1,4 @@
-"""Regression coverage for the latest fail-closed migration invariants."""
+"""Fail-closed migration invariants: locks, actors, activation barriers, autostart and billing."""
 
 from __future__ import annotations
 

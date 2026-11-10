@@ -3,7 +3,7 @@
 Two gates, both driven through the real routers: the SQL the page is built from carries the
 caller's cluster set (asserted on the compiled statement the fake session recorded), and the
 per-row judgement drops anything the SQL would not have returned (the fake answers rows the
-predicate must refuse, which is exactly what a wrongly built WHERE clause would do). A
+predicate must refuse, as a wrongly built WHERE clause would). A
 foreign `cluster_id` filter answers 403 from `verify_cluster_access`, `actor=me` without an
 email claim answers 403, and a malformed status answers 422.
 """

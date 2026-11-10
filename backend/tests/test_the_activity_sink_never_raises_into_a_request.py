@@ -1,9 +1,9 @@
-"""The journal is a copy; the request that produced the record must never pay for it.
+"""The journal is a copy; a failing journal sink must never fail the request that logged.
 
-`log_activity` runs inside request handlers, inside worker threads under `run_blocking`, and
-inside background tasks. Whatever the sink does (not started, disabled, full, broken, or
-missing entirely) the caller gets its event id and the stdout record it always got. These pin
-that boundary from both sides: the logger's guarded call, and the sink's own `offer`.
+`log_activity` runs inside request handlers, worker threads under `run_blocking`, and
+background tasks. Whatever the sink does (not started, disabled, full, broken, or missing) the
+caller still gets its event id and the stdout audit record. Covered from both sides: the
+logger's guarded call, and the sink's own `offer`.
 """
 
 import asyncio

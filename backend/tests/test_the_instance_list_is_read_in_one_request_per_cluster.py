@@ -1,11 +1,10 @@
 """A cluster's instances are read in one request, state included.
 
-The per-node read walked the projects one by one (`projects.all()` plus one
-`GET /1.0/instances?project=` per project) and then asked `/state` once per running
-instance, keyed by bare name: 11 s on a 52-project host, and two projects holding an instance
-of the same name shared one state entry. A daemon that advertises `instance_all_projects`
-answers everything, state inline, in one `?all-projects=true&recursion=2` request; a daemon
-that does not is walked project by project by `list_across_projects`, still with state.
+A daemon that advertises `instance_all_projects` answers everything, state inline, in one
+`?all-projects=true&recursion=2` request; a daemon that does not is walked project by
+project by `list_across_projects`, still with state inline. State is never fetched per
+instance by bare name, which would be slow on hosts with many projects and would let two
+projects holding an instance of the same name share one state entry.
 """
 
 import logging

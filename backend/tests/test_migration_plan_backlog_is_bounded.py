@@ -1,9 +1,8 @@
-"""Plans cannot pile up without bound (owner decision 2026-11-04).
+"""Plans cannot pile up without bound.
 
-Each plan stores its request and preflight report, and nothing limited how many one operator
-kept open or ever removed an expired one, so a script could grow the database at will. An
-operator now holds at most OPEN_PLAN_LIMIT open plans, and expired plans no job refers to are
-removed after PLAN_RETENTION.
+Each plan stores its request and preflight report, so without a limit a script could grow the
+database at will. An operator holds at most OPEN_PLAN_LIMIT open plans, and expired plans no job
+refers to are removed after PLAN_RETENTION.
 """
 
 from __future__ import annotations
@@ -79,7 +78,7 @@ def _plan(index: int, *, requester: str, status: str, age: timedelta, ttl: timed
 @pytest.mark.asyncio
 async def test_only_unexpired_open_plans_of_that_operator_count(db: AsyncSessionFacade) -> None:
     rows = [_plan(i, requester="a@example.test", status="ready", age=timedelta(minutes=1)) for i in range(3)]
-    rows += [_plan(10, requester="a@example.test", status="ready", age=timedelta(hours=2))]  # past its TTL
+    rows += [_plan(10, requester="a@example.test", status="ready", age=timedelta(hours=2))]  # Past its TTL
     rows += [_plan(11, requester="a@example.test", status="executed", age=timedelta(minutes=1))]
     rows += [_plan(12, requester="b@example.test", status="blocked", age=timedelta(minutes=1))]
     db.sync.execute(insert(MigrationPlan), rows)

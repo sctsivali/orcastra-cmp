@@ -1,21 +1,14 @@
-"""
-The core regression proof for the RC3 production outage.
+"""A cluster that accepts TCP and then goes silent cannot park the API through raw_proxy.
 
-On 2026-07-30 all four uvicorn workers' event-loop threads parked inside
-`session.get(full_url, verify=False)` in `raw_proxy`, because the call carried no timeout and
-was awaited inline on the loop. An LXD cluster that accepted TCP and then went silent took the
-entire API down, `/health` included, for 50 hours.
-
-Four things have to hold for that to be impossible, and this module asserts all four:
+A `session.get(full_url, verify=False)` with no timeout, awaited inline on the loop, parks the
+worker's event-loop thread for as long as the peer stays silent, `/health` included. Four
+things have to hold for that to be impossible, and this module asserts all four:
 
   1. the endpoint returns within its wall-clock cap
   2. the event loop keeps running while the blocked call is outstanding
   3. the blocking call does not execute on the loop thread
   4. the call carries a socket timeout, which is the only thing that ever frees the worker
      thread (cancelling the await does not stop it)
-
-Before the fix this module fails on all four. That is the point: a regression test that has
-never been seen to fail is not a regression test.
 """
 
 import asyncio
@@ -31,8 +24,8 @@ from app.routers.integrations import RawProxyRequest, raw_proxy
 # The wall-clock cap the test drives the endpoint against. Kept small so the suite stays fast.
 TEST_CAP_SECONDS = 1.0
 
-# Bounds a pre-fix run. Without a cap in the code, the fake would otherwise block forever and
-# hang the suite instead of failing it.
+# Releases a call that carries no timeout, so a missing timeout fails the suite instead of
+# hanging it.
 SAFETY_RELEASE_SECONDS = 3.0
 
 
@@ -53,8 +46,7 @@ class BlackholeSession:
         timeout = kwargs.get("timeout")
         read = timeout[1] if isinstance(timeout, (tuple, list)) else timeout
         if read is None:
-            # The bug: no timeout means the calling thread is parked until something else
-            # gives up. In production nothing did.
+            # No timeout: the calling thread is parked until something else gives up.
             self._release.wait()
             raise requests.exceptions.ReadTimeout("safety release (no timeout was passed)")
         if not self._release.wait(read):
@@ -134,12 +126,12 @@ def _reset_circuit_breaker():
 def _apply_test_cap(monkeypatch: pytest.MonkeyPatch) -> Optional[float]:
     """Shrink the production wall-clock cap so the suite stays fast.
 
-    important: patched on the router module, not on app.services.lxd.proxy. The router
-    imports the constants by value, so patching the definition site would have no effect on
-    the name the endpoint actually reads.
+    Patched on the router module rather than app.services.lxd.proxy. The router
+    imports the constants by value, so patching the definition site has no effect on the name
+    the endpoint reads.
 
-    Returns the cap in force, or None when the fix is not present yet, so a pre-fix run still
-    executes and fails on the assertions rather than erroring on an import.
+    Returns the cap in force, or None when the router has no RAW_PROXY_TIMEOUT, so the test
+    still runs and fails on its assertions rather than on a missing attribute.
     """
     from app.routers import integrations as router_module
 
@@ -200,8 +192,8 @@ async def test_blackholed_cluster_does_not_park_the_event_loop(
     assert elapsed < cap + 1.5, (
         f"raw_proxy took {elapsed:.2f}s against a {cap}s cap: the call is not bounded"
     )
-    # A nominal loop ticks ~100x/s. Requiring only 10x/s leaves generous headroom for a busy
-    # CI box while still failing hard when the loop is parked (pre-fix this is 0).
+    # A nominal loop ticks ~100x/s. Requiring only 10x/s leaves headroom for a busy CI box
+    # while still failing hard when the loop is parked (then it is 0).
     assert ticked >= elapsed * 10, (
         f"event loop starved: only {ticked} ticks in {elapsed:.2f}s"
     )
@@ -221,7 +213,7 @@ async def test_blackholed_cluster_does_not_park_the_event_loop(
 async def test_every_verb_passes_a_socket_timeout(
     monkeypatch: pytest.MonkeyPatch, method: str
 ) -> None:
-    """Guards all five call sites, not just the GET that happened to take production down."""
+    """The call site of every verb carries a socket timeout."""
     _apply_test_cap(monkeypatch)
     session = BlackholeSession()
 

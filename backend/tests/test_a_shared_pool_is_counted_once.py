@@ -1,15 +1,9 @@
 """A clustered host's storage total must not count a shared backing store per member.
 
-The defect this replaces read `member_resources["storage"]["pools"]`, a key /1.0/resources does
-not send, so every clustered host reported zero. Correcting the key would not have produced the
-number either: the real block is `storage.disks`, which is physical media, and raw device
-capacity double counts a mirror and counts disks belonging to no pool.
-
-Pool space exists only per pool per member. Adding those up is wrong the other way: a 400 GB
-Ceph pool seen from three members is 1.2 TB of capacity nobody has.
-
-The fixture below is the three-member QA stub's own POOLS table, so the numbers here and the
-numbers the browser suite asserts against a running stub are the same numbers.
+/1.0/resources sends no `storage.pools` key, and its `storage.disks` block is physical media:
+raw device capacity double counts a mirror and counts disks belonging to no pool. Pool space
+exists only per pool per member, and adding those up is wrong the other way: a 400 GB Ceph pool
+seen from three members is 1.2 TB of capacity that does not exist.
 """
 
 import unittest
@@ -24,7 +18,7 @@ from app.services.lxd.storage_model import (
 
 GB = 10 ** 9
 
-# tools/clustered-lxd-stub.py POOLS, verbatim. `remote` is the same Ceph store on two members.
+# A three-member cluster. `remote` is the same Ceph store on two members.
 FIXTURE = [
     PoolReading("microcloud20", "local", "zfs", 200 * GB, 50 * GB),
     PoolReading("microcloud20", "remote", "ceph", 400 * GB, 100 * GB),
@@ -53,8 +47,8 @@ class DriverClassificationTests(unittest.TestCase):
         self.assertEqual("shared", classify_driver("lvmcluster"))
 
     def test_an_unknown_driver_counts_as_local_and_is_named(self):
-        """Fails in the direction that understates capacity rather than overstating it, and
-        says so, because a driver nobody classified is a gap and not a fact."""
+        """An unknown driver understates capacity rather than overstating it, and is named so
+        the gap stays visible."""
         self.assertEqual("unknown", classify_driver("some-future-driver"))
         summary = summarise_cluster_storage([
             PoolReading("m1", "p", "some-future-driver", 10, 1),
@@ -77,7 +71,7 @@ class ClusterStorageTests(unittest.TestCase):
         self.assertEqual(1050 * GB, self.summary.total)
 
     def test_the_naive_sum_is_still_reported(self):
-        """Nobody loses a figure they had, the way gpu_cards_total sits beside gpu_total."""
+        """The naive sum stays beside the total, as gpu_cards_total sits beside gpu_total."""
         self.assertEqual(1450 * GB, self.summary.raw_total)
 
     def test_the_difference_is_exactly_the_duplicate(self):
@@ -104,7 +98,7 @@ class ClusterStorageTests(unittest.TestCase):
         self.assertEqual(600 * GB, local["space_total"])
 
     def test_a_pool_is_never_hidden_to_tidy_a_number(self):
-        """gpu-inventory.md's rule: a shared pool is marked, not dropped."""
+        """A shared pool is marked, never dropped."""
         self.assertEqual({"local", "remote", "scratch"}, {p["name"] for p in self.summary.pools})
 
     def test_the_rows_add_up_to_the_totals(self):
@@ -124,8 +118,7 @@ class ClusterStorageTests(unittest.TestCase):
         self.assertEqual(400 * GB, summary.total)
 
     def test_a_standalone_host_is_unchanged(self):
-        """One member, no sharing: usable and raw must be the same number, or the standalone
-        path would start reporting something different from what it reports today."""
+        """One member, no sharing: usable and raw are the same number."""
         one = [
             PoolReading("solo", "default", "dir", 123887923200, 97336033280),
         ]

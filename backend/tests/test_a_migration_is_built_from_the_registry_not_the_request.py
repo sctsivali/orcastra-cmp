@@ -3,9 +3,7 @@
 A pull migration tells the DESTINATION hypervisor to open a connection to an address and trust a
 certificate. If either could be supplied in the request body, an authenticated partner would gain
 an SSRF primitive aimed from inside a hypervisor, which reaches far more than the API server can.
-
-This repository already treats that class of input carefully: `_validate_image_server` exists in
-the instances router for the same reason on the image path.
+`_validate_image_server` in the instances router guards the image path for the same reason.
 
 Also covered here: the import POST must not travel on a session that retries, because a retried
 instance import creates the instance twice, and for a multi-gigabyte transfer that means two
@@ -85,9 +83,8 @@ def test_only_a_reachability_failure_falls_back_to_streaming():
 def test_an_incompatible_architecture_is_refused_rather_than_offered():
     """A destination that cannot run the instance is never presented as a choice.
 
-    This fleet is the case in point: nuc2 is x86_64 and pandora is aarch64, so a copy between
-    them cannot work no matter how the transfer is arranged. Offering it and failing afterwards
-    would read as a broken feature rather than as physics.
+    An x86_64 instance cannot run on an aarch64 host however the transfer is arranged. Offering
+    that destination and failing afterwards would read as a broken feature.
     """
     assert mobility.architecture_compatible("x86_64", ["aarch64", "armv7l"]) is False
     assert mobility.architecture_compatible("x86_64", ["x86_64", "i686"]) is True
@@ -106,8 +103,8 @@ def test_a_migration_declares_the_instance_architecture_and_type(instance_type):
     """The migration body must name the architecture, or the target refuses it outright.
 
     A same-cluster copy infers it from the source; a migration target builds the instance record
-    before any bytes move and has nothing to infer from. Omitting it is answered with
-    `Architecture is not supported: ""`, which was reproduced live between nuc2 and nuc1.
+    before any bytes move and has nothing to infer from. Without it LXD answers
+    `Architecture is not supported: ""`.
     """
     captured = {}
 
@@ -148,13 +145,12 @@ def test_a_migration_declares_the_instance_architecture_and_type(instance_type):
 
 
 def test_the_migration_operation_url_is_absolute():
-    """The URL handed to the target must name a host it can actually open.
+    """The URL handed to the target must name a host it can open.
 
     LXD answers a migration request with a relative path. That path is consumed by the TARGET,
     which has no host to resolve it against, so it accepts the request and then does nothing:
-    the operation is created, no bytes move, and the instance never appears. Reproduced live
-    between nuc2 and nuc1, where the copy returned 202 and the destination was still empty
-    seven minutes later. Nothing in the response distinguishes that from success.
+    the operation is created, no bytes move, and the instance never appears. The copy still
+    answers 202, so nothing in the response distinguishes that from success.
     """
 
     class _Instance:

@@ -1,17 +1,12 @@
 """Running a command or reading a file inside a guest costs a capability of its own.
 
-The power was already there and nothing asked for it. `_REFUSED_PROXY_PREFIXES` holds exactly one
-entry, `/certificates`, so `POST /1.0/instances/<n>/exec` through the raw proxy ran arbitrary
-commands as root for any key holding `lxd.proxy` and `write`, and `GET /1.0/instances/<n>/files`
-needed only `read`, which made a read-only monitoring key an exfiltration tool. Both were
-demonstrated against the running deployment before this was written: `uid=0(root)` from a key
-carrying nothing but the `mcp` preset, and `/etc/shadow` returned to a `read`-level key. The
-integrator document actively recommended the exec route.
+Without one, `POST /1.0/instances/<n>/exec` through the raw proxy would run commands as root for
+any key holding `lxd.proxy` and `write`, and `GET /1.0/instances/<n>/files` would turn a
+`read`-level monitoring key into an exfiltration tool.
 
-Two capabilities rather than one, because the powers are separable and real integrations need
-them separately: a health check runs a command and never opens a file, a backup reads files and
-never runs anything. They also differ in what they leave behind. An exec leaves a process and an
-exit code the guest can log; a file pull leaves nothing inside the guest at all.
+The two powers are separate capabilities because integrations need them separately: a health check
+runs a command and never opens a file, a backup reads files and never runs anything. An exec also
+leaves a process and an exit code the guest can log; a file pull leaves nothing inside the guest.
 """
 
 import ast
@@ -43,12 +38,10 @@ ROUTER = Path(__file__).resolve().parents[1] / "app" / "routers" / "integrations
 
 
 def _calls(node: ast.AST, name: str) -> bool:
-    """Whether ``name`` is actually CALLED here, rather than merely spelled somewhere.
+    """Whether ``name`` is called inside ``node``; a mention alone does not count.
 
-    important: several handlers import their guard inside the function body, so
-    `"guard" in ast.unparse(node)` is satisfied by the import line alone. Proven by ablation on
-    the shared cluster-scope ratchet, which had passed on ten routers for a property it was only
-    checking by spelling.
+    Several handlers import their guard inside the function body, so
+    `"guard" in ast.unparse(node)` is satisfied by the import line alone.
     """
     return any(
         isinstance(inner, ast.Call)
@@ -79,10 +72,8 @@ def _key(capabilities=None, *, legacy: bool = False):
 def test_every_guest_capability_exists_and_is_described() -> None:
     """The dialog and the integrator doc both render these sentences.
 
-    Spelled out as a literal so that adding a guest-reaching power is a deliberate edit here as
-    well as in the vocabulary. That is the point of the assertion rather than an inconvenience:
-    when the desktop family was added, this is the test that failed and made somebody state which
-    side of the never-inherited line it belonged on.
+    The set is a literal so that adding a guest-reaching power needs an edit here too, which forces
+    a decision on whether the new power is ever inherited.
     """
     assert GUEST_ACCESS_CAPABILITIES == {
         "instance.exec",
@@ -98,9 +89,8 @@ def test_every_guest_capability_exists_and_is_described() -> None:
 def test_the_desktop_family_is_split_rather_than_one_capability() -> None:
     """Watching, touching and reading the clipboard are three different consents.
 
-    A kiosk monitor that may look at a screen has not thereby been allowed to type into it, and
-    neither implies the right to read whatever the user last copied, which is the highest-yield
-    exfiltration primitive on the surface.
+    A kiosk monitor that may look at a screen may not type into it, and neither implies reading
+    whatever the user last copied, the highest-yield exfiltration primitive on the surface.
     """
     assert {"desktop.view", "desktop.input", "desktop.clipboard"} <= set(CAPABILITIES)
 
@@ -121,29 +111,23 @@ def test_they_are_marked_elevated_with_their_own_reason() -> None:
         assert ELEVATED_REASONS[capability] != ELEVATED_REASONS["org.sync"]
 
 
-# ── the two silent grants this had to avoid ────────────────────────────────────────────────
+# ── no silent grant ────────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize("app_type", sorted(APP_TYPE_CAPABILITIES))
 @pytest.mark.parametrize("capability", sorted(GUEST_ACCESS_CAPABILITIES))
 def test_no_application_type_seeds_it(app_type: str, capability: str) -> None:
-    """`orcahub` is `set(CAPABILITIES)`, so it widens whenever the vocabulary does.
-
-    Right for another read, wrong for root in a customer's container.
-    """
+    """`orcahub` widens with `set(CAPABILITIES)`, so guest access is excluded from it."""
     assert capability not in default_capabilities_for(app_type)
 
 
 @pytest.mark.parametrize("capability", sorted(GUEST_ACCESS_CAPABILITIES))
 def test_a_legacy_key_does_not_inherit_it(capability: str) -> None:
-    """17 of the 22 keys in this deployment have no `capabilities` field, which means
-    unrestricted. Shipping without this exclusion would have handed root-in-guest to most of the
-    fleet on deploy, with nobody deciding it.
-    """
+    """A key with no `capabilities` field is unrestricted, yet must not gain root-in-guest."""
     legacy = _key(legacy=True)
-    # The ordinary rule still grants a legacy key everything, which is what keeps it working.
+    # The ordinary rule still grants a legacy key everything, which keeps it working.
     assert_capability(legacy, capability)
-    # The explicit rule does not, and that difference is the entire point.
+    # The explicit rule does not.
     assert not has_explicit_capability(legacy, capability)
     with pytest.raises(HTTPException) as raised:
         assert_explicit_capability(legacy, capability)
@@ -157,7 +141,7 @@ def test_an_explicit_grant_satisfies_it(capability: str) -> None:
 
 
 def test_holding_one_does_not_grant_the_other() -> None:
-    """The reason there are two of them."""
+    """Neither guest capability implies the other."""
     with pytest.raises(HTTPException):
         assert_explicit_capability(_key(["instance.exec"]), "instance.files")
     with pytest.raises(HTTPException):
@@ -186,7 +170,7 @@ def test_holding_one_does_not_grant_the_other() -> None:
         ("/1.0/instances/web-1/snapshots", None),
         ("/1.0/instances", None),
         ("/1.0/operations/abc", None),
-        # An instance NAMED exec is managed, not entered.
+        # An instance named `exec` is an ordinary instance path.
         ("/1.0/instances/exec", None),
         ("/1.0/instances/exec/state", None),
     ],
@@ -206,12 +190,12 @@ def test_the_raw_proxy_refuses_a_guest_path_without_the_capability() -> None:
     for path in ("/1.0/instances/web-1/exec", "/1.0/instances/web-1/files"):
         assert_guest_access_allowed(path, granted)  # must not raise
 
-    # And a path that stays outside the guest is untouched for either key.
+    # A path outside the guest passes for either key.
     assert_guest_access_allowed("/1.0/instances/web-1/state", ordinary)
 
 
 def test_the_raw_proxy_handler_consults_the_rule() -> None:
-    """The rule existing is not the same as the handler calling it."""
+    """raw_proxy calls the guest-access rule."""
     assert _calls(_handler("raw_proxy"), "assert_guest_access_allowed"), (
         "raw_proxy refuses only the paths nobody may reach, so /exec and /files are open to any "
         "key holding lxd.proxy"
@@ -243,8 +227,7 @@ def test_the_operation_handler_consults_the_table() -> None:
         "proxy_operation does not demand the guest-access capability, so exec_instance is "
         "reachable with lxd.proxy alone"
     )
-    # And it has to read the table, not a hardcoded name, or a second guest operation added later
-    # inherits nothing.
+    # The capability is looked up in the table, so a new guest operation cannot be left unpriced.
     reads_table = any(
         isinstance(node, ast.Attribute)
         and getattr(node.value, "id", None) == "GUEST_ACCESS_OPERATIONS"
@@ -259,8 +242,8 @@ def test_the_operation_handler_consults_the_table() -> None:
 @pytest.mark.parametrize(
     "path,expected",
     [
-        # A console POST returns the operation's file-descriptor secrets, which is exactly what
-        # the removed GET /terminal/session handed out. A GET returns the guest's tty buffer.
+        # A console POST returns the operation's file-descriptor secrets; a GET returns the
+        # guest's tty buffer.
         ("/1.0/instances/web-1/console", "instance.exec"),
         # A backup or a published image is the guest filesystem in a tarball.
         ("/1.0/instances/web-1/backups", "instance.files"),
@@ -281,16 +264,16 @@ def test_the_sideways_routes_cost_the_same_as_the_direct_one(path: str, expected
 @pytest.mark.parametrize(
     "config,devices,expected",
     [
-        # `lxc.hook.pre-start` runs as root ON THE HOST, which is more than exec-in-guest.
+        # `lxc.hook.pre-start` runs as root on the host, which is more than exec-in-guest.
         ({"raw.lxc": "lxc.hook.pre-start = /bin/sh -c id"}, None, "instance.exec"),
         ({"raw.idmap": "both 0 0"}, None, "instance.exec"),
         ({"security.privileged": "true"}, None, "instance.exec"),
         ({"security.nesting": "true"}, None, "instance.exec"),
-        # A host path mounted into the guest is the file API with extra steps.
+        # A host path mounted into the guest gives the same reach as the file API.
         (None, {"h": {"type": "disk", "source": "/", "path": "/mnt/h"}}, "instance.files"),
         (None, {"h": {"type": "disk", "source": "/etc", "path": "/mnt/e"}}, "instance.files"),
-        # Ordinary configuration management stays at `write`, or this breaks far more than it
-        # protects.
+        # Ordinary configuration stays at `write`; pricing it higher would break routine
+        # management.
         ({"limits.cpu": "2", "limits.memory": "1GiB"}, None, None),
         ({"user.team": "platform"}, None, None),
         (None, {"eth0": {"type": "nic", "network": "br0"}}, None),
@@ -302,11 +285,10 @@ def test_the_sideways_routes_cost_the_same_as_the_direct_one(path: str, expected
 def test_configuration_that_is_execution_by_another_name_costs_the_capability(
     config, devices, expected
 ) -> None:
-    """`update_instance` took arbitrary config and devices at `write` alone.
+    """Config and devices that run code or expose host files cost the guest capability.
 
-    A key refused `exec_instance` could set `raw.lxc` and restart, and the hook runs as root on
-    the host. Leaving that open would have made the new capability the front door of a room with
-    an open window.
+    Otherwise a key refused `exec_instance` could set `raw.lxc` through `update_instance` at
+    `write` and restart, and the hook runs as root on the host.
     """
     assert config_reaches_inside(config, devices) == expected
 
@@ -320,12 +302,10 @@ def test_the_operation_handler_prices_a_configuration_change() -> None:
 
 
 def test_opening_a_terminal_still_lands_in_the_activity_index() -> None:
-    """The removed REST endpoint was the only emitter of `terminal.session.create`.
+    """The terminal WebSocket emits `terminal.session.create`.
 
-    The WebSocket, which is what the app actually uses, wrote nothing to the activity index at
-    all: a client connecting straight to it opened a root shell in a guest and left a record only
-    in session tracking. Removing the endpoint would have made the action dead rather than
-    merely unused, so the emitter moved to the socket.
+    The socket is how a terminal opens, so without this a client connecting straight to it would
+    open a root shell in a guest with a record only in session tracking.
     """
     terminal = Path(__file__).resolve().parents[1] / "app" / "routers" / "terminal.py"
     tree = ast.parse(terminal.read_text())
@@ -349,7 +329,7 @@ def test_opening_a_terminal_still_lands_in_the_activity_index() -> None:
     ]
     assert emitted, "opening a terminal leaves no record in the audit index"
 
-    # And it must carry the organisation, or an exec into a tenant's guest is unattributable
-    # to that tenant.
+    # The record carries the organisation, or an exec into a tenant's guest is unattributable to
+    # that tenant.
     carried = {kw.arg for kw in emitted[0].keywords}
     assert "target_organization_id" in carried

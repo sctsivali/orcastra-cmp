@@ -1,20 +1,14 @@
 """A Vault LIST that is lost must answer with the fleet it last saw, not with nothing.
 
 The create-instance form starts from GET /nodes/names, which reads the cluster registry from
-Vault on every request. One lost LIST (a 2 s connect budget on a busy box, a token whose
-policy denies the metadata LIST while every per-cluster read still works) used to empty the
-node picker and, because every other control on the form waits for a node, the whole form.
-The list came back a moment later, so the operator saw pickers that were "sometimes empty,
-sometimes there", and a hard refresh did not help while the blip lasted.
+Vault on every request. One lost LIST (a 2 s connect budget on a busy box, or a token whose
+policy denies the metadata LIST) would empty the node picker and with it the whole form.
 
 The registry cannot change while Vault is unreachable, because registration and
-deregistration both write to Vault first. So the last successful answer is the truth until
-Vault answers again, and serving it is not a guess. The copy is kept twice: in Redis, shared
-by every worker and surviving a restart, and in the process, for the case where Redis is
-down as well. Only when neither holds anything does the read stay empty.
-
-The filter is applied to the answer, never to the copy: the copy is the unfiltered fleet, so a
-Partner's request cannot poison what an Admin is served later.
+deregistration both write to Vault first, so the last successful answer holds until Vault
+answers again. The copy is kept in Redis (shared by every worker, survives a restart) and in
+the process (for when Redis is down too). The copy is the unfiltered fleet and the filter
+applies to the answer, so a Partner's request cannot narrow what an Admin is served later.
 """
 
 import pytest

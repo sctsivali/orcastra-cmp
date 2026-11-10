@@ -1,10 +1,8 @@
 """A cluster's members are read side by side and folded in their own order.
 
-The capacity aggregation read one member after another and, on each, one pool after another; a
-profile of the live sweep put 72% of a three-member cluster's aggregation in the pool reads. The
-reads now overlap, and the fold keeps the members' order, so the figures are the ones the loop
-produced. A members list that fails is remembered for five minutes, because a member that stops
-answering makes LXD wait out its own deadline on every check.
+Serial member and pool reads dominate the capacity aggregation, so the reads overlap and the
+fold keeps the members' order. A members list that fails is remembered for five minutes,
+because a member that stops answering makes LXD wait out its own deadline on every check.
 """
 
 import contextvars

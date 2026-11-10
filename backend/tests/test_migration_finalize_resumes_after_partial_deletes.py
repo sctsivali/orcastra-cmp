@@ -1,10 +1,10 @@
 """A Finalize that resumes after it already deleted something finishes or stops, never loops.
 
-* The source project was already gone (the delete timed out but LXD finished it, or the worker
-  died after it): the drift pass read the missing project's inventory, failed, and every
-  Recheck failed the same way, so the deleted events and the grant revoke never ran.
-* Some sources were already deleted and something else drifted: the job went back to
-  retention and offered a Rollback that could not restore what was gone.
+* The source project is already gone (the delete timed out but LXD finished it, or the worker
+  died after it): the cleanup finishes instead of failing every Recheck on the missing
+  project's inventory, so the deleted events and the grant revoke still run.
+* Some sources are deleted and something else drifted: the job stops for manual recovery,
+  since a Rollback from retention cannot restore what is gone.
 """
 
 from __future__ import annotations

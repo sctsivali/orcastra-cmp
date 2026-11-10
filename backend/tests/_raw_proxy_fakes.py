@@ -1,8 +1,8 @@
 """Shared fakes for the raw-proxy path tests: a recording session, a cluster, and the integrator paths.
 
-The session records what raw_request hands it (verb, URL and keyword arguments), which is the side
-effect the real session turns into a request on the wire. `lxd_reads` parses a sent URL the way LXD
-does after requests has prepared it: the path decoded once and split, the query decoded once.
+The session records what raw_request hands it (verb, URL and keyword arguments). `lxd_reads` parses
+a sent URL the way LXD does after requests has prepared it: the path decoded once and split, the
+query decoded once.
 """
 
 from contextlib import contextmanager
@@ -112,8 +112,8 @@ def without_rule_bookkeeping() -> Iterator[None]:
 
     A project DELETE runs inside the deletion core and a stranding write captures rules first
     (services/raw_project_delete.py, services/stranded_rules.py); both need the database. These
-    tests judge what is SENT, so the core runs the sender alone and nothing is captured. The
-    bookkeeping itself is covered by test_a_raw_project_delete_forgets_its_access_rules.py and
+    tests judge what is sent, so the core runs the sender alone and nothing is captured. The
+    bookkeeping has its own tests: test_a_raw_project_delete_forgets_its_access_rules.py and
     test_a_deleted_instance_takes_its_named_rules_with_it.py.
     """
     from app.services import project_deletion, stranded_rules

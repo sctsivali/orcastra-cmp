@@ -1,11 +1,10 @@
 """Withdrawing tenant.provision from a key that owns organizations is asked about, then forced.
 
-Owner decision, 2026-10-08: not silently allowed and not refused. Without it the owner still syncs
-its organizations and their members, but provisioning buyer dashboard access for them stops, and no
-other key may provision for them. The capability edit answers 409 naming that consequence and the
-organizations the caller may see, and the same request with force goes through, recorded as forced
-with the organization ids. org.sync and inventory.read stay refused, force or not, and who may edit
-the key at all is unchanged.
+Without it the owner still syncs its organizations and their members, but provisioning buyer
+dashboard access for them stops, and no other key may provision for them. The capability edit
+answers 409 naming that consequence and the organizations the caller may see; the same request
+with force goes through, recorded as forced with the organization ids. Withdrawing org.sync or
+inventory.read stays refused, force or not, and who may edit the key is unchanged.
 
 These send the real route through its RBAC gate against SQLite organization rows and an in-memory
 Vault.

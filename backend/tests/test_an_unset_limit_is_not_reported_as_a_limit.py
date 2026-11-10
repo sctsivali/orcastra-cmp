@@ -1,13 +1,12 @@
 """An instance without a limit is reported as unlimited, not as the size of its host.
 
 A container with no `limits.cpu` is measured against the host's hardware threads, and LXD reports
-a container with no `limits.memory` as having the host's memory. The console then printed "0.9 of
-64 vCPUs busy" and "2 GiB / 62 GiB", which reads as the instance's allocation when it is the
-host's size. The readings carry whether the instance's own config sets each limit, so a surface
-can say "no CPU limit" instead.
+a container with no `limits.memory` as having the host's memory, so "0.9 of 64 vCPUs busy" reads
+as the instance's allocation when it is the host's size. The readings carry whether the
+instance's own config sets each limit, so a surface can say "no CPU limit" instead.
 
-note: the figures stay. Inside an unlimited container lxcfs shows the same host values, so
-withholding them here would hide nothing; the real control is setting the limits.
+The figures stay: inside an unlimited container lxcfs shows the same host values, so withholding
+them here would hide nothing.
 """
 
 from types import SimpleNamespace
@@ -93,8 +92,8 @@ def test_instance_metrics_say_whether_the_limits_are_set(monkeypatch, kind, expa
 
 
 def test_a_local_config_alone_does_not_claim_an_unset_limit(monkeypatch):
-    # With no expanded_config the reading falls back to the local config, where a profile's limit
-    # is absent; absent is then unknown, not unset.
+    # With no expanded_config the reading falls back to the local config, which lacks any limit a
+    # profile sets, so an absent limit there reads as unknown (None).
     instance = _instance("container", None)
     monkeypatch.setattr(metrics_module, "find_instance_in_projects", lambda *_a, **_k: (instance, "default"))
     metrics = read_instance_metrics(object(), "cluster-a", "fixture", "default")

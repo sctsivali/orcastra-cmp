@@ -1,4 +1,4 @@
-"""Crash boundaries for durable instance specification jobs are reconciled, not replayed."""
+"""A durable specification job is reconciled at each crash boundary, never replayed."""
 
 from types import SimpleNamespace
 
@@ -97,7 +97,7 @@ def _pending_quota(read: SpecificationRead) -> SpecificationRead:
 
 @pytest.mark.asyncio
 async def test_recovery_after_graceful_stop_applies_then_restarts(monkeypatch):
-    """A stopped readback is the transition this job caused, not a stale-plan refusal."""
+    """After the job's own graceful stop, recovery applies the change and restarts."""
     row = _row(phase="applying", stopped_by_job=True)
     stopped_before = _read(cpu=4, status="Stopped")
     stopped_after = _read(cpu=6, status="Stopped")

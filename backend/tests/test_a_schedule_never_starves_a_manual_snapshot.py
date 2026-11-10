@@ -1,12 +1,9 @@
 """A schedule must never be the reason an operator cannot take a snapshot by hand.
 
-`MAX_OPS_SNAPSHOTS_PER_INSTANCE` is 5 and counts every `ops-` name from the cluster, including the
-ones an operator took themselves and the `ops-pre-` safety copies a restore leaves behind. So a
-schedule allowed to keep 5 would occupy the whole budget and turn the pre-maintenance snapshot,
-which is the thing this entire surface exists for, into a 409.
-
-The answer is arithmetic rather than policy: the schedule's ceiling is strictly below the
-instance's, and the gap is the operator's. Nothing has to remember to leave room.
+`MAX_OPS_SNAPSHOTS_PER_INSTANCE` counts every `ops-` name on the cluster, including the ones an
+operator took and the `ops-pre-` safety copies a restore leaves behind. A schedule allowed to keep
+that many would fill the budget and turn the pre-maintenance snapshot into a 409. The schedule's
+ceiling is therefore strictly below the instance's, and the gap is the operator's.
 """
 
 import asyncio
@@ -26,18 +23,15 @@ SLOT = datetime(2026, 9, 9, 3, 0, tzinfo=UTC)
 
 
 def test_the_schedule_ceiling_is_strictly_below_the_instance_ceiling():
-    """The whole guarantee, in one comparison.
-
-    Ablation: raise MAX_SCHEDULE_KEEP_LAST to 5 and this fails, which is the point. A schedule at
-    the instance's own ceiling leaves no room for the snapshot an operator takes before a change.
-    """
+    """A schedule at the instance's own ceiling leaves no room for the snapshot an operator takes
+    before a change."""
     assert MAX_SCHEDULE_KEEP_LAST < MAX_OPS_SNAPSHOTS_PER_INSTANCE
     headroom = MAX_OPS_SNAPSHOTS_PER_INSTANCE - MAX_SCHEDULE_KEEP_LAST
     assert headroom >= 2, "an operator needs room for a manual snapshot and a pre-restore copy"
 
 
 def test_the_label_bound_is_what_the_name_can_actually_hold():
-    """42 is not arbitrary: 63 minus 'ops-' minus a 16-character stamp minus the joining dash.
+    """The label bound is 63 minus 'ops-', a 16-character stamp and the joining dash.
 
     Bounded on the label rather than on the result, so an over-long label is refused as an input
     instead of discovered later as two schedules rendering to one name.
@@ -78,8 +72,7 @@ def test_a_full_schedule_leaves_room_for_a_manual_snapshot(keep_last):
 
     outcome = asyncio.run(run_one(FakeDB(), schedule, now=SLOT, lxd_service=svc))
 
-    # Without this the count below is satisfied by a run that refused and changed nothing, which
-    # is a green test proving the opposite of what it claims.
+    # Without this, a run that refused and changed nothing would satisfy the count below.
     assert outcome.result == "success", f"{outcome.result}: {outcome.error or outcome.refusal}"
     assert outcome.snapshot == build_scheduled_snapshot_name(schedule.id, schedule.label, SLOT)
 

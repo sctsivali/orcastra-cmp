@@ -1,11 +1,10 @@
 """OrcaHub hears about a project only when the organization it serves reaches that project.
 
-OrcaHub events fanned out to every OrcaHub organization bound to the event's cluster, so on a
-cluster two parties hold, each one's OrcaHub heard, and could bill, the other's projects (pre-1.0.0
-review, 2026-11-06). An organization hears an event when no other party holds the cluster for it,
-or when the project is in its bound there (`default` and what its party's policies name, never `*`);
-a delete
-reaches the organizations that held what it removed (services/orcahub_reach.py).
+A fan-out to every OrcaHub organization bound to the event's cluster would let each party on a
+shared cluster hear, and bill, the other's projects. An organization hears an event when no other
+party holds the cluster for it, or when the project is in its bound there (`default` and what its
+party's policies name, never `*`); a delete reaches the organizations that held what it removed
+(services/orcahub_reach.py).
 """
 
 from typing import Any, Dict, List

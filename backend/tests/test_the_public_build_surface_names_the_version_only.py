@@ -1,13 +1,9 @@
 """The unauthenticated surface may name the version. It may not name the commit or the build date.
 
-f270eb0 took the build commit and date off `/` for a reason that has not changed: `/` and `/health`
-need no credential, `/health` is excluded from access logging, and together they name the exact
-source an anonymous caller is talking to while leaving no trace that anyone asked. The version
-stayed, because clients and the footer read it.
-
-Publishing the version on `/health` as well discloses nothing new, since `/` already hands it to the
-same callers. Publishing anything more would quietly undo the remediation, and nothing in the tree
-would have said so. This is that thing.
+`/` and `/health` need no credential and `/health` is excluded from access logging, so a commit and
+build date there would name the exact source an anonymous caller is talking to while leaving no
+trace that anyone asked. The version stays, because clients and the footer read it; publishing it
+on both endpoints discloses nothing new.
 
 Hermetic: `create_app()` builds the app in process, and `TestClient` outside a `with` block runs no
 lifespan, so no database, no Vault and no cluster are touched.
@@ -24,9 +20,9 @@ from app.main import create_app  # noqa: E402
 
 WITHHELD = ("commit", "built_at", "build_commit", "build_date")
 
-# What `/health` is allowed to answer, exactly. A denylist of four names fails open on a rename, on
-# a fifth field nobody thought of, and on anything nested; this fails closed and the failure names
-# the new key. Monitoring keys on `status` and `service`, so widening this is a contract change.
+# What `/health` is allowed to answer, exactly. An allow-list fails closed on a renamed or new field,
+# and the failure names the new key. Monitoring keys on `status` and `service`, so widening this is
+# a contract change.
 HEALTH_KEYS = {"status", "service", "version", "temp_storage", "vault", "identity_provider"}
 
 
@@ -62,12 +58,12 @@ def test_health_withholds_the_commit_and_the_build_date() -> None:
 
 
 def test_health_answers_these_keys_and_no_others() -> None:
-    """Set equality, not a denylist. A new top-level field has to be added here deliberately."""
+    """Set equality, so a new top-level field has to be added here explicitly."""
     assert set(_client().get("/health").json()) == HEALTH_KEYS
 
 
 def test_the_root_endpoint_still_withholds_them_too() -> None:
-    """The endpoint the original hardening was about. Both must stay closed, not just the new one."""
+    """`/` names the version and withholds the commit and the build date, like `/health`."""
     body = _client().get("/").json()
     assert "version" in body, body
     for field in WITHHELD:

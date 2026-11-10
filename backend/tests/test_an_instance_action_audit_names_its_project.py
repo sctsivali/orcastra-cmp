@@ -3,9 +3,8 @@
 The journal correlates a dashboard action with its LXD operation by
 `(cluster, project, resource_type, resource_name, action)`. An audit call without
 `target_project` lands in `default`, never matches the operation the daemon reported in the
-instance's real project, and the panel lists the click twice. The adversarial review found
-every `vm.*` call in `routers/vms.py` (the path the console drives) missing it; this keeps
-both routers honest by reading the call sites.
+instance's real project, and the panel lists the click twice. This reads the call sites in
+both routers.
 """
 
 import ast

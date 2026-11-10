@@ -1,22 +1,15 @@
 """Every tenant-reachable function that hands back `used_by` must filter it first.
 
 An LXD `used_by` list names the instances, profiles and volumes that reference a resource,
-across every project on the cluster. On a router reachable by a tenant that list is another
-organisation's inventory unless it is filtered, and the list endpoints already drop a resource
-whose references are all invisible. A detail endpoint that skips the same two steps therefore
-hands a tenant both the references they may not see and a resource that is absent from their
-own list.
+across every project on the cluster. On a router a tenant can reach, that list is another
+organisation's inventory unless it is filtered, and the list endpoints drop a resource whose
+references are all invisible. A detail endpoint that skips either step hands a tenant references
+they may not see, or a resource absent from their own list. The check is structural because the
+leak only shows when someone asks for a resource they do not own.
 
-That is what `storage_pools.get_storage_pool` did while its five siblings filtered, so the gap
-was invisible next to working code rather than obviously missing. It is also invisible at
-runtime to anyone whose own references happen to come back, which is why this is structural and
-not a functional test: it only shows up when someone asks for a resource they do not own.
-
-important: this checks that the filter reaches the value that is EMITTED, not merely that a
-filter is called somewhere in the function. An earlier version checked only for the presence of
-the name, and a review demonstrated a mutant that kept the denial gate, reverted the emission to
-the raw list, and passed. That mutant leaks the whole reference list for every resource the
-tenant can see one reference of, which is the more damaging half of the original bug.
+The filter must reach the value that is emitted; a filter called elsewhere in the function is not
+enough. A handler that keeps the denial gate but emits the raw list leaks every reference of
+every resource the tenant can see one reference of.
 """
 
 import ast
@@ -24,9 +17,9 @@ from pathlib import Path
 
 ROUTERS = Path(__file__).resolve().parents[1] / "app" / "routers"
 
-# Any one of these discharges the obligation. They are different shapes of the same decision:
-# the first two filter or gate a reference list, the third answers the same question per
-# allocation for a payload that carries one reference rather than a list.
+# Any one of these discharges the obligation. The first three filter or gate a reference list;
+# check_tenant_permission answers the same question per allocation for a payload that carries
+# one reference rather than a list.
 FILTERS = frozenset(
     {
         "filter_visible_lxd_references",
@@ -40,11 +33,9 @@ ELEVATED = frozenset({"require_partner", "require_admin"})
 
 # Functions that emit an unfiltered used_by for a reason, keyed (filename, function).
 #
-# important: every entry here is a fan-out worker that runs inside a thread pool, where the
-# tenant ACL contextvar does not propagate, so it CANNOT filter and the filtering has to happen
-# in the caller after the results are gathered. Each reason names the caller and the line, so a
-# reviewer can check the claim rather than trust it, and so an exemption cannot outlive the
-# filtering it depends on. Do not add an entry without that line reference.
+# important: every entry is a fan-out worker running in a thread pool, where the tenant ACL
+# contextvar does not propagate, so its caller filters the gathered results. Each reason names
+# that caller and line so the claim can be checked; do not add an entry without one.
 EXEMPT: dict[tuple[str, str], str] = {
     ("ipam.py", "_fetch_ipam_for_node"): "list_ipam filters the gathered rows, ipam.py:277-286",
     ("network_acls.py", "_fetch_acls_for_node"): "list_network_acls filters, network_acls.py:241",
@@ -100,9 +91,8 @@ def _emission_is_filtered(expr: ast.AST, filtered: set[str]) -> bool:
         return True
     if isinstance(expr, ast.Name):
         return expr.id in filtered
-    # important: `all`, not `any`. `pool.used_by or []` evaluates to the RAW list whenever it is
-    # non-empty, so the safe-looking `[]` branch says nothing about the branch that actually
-    # carries data. An earlier `any` here passed every unfiltered list in the codebase.
+    # important: `all`, not `any`. `pool.used_by or []` evaluates to the raw list whenever it is
+    # non-empty, so the `[]` branch says nothing about the branch that carries data.
     if isinstance(expr, ast.BoolOp):
         return all(_emission_is_filtered(v, filtered) for v in expr.values)
     if isinstance(expr, ast.IfExp):
@@ -116,9 +106,8 @@ def _emission_is_filtered(expr: ast.AST, filtered: set[str]) -> bool:
 def _depends_on_elevated(expr: ast.AST | None) -> bool:
     """True for `Depends(require_partner())`, false for the uncalled `Depends(require_partner)`.
 
-    important: matching the bare name would read a broken dependency as a working gate. FastAPI
-    resolves `Depends(require_partner)` as the factory itself, which enforces nothing, so the
-    call has to be present for the exemption to be real.
+    Matching the bare name would read a broken dependency as a working gate: FastAPI resolves
+    `Depends(require_partner)` as the factory itself, which enforces nothing.
     """
     if not isinstance(expr, ast.Call):
         return False
@@ -138,9 +127,8 @@ def _depends_on_elevated(expr: ast.AST | None) -> bool:
 def _module_is_tenant_reachable(tree: ast.Module) -> bool:
     """A module is tenant-reachable unless its router is mounted above the tenant role.
 
-    note: this asks the question in the safe direction. Keying on the presence of
-    `require_tenant()` instead would skip a router mounted with no role dependency at all, and
-    two of those exist today.
+    This asks the question in the safe direction: keying on `require_tenant()` instead would
+    skip a router mounted with no role dependency at all.
     """
     for node in ast.walk(tree):
         if isinstance(node, ast.keyword) and node.arg == "dependencies":
@@ -153,11 +141,10 @@ def _module_is_tenant_reachable(tree: ast.Module) -> bool:
 def _handler_elevates_above_tenant(node: ast.AST, tree: ast.Module) -> bool:
     """True when the function re-gates itself above the router's own dependency.
 
-    A tenant-mounted router can still carry Partner-only handlers, and all four `create_*`
-    endpoints do exactly that. Their used_by is unfiltered and that is correct: no tenant
-    reaches them, and a resource has no users the moment it is created. Reading the elevation
-    rather than naming the four handlers keeps this true if a fifth is added, and makes the
-    check fire if one of them ever loses its gate.
+    A tenant-mounted router can carry Partner-only handlers, such as the `create_*` endpoints,
+    whose unfiltered used_by is correct: no tenant reaches them, and a new resource has no
+    users. Reading the elevation instead of naming handlers covers new ones and fires if one
+    loses its gate.
     """
     if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return False
@@ -214,8 +201,8 @@ def test_every_tenant_reachable_used_by_is_filtered() -> None:
 
 
 # A model built from an unpacked dict carries whatever LXD sent, used_by and config included, and
-# the keyword scan above never sees a `used_by=` for it: `ProjectInfo(**proj)` handed a Tenant the
-# whole project inventory that way (backlog A7). Such a handler must reach a tier or filter helper.
+# the keyword scan above never sees a `used_by=` for it (ex; `ProjectInfo(**proj)` would hand a
+# Tenant the whole project inventory). Such a handler must reach a tier or filter helper.
 TIER_HELPERS = FILTERS | {"_for_caller", "project_for_tier", "network_for_tier", "volume_for_tier",
                           "pool_for_tier", "profile_for_tier", "profile_list_for_tier",
                           "pool_list_for_tier", "volume_list_for_tier"}

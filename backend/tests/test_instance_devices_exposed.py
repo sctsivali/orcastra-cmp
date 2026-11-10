@@ -1,9 +1,8 @@
 """The root disk size an operator chooses at create time must be readable back.
 
-The create form accepts a size, sends it as `devices.root.size`, and LXD stores it on the
-instance's own device config. Nothing returned it: the instance detail response carried no
-devices field, and the storage volume for a VM root reports only `volatile.uuid`. An operator
-could pick a size and then never see it again, and a test had no surface to assert it against.
+The create form sends the size as `devices.root.size` and LXD stores it on the instance's own
+device config. The storage volume for a VM root reports only `volatile.uuid`, so the instance
+response's devices and expanded_devices fields are where an operator reads the size back.
 """
 
 from app.models.schemas import VMInfo
@@ -11,7 +10,7 @@ from app.services.lxd.utils import jsonable_lxd
 
 
 class _AttributeDict:
-    """pylxd hands device maps back as AttributeDict, which is NOT a dict subclass."""
+    """pylxd hands device maps back as AttributeDict, which is not a dict subclass."""
 
     def __init__(self, **kw) -> None:
         self.__dict__.update(kw)
@@ -37,20 +36,18 @@ def test_a_root_disk_size_survives_the_pylxd_conversion() -> None:
 
 
 def test_an_instance_with_no_overrides_reports_an_empty_map_not_null() -> None:
-    """`{}` says "this instance overrides nothing"; `null` says "we did not look"."""
+    """`{}` means the instance overrides nothing; `null` means the devices were not read."""
     assert jsonable_lxd({}) == {}
     assert jsonable_lxd(None) is None
 
 
 def test_every_build_path_carries_devices() -> None:
-    """Three separate paths build an instance response, and the first fix only covered one.
+    """Three separate paths build an instance response, and each must carry devices.
 
-    `_instance_to_vm_info` serves start/stop and the pylxd-model path; a second builder inside
-    `list_all_vms` constructs VMInfo straight from the raw LXD payload; and the detail endpoint
-    goes through `InstanceWrapper`, which copies a fixed set of fields and silently dropped
-    anything not on that list. Miss one and the field reads as null or {} on exactly the surface
-    an operator uses, which is how the first attempt shipped looking correct and returning
-    nothing.
+    `_instance_to_vm_info` serves start/stop and the pylxd-model path; `_vm_info_from_row` builds
+    VMInfo for the instance list straight from the raw LXD payload; and the detail endpoint goes
+    through `InstanceWrapper`, which copies a fixed set of fields and drops anything else. A path
+    that misses the field reads as null or {} on the surface an operator uses.
     """
     import inspect
 

@@ -1,15 +1,13 @@
-"""LXD connections had no server authentication at all, and pinning is what replaces it.
+"""LXD connections authenticate the server by pinning its certificate fingerprint.
 
-`verify=False` appears at roughly twenty-five call sites and no fingerprint was pinned anywhere.
-That is not a relaxed CA check: LXD does not use a certificate authority. Its trust model is that
-the client remembers the server's fingerprint, which is why `lxc remote add` prints one and asks
-you to accept it. With neither, anyone on the path between this control plane and a hypervisor
-can present their own certificate, take the mTLS session, and read or forge instance configs,
-exec streams and console traffic.
+LXD uses no certificate authority, so `verify=False` on the TLS layer is expected; its trust model
+is that the client remembers the server's fingerprint, which is why `lxc remote add` prints one and
+asks to accept it. Without a pin, anyone on the path between this control plane and a hypervisor
+can present their own certificate, take the mTLS session, and read or forge instance configs, exec
+streams and console traffic.
 
-Trust on first use, then pin: the pattern SSH and LXD itself already use for systems with no CA.
-The limit is stated in the module rather than implied, and it is the reason this is not sold as
-complete: it protects against an attacker who arrives after enrolment, not one already in place.
+Trust on first use, then pin, as SSH and LXD itself do for systems with no CA. The limit: it
+protects against an attacker who arrives after enrolment, not one already in place.
 """
 
 import inspect
@@ -62,7 +60,7 @@ def test_a_matching_certificate_is_accepted(monkeypatch) -> None:
 
 
 def test_a_substituted_certificate_is_refused(monkeypatch) -> None:
-    """The whole point: a different certificate on a pinned cluster is not a warning."""
+    """A different certificate on a pinned cluster is refused, not logged as a warning."""
     _with_live(monkeypatch, PIN_B)
     with pytest.raises(LXDCertificatePinError) as exc:
         decide_pin("nuc2", "https://host:8443", _pinned(PIN_A))
@@ -73,8 +71,8 @@ def test_a_substituted_certificate_is_refused(monkeypatch) -> None:
 def test_an_unreachable_endpoint_is_not_reported_as_an_attack(monkeypatch) -> None:
     """A cluster that cannot handshake fails on its own terms a moment later.
 
-    Turning an unreadable certificate into a pin error would report six offline clusters on this
-    fleet as security incidents every time something polled them.
+    Turning an unreadable certificate into a pin error would report every offline cluster as a
+    security incident each time something polled it.
     """
     _with_live(monkeypatch, None)
     decision = decide_pin("nuc2", "https://host:8443", _pinned(PIN_A))
@@ -83,7 +81,7 @@ def test_an_unreachable_endpoint_is_not_reported_as_an_attack(monkeypatch) -> No
 
 
 def test_the_pin_is_checked_before_the_client_certificate_is_sent() -> None:
-    """Ordering is the property. Checking after the handshake hands the credential over first."""
+    """Checking after the handshake would hand the client certificate over first."""
     source = inspect.getsource(connection_module.LXDConnectionManager.connect_with_vault_cert)
     assert "_enforce_certificate_pin" in source, "the connection path does not check the pin"
     assert source.index("_enforce_certificate_pin") < source.index("pylxd.Client("), (
@@ -100,12 +98,12 @@ def test_a_vault_outage_does_not_look_like_a_certificate_attack() -> None:
 
 
 def test_pinning_is_on_by_default() -> None:
-    """An opt-in security control on a fleet is an off security control."""
+    """Pinning protects a fleet without anyone having to turn it on."""
     assert Settings.model_fields["lxd_pin_server_certificate"].default is True
 
 
 def test_pinning_can_be_disabled_deliberately() -> None:
-    """There has to be a way out, or the first enrolment problem becomes an outage with no lever."""
+    """A setting turns pinning off, so an enrolment problem is not an outage with no lever."""
     source = inspect.getsource(connection_module.LXDConnectionManager._enforce_certificate_pin)
     assert "lxd_pin_server_certificate" in source
 

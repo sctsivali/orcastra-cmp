@@ -1,11 +1,8 @@
-"""Fields a response model declares must actually be sent.
+"""Fields a response model declares must be set by the code that builds it.
 
-Both cases here were the same shape: a model declared a field, a handler or serializer never
-set it, and `response_model` silently emitted the default. That is worse than a missing field,
-because the frontend can read it, type it, and build a control on it without ever seeing an
-error. The images Flags facet did exactly that: it offered Cached and Auto-update filters over
-two values the backend had never sent, so those options could not appear no matter what the
-fleet contained.
+When a handler or serializer never sets a declared field, `response_model` silently emits the
+default. The frontend can then type the field and build a control on it, such as the images Flags
+facet's Cached and Auto-update filters, that never shows a value and never raises an error.
 """
 
 import ast

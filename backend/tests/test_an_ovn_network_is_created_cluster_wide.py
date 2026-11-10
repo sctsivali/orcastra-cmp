@@ -1,12 +1,10 @@
 """On a cluster, only member-defined network types get the per-member define step.
 
-The clustered create was two-phase for every type: POST ?target=<member> on each member, then
-one cluster-wide POST. That is LXD's rule for a bridge, macvlan, physical or sriov network,
-which carry member-specific config. An OVN network carries none and the daemon refuses the
-define step: 'Network type "ovn" does not support member specific config'. Measured against a
-3-member MicroCloud: every OVN create from the console answered 400 while a bridge went
-through, so the one network type a MicroCloud tenant can create in its project was the one it
-could not create.
+A bridge, macvlan, physical or sriov network carries member-specific config, so LXD's clustered
+create for it is two-phase: POST ?target=<member> on each member, then one cluster-wide POST.
+An OVN network carries none and the daemon refuses the define step ('Network type "ovn" does
+not support member specific config'), so it is created with one cluster-wide POST. On a
+MicroCloud, OVN is the network type a tenant can create in its own project.
 """
 
 from types import SimpleNamespace

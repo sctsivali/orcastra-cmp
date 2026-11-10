@@ -1,23 +1,13 @@
-"""A tenant holding no active policy assignment must have an EMPTY cluster scope, not an org-wide one.
+"""A tenant holding no active policy assignment has an empty cluster scope, never an org-wide one.
 
-`org_scope_dependency` narrows a tenant's clusters to org-scope intersected with the clusters
-their ACL grants. It used to skip that intersection when the ACL was empty, and the comment
-directly above the skip said the opposite of what the code did:
+`org_scope_dependency` narrows a tenant's clusters to org scope intersected with the clusters
+its ACL grants. An empty ACL means no access, as `check_tenant_permission` reads it. Skipping the
+intersection for it would let `unreachable_nodes` on /instances and /vms name every down cluster
+in the partner's organisation, and let every power route whose per-project check sits behind
+TENANT_PERM_ENFORCEMENT_ENABLED (off by default) pass `verify_cluster_access`.
 
-    # if ACL is empty dict, tenant has no access (newly assigned, no policy yet)
-    if acl_clusters:
-        allowed = allowed.intersection(acl_clusters)
-    # else: keep org-scoped clusters (tenant without ACL assignment has org-level view)
-
-An empty ACL is a real answer, not a missing one, and `check_tenant_permission` already denied
-every cluster for it. So a tenant with no policy saw zero instances while `unreachable_nodes`
-on /instances and /vms named every down cluster in the partner's organisation, and every power
-route whose per-project check sits behind TENANT_PERM_ENFORCEMENT_ENABLED (off by default) still
-passed `verify_cluster_access`.
-
-The block was duplicated verbatim in `set_org_scope_for_ws`, which is what the console, terminal
-and events sockets use, so a fix applied to one of them would have left the other leaking with
-nothing to notice. That is what the AST test at the bottom is for.
+`set_org_scope_for_ws` (console, terminal and events sockets) must narrow the same way, so both
+setters call one shared helper; the AST tests at the bottom pin that.
 """
 
 import ast
@@ -64,10 +54,9 @@ def _run(allowed: Optional[set], acl: Optional[dict], groups: list[str]) -> Opti
     org_scope.get_visible_projects = fake_visible_projects
     org_scope._resolve_user_org_names = fake_org_names
 
-    # important: read the scope from INSIDE the coroutine. asyncio.run executes in a copied
-    # context, so a contextvar the dependency sets is discarded when it returns and reading it
-    # from the caller reports None, which is the "unrestricted" sentinel. That reads as a
-    # passing admin case no matter what the dependency did.
+    # important: read the scope inside the coroutine. asyncio.run executes in a copied context,
+    # so from the caller the contextvar reads None, the "unrestricted" sentinel, whatever the
+    # dependency did.
     async def drive():
         await org_scope.org_scope_dependency(user=user, db=None)
         return org_scope.get_current_allowed_clusters()
@@ -86,8 +75,8 @@ def _run(allowed: Optional[set], acl: Optional[dict], groups: list[str]) -> Opti
 
 def test_an_empty_acl_empties_the_cluster_scope() -> None:
     scope = _run(allowed={"nuc1", "nuc2"}, acl={}, groups=["role_tenant"])
-    # important: `== set()`, not `is not None`. None is the security inversion here, because
-    # apply_cluster_filter reads None as "no filter" and would hand back the whole fleet.
+    # important: compare with `set()`; apply_cluster_filter reads None as "no filter" and would
+    # hand back the whole fleet.
     assert scope == set()
 
 
@@ -116,7 +105,7 @@ def test_a_partner_keeps_its_organisation_scope() -> None:
 
 
 def test_an_admin_keeps_the_unrestricted_scope() -> None:
-    """None, not set(). An over-eager narrowing here would break the admin god-view."""
+    """An admin's scope stays None (unrestricted); narrowing it would hide the fleet from admins."""
     scope = _run(allowed=None, acl=None, groups=["role_admin"])
     assert scope is None
 
@@ -132,14 +121,10 @@ def _setter_node(name: str) -> ast.AST:
 
 
 def _calls(node: ast.AST) -> set:
-    """Every name actually CALLED inside `node`, direct or via an attribute.
+    """Every name called inside `node`, direct or via an attribute.
 
-    important: this walks for ast.Call rather than searching the source text. The first version
-    of these two tests asserted `"_narrow_by_tenant_acl(" in body` and `".intersection(" not in
-    body` against the unparsed source, and a comment naming the helper satisfied the first one.
-    Ablated: deleting the narrowing from set_org_scope_for_ws entirely, which reinstates the
-    empty-ACL fallback on the console, terminal and events sockets, left all of these green
-    because the words were still in a comment two lines up. A string test asserts a spelling.
+    This walks for ast.Call rather than searching the source text: a comment naming the helper
+    would satisfy a text search after the call itself was deleted.
     """
     called = set()
     for child in ast.walk(node):

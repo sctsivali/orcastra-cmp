@@ -1,9 +1,7 @@
 """GET /vms reports how many answering clusters are LXD, MicroCloud and Incus.
 
-The old count split connected clusters into "config nodes" (assumed LXD) and the rest, and only
-read a type for the rest. Every connected cluster is a registered one, so the rest was always
-empty and incus_count and microcloud_count were 0 on every fleet. It also read a hard-coded
-`secret/data/clusters` path instead of the configured registry.
+Every connected cluster is counted by its registered type; a type that is missing or unreadable
+counts as LXD.
 """
 
 import unittest

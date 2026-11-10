@@ -5,12 +5,10 @@ restore the snapshot's, and a create from a remote server whatever LXD finds cac
 those is read before the write is sent, and a source that cannot be read, a read the cluster answers
 with an error, or reads that outlive the cap send nothing.
 
-Ported from the RC4-hotfix2 line (18db202, round 11, and round 12's image lookup) and adapted to
-this line's run_blocking: the checks are a job of their own and the write is a second job that
-only starts once they have answered, so a timeout can never be followed by a late write. Two
-deliberate differences from hotfix2: a cluster with no cached image at all lists an empty cache
-(hotfix2 read that as "could not list" and refused), and a read the cluster answers with an error
-is answered as "not sent" with a sanitized message instead of the generic envelope.
+The checks are a run_blocking job of their own and the write is a second job that only starts
+once they have answered, so a timeout can never be followed by a late write. A cluster with no
+cached image at all lists an empty cache, which is judged as default rather than refused, and a
+read the cluster answers with an error is answered as "not sent" with a sanitized message.
 """
 
 import asyncio

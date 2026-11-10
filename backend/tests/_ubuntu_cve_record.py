@@ -1,5 +1,5 @@
-"""Ubuntu's record of CVE-2026-99999 as published on 2026-10-28T17:47Z
-(https://ubuntu.com/security/cves/CVE-2026-99999.json), for the kernel CVE feed tests.
+"""Ubuntu's record of CVE-2026-99999 (https://ubuntu.com/security/cves/CVE-2026-99999.json), for the
+kernel CVE feed tests.
 
 Trimmed: the real record is about 216 KB with 169 packages. Kept are the top-level keys, the CVSS
 block and the kernel packages the verdict tests need, each with every status Ubuntu listed for it.

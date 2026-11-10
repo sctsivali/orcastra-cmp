@@ -1,8 +1,8 @@
 """The recovery sweep reaches every organization's oldest waiting job.
 
-It read the 50 oldest claimable jobs by update time. A claim refused for want of a slot changes
-nothing, so one organization with more than 50 queued jobs held every place in that list and a
-newer job of any other organization was never even tried.
+A claim refused for want of a slot changes nothing, so a sweep ordered by age alone would let
+one organization with more queued jobs than the limit hold every place and starve the rest. The
+sweep takes each organization's oldest job first, then each one's next.
 """
 
 from __future__ import annotations

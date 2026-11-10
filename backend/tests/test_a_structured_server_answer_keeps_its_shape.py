@@ -1,9 +1,9 @@
-"""A 5xx the app wrote on purpose reaches the client as written, never as a Python dict repr.
+"""A structured 5xx detail reaches the client as written, never as a Python dict repr.
 
-The handler in main.py passes every 5xx detail through public_server_detail, and a detail keyed on
-`code` fell through to `str(detail)`. The toast read `{'code': 'project_write_unknown', ...`, and
-`isProjectDeleteUnknown` in the frontend, which reads `detail.code`, could never match. Router
-tests missed it because their apps do not install that handler, so these go through it.
+The handler in main.py passes every 5xx detail through public_server_detail. A detail keyed on
+`code` must keep its shape: `isProjectDeleteUnknown` in the frontend reads `detail.code`, and
+`str(detail)` would put a dict repr in the toast. Router tests do not install that handler, so
+these go through it.
 """
 
 import ast

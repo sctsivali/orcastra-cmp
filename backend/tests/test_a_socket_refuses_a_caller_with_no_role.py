@@ -1,9 +1,9 @@
 """Sockets refuse a caller with no role, and an open shell ends when its caller loses every role.
 
 The REST routes refuse such a caller (rbac.refuse_unmapped); a socket must not hand it the live
-feeds instead. A terminal or console also outlives the token that opened it, and the minute
-re-check used to read "no role group" as Tenant: a Tenant whose role was removed kept a shell open
-because Tenant equals Tenant. The reading now says whether any group mapped to a role.
+feeds instead. A terminal or console also outlives the token that opened it, so the periodic
+re-check asks whether any group maps to a role. Reading "no role group" as Tenant would keep a
+shell open for a Tenant whose role was removed.
 """
 
 import asyncio

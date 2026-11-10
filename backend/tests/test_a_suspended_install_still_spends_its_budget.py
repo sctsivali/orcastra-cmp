@@ -1,13 +1,8 @@
-"""Where the installation check sits in `validate_api_key` is load-bearing, not incidental.
+"""The installation check in `validate_api_key` runs after the per-key budget is spent.
 
-The check runs AFTER the budget is spent. Placed before it, a suspended add-on would be
-refused for free and could hammer the door without ever reaching its own per-key rate limit,
-bounded only by the IP limiter. Placed after, it spends its budget and gets throttled like
-anything else.
-
-Both orders look equally sensible in a diff, which is exactly why this is pinned: a later tidy-up
-that groups "all the authorization checks" together would silently remove the throttle from the
-one caller most likely to be hostile.
+Placed before it, a suspended add-on would be refused for free and could hammer the endpoint
+without ever reaching its own per-key rate limit, bounded only by the IP limiter. Both orders
+look equally sensible in a diff, so the order is pinned here.
 """
 
 import ast
@@ -30,9 +25,8 @@ def _statement_order(fn) -> list:
 def test_the_installation_check_runs_after_the_budget_is_spent() -> None:
     order = _statement_order(validate_api_key)
 
-    # Matched on the prefix rather than the exact name: the call became
-    # `consume_api_key_budget_state` when the limiter started reporting the caller's remaining
-    # budget, and an exact match would have read that rename as the throttle being deleted.
+    # Matched on the prefix so a variant of the spend (ex; `consume_api_key_budget_state`, which
+    # also reports the remaining budget) still counts.
     spend = next((name for name in order if name.startswith("consume_api_key_budget")), None)
     assert spend is not None, "the per-key rate limit is gone from this path"
     assert "assert_install_is_live" in order, (
@@ -47,8 +41,8 @@ def test_the_installation_check_runs_after_the_budget_is_spent() -> None:
 def test_only_install_credentials_pay_for_the_lookup() -> None:
     """An ordinary integration key must not acquire a database connection to authenticate.
 
-    Every key on this deployment goes through here, so an unconditional query would put a
-    connection checkout on the hot path of the whole external API.
+    Every key goes through here, so an unconditional query would put a connection checkout on
+    the hot path of the whole external API.
     """
     source = inspect.getsource(validate_api_key)
     marker = source.index("extension_install_id")

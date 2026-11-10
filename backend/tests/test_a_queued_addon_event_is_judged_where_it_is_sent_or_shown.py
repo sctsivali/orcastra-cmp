@@ -2,9 +2,8 @@
 
 The bound is judged when the event is queued (test_an_addon_hears_only_its_installers_projects.py).
 Delivery then checks the stored grant only, so an identity provider outage or a restart cannot
-drop it (rows a cluster-routed build queued before the upgrade go out within their retry window,
-owner decision 2026-11-06). The delivery log and redeliver judge the current bound, so another
-party's names in old rows stay out of them (security review, 2026-11-06).
+drop it. The delivery log and redeliver judge the current bound, so another party's names in old
+rows stay out of them.
 """
 
 import asyncio

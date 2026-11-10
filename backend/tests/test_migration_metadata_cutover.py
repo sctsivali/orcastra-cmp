@@ -1,6 +1,6 @@
 """Per-instance Orcastra records follow a moved instance to its new identity, and back.
 
-note: tenant_policy_rules.permissions is JSONB, so the tables are created from a copy of their
+tenant_policy_rules.permissions is JSONB, so the tables are created from a copy of their
 metadata with JSON in its place (as test_tenant_policy_details_require_own_assignment.py does).
 The statements under test still run against the production model metadata.
 """

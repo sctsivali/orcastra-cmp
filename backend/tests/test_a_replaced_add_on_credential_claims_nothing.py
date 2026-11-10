@@ -1,10 +1,10 @@
 """An add-on credential first-claims an organization only while it is its installation's current key.
 
-A rotation with a grace window leaves the old credential authenticating until the window ends, and the
-carry that moves the add-on's organizations runs once. An organization the old credential claimed after
-that stayed on a key about to expire, with no record. The sync's three claim arms and provisioning now
-ask is_current_add_on_credential first, under the key's lock, and refuse a replaced key, one rotated
-with no grace, or one whose installation was deleted.
+A rotation with a grace window leaves the previous credential authenticating until the window ends,
+and the carry that moves the add-on's organizations runs once, so an organization the previous
+credential claimed afterwards would stay on a key about to expire, with no record. The sync's three
+claim arms and provisioning ask is_current_add_on_credential first, under the key's lock, and refuse
+a replaced key, one rotated with no grace, or one whose installation was deleted.
 """
 
 import asyncio
@@ -76,7 +76,7 @@ async def test_the_current_credential_still_claims() -> None:
 
 
 async def test_a_key_that_is_not_an_add_on_never_asks() -> None:
-    # note: no extension_installations table at all, so asking would fail; an integration key never asks
+    # There is no extension_installations table, so asking would fail; an integration key never asks.
     db = sqlite_session(*org_tables())
     assert await synced(key("oak_integration", C), db, [("ext-fresh", "fresh-org")]) == 1
 

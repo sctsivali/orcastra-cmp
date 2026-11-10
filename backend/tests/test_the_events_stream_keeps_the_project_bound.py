@@ -1,12 +1,10 @@
-"""The browser event stream is a list of every project, so it owes the same bound the lists do.
+"""The browser event stream covers every project, so it owes the same bound the lists do.
 
-The hub used to subscribe to `/1.0/events?type=operation,lifecycle`, which LXD answers with the
-default project's events only. A create into any other project produced no frame, and the
-"Creating..." placeholder sat until its ten-minute expiry with the instance long running.
-Subscribing with `all-projects=true` closes that, and widens the stream to every project on the
-host, so `frame_is_visible` applies the Partner project bound before the tenant ACL: on a
-cluster two organisations share, a Partner must not start receiving the other organisation's
-instance names, image aliases and error text the moment the subscription widened.
+Without `all-projects=true`, LXD answers `/1.0/events` with the default project's events only, and
+a create into any other project produces no frame for its "Creating..." placeholder. With it, the
+stream carries every project on the host, so `frame_is_visible` applies the Partner project bound
+before the tenant ACL: on a cluster two organisations share, a Partner must not receive the other
+organisation's instance names, image aliases and error text.
 """
 import contextvars
 import json
@@ -93,7 +91,7 @@ def _decide(mapping, acl, host, payload):
         ({"nuc2": {"default"}}, "default", True),
         # A frame with no project is a default-project frame, as a record with no project is.
         ({"nuc2": {"default"}}, None, True),
-        # The bound is per cluster: an unlisted cluster restricts nothing.
+        # The bound is per cluster; an unlisted cluster is covered by the next test.
         ({"nuc2": {"default"}}, "other-org", False),
         # Nothing set (Admin, or a Partner on an unshared cluster): everything passes.
         (None, "other-org", True),
@@ -145,7 +143,7 @@ def test_a_long_lived_socket_re_reads_its_scope():
 
 
 async def test_a_queued_browser_frame_carries_no_requestor(monkeypatch):
-    """The hub now parses the daemon's `requestor` for the journal follower; a browser queue
+    """The hub parses the daemon's `requestor` for the journal follower; a browser queue
     receives the projection, which never carries it."""
     import asyncio
 

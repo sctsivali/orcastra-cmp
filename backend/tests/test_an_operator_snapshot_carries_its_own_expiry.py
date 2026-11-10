@@ -1,13 +1,9 @@
 """An operator snapshot is created with an expiry and an ops- name, and the daemon receives both.
 
-The lifetime is the control that keeps this feature from filling a storage pool, and it is
-expressed to LXD as `expires_at` precisely so LXD prunes it whether or not Orcastra is running.
-A test that only asserted a 201 would pass just as happily against a create that sent no expiry
-at all, which is the shape of defect this repository keeps shipping: the mechanism runs, the
-effect never happens.
-
-pandora's `dir` pool has 28.5 GB free and copies the whole instance per snapshot, so an unbounded
-snapshot there is not a theoretical tidiness problem.
+The lifetime keeps this feature from filling a storage pool, and it is sent to LXD as `expires_at`
+so LXD prunes the snapshot whether or not Orcastra is running. A 201 alone would also pass for a
+create that sent no expiry, so the tests read what the daemon received. A `dir` pool copies the
+whole instance per snapshot, so unbounded snapshots fill it quickly.
 """
 
 import pytest
@@ -100,11 +96,10 @@ def test_snapshots_belonging_to_the_paid_product_do_not_count_toward_the_cap():
 
 
 def test_a_create_waits_for_the_operation_before_reporting_success():
-    """201 must mean the snapshot exists, not that the daemon accepted the request.
+    """201 means the snapshot exists, not only that the daemon accepted the request.
 
-    LXD's create is asynchronous. Answering before the operation settles makes the caller's very
-    next read find nothing, which is how a working feature looks broken. It also makes "created"
-    a claim nobody checked.
+    LXD's create is asynchronous; answering before the operation settles would make the caller's
+    next read find nothing.
     """
     node = FakeInstanceNode()
     response = _client(service(FakeClient(node))).post(
@@ -193,7 +188,7 @@ def test_a_pending_create_is_audited_invalidated_and_not_announced(monkeypatch):
     assert creates[0]["details"]["status"] == "pending"
     assert emitted == [], "snapshot.created must assert existence, not mere acceptance"
     assert invalidated == ["snapshots_fleet", "storage_pool_resources"]
-    # the copy is still running: the same lists are cleared again once LXD settles it
+    # The copy is still running, so the same lists are cleared again once LXD settles it.
     assert len(settle_waiters) == 1
     operation_id, project, invalidate = settle_waiters[0]
     assert operation_id and project == PROJECT
@@ -268,9 +263,8 @@ def test_a_failed_create_does_not_expose_an_upstream_url():
 def test_a_negative_size_is_reported_as_no_size():
     """LXD answers `size: -1` when it did not compute one, which the bulk listing never does.
 
-    Passed through, the API carries a negative byte count and any consumer that only checks for
-    null renders it as a real value. The fleet view exists so an operator can see which snapshot
-    is worth deleting, so the size column is the one that must not lie.
+    Passed through, a consumer that only checks for null would render a negative byte count as a
+    real size, and operators use the fleet view's size column to pick snapshots to delete.
     """
     from app.services.lxd.snapshots import _normalize
 
@@ -291,10 +285,8 @@ def test_no_expiry_is_null_rather_than_the_zero_time():
 def test_the_request_bounds_match_the_service_constants():
     """The schema declares the expiry bounds as literals, and the service owns the real values.
 
-    They are not imported across, because models/schemas.py loads early and pulling the LXD
-    service package in from there inverts the dependency direction. That leaves them free to
-    drift, so the agreement is asserted instead of assumed: raising the service's ceiling without
-    the schema would keep refusing what the service now allows, silently.
+    models/schemas.py loads early, and importing the LXD service package from there would invert
+    the dependency direction, so the two are compared here instead.
     """
     from app.models.schemas import SnapshotCreateRequest
     from app.services.lxd import snapshots as svc

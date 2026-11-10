@@ -1,9 +1,8 @@
-"""A cluster whose resources read timed out is not a cluster that stopped trusting us.
+"""A cluster whose resources read timed out has not stopped trusting the console.
 
-Once host_info answered, every failure of the resources read became "Not authorized", and
 derive_status maps an answering host without resources to NOT_AUTHORIZED with the trust-add
-hint. A busy cluster that let one read time out therefore told its operator to re-trust a
-certificate that was fine. Only a 401 or 403 is a refusal now.
+hint, so only a 401 or 403 on the resources read may count as a refusal. A timeout read as
+one would tell the operator to re-trust a certificate that is fine.
 """
 
 from types import SimpleNamespace

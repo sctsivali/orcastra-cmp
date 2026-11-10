@@ -1,18 +1,14 @@
 """Deleting an image must refuse by default when instances were built from it.
 
-LXD permits the delete. The instances keep running, because their root disk no longer needs
-the image record. What is lost is the ability to launch or refresh from that fingerprint, and
-for a custom image whose source artifact is gone, that loss is permanent.
+LXD permits the delete and the instances keep running, but nothing can launch or refresh from
+that fingerprint again; for a custom image whose source artifact is gone the loss is permanent.
+The endpoint refuses with 409 naming the dependents, and `force=true` overrides. The refusal
+lives on the server: the dashboard's dependent count comes from a tenant-filtered list and can
+undercount, and `/integrations/raw-proxy` forwards DELETE /1.0/images/{fp} for a cluster-admin
+key with no dialog at all.
 
-So the endpoint refuses with 409 and names the dependents, and `force=true` overrides. The
-refusal lives on the server rather than in the confirm dialog for two reasons. The dashboard's
-own dependent count comes from a tenant-filtered instance list, so it can be an undercount.
-And `/integrations/raw-proxy` already forwards DELETE /1.0/images/{fp} for an API key holding
-cluster-admin, which has no dialog at all.
-
-Hermetic, following test_unreachable_cluster_is_503: `LXDService.__new__` skips `__init__`, so
-there is no Vault client, no pylxd and no cluster sync. The connection manager hands back a
-fake client. No database, no Redis, no network.
+Hermetic: `LXDService.__new__` skips `__init__` and the connection manager hands back a fake
+client.
 """
 
 import pytest
@@ -177,10 +173,10 @@ def audit(monkeypatch):
 
 
 def _client(svc) -> TestClient:
-    """One real router, real dependencies, only auth and org scope stubbed.
+    """The real router and dependencies, with only auth and org scope stubbed.
 
-    The point is to exercise the real except-clause ordering: a 403, 404 or 409 raised inside
-    the handler's try must not be re-raised as a 500 by the broad handler below it.
+    This exercises the real except-clause ordering: a 403, 404 or 409 raised inside the
+    handler's try must not be re-raised as a 500 by the broad handler below it.
     """
     from app.core.org_scope import org_scope_dependency
     from app.core.rbac import get_current_user
@@ -212,8 +208,7 @@ def test_a_dependent_instance_refuses_the_delete():
 
     assert r.status_code == 409, r.text
     detail = r.json()["detail"]
-    # Naming them is the whole point: "in use" without saying by what leaves the operator to
-    # go and find out, which is the step they will skip.
+    # The detail names the dependents so the operator does not have to look them up.
     assert "web-01" in detail and "web-02" in detail, detail
     assert image.deleted is False, "a refused delete must not have reached the daemon"
 
@@ -230,11 +225,10 @@ def test_force_overrides_a_dependent_instance():
 
 
 def test_the_second_config_key_counts_as_a_dependency():
-    """volatile.base_image is the usual key, image.fingerprint is the fallback.
+    """volatile.base_image is the usual key, image.fingerprint the fallback.
 
-    The tenant image filter reads both, in that order. If this path read only the first, an
-    image visible to a tenant because of one key could be deleted without warning because of
-    the other.
+    The tenant image filter reads both, so this path does too: otherwise an image visible to a
+    tenant through one key could be deleted without warning through the other.
     """
     image = _FakeImage()
     svc = _service(image, vms=[_VM("legacy-01", key="image.fingerprint")])
@@ -262,8 +256,7 @@ def test_an_unknown_fingerprint_is_404_not_500():
 
 
 def test_a_short_fingerprint_is_refused():
-    """LXD resolves a prefix. Accepting one would let a short string delete whichever image
-    happened to match it first, which is the wrong image with no way to tell."""
+    """LXD resolves a prefix, so a short string could delete whichever image matched it first."""
     r = _client(_service(_FakeImage())).delete("/images/abc123", params={"host": HOST})
     assert r.status_code == 422, r.text
 
@@ -279,8 +272,7 @@ def test_a_missing_host_is_refused():
 
 
 def test_an_unreachable_cluster_is_503_not_500():
-    """The breaker returns None without a network call, which is the steady state for a
-    cluster that is down. 500 pages an engineer for an outage they already know about."""
+    """The breaker returns None without a network call while a cluster is down; that is a 503."""
     svc = _service(_FakeImage())
     svc.connection_manager._client = None
 
@@ -301,8 +293,7 @@ def test_success_is_audited_with_the_force_flag(audit):
     assert entry["result"] == "success"
     assert entry["target_id"] == FP
     assert entry["target_host"] == HOST
-    # An override is the entry worth having. Without the flag the audit trail cannot tell a
-    # routine cleanup apart from one that overrode a refusal.
+    # The flag tells a routine cleanup apart from one that overrode a refusal.
     assert entry["details"]["force"] is True
     assert entry["details"]["dependents"] == 1
     assert entry["details"]["cached"] is False
@@ -336,8 +327,7 @@ def test_a_refusal_is_not_audited_as_a_delete(audit):
 # --- The preflight read the confirm dialog uses --------------------------------------------
 
 def test_usage_names_the_dependent_instances():
-    """The dialog reads this before offering the delete, so the operator sees the truth before
-    committing rather than after being refused."""
+    """The dialog reads this before offering the delete, so the dependents are shown first."""
     svc = _service(_FakeImage(), vms=[_VM("web-01"), _VM("web-02"), _VM("other", fingerprint=OTHER_FP)])
 
     r = _client(svc).get(f"/images/{FP}/usage", params={"host": HOST})
@@ -356,9 +346,10 @@ def test_usage_is_empty_for_an_unused_image():
 
 
 def test_usage_does_not_collide_with_the_per_host_list_route():
-    """GET /images/{host} was already registered and its path parameter is a fingerprint-shaped
-    string too. The assertion is about which handler each path reaches, not about what the
-    list handler answers: this fake has no cert manager, so the list cannot succeed here.
+    """GET /images/{host} takes a fingerprint-shaped path parameter too.
+
+    The assertion is about which handler each path reaches: this fake has no cert manager, so
+    the list handler cannot succeed here.
     """
     svc = _service(_FakeImage(), vms=[_VM("web-01")])
     client = _client(svc)
@@ -379,7 +370,7 @@ def test_usage_refuses_a_short_fingerprint():
 
 
 def test_a_delete_names_the_store_the_project_reads():
-    """dev01 keeps its own images, so the daemon is asked about dev01; qa-cap shares default."""
+    """The daemon is asked about the project's own store if it keeps images, else default."""
     own = _FakeImage()
     svc = _service(own, projects={"default": {}, "dev01": {"features.images": "true"}})
     r = _client(svc).delete(f"/images/{FP}", params={"host": HOST, "project": "dev01"})
@@ -424,8 +415,8 @@ def test_a_dependent_in_another_project_on_the_host_refuses_the_delete():
 
 
 def test_an_unreadable_host_never_lets_a_delete_through():
-    # The instances on the host could not be read, so the dependents are unknown; a delete on
-    # the strength of a read that did not happen is the one outcome this must never produce.
+    # The host's instances could not be read, so the dependents are unknown and the delete is
+    # refused.
     image = _FakeImage()
     svc = _service(image, vms=[])
 
@@ -456,7 +447,7 @@ def _bounded(client_call):
 
 
 def test_a_bounded_partner_may_delete_from_the_default_store_a_shared_project_reads():
-    # `qa-shared` is outside the bound but keeps no store: the image sits in the default
+    # The shared project is outside the bound but keeps no store: the image sits in the default
     # store, which the bound allows, so the delete is judged on that store and goes through.
     image = _FakeImage()
     svc = _service(image, projects={"default": {}, "qa-shared": {"features.images": "false"}})
@@ -487,7 +478,7 @@ def test_dependents_outside_the_bound_are_counted_but_not_named():
     seen = _VM("mine-01")
     hidden = _VM("theirs-01")
     hidden.project = "cust-other"
-    # cust-other shares the default store, so its instance is this store's dependent.
+    # The other project shares the default store, so its instance is this store's dependent.
     svc = _service(image, vms=[seen, hidden], projects={"default": {}, "cust-other": {"features.images": "false"}})
     client = _client(svc)
 

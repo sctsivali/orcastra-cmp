@@ -1,25 +1,14 @@
 """A cluster's hypervisor family must be read from a trusted payload, never guessed.
 
-Registration probed `/1.0` without a certificate and stored whatever came back as the cluster
-type. LXD answers an untrusted caller with api_extensions and nothing else: no `environment`,
-so no `server`, no `server_name`, no `server_clustered`. Every MicroCloud signal lives in that
-block, so the detector always fell through to its "LXD" default and registration persisted the
-default as though it were a reading. Timeouts and non-200s took the same default.
-
-Measured on the cluster that reported this, unauthenticated:
-    auth      = untrusted
-    metadata  = api_extensions, api_status, api_version, auth, auth_methods,
-                client_certificate, config, public
-    environment = absent
-
-Nothing then re-derived it: the list endpoint read the stored string, and the live-detection
-fallback was gated behind "a type was already stored", which registration guaranteed. The only
-corrective path was Check Authentication, which was itself broken by the double-slash 404 -
-see test_a_trailing_slash_endpoint_never_double_slashes. The two defects held each other up.
+LXD answers an untrusted caller's `/1.0` with api_extensions, api_status, api_version, auth,
+auth_methods, client_certificate, config and public, and no `environment`: no `server`,
+`server_name` or `server_clustered`. Every MicroCloud signal lives in that block, so a detector
+reading an untrusted payload can only fall back to its "LXD" default, and storing that default
+as the cluster type records a guess as a reading.
 
 Second rule pinned here: `server_clustered` answers "is this clustered", not "is this
-MicroCloud". The cluster that reported this returns server_clustered=true with server="lxd",
-and a plain `lxc cluster enable` host does the same, so the flag cannot separate them.
+MicroCloud". A MicroCloud returns server_clustered=true with server="lxd", and a plain
+`lxc cluster enable` host does the same, so the flag cannot separate them.
 """
 
 import unittest
@@ -32,7 +21,7 @@ from app.core.type_utils import (
     resolve_clustered,
 )
 
-# The real shape of an untrusted /1.0, captured from central2.jkt.orcastra.io.
+# The shape of an untrusted /1.0 as a real LXD cluster answers it.
 UNTRUSTED = {
     "auth": "untrusted",
     "auth_methods": ["tls"],
@@ -112,10 +101,9 @@ class ClusteredIsNotMicroCloudTests(unittest.TestCase):
 
 
 class AHostNameIsNotAnEngineTests(unittest.TestCase):
-    """`server_name` is the member's host name, chosen by whoever installed it. LXD reports
-    `server: "lxd"` on every host, so a name check only ever fired on an LXD host whose name
-    happened to contain the word: an LXD box called `incus-lab` was labelled Incus and was told
-    to run `incus config trust add-certificate`, a CLI it does not have."""
+    """`server_name` is the member's host name, chosen by whoever installed it, so it never names
+    the engine. An LXD host called `incus-lab` read as Incus would be told to run
+    `incus config trust add-certificate`, a CLI it does not have."""
 
     def test_an_lxd_host_named_after_incus_stays_lxd(self):
         payload = {
@@ -150,7 +138,7 @@ class LiveOutranksStoredTests(unittest.TestCase):
         self.assertIsNone(resolve_cluster_type(None, _Client(UNTRUSTED)))
 
     def test_a_trusted_client_outranks_the_stored_clustering_state(self):
-        """Same two-source contract as the family: live wins, stored answers when nobody can."""
+        """As for the family: a trusted live payload wins, the stored value answers otherwise."""
         self.assertTrue(resolve_clustered(None, _Client(MICROCLOUD)))
         self.assertIs(resolve_clustered(None, _Client(STANDALONE)), False)
         # A host that says it is standalone overrides a stale True, and vice versa.
@@ -159,8 +147,8 @@ class LiveOutranksStoredTests(unittest.TestCase):
 
     def test_the_stored_clustering_state_answers_when_there_is_no_client(self):
         """An offline host that proved itself clustered must not read the same as one that
-        never proved anything. Both used to answer None, which is what let the members picker
-        offer a cluster pending trust."""
+        never proved anything; None for both would let the members picker offer a cluster
+        pending trust."""
         self.assertTrue(resolve_clustered(True, None))
         self.assertIs(resolve_clustered(False, None), False)
         self.assertTrue(resolve_clustered(True, _Client(UNTRUSTED)))

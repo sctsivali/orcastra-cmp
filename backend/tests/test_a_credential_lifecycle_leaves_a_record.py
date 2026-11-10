@@ -1,23 +1,12 @@
-"""Issuing and revoking an integration credential left nothing an operator could look at.
+"""Issuing, revoking and deleting an integration credential leave an audit record.
 
-Two separate gaps, one subject.
+The record answers who minted the credential reaching a tenant's cluster, and when. An application
+`logger.info` line cannot: it misses the audit index and is subject to `LogDeduplicationFilter`.
 
-The first is the audit trail. `create_api_key` wrote no record at all. `revoke_api_key` and
-`delete_api_key` wrote one `logger.info` apiece, which goes to the application log rather than the
-audit index and is subject to `LogDeduplicationFilter`. So "who minted the credential that is
-reaching this tenant's cluster, and when" had no answer, on a surface whose whole job is handing
-third parties access to customer infrastructure. `_audit_key_action` was already there for the
-key-authenticated side; nothing covered the operator-authenticated side that creates the key in
-the first place.
-
-The second is the recoverable copy of the secret. `save_api_key_to_vault` stores an HMAC of the
-secret, and `verify_api_key_secret` compares against it, so the design is hash-only. But
-`_validate_api_key_blocking` also wrote the PLAINTEXT secret back into Vault on every key's first
-successful authentication. The only reader of that field is `orcahub_sync._get_orcahub_credentials`,
-which returns None unless the key carries `app_url`. Every key without a callback base therefore
-accumulated a plaintext credential in Vault that nothing would ever read: pure liability, and it
-would have made "extension credentials are hash-only" a false claim the moment an extension made
-its first request.
+Keys are also hash-only: `save_api_key_to_vault` stores an HMAC of the secret. On first
+authentication `_validate_api_key_blocking` writes the plaintext back into Vault only for a key
+with `app_url`, because its only reader, `orcahub_sync._get_orcahub_credentials`, returns None
+without one.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -46,17 +35,17 @@ LIFECYCLE_ACTIONS = (
 
 @pytest.mark.parametrize("action", LIFECYCLE_ACTIONS)
 def test_the_action_is_registered(action: str) -> None:
-    """An unregistered action still logs, but silently lands in the wrong category.
+    """An unregistered action still logs, but in the wrong category.
 
-    `ACTION_CATEGORIES.get(action, EventCategory.LXD_INFRA)` means a typo files a credential
-    grant under infrastructure and nobody notices.
+    `ACTION_CATEGORIES.get(action, EventCategory.LXD_INFRA)` files a misspelt credential action
+    under infrastructure without any error.
     """
     assert ACTION_CATEGORIES.get(action) is EventCategory.ADMIN
 
 
 @pytest.mark.parametrize("action", LIFECYCLE_ACTIONS)
 def test_the_action_is_high_severity(action: str) -> None:
-    """Minting and revoking third-party access to a customer's clusters are both sharp."""
+    """Minting and revoking third-party access to a customer's clusters are both sensitive."""
     assert action in HIGH_SEVERITY_ACTIONS
 
 
@@ -167,11 +156,7 @@ def test_a_key_without_a_callback_stays_hash_only(monkeypatch) -> None:
 
 
 def test_a_key_with_a_callback_still_gets_the_copy_its_callbacks_need(monkeypatch) -> None:
-    """The half that has to keep working.
-
-    OrcaHub's outbound member sync re-presents this secret. Removing the backfill outright would
-    break a live integration, which is why the fix is a guard and not a deletion.
-    """
+    """OrcaHub's outbound member sync re-presents this secret, so a callback key keeps its copy."""
     vault = _validate_with(monkeypatch, app_url="https://partner.example.com")
 
     assert vault.writes, "a callback key did not get the copy its callbacks read"

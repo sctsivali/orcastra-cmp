@@ -1,14 +1,13 @@
 """Every write of an add-on credential's capability set records what it granted and withdrew.
 
 Installing, rescoping and rotating an add-on, and the sweep that narrows one, all write the
-capability set of an integration key. Their records carried the new set only. They now carry the
-same fields as an integration key edit: the set before, what was granted and withdrawn, and the
-elevated capabilities among them, built by core/api_key_capability_audit. The existing action
-names and fields are unchanged.
+capability set of an integration key. Besides their own action names and fields, their records
+carry the same fields as an integration key edit: the set before, what was granted and withdrawn,
+and the elevated capabilities among them, built by core/api_key_capability_audit.
 
-The set before a rewrite is the key's own, read from Vault, not the installation row's. A key can
-be edited through the integration capabilities route, so the two can differ, and the rewrite then
-withdraws what that edit added.
+The set before a rewrite is the key's own as read from Vault. The installation row's set can
+differ, because a key can be edited through the integration capabilities route, and the rewrite
+then withdraws what that edit added.
 """
 
 import asyncio
@@ -81,8 +80,8 @@ class _Rows:
 class _DB:
     """Answers the install path's lookups: no existing installation, none counted, one organization.
 
-    A rotation also reads which organizations the old credential owns, to lock their owner sets, and
-    then reads them FOR UPDATE: none here.
+    A rotation also reads which organizations the outgoing credential owns, to lock their owner
+    sets, and then reads them FOR UPDATE: none here.
     """
 
     def __init__(self) -> None:
@@ -153,7 +152,7 @@ def surface(monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any]:
             return install
 
         monkeypatch.setattr(extension_installs, "_load", _load)
-        # note: the row lock re-reads the same object in production; this fake database has no rows
+        # The real row lock re-reads the same object; this fake database has no rows.
         monkeypatch.setattr(extension_install, "lock_installation", _locked)
 
     holder["use"] = use

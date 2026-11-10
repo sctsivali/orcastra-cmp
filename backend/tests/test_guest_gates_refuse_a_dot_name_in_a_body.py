@@ -1,15 +1,12 @@
-"""
-A create or rename body that names an LXD object `.`, `..`, empty or null is refused with 400 before it is
+"""A create or rename body that names an LXD object `.`, `..`, empty or null is refused with 400 before it is
 sent, on every key door.
 
-LXD addresses a snapshot, a backup, a volume, a network, a zone record or an image alias by the name its
-create or rename body carried, and several of its own name checks allow a dot name (core/lxd_body_names.py
-cites each). requests folds such a segment out of a path and the raw proxy refuses one, so the object could
-never be read, renamed or deleted through a key door once it existed. Each case sends one request through
-the real route (tests/_guest_gate_doors.py) and asserts a 400 naming the object, nothing sent to the
-cluster and no failure record (a dot-name 400 is not audited, like the raw proxy's traversal 400). Bodies
-whose name LXD refuses itself (an instance create, a profile, a project, a network ACL or peer, a bucket)
-are left to LXD and pinned as sent.
+LXD addresses a snapshot, backup, volume, network, zone record or image alias by the name its create or
+rename body carried, and several of its own name checks allow a dot name (core/lxd_body_names.py cites each).
+requests folds such a segment out of a path and the raw proxy refuses one, so the object could never be read,
+renamed or deleted through a key door. Each case sends one request through the real route and asserts a 400
+naming the object, nothing sent and no failure record (like the raw proxy's traversal 400). Bodies whose name
+LXD refuses itself are left to LXD and pinned as sent.
 """
 
 from typing import Any, Dict, List, Tuple
@@ -26,10 +23,10 @@ from tests._raw_proxy_fakes import CLUSTER_ID, _clean_breaker, fence_calls  # no
 FP = "0f3c9a1b2c3d4e5f"
 FAMILIES = ["instances", "containers", "virtual-machines"]
 VOLUME = "/1.0/storage-pools/default/volumes/custom/v1"
-# note: each value no key door could address once LXD named an object with it, the encoded ones as the raw
-# proxy decodes a path.
+# Names no key door could address once LXD named an object with one; the encoded ones as the raw proxy
+# decodes a path.
 UNADDRESSABLE = [".", "..", "", None, "%2e%2e", "%2E", "%252e%252e"]
-# note: (id, path, the rest of the body). The name goes in `name`, or in the one alias of an image create.
+# (id, path, the rest of the body). The name goes in `name`, or in the one alias of an image create.
 NAMED = [
     *[(f"{family}-snapshot-create", f"/1.0/{family}/web-1/snapshots", {"stateful": False}) for family in FAMILIES],
     *[(f"{family}-snapshot-rename", f"/1.0/{family}/web-1/snapshots/s0", {}) for family in FAMILIES],
@@ -100,7 +97,7 @@ def test_every_spelling_of_a_snapshot_path_is_judged(door: Any, how: str, templa
     _sent(door.raw(EVERY, "POST", path, body={"name": "snap-1"}))
 
 
-# note: LXD reads an absent name as an empty one and keeps it for these, so an absent name is refused too.
+# LXD reads an absent name as an empty one and keeps it for these, so an absent name is refused too.
 ABSENT_IS_EMPTY = ["instance-backup-rename", "volume-backup-rename", "zone-record-create", "alias-rename",
                    "image-create-alias"]
 
@@ -125,7 +122,7 @@ def test_a_name_in_a_body_that_is_not_a_create_or_rename_is_never_judged(door: A
     assert [verb for verb, *_ in seen.cluster.session.calls] == [method]
 
 
-# note: LXD refuses a dot name for these itself (core/lxd_body_names.py cites where), so they are sent.
+# LXD refuses a dot name for these itself (core/lxd_body_names.py cites where), so they are sent.
 LEFT_TO_LXD: List[Tuple[str, str, Dict[str, Any]]] = [
     ("instance-create", "/1.0/instances", {"source": {"type": "none"}}),
     ("profile-create", "/1.0/profiles", {}),

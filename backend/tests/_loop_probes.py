@@ -1,8 +1,8 @@
 """Probes for tests that prove blocking work runs off the event loop, without wall-clock bets.
 
-important: a test that sleeps a few milliseconds and then asserts that a worker has started, or that
-a task is still pending, races the host's CPU and fails whenever the machine is busy. Every wait
-here ends on an event. SAFETY_TIMEOUT only bounds a test that is already failing.
+A test that sleeps a few milliseconds and then asserts that a worker has started, or that a task is
+still pending, races the host's CPU and fails whenever the machine is busy. Every wait here ends on
+an event; SAFETY_TIMEOUT only bounds a test that is already failing.
 """
 
 import asyncio
@@ -51,7 +51,7 @@ class WorkerGate:
         self.thread_name = threading.current_thread().name
         self.entered.set()
         if self.thread_id == self.loop_thread:
-            # important: never block the loop thread itself; the caller's identity assertion is
-            # what reports that regression, rather than a frozen test.
+            # important: never block the loop thread itself. The caller's thread identity assertion
+            # then reports the failure instead of the test freezing.
             return
         assert self.release.wait(SAFETY_TIMEOUT), "the test never released the worker"

@@ -1,20 +1,12 @@
-"""`client.instances.all()` must always name its recursion. A structural guard, on purpose.
+"""`client.instances.all()` must always name its recursion.
 
-pylxd's Instance.all defaults to recursion=0, which asks the daemon for a list of URLs. pylxd
-then builds one Instance per URL carrying only a name (pylxd/models/instance.py, the `all`
-classmethod). Every attribute this app reads afterwards - location, status, config - is
-declared in `__attributes__`, so the read falls into `Model.__getattribute__`, which calls
-`sync()`, which is `self.api.get()`. One HTTP request per instance in the whole cluster,
-sequential, each bounded by the pooled (3, 8) socket timeout.
-
-Nothing at the call site shows any of that. The line reads like a single list fetch, the
-attribute read below it reads like a dict lookup, and the cost only appears as a member
-resource panel that times out on a cluster with enough instances. Both call sites had it:
-routers/cluster_members.py and services/lxd/node_resources.py, the latter feeding the whole
-clustered aggregate.
-
-A behavioural test covers each call site separately. This is the net underneath, because the
-next one will look exactly as harmless.
+pylxd's Instance.all defaults to recursion=0, which asks the daemon for a list of
+URLs, and builds one Instance per URL carrying only a name (pylxd/models/instance.py,
+the `all` classmethod). Every attribute this app reads afterwards (location, status,
+config) is declared in `__attributes__`, so the read goes through
+`Model.__getattribute__` to `sync()`: one sequential HTTP request per instance in the
+cluster. Nothing at the call site shows that cost, so this structural guard scans the
+whole app.
 """
 
 import ast
@@ -44,7 +36,7 @@ def _bare_instance_list_calls(tree: ast.AST):
 
 
 def test_no_instance_list_is_fetched_without_a_recursion():
-    """No allowlist. A new bare call is always a regression, never a style choice."""
+    """No allowlist: every bare call fails."""
     offenders = []
     for path in sorted(APP.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -59,7 +51,7 @@ def test_no_instance_list_is_fetched_without_a_recursion():
 
 
 def test_the_guard_can_actually_see_a_bare_call():
-    """Ablation. A guard that cannot fail is not a guard."""
+    """Ablation: the guard flags a bare call and passes the others."""
     bad = ast.parse("client.instances.all()\n")
     assert list(_bare_instance_list_calls(bad)) == [1]
 

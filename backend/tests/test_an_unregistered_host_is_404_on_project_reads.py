@@ -1,10 +1,9 @@
 """A project read for a host no cluster is registered under answers 404, not 503.
 
-The cold-miss path cannot tell an unknown name from a worker that has not connected yet, so
-GET /projects/{host} for a typo answered 503 "temporarily unavailable" and invited a retry that
-could never succeed (RC5 acceptance F-06, 2026-11-05). The registry answers that question: an id
-it does not hold is 404 `cluster_not_registered`; a registered but unreachable cluster stays 503,
-and so does every host while the registry cannot be read.
+The cold-miss path cannot tell an unknown name from a worker that has not connected yet, and a
+503 for a typo in GET /projects/{host} invites a retry that can never succeed. The registry
+answers that question: an id it does not hold is 404 `cluster_not_registered`; a registered but
+unreachable cluster stays 503, and so does every host while the registry cannot be read.
 """
 
 from typing import Optional

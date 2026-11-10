@@ -1,8 +1,8 @@
 """A download holds a guest connection and a slot, so it has to be able to end, and to look ended.
 
-`StreamingResponse` has no send timeout and no way to end on revocation. And every middleware here
-is `BaseHTTPMiddleware`, which finishes the response itself when the inner app simply returns, so
-a cut stream that returned quietly would hand a browser a truncated file reported as complete.
+`StreamingResponse` has no send timeout and no way to end on revocation. Every middleware here is
+`BaseHTTPMiddleware`, which finishes the response itself when the inner app returns, so a cut
+stream that returned quietly would hand a browser a truncated file reported as complete.
 """
 
 import asyncio

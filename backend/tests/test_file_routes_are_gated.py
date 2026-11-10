@@ -74,7 +74,7 @@ def test_a_tenant_with_the_grant_gets_the_bound_project(partner_scope, monkeypat
 
 
 def test_switching_console_enforcement_off_does_not_open_files(partner_scope, monkeypatch):
-    # important: that flag relaxes a rollout. Reading it here would make every viewer root.
+    # That flag relaxes the console-grant rollout; honouring it here would give every viewer root.
     monkeypatch.setattr(get_settings(), "tenant_perm_enforcement_enabled", False, raising=False)
     _tenant_with(monkeypatch, {"view"})
     with pytest.raises(HTTPException):
@@ -185,7 +185,8 @@ def test_no_cluster_lock_is_held_across_a_guest_round_trip():
 def test_no_route_depends_on_content_length():
     """The proxy streams request bodies and drops Content-Length, so a browser never sends one.
 
-    Live on 2026-10-30 every chunk from a browser answered 422 while a direct API call passed.
+    A route that required it would answer every browser chunk with 422 while direct API calls
+    pass.
     """
     for filename in ("instance_files.py", "instance_file_transfer.py"):
         assert 'alias="Content-Length"' not in (ROUTERS / filename).read_text()

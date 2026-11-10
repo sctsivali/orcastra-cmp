@@ -1,13 +1,13 @@
 """An Incus key is refused below the security baseline, before any certificate exists.
 
-The 2026-10-29 Incus advisories (GHSA-5c64-j5m6-8433, GHSA-8r3h-vc36-6xpx, GHSA-jcw9-v2ff-8m79)
-let a restricted client create or read resources in the default project: below 7.6.0, or the next
-LTS point releases 7.0.3 and 6.0.8, a project certificate is not held to its project. A key there
-would be an admin credential in disguise, so it is refused with the reason and the build to move
-to, and nothing is minted or posted.
+Below Incus 7.6.0, or the LTS point releases 7.0.3 and 6.0.8, a project certificate is not held to
+its project: a restricted client can create or read resources in the default project
+(GHSA-5c64-j5m6-8433, GHSA-8r3h-vc36-6xpx, GHSA-jcw9-v2ff-8m79). A key there would be an admin
+credential, so it is refused with the reason and the build to move to, and nothing is minted or
+posted.
 
-Also pinned: a key whose record cannot be stored loses its cluster credential too, because the
-private key exists only in the failed request and nobody could revoke it afterwards.
+A key whose record cannot be stored also loses its cluster credential: the private key exists only
+in the failed request, so it could not be revoked afterwards.
 """
 
 from __future__ import annotations
@@ -104,8 +104,8 @@ async def test_a_key_that_cannot_be_stored_takes_its_certificate_with_it(issuing
 
 
 async def test_a_key_for_a_project_that_does_not_exist_is_refused_before_anything_is_minted(issuing):
-    """Found on the Incus lab: the daemon refused the certificate with "Project not found" and the
-    dashboard answered 500. The project is looked up first, on either engine."""
+    """The project is looked up first, on either engine; otherwise the daemon refuses the
+    certificate with "Project not found" and the create answers 500."""
     from pylxd import exceptions as lxd_exceptions
     from tests.test_an_incus_key_is_a_restricted_certificate_on_its_project import _Response
 
@@ -128,8 +128,8 @@ async def test_a_key_for_a_project_that_does_not_exist_is_refused_before_anythin
 
 
 async def test_a_worker_that_never_connected_to_the_cluster_connects_to_create(issuing):
-    """get_client is memory-only, so on a worker with no pooled client the create answered 404
-    "not connected" depending on which worker took it (services/lxd/lazy_client.py)."""
+    """get_client is memory-only (services/lxd/lazy_client.py), so the create connects first
+    instead of answering 404 "not connected" on a worker with no pooled client."""
     store = _Store()
     pool: dict = {}
 
@@ -142,5 +142,5 @@ async def test_a_worker_that_never_connected_to_the_cluster_connects_to_create(i
     request = my_keys.KeyCreateRequest(name="ci", node="incus-lts", project="web", auth_level="standard", expire_days=30)
     with pytest.raises(HTTPException) as caught:
         await my_keys.create_key(request, service, None, _user(), None)
-    # it reached the cluster: the floor answered, not "not connected"
+    # The floor answered, so the create reached the cluster.
     assert caught.value.status_code == 409 and caught.value.detail["error"] == "below_floor"

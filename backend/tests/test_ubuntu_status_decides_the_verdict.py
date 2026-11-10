@@ -5,8 +5,8 @@ The kernel flavour and branch name the source package, the host's release names 
 Ubuntu's status for that pair decides. When the record cannot be matched to the kernel (an unknown
 release or flavour, a package Ubuntu does not list) it says so and the built-in data decides: a gap
 in the match is not evidence of a fix. A record older than three days keeps its verdict and says
-how old it is (a security review found that downgrading it let a blocked ubuntu.com silence the
-alert); with no record at all the built-in data decides and says that it did.
+how old it is (downgrading it would let a blocked ubuntu.com silence the alert); with no record at
+all the built-in data decides and says that it did.
 """
 
 from dataclasses import replace

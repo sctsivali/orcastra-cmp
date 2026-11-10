@@ -1,11 +1,11 @@
 """`DELETE /tasks/{id}` refuses what it must and cancels what it may, audited.
 
 Drives the real router through a real app (the wiring of `test_unreachable_cluster_is_503`),
-with the session, the scope and the LXD client faked at their boundaries. What is asserted
-is the whole path: the refusal codes the panel branches on (D16 routes a websocket-class
-operation to "Kill Console Session"), the enumeration rule for a row outside the caller's
-scope, the DELETE reaching the cluster with the per-attempt socket timeout the blocking rule
-demands, the `task.cancel` audit record, and a dead cluster answering 503 rather than 500.
+with the session, the scope and the LXD client faked at their boundaries. Asserted: the
+refusal codes the panel branches on (a websocket-class operation is routed to "Kill Console
+Session"), the enumeration rule for a row outside the caller's scope, the DELETE reaching the
+cluster with a per-attempt socket timeout, the `task.cancel` audit record, and a dead cluster
+answering 503 rather than 500.
 """
 
 import contextvars

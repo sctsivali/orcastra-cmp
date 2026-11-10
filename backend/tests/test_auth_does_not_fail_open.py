@@ -1,22 +1,14 @@
 """A deployment that asks for auth and cannot verify it must refuse, on every entry point.
 
-`get_current_user` returned None when AUTH_ENABLED was true but AUTHENTIK_ISSUER was unset, and
-every RBAC dependency reads None as dev mode and fabricates a full Admin. One missing environment
-variable therefore turned an auth-enabled deployment into an open one, silently, for callers with
-no token at all.
+Every RBAC dependency reads a None user as dev mode and fabricates a full Admin, so an entry point
+that returns None when AUTH_ENABLED is true but AUTHENTIK_ISSUER is unset opens the deployment to
+callers with no token at all. On a socket that reaches a terminal, a SPICE console, the event
+stream and the admin-only monitoring feed on any cluster, because `set_org_scope_for_ws(None)`
+also collapses the org scope to "no filter". A socket guard written as
+`auth_enabled and authentik_issuer and user is None` is switched off by that same configuration.
 
-That was fixed for HTTP. It was not fixed for WebSockets, and this file is the reason nobody
-noticed: it asserted on `get_current_user` and nothing else. `get_ws_user` kept returning None on
-the same condition, and all four socket guards were written as
-`auth_enabled and authentik_issuer and user is None`, gated on the very variable whose absence
-produced the unauthenticated user. The guard switched itself off in the situation it existed to
-catch. Reachable unauthenticated: an interactive shell (terminal), a SPICE console, the event
-stream and the admin-only monitoring feed, on any instance on any cluster, because
-`set_org_scope_for_ws(None)` also collapses the org scope to "no filter".
-
-So the structural tests below now walk every authentication entry point rather than naming one,
-and every socket guard rather than trusting them. A new entry point that returns None on an
-unverifiable configuration fails here, which is the property this file was supposed to have.
+The structural tests below walk every authentication entry point and every socket guard, so a
+new one that returns None on an unverifiable configuration fails here.
 """
 
 import ast
@@ -51,7 +43,7 @@ AUTH_MODULES = (auth_module, ws_auth_module)
 
 
 def _code_only(src: str) -> str:
-    """The source minus comments, so prose describing the old behaviour cannot satisfy a match."""
+    """The source minus comment lines, so prose in a comment cannot satisfy a match."""
     return "\n".join(line for line in src.split("\n") if not line.strip().startswith("#"))
 
 
@@ -82,7 +74,7 @@ def test_a_missing_issuer_refuses_instead_of_returning_none(name: str) -> None:
 
 
 def test_every_auth_entry_point_is_covered_by_this_file() -> None:
-    """The blind spot itself. Adding an entry point without covering it must fail here."""
+    """Adding an entry point without covering it in this file must fail."""
     # An entry point is a function that hands back a principal. Keying on the return annotation
     # rather than the name keeps JWKS and key-selection helpers out, and still catches a new
     # dependency however it is named.
@@ -119,11 +111,10 @@ def test_the_verifier_itself_cannot_return_an_unverified_principal() -> None:
 
 
 def test_the_fail_open_dependency_is_gone() -> None:
-    """`get_optional_user` returned None instead of refusing, and nothing used it.
+    """There is no `get_optional_user` dependency.
 
-    An unused fail-open dependency is a trap for whoever writes the next endpoint: it looks like
-    the polite version of get_current_user and behaves like no authentication at all. Deleted
-    rather than hardened, because there was no caller to keep working.
+    A dependency that returns None instead of refusing looks like the polite version of
+    get_current_user and behaves like no authentication at all.
     """
     assert not hasattr(auth_module, "get_optional_user"), (
         "get_optional_user is back. If a route genuinely needs an optional principal, give it "
@@ -132,7 +123,7 @@ def test_the_fail_open_dependency_is_gone() -> None:
 
 
 def test_no_websocket_guard_gates_itself_on_the_issuer() -> None:
-    """The second half of the defect, and the half a behavioural test cannot reach.
+    """No router socket guard mentions the issuer; a behavioural test cannot reach every guard.
 
     A guard written as `auth_enabled and authentik_issuer and user is None` is disabled by exactly
     the configuration that produces the unauthenticated user it is meant to reject.
@@ -187,7 +178,7 @@ async def test_the_websocket_refusal_closes_the_socket() -> None:
 
 @pytest.mark.asyncio
 async def test_auth_disabled_still_returns_none_on_both_paths() -> None:
-    """The legitimate dev-mode case must keep working, or this fix breaks local development."""
+    """Dev mode: with auth disabled, both paths return None."""
     class _Settings:
         auth_enabled = False
         authentik_issuer = ""

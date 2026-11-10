@@ -1,23 +1,15 @@
 """The unbound-ownership guard must filter on exactly the columns its index covers.
 
 `uq_org_cluster_null` (db_models.py) is a partial unique index on `cluster_id` alone, where
-`organization_id IS NULL`. Postgres treats NULLs as distinct, so the ordinary
-`uq_org_cluster` does not cover org-less rows and this partial index is what does.
+`organization_id IS NULL`. Postgres treats NULLs as distinct, so `uq_org_cluster` does not
+cover org-less rows; this partial index does.
 
-The existence check in `register_cluster` filtered on `registered_by` as well. A cluster
-already claimed by another user therefore missed the check, the INSERT violated the index,
-and the broad `except Exception` around the block swallowed it. Registration returned
-success while recording no ownership at all, which the block's own comment says is what
-lets a registrant see and grant API-key access to their own cluster.
-
-Structural rather than behavioural, and deliberately so. `register_cluster` reaches this
-block only after Vault and the certificate manager, so driving it in a unit test would mock
-more than it verifies. What can be checked exactly is the property that was violated: the
-guard's WHERE columns must be the index's columns, no more.
-
-Keyed on the column set rather than on any string, because the same defect spelled
-differently would pass a substring scan. A guard that filters on FEWER columns than the
-index is also wrong and is caught by the same equality.
+If the existence check in `register_cluster` filters on an extra column (ex; `registered_by`),
+a cluster claimed by another user misses the check, the INSERT violates the index, and the
+broad `except Exception` around the block swallows it: registration succeeds with no
+ownership recorded. Fewer columns are wrong too, and the same equality catches them. The
+check is structural (the block runs only after Vault and the certificate manager) and compares
+column sets, so a differently spelled defect still fails.
 """
 
 import ast
@@ -33,18 +25,16 @@ ROUTER = (
 )
 MODELS = pathlib.Path(__file__).resolve().parents[1] / "app" / "models" / "db_models.py"
 
-# The columns uq_org_cluster_null actually covers, plus the organization_id IS NULL predicate
-# that scopes it. Both belong in the guard and nothing else does.
+# The column uq_org_cluster_null covers, plus the organization_id IS NULL predicate that scopes
+# it. Both belong in the guard and nothing else does.
 EXPECTED = {"organization_id", "cluster_id"}
 
 
 def _filtered_columns(where_call: ast.Call) -> set:
     """Columns named inside `.where(...)` only.
 
-    Deliberately not the whole expression. The first version of this walked the entire
-    select and counted the SELECTed column too, so it failed against the correct code
-    because the fix selects `registered_by` in order to name the holder in the log. What
-    the index constrains is what the WHERE must match, and nothing about the projection.
+    The projection is ignored: the lookup selects `registered_by` to name the holder in the
+    log, and only the WHERE has to match the index.
     """
     found = set()
     for arg in where_call.args:

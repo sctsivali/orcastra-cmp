@@ -1,10 +1,9 @@
 """The fleet snapshot list answers from its cache, stale included, while one read refreshes it.
 
-It had a plain 30 s TTL behind single_flight and nothing polls it, so nearly every visit missed
-and paid the whole fan-out (9 to 15 s on dev), and a reader with a warm entry still queued
-behind a cold rebuild in its worker. It now goes through swr.serve like the other fleet lists:
-a hit inside the soft TTL, a stale answer for up to SWR_MAX_STALE_SECONDS past it with one
-background read, and `fresh=true` still reads the clusters before it answers.
+Nothing polls the list, so with a plain TTL nearly every visit would miss and pay the whole
+fan-out. It goes through swr.serve like the other fleet lists: a hit inside the soft TTL, a stale
+answer for up to SWR_MAX_STALE_SECONDS past it with one background read, and `fresh=true` still
+reads the clusters before it answers.
 """
 
 from __future__ import annotations

@@ -1,10 +1,9 @@
 """An in-memory LXD for project relocation runner tests.
 
-The fake answers the executor, preflight, and profile calls the planner and the runners make, so
-one test plans a relocation with the real planner and then drives the real runners against the
-same fake state. It keeps what a daemon would: projects with their features, profiles per
-profile namespace, instances with local and expanded config, status, location, snapshots, and
-cached images. Mutations can be refused (a 4xx) per action and instance name.
+It answers the executor, preflight, and profile calls the planner and the runners make, so a test
+plans with the real planner and drives the real runners against the same state: projects with
+their features, profiles per namespace, instances with local and expanded config, status,
+location, snapshots, and cached images. Mutations can be refused (a 4xx) per action and name.
 """
 
 from __future__ import annotations

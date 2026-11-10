@@ -1,15 +1,13 @@
-"""A worker that has never talked to a cluster must connect, not answer 503.
+"""A worker that has never talked to a cluster must connect instead of answering 503.
 
-`connection_manager.get_client` is memory-only. With WEB_CONCURRENCY=4 the worker that served
-a registration holds a client and the other three hold nothing, so the same GET answered 200
-or 503 depending on which worker took it. `connection.py` declines to trip the breaker on that
-branch precisely because it is not evidence about the cluster, and names ensure_connection as
-the repair. Twenty-four read and write handlers never called it.
+`connection_manager.get_client` is memory-only. With several workers only the one that
+served a registration holds a client, so without a connect the same GET would answer 200 or
+503 depending on which worker took it. `connection.py` does not trip the breaker on that
+branch, because it is no evidence about the cluster, and names ensure_connection as the
+repair.
 
-The other half of the contract matters just as much: a cluster the breaker has tripped must
-still cost nothing. `documentation/reliability/cluster-connection-breaker.md` records the
-measurement behind that rule, so the tripped case here asserts no Vault read happened at all
-rather than merely that the answer was None.
+A cluster the breaker has tripped must still cost nothing, so the tripped case asserts that no
+Vault read happened at all rather than only that the answer was None.
 """
 
 import asyncio
@@ -109,8 +107,8 @@ class ColdWorkerConnects(unittest.TestCase):
         self.assertIsNone(connect_or_get_client(svc, CLUSTER))
 
     def test_an_out_of_scope_cluster_is_refused_without_touching_vault(self):
-        """The org-scope guard inside ensure_connection, which only works because
-        run_blocking now carries the context into the worker thread."""
+        """The org-scope guard inside ensure_connection holds because run_blocking carries
+        the context into the worker thread."""
         from app.core import org_scope
 
         svc = _service()
@@ -127,8 +125,7 @@ class ColdWorkerConnects(unittest.TestCase):
         self.assertIsNotNone(client)
 
     def test_the_async_wrapper_carries_the_callers_scope_into_the_thread(self):
-        """Ablation of the contextvar fix: an out-of-scope cluster must be refused even
-        though the check now runs in a worker thread."""
+        """An out-of-scope cluster is refused although the check runs in a worker thread."""
         from app.core import org_scope
 
         svc = _service()

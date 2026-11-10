@@ -1,17 +1,14 @@
 """An unattended key must not reach further than a human would, and consent is not the integrator's to give.
 
-Two gaps this closes, both structural rather than a coding slip.
-
 A human admin cannot open a console into a cluster they do not own without a break-glass grant:
-justified, time-boxed, revocable, and visible to the tenant in the session audit. An API key had
-no equivalent AND no way to acquire one, because `break_glass_grants` is keyed on `admin_email`
-and `enforce_sensitive_access` takes an authenticated user. So a partner could issue a key, tick a
-capability, and hold permanent unattended access with no reason recorded and nothing to revoke.
+justified, time-boxed, revocable, and visible to the tenant in the session audit. A break-glass
+grant can name an API key as its principal, so a capability on a key does not mean permanent
+unattended access with no reason recorded and nothing to revoke.
 
-Separately, a capability on a key is a decision made by whoever issues the key. Whether an
-organization agrees that an agent may photograph its desktops is a decision belonging to that
-organization. Screen contents leaving for a third-party model is a disclosure to a sub-processor,
-so the two consents are kept apart and both are required.
+A capability on a key is a decision made by whoever issues the key. Whether an organization agrees
+that an agent may photograph its desktops is that organization's decision. Screen contents leaving
+for a third-party model is a disclosure to a sub-processor, so the two consents are kept apart and
+both are required.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -63,11 +60,11 @@ class _Session:
         self.commits += 1
 
 
-# ── the grant may now name a key, and only one principal ───────────────────────────────────────
+# ── the grant may name a key, and only one principal ───────────────────────────────────────────
 
 def test_a_grant_names_exactly_one_kind_of_principal() -> None:
-    """Neither would authorize nobody; both would be ambiguous, and the enforcement query would
-    match on either."""
+    """A grant with no principal is useless; with two it is ambiguous, and the enforcement query
+    would match on either."""
     constraints = {c.name for c in BreakGlassGrant.__table__.constraints if c.name}
     assert "ck_bgg_one_principal" in constraints
 
@@ -75,8 +72,8 @@ def test_a_grant_names_exactly_one_kind_of_principal() -> None:
 def test_the_key_principal_column_exists_and_is_optional() -> None:
     columns = BreakGlassGrant.__table__.columns
     assert columns["api_key_id"].nullable is True
-    # Widened, because a key grant has no human behind it and encoding one as an email would make
-    # every existing query silently match the wrong kind of principal.
+    # Nullable: a key grant has no human behind it, and encoding the key as an email would make
+    # every query on admin_email silently match the wrong kind of principal.
     assert columns["admin_email"].nullable is True
 
 
@@ -106,7 +103,7 @@ async def test_a_key_grant_is_refused_when_the_cluster_is_a_different_registrati
 
 @pytest.mark.asyncio
 async def test_a_grant_issued_before_fingerprints_existed_still_works() -> None:
-    """It never made that promise, so it is not held to it."""
+    """A grant without a fingerprint never named a registration, so it is not held to one."""
     from app.services.break_glass_service import get_active_key_grant
 
     grant = BreakGlassGrant(
@@ -131,8 +128,7 @@ async def test_no_grant_means_no_access() -> None:
 # ── the organization's own consent ─────────────────────────────────────────────────────────────
 
 def test_input_requires_the_feature_to_be_on_at_all() -> None:
-    """allow_input alone would let a disabled policy still authorize typing, which reads as a bug
-    the first time somebody turns desktop control off and expects everything to stop."""
+    """Input also needs `enabled`, so turning desktop control off stops typing too."""
     assert DesktopConsent(enabled=True, allow_input=True).may_input is True
     assert DesktopConsent(enabled=False, allow_input=True).may_input is False
     assert DesktopConsent(enabled=True, allow_input=False).may_input is False
@@ -152,7 +148,7 @@ async def test_an_organization_that_was_never_asked_has_not_agreed() -> None:
 
 @pytest.mark.asyncio
 async def test_a_cluster_with_no_organization_is_refused() -> None:
-    """Nobody could have consented, so an unbound cluster must not be the soft spot."""
+    """No organization could have consented on an unbound cluster, so it is refused."""
     assert await get_consent(_Session(None), None) == DENIED
 
 
@@ -231,13 +227,11 @@ def _row(enabled: bool, allow_input: bool, allow_clipboard: bool = True,
 
 @pytest.mark.asyncio
 async def test_one_tenant_cannot_consent_on_behalf_of_another_sharing_the_cluster() -> None:
-    """The intersection, not the lowest-id binding.
+    """Consent on a shared cluster is the intersection of every bound organization's policy.
 
-    `resolve_cluster_org` returns one organization because it answers "who is this attributed
-    to", and the gate first shipped reading its policy row. On this deployment nuc2 is bound to
-    both a provider organization and a partner's, so that rule let one tenant's yes authorise
-    capturing the other tenant's screens. Nothing about a guest says which tenant it belongs to,
-    so agreement from all of them is the only rule that cannot disclose the wrong desktop.
+    `resolve_cluster_org` answers "who is this attributed to" with one organization; reading only
+    its policy row would let one tenant's yes authorise capturing another tenant's screens. A guest
+    does not say which tenant it belongs to, so every bound organization has to agree.
     """
     consent, dissenting = await consent_for_cluster(
         _MultiOrgSession([(6, "provider"), (122, "partner")], [_row(True, True), _row(False, False)]),
@@ -274,10 +268,9 @@ async def test_a_cluster_bound_to_nobody_is_still_refused() -> None:
 
 
 def test_the_policy_is_not_stored_in_the_personalization_blob() -> None:
-    """Its own table on purpose. organization_preferences.settings is the JSONB the branding
-    editor writes, and this repository has already shipped bugs where one code path overwrote
-    another's keys in it. A security consent cleared by somebody saving a logo is a defect class
-    already paid for once here."""
+    """The consent has its own table. organization_preferences.settings is the JSONB the branding
+    editor writes, where one code path can overwrite another's keys, and saving a logo must not
+    clear a security consent."""
     assert DesktopControlPolicy.__tablename__ == "desktop_control_policy"
     columns = DesktopControlPolicy.__table__.columns
     assert "settings" not in columns
@@ -288,7 +281,7 @@ def test_the_policy_is_not_stored_in_the_personalization_blob() -> None:
     assert foreign_keys and foreign_keys[0].ondelete == "CASCADE"
 
 
-# ── a grant that names a key can actually be created ───────────────────────────────────────────
+# ── a grant that names a key can be created ────────────────────────────────────────────────────
 
 class _GrantSession(_Session):
     """Enough AsyncSession for create_grant: it adds, commits and refreshes."""
@@ -311,8 +304,7 @@ def _no_org_lookup(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_a_grant_can_name_a_key_instead_of_a_person(_no_org_lookup) -> None:
-    """Dead in both directions before this: `create_grant` had no api_key_id parameter at all, so
-    no code path could write the column the migration had already added."""
+    """`create_grant` writes api_key_id and leaves admin_email empty for a key grant."""
     session = _GrantSession()
     grant = await _no_org_lookup.create_grant(
         session,
@@ -330,8 +322,8 @@ async def test_a_grant_can_name_a_key_instead_of_a_person(_no_org_lookup) -> Non
 
 @pytest.mark.asyncio
 async def test_the_human_who_issued_it_is_recorded_apart_from_the_grantee(_no_org_lookup) -> None:
-    """A key has nobody to answer for it. Collapsing the grantee and the issuer, which is what
-    using admin_email for both did, would leave a key grant with no accountable person on it."""
+    """A key is not a person, so the issuer is recorded apart from the grantee; one field for both
+    would leave a key grant with no accountable person on it."""
     grant = await _no_org_lookup.create_grant(
         _GrantSession(),
         created_by="ops@sivali.co.id",
@@ -368,7 +360,7 @@ async def test_a_grant_with_both_grantees_or_neither_is_refused(_no_org_lookup, 
 
 @pytest.mark.asyncio
 async def test_a_reason_is_still_mandatory_for_a_key(_no_org_lookup) -> None:
-    """The whole point of routing an unattended caller through a grant."""
+    """An unattended caller goes through a grant so that a reason is recorded."""
     with pytest.raises(HTTPException):
         await _no_org_lookup.create_grant(
             _GrantSession(),
@@ -380,8 +372,7 @@ async def test_a_reason_is_still_mandatory_for_a_key(_no_org_lookup) -> None:
 
 
 def test_a_key_grant_can_be_serialized_back() -> None:
-    """`GrantResponse.admin_email` was a non-Optional str, so such a row could not be returned
-    even if one existed."""
+    """`GrantResponse.admin_email` is optional, so a key grant can be returned."""
     from app.routers.break_glass import GrantResponse, _to_response
 
     fields = GrantResponse.model_fields
@@ -404,15 +395,13 @@ def test_a_key_grant_can_be_serialized_back() -> None:
     assert payload.admin_email is None
 
 
-# ── the gate is reached, which is the whole point ──────────────────────────────────────────────
+# ── the gate is reached ────────────────────────────────────────────────────────────────────────
 
 def test_a_desktop_action_passes_through_the_gate() -> None:
-    """The finding that produced this file's second half.
+    """proxy_operation calls the desktop gate.
 
-    Consent, the key grant and the budgets were all written, tested against stubs, documented as
-    live gates in three places, and called by nothing. Every test above passes whether or not any
-    request path reaches them, which is exactly how a dead gate stays green. This one asserts the
-    handler calls it.
+    The tests above pass against stubs whether or not any request path reaches consent, the key
+    grant and the budgets; this one asserts the handler calls the gate.
     """
     import ast
     import inspect
@@ -428,13 +417,11 @@ def test_a_desktop_action_passes_through_the_gate() -> None:
 
 
 def _calls(tree, name: str) -> bool:
-    """Whether `name` is actually CALLED here, rather than merely spelled somewhere.
+    """Whether `name` is called in `tree`; a mere mention does not count.
 
-    important: each of these guards is imported inside the function body, so
-    `"get_consent" in source` is satisfied by the import line alone. Proven by ablation: replacing
-    the call with `consent = None` left every string assertion green. The same trap is documented
-    on the shared cluster-scope ratchet, which had passed on ten routers for a property it was
-    only checking by spelling.
+    Each of these guards is imported inside the function body, so `"get_consent" in source` is
+    satisfied by the import line alone; replacing the call with `consent = None` would leave
+    every string assertion green.
     """
     import ast
 
@@ -446,16 +433,15 @@ def _calls(tree, name: str) -> bool:
 
 
 def test_the_gate_consults_all_three_controls() -> None:
-    """Naming the function is not enough: it has to do the three things it exists for."""
+    """The gate calls each of its three controls and acts on each answer."""
     import ast
     import inspect
 
     from app.routers import integrations
 
     tree = ast.parse(inspect.getsource(integrations._assert_desktop_allowed).lstrip())
-    # important: `consent_for_cluster`, not `get_consent`. The single-organization form answers
-    # for whichever binding has the lowest id, and a cluster on this deployment carries two, so
-    # using it here is the bug that let one tenant consent for another tenant's screens.
+    # The gate must use `consent_for_cluster`. `get_consent` answers for one organization, so on
+    # a shared cluster one tenant could consent for another tenant's screens.
     assert _calls(tree, "consent_for_cluster"), (
         "the gate does not consult every organization sharing the cluster"
     )
@@ -470,7 +456,7 @@ def test_the_gate_consults_all_three_controls() -> None:
         "cluster of the same name inherits it"
     )
 
-    # And each answer has to be acted on, not merely fetched.
+    # Each answer is acted on, as well as fetched.
     rendered = ast.unparse(tree)
     assert "may_view" in rendered, "consent is read and its answer discarded"
     assert "may_input" in rendered, "input consent is never distinguished from view consent"
@@ -478,8 +464,8 @@ def test_the_gate_consults_all_three_controls() -> None:
 
 
 def test_the_capability_is_refused_before_the_grant_is_looked_up() -> None:
-    """A key that was never granted the capability should hear that, not that it lacks a grant.
-    The order also keeps a Vault and database round trip off the path of an obvious refusal."""
+    """A key without the capability is told so before any grant lookup, which also keeps a Vault
+    and database round trip off the path of an obvious refusal."""
     import inspect
 
     source = inspect.getsource(
@@ -489,8 +475,8 @@ def test_the_capability_is_refused_before_the_grant_is_looked_up() -> None:
 
 
 def test_input_fails_closed_when_the_budget_store_is_unreachable() -> None:
-    """Every other limiter here fails open, and `_shared_allow` explains why. That reasoning
-    covers reads and uploads. It does not cover typing into a customer's desktop."""
+    """Other limiters fail open (see `_shared_allow`), which suits reads and uploads but not
+    typing into a customer's desktop."""
     import inspect
 
     from app.routers import integrations
@@ -527,12 +513,11 @@ def test_the_budget_is_keyed_per_guest_not_per_key() -> None:
 
 
 def test_a_guest_action_is_attributable_to_the_tenant() -> None:
-    """Without the owning organization every record on this surface landed with a NULL org, so an
-    action against a tenant's guest could not appear in a tenant-scoped view of the audit.
+    """Every record on the key surface carries the owning organization.
 
-    The human console and terminal paths have carried it since break-glass shipped. The
-    key-authenticated surface did not, which left the tenant-visible trail those paths promise
-    incomplete for exactly the unattended callers it most needed to cover.
+    Without it a record lands with a NULL org, and an action against a tenant's guest cannot
+    appear in a tenant-scoped view of the audit. The human console and terminal paths carry it
+    too.
     """
     import ast
     import inspect
@@ -546,7 +531,7 @@ def test_a_guest_action_is_attributable_to_the_tenant() -> None:
         ast.parse(inspect.getsource(integrations.proxy_operation).lstrip())
     )
     assert "resolve_cluster_org" in handler, "the owning organization is never resolved"
-    # Every audit call on the guest path must carry it, not just one.
+    # Every audit call on the guest path carries it.
     assert handler.count("target_organization_id=_guest_org_id") >= 4, (
         "some guest audit records still land without the tenant they belong to"
     )
@@ -560,8 +545,8 @@ def test_a_guest_action_is_attributable_to_the_tenant() -> None:
 
 
 def test_the_consent_route_exists_and_is_the_organizations_own() -> None:
-    """The gate reads a row that nothing could write. A consent nobody can give is not a consent,
-    and an operator could not tell a deliberate refusal from a missing endpoint."""
+    """The organization writes the consent row the gate reads through its own route, so an
+    operator can tell a deliberate refusal from a missing endpoint."""
     from app.routers.desktop_policy import router
 
     paths = {route.path for route in router.routes}
@@ -581,9 +566,8 @@ def test_the_consent_route_exists_and_is_the_organizations_own() -> None:
 # ── the tenant can see the session, not only the audit ─────────────────────────────────────────
 
 def test_an_agent_session_has_a_protocol_of_its_own() -> None:
-    """The enum had exactly two members, both describing a human at a browser, and the Sessions
-    page labelled anything else as a terminal. Reading machine activity as a person's session is
-    worse than reading it as unknown."""
+    """TERMINAL and GRAPHICS describe a human at a browser; machine activity must not read as a
+    person's session on the Sessions page."""
     from app.services.session_models import SessionProtocol
 
     assert SessionProtocol.MCP_DESKTOP.value == "mcp-desktop"
@@ -620,7 +604,7 @@ def test_one_session_row_per_session_not_per_action() -> None:
     assert "session_started" in handler, (
         "the session row is written unconditionally, so every action produces one"
     )
-    # And the flag has to come from the place that knows, which is the cache.
+    # The flag comes from the probe report cache, which knows whether the session is new.
     assert "session_started" in inspect.getsource(entry.desktop_action)
     assert "-> Tuple[ProbeReport, bool]" in inspect.getsource(entry._report_for)
 
@@ -641,8 +625,8 @@ def test_no_person_is_invented_for_an_agent_session() -> None:
 
 @pytest.mark.asyncio
 async def test_the_clipboard_needs_its_own_consent() -> None:
-    """It used to ride on view consent, while the code calls it the highest-yield exfiltration
-    primitive on this surface and the capability is already separate on the key."""
+    """The clipboard is the highest-yield exfiltration primitive on this surface, so it has its
+    own consent, as it has its own capability on the key."""
     consent, _ = await consent_for_cluster(
         _MultiOrgSession([(6, "provider")], [_row(True, True, allow_clipboard=False)]), "nuc2"
     )
@@ -653,9 +637,8 @@ async def test_the_clipboard_needs_its_own_consent() -> None:
 
 @pytest.mark.asyncio
 async def test_guest_access_needs_its_own_consent() -> None:
-    """The install path gated instance.exec on the DESKTOP consent, whose toggle says it is about
-    capturing screens. So enabling screenshots silently authorized a shell inside a customer's
-    container."""
+    """Guest access has its own consent: the desktop consent is about capturing screens, and
+    enabling screenshots must not authorize a shell inside a customer's container."""
     consent, _ = await consent_for_cluster(
         _MultiOrgSession([(6, "provider")], [_row(True, True, allow_guest_access=False)]), "nuc2"
     )
@@ -677,10 +660,8 @@ async def test_turning_the_feature_off_withdraws_all_four() -> None:
 def test_the_consent_response_carries_every_field_it_stores() -> None:
     """A read that drops a field is invisible, because the model defaults it.
 
-    The read handler built its response inline with two of the four fields. The row was correct
-    and the form showed the consent switched off, so an operator would have granted it, seen
-    nothing change, and granted it again. Caught live by a spec that reloaded and re-read rather
-    than trusting the success toast.
+    The row would be correct while the form showed the consent switched off, so an operator would
+    grant it, see nothing change, and grant it again.
     """
     import inspect
 
@@ -693,8 +674,8 @@ def test_the_consent_response_carries_every_field_it_stores() -> None:
             f"{field} is stored and not returned, so a reader cannot see it"
         )
 
-    # And nothing may build that response outside the one builder, or the next field added is
-    # dropped by whichever handler forgot it.
+    # Nothing builds that response outside the one builder, or a new field could be dropped by
+    # whichever handler forgot it.
     module = inspect.getsource(desktop_policy)
     assert module.count("DesktopControlPolicyResponse(") == 2, (
         "the response is constructed somewhere other than _as_response and the class definition"

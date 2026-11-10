@@ -2,12 +2,9 @@
 
 `check_tenant_permission` merges permissions from every rule matching the project when it is
 given no instance name, which is correct for a project-scoped question and wrong as the only
-check on a listing. A tenant holding `snapshot` on one instance passes it, and the fleet read
-then answers with every snapshot of every instance in the project: names, sizes, ages, and the
-source's running state for workloads that are not theirs.
-
-The per-instance routes are unaffected, because they pass the instance name and the merge never
-happens. This is specific to the shape of the fleet read.
+check on a listing: a tenant holding `snapshot` on one instance would be answered with every
+snapshot of every instance in the project. The fleet read therefore filters rows per instance.
+The per-instance routes pass the instance name, so the merge never happens there.
 
 Admin and Partner carry no ACL at all, so nothing here narrows what an operator sees.
 """
@@ -21,7 +18,7 @@ from tests._snapshot_fakes import HOST, PROJECT, FakeClient, FakeInstanceNode, s
 MINE = "ct-mine-0001"
 THEIRS = "ct-theirs-0002"
 
-# The grant that used to be enough to read the whole project.
+# Passes the project-level gate, but covers one instance only.
 ONE_INSTANCE_ACL = {HOST: {(PROJECT, MINE): {"view", "snapshot"}}}
 WILDCARD_ACL = {HOST: {(PROJECT, "*"): {"view", "snapshot"}}}
 
@@ -62,10 +59,9 @@ def _client(svc, *, acl, flag_on: bool = True) -> TestClient:
     object.__setattr__(settings, "snapshot_tenant_enforcement_enabled", flag_on)
     token = org_scope._tenant_acl_var.set(acl)
 
-    # important: the route caches its answer for 30s. Without this every test after the first
-    # reads the first one's rows, and a filter that had stopped working would still look right.
-    # This fixture leaves _allowed_clusters_var unset, which is admin scope, so all of them
-    # share one key.
+    # important: the route caches its answer for 30s, and every test here shares one cache key
+    # (_allowed_clusters_var unset is admin scope). Without this, later tests read the first
+    # one's rows and a broken filter would still look right.
     from app.core.cache import get_cache_manager
 
     get_cache_manager().invalidate_resource_cache("snapshots_fleet")
@@ -117,7 +113,7 @@ def test_a_wildcard_grant_still_sees_every_instance_in_the_project(fake):
 
 
 def test_an_operator_carries_no_acl_and_sees_the_whole_project(fake):
-    # acl=None is what Admin and Partner actually have. The filter must be a no-op for them.
+    # Admin and Partner have acl=None; the filter must be a no-op for them.
     client = _client(service(fake), acl=None, flag_on=False)
     try:
         response = _fleet(client)
@@ -157,12 +153,11 @@ SPLIT_ACL = {HOST: {(PROJECT, MINE): {"view"}, (PROJECT, THEIRS): {"snapshot"}}}
 
 
 def test_a_view_only_grant_does_not_come_with_the_snapshots(fake):
-    """The filter has to ask about the snapshot permission, not about "has any rule here".
+    """The row filter checks the snapshot permission on each instance's own rule.
 
-    filter_instances_by_acl, which this route used first, ignores the permissions on a rule
-    entirely. A tenant with `view` on one instance and `snapshot` on another therefore passed the
-    project-level gate on the second and was handed the first one's snapshots too, which is the
-    same leak the filter was added to close.
+    filter_instances_by_acl ignores the permissions on a rule. With it, a tenant with `view` on
+    one instance and `snapshot` on another would pass the project-level gate on the second and
+    be handed the first one's snapshots too.
     """
     client = _client(service(fake), acl=MIXED_ACL)
     try:

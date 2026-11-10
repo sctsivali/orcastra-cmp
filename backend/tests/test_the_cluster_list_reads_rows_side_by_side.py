@@ -1,15 +1,12 @@
 """`GET /clusters` must cost about one row, not the sum of its rows, and never re-dial a dead one.
 
 Every list row probes its cluster: a pooled-client revalidation, a Vault read and, for a cluster
-with no live connection, a TLS connect. The rows were built by coroutines that made those calls
-inline, so `asyncio.gather` ran them one after another on the loop thread. On the dev fleet five
-offline clusters made every cold read take about 40s, which is how long the migration wizard sat
-on "Loading clusters".
+with no live connection, a TLS connect. Those calls block, so rows are built in worker threads side
+by side; inline on the loop thread a handful of offline clusters would serialize their timeouts.
 
-The row also forced a reconnect even when this worker had just seen that cluster fail, so each dead
-cluster paid at least one more connect timeout on every cold list read. The background healer
-already retries dead clusters and clears the verdict on success, so the list reports the verdict
-instead. Refresh (fresh=true) is the operator asking for a real recheck, and that one still forces it.
+A cluster this worker has seen fail is not re-dialed on a plain read: the background healer retries
+dead clusters and clears the verdict on success, so the list reports the verdict. Refresh
+(fresh=true) is the operator asking for a real recheck, and that one still forces it.
 """
 
 import threading
@@ -254,10 +251,10 @@ def test_a_list_with_an_unfinished_row_is_never_cached(client, monkeypatch) -> N
 
 
 def test_a_finished_list_is_fresh_for_thirty_seconds(client, monkeypatch) -> None:
-    """Owner decision 2026-11-04: a cluster going down shows within about 35 s, not 180.
+    """A cluster going down shows in the list within about 35 s.
 
-    A recovery clears the list at once and a failure does not, so after a cluster stopped
-    answering the list read online until its entry aged out: 88 s in the lab, up to 180.
+    A recovery clears the cached list at once and a failure does not, so a cluster that stops
+    answering reads online until the entry ages out; the fresh window bounds that delay.
     """
     from app.core.swr import SWR_MAX_STALE_SECONDS
     from app.routers import cluster_registration as module

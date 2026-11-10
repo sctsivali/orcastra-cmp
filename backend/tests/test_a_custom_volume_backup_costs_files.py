@@ -1,17 +1,14 @@
 """
 Every request under a storage volume's /backups costs `instance.files`, like an instance's /backups.
 
-A volume backup is the volume's data in a tarball. The instance /backups path has cost
-`instance.files` for every method since the guest-access table existed, while
-storage-pools/<pool>/volumes/<type>/<volume>/backups cost nothing: a `*` key without files could
-create a backup and export it, and a key granted only `read` on one project could export a backup
-that already existed, because reads under /storage-pools are never refused. So create, list, read,
-rename, export and delete are all priced, for every volume type, on the path alone and before the
-body is read.
+A volume backup is the volume's data in a tarball, and reads under /storage-pools are never
+refused. Unpriced, storage-pools/<pool>/volumes/<type>/<volume>/backups would let a `*` key without
+files create and export a backup, and a key granted only `read` on one project export a backup that
+already exists. So create, list, read, rename, export and delete are all priced, for every volume
+type, on the path alone and before the body is read.
 
-The integrator never calls a /backups path (its client source was read), and its volume reads and
-writes stay unpriced. Every raw-proxy test drives the real handler; the session records the request
-it would send.
+The integrator never calls a /backups path, and its volume reads and writes stay unpriced. Every
+raw-proxy test drives the real handler; the session records the request it would send.
 """
 
 from typing import Any, Dict, List, Optional, Tuple

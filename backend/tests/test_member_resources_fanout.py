@@ -1,19 +1,12 @@
 """The member resource read must be shallow, concurrent, and honest about what it lost.
 
-Three defects live here and none of them is visible in review.
+At pylxd's default `recursion=0` an instance list builds objects carrying only a name, and the
+first read of a declared attribute such as `location` calls `sync()`, one sequential GET per
+instance in the cluster. The fake below reproduces that, so the test can fail before it
+passes.
 
-The first is the reason the modal timed out on a real MicroCloud. `client.instances.all()`
-takes pylxd's default `recursion=0`, which returns a list of URLs and builds Instance objects
-carrying only a name. `location` is a declared model attribute, so the first read of it falls
-into `Model.__getattribute__`, which calls `sync()`, which is a GET. One request per instance
-in the whole cluster, sequential, each under the same 8s socket budget. The fake below
-reproduces that faithfully, so the test can fail before it can pass.
-
-The second is the per-pool detail call, which `recursion=1` on the pool list makes unnecessary.
-
-The third is silence. A storage or instance read that failed used to be swallowed, so the
-response was a 200 carrying zeroes, which renders as "this member has no storage" rather than
-as "we could not find out".
+`recursion=1` on the pool list makes the per-pool detail call unnecessary. A storage or
+instance read that fails is reported as degraded, so the response never shows zeroes as a fact.
 """
 
 import asyncio
@@ -38,7 +31,6 @@ class _LazyInstance:
     """A pylxd Instance as it comes back from recursion=0: a name and nothing else.
 
     Touching any other attribute is a round trip in the real client, so here it is an error.
-    That is what makes the recursion assertion a behavioural test rather than a spelling check.
     """
 
     def __init__(self, name: str) -> None:
@@ -92,8 +84,7 @@ class _Node:
         return _Node(self._client, self._parts + [item])
 
     def get(self, params: Optional[Dict[str, Any]] = None, timeout: Any = None) -> _Response:
-        # timeout is accepted because the real _APINode takes one and the all-projects read
-        # passes it explicitly rather than inheriting the pooled socket budget.
+        # The real _APINode takes a timeout, and the all-projects read passes one explicitly.
         return self._client.handle(self._parts, params or {})
 
 
@@ -119,8 +110,7 @@ class FakeClient:
         self.fail_instances = fail_instances
         self.pool_delay = pool_delay
         self.calls: List[str] = []
-        # a real daemon advertises this, and it is what lets the member read cover every
-        # project in one request instead of walking them
+        # Lets the member read cover every project in one request.
         self.host_info = {"api_extensions": ["instance_all_projects"]}
         self.project = None
         self.instance_recursions: List[int] = []
@@ -141,10 +131,8 @@ class FakeClient:
         key = "/".join(parts) + (f"?{sorted(params.items())}" if params else "")
         self.calls.append(key)
         if parts == ["instances"]:
-            # The member read asks the raw API for every project at recursion=2. It used to go
-            # through client.instances.all(recursion=1), which pylxd binds to the default
-            # project, so a member running work anywhere else was counted as running almost
-            # nothing.
+            # The member read asks the raw API for every project at recursion=1.
+            # client.instances.all() is bound to the default project and would miss the rest.
             self.instance_recursions.append(int(params.get("recursion", 0)))
             self.instance_all_projects.append(params.get("all-projects"))
             if self.fail_instances:
@@ -191,7 +179,7 @@ def _collect(client: FakeClient, member: str = "microcloud20") -> mr.MemberFanou
 
 
 def test_the_fake_reproduces_the_lazy_sync_defect():
-    """Ablation. Prove the fake can fail before trusting it when it passes."""
+    """The fake must be able to fail before a pass can be trusted."""
     client = FakeClient()
     lazy = client.instances.all()
     with pytest.raises(AssertionError):
@@ -201,10 +189,8 @@ def test_the_fake_reproduces_the_lazy_sync_defect():
 def test_a_member_read_never_lazily_syncs_an_instance():
     client = FakeClient()
     fanout = _collect(client)
-    # recursion=1 carries expanded_config, expanded_devices, location and status, which is
-    # everything the readers duck-type; recursion=2 (state, snapshots, backups on top) was
-    # measured at 4.6 s against 0.8 s on a 62-instance MicroCloud. What must stay true is that
-    # the list asks for recursion at all, so no attribute read below becomes its own GET.
+    # recursion=1 carries everything the readers duck-type; recursion=2 adds state, snapshots
+    # and backups at several times the cost. Without recursion each attribute read is a GET.
     assert client.instance_recursions == [1], (
         f"the instance list must ask for recursion, got {client.instance_recursions}"
     )
@@ -227,7 +213,7 @@ def test_the_pool_list_carries_the_driver_so_there_is_no_detail_call():
 
 
 def test_a_daemon_that_ignores_recursion_still_reports_a_driver():
-    """Degrading to the old shape beats reporting driver 'unknown' as though it were data."""
+    """Without recursion the driver comes from the detail read, never 'unknown'."""
     client = FakeClient(recursion_on_pools=False)
     fanout = _collect(client)
     assert {p.name: p.driver for p in fanout.pools} == {"local": "zfs", "remote": "ceph"}

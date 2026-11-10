@@ -1,11 +1,10 @@
 """A project deleted through the raw proxy takes its access rules with it.
 
 OrcaHub removes a buyer's project at the end of the retention window with a raw
-`DELETE /1.0/projects/<name>`. The raw path sent it straight to LXD, so the tenant's
-`auto:<project>` rule outlived the project, kept the cluster in the tenant's scope, and the buyer
-still saw the cluster on Overview with no project and no instance (2026-10-27). The raw
-delete now runs inside the same deletion core as the route and the structured proxy, and the raw
-caller still receives LXD's own answer.
+`DELETE /1.0/projects/<name>`. Sent straight to LXD, the tenant's `auto:<project>` rule would
+outlive the project and keep the cluster in the tenant's scope, so the buyer would still see the
+cluster on Overview with no project and no instance. The raw delete runs inside the same deletion
+core as the route and the structured proxy, and the raw caller still receives LXD's own answer.
 """
 
 from __future__ import annotations
@@ -65,7 +64,7 @@ def _wait_raising(error: BaseException):
     return wait
 
 
-# ── which requests are project deletes ─────────────────────────────────────────────────────
+# ── Which requests are project deletes ─────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -149,7 +148,7 @@ async def test_a_failed_operation_is_a_refusal_and_a_stalled_one_is_unknown() ->
                                 wait_operation=_wait_raising(LXDAPIException(stalled)))
 
 
-# ── through the deletion core ──────────────────────────────────────────────────────────────
+# ── Through the deletion core ──────────────────────────────────────────────────────────────
 
 
 def _sender(answer: RawDeleteAnswer, response: Any = None, error: Optional[BaseException] = None):
@@ -220,7 +219,7 @@ async def test_a_raw_delete_of_a_project_already_gone_revokes_nothing(monkeypatc
     assert answer.status_code == 404, "the caller still reads LXD's 404, which OrcaHub treats as done"
 
 
-# ── the route ──────────────────────────────────────────────────────────────────────────────
+# ── The route ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_the_raw_proxy_sends_a_project_delete_through_the_core() -> None:

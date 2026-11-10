@@ -1,21 +1,12 @@
 """A backend storage fault must never be recorded against a cluster's reachability.
 
-The circuit breaker in ``app.services.lxd.health`` decides whether a cluster is skipped on every
-later request, and roughly every read path consults it. It is only ever allowed to answer a
-question about the *peer*. When the backend's own tmpfs filled, ``mkstemp`` raised ``OSError(28)``
-while preparing TLS credentials, a broad ``except Exception`` recorded it as ``KIND_OFFLINE``, and
-operators were told every hypervisor was offline while all of them were healthy. The breaker then
-suppressed for its whole TTL the retries that would have corrected the picture.
-
-``LXDLocalStorageError`` exists to make that distinction catchable, but an exception type only
-helps where somebody remembered to catch it first. Fixing the two connect sites was not enough:
-``ensure_connection`` and ``check_node_status`` in lxd_service, and the reconnect in instance.py,
-each re-recorded the same fault one layer up through their own broad handlers. Three separate
-places had to agree, which is precisely the shape that rots the next time a handler is added.
-
-So this is structural rather than behavioural. The rule: a handler catching ``Exception`` that
-records a breaker failure unconditionally must first re-raise ``LXDLocalStorageError``. A record
-guarded by an ``isinstance`` narrowing test is already type-scoped and is left alone.
+The breaker in ``app.services.lxd.health`` makes later requests skip a cluster, so it may
+record only the peer's faults. A full tmpfs makes ``mkstemp`` raise ``OSError(28)`` while TLS
+credentials are prepared; a broad handler that records it marks every hypervisor offline for
+the breaker's TTL. The connect sites each have such a handler, so the rule is structural: a
+broad handler that records a failure unconditionally needs an earlier
+``except LXDLocalStorageError: raise`` in the same ``try``. A record behind an ``isinstance``
+test is already type-scoped and is left alone.
 """
 
 import ast
@@ -115,7 +106,7 @@ class StorageFaultsAreNotClusterFailures(unittest.TestCase):
         )
 
     def test_the_guard_detects_a_regression(self):
-        """The checker must actually fail when the guard is removed, not pass vacuously."""
+        """The checker flags a broad handler without the guard and passes once it is added."""
         regressed = ast.parse(
             "try:\n"
             "    connect()\n"
@@ -135,7 +126,7 @@ class StorageFaultsAreNotClusterFailures(unittest.TestCase):
         self.assertEqual(_violations(repaired), [])
 
     def test_an_isinstance_narrowed_record_is_not_flagged(self):
-        """The raw proxy already type-scopes its record, and must not be forced to change."""
+        """A record narrowed by isinstance, as in the raw proxy, is already type-scoped."""
         narrowed = ast.parse(
             "try:\n"
             "    call()\n"

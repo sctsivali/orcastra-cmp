@@ -1,4 +1,4 @@
-"""Final migration acceptance shares the cluster serialization boundary with creates."""
+"""Migration execute admission shares the cluster serialization boundary with creates."""
 
 from __future__ import annotations
 

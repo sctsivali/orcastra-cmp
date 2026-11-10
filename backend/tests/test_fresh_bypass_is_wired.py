@@ -2,17 +2,11 @@
 
 The refresh controls in the console call `refetch()`, which re-issues the identical URL. If
 the handler serves that URL from the Redis response cache (TTLs here run 30s to 3600s), the
-operator gets the same bytes back and the button looks broken. It was exactly that: `fresh`
-existed on two endpoints, and no UI path reached either of them.
+operator gets the same bytes back and the button looks broken.
 
-The bypass belongs only to explicit user actions. Background polling keeps reading the cache
-on purpose, because the endpoints worth refreshing are the ones that fan out across every
-cluster, and letting every open tab bypass would turn routine polling into a fan-out storm.
-
-This is structural rather than a request test because the failure is silent: the endpoint
-still returns 200 with a plausible body, and the operator simply does not see their own
-change. A new cached GET is caught automatically, so there is no list here to forget to
-update.
+The bypass belongs only to explicit user actions. Background polling keeps reading the cache:
+letting every open tab bypass would turn routine polling into a fan-out storm. The check is
+structural because the failure is silent: the endpoint still returns 200 with a plausible body.
 """
 
 import ast
@@ -27,9 +21,8 @@ ROUTERS = Path(__file__).resolve().parents[1] / "app" / "routers"
 RESPONSE_CACHES = {"api_responses", "lxd_resources"}
 
 EXEMPT = {
-    # Reads monitoring_history only, which is an append-only series rather than a cached
-    # response. Its own dashboard data comes from get_monitoring_dashboard, which does take
-    # fresh, and the history points are identical whether or not you bypass anything.
+    # Reads monitoring_history only, an append-only series rather than a cached response.
+    # The dashboard data comes from get_monitoring_dashboard, which takes fresh.
     "get_metrics_history",
 }
 
@@ -42,10 +35,9 @@ def _tries_swallowing_a_connection_error(source: str):
     handler catches it and no passthrough lets it out.
 
     The rule lives here rather than in one test class because it is the same rule on both
-    sides of the layer boundary. It was written for app/services/lxd/ and the identical
-    defect then shipped in six app/routers/ helpers, where nothing was looking: the router
-    check next to it was a substring scan, and both strings were present because the inner
-    per-item handler supplied the second one.
+    sides of the layer boundary, app/services/lxd/ and app/routers/. A substring scan is not
+    enough: an inner per-item handler can supply the second string while the outer one still
+    swallows the error.
     """
     tree = ast.parse(source)
     for node in ast.walk(tree):
@@ -61,10 +53,9 @@ def _tries_swallowing_a_connection_error(source: str):
         )
         if not raises_conn:
             continue
-        # note: a handler's type is a Name, an Attribute, or a Tuple of those. Flatten the
-        # tuple rather than letting it fall through to "bare": `except (ConnectionError,
-        # Timeout)` catches two specific types and is not broad, but reading no .id and no
-        # .attr off the Tuple node scored it as a bare except and failed correct code.
+        # A handler's type is a Name, an Attribute, or a Tuple of those. The tuple is flattened:
+        # `except (ConnectionError, Timeout)` catches two specific types and is not broad, but
+        # a Tuple node has no .id or .attr and would otherwise score as a bare except.
         def _handler_names(handler):
             if handler.type is None:
                 return ["bare"]
@@ -207,26 +198,21 @@ class FreshBypassTests(unittest.TestCase):
 class DegradedFanOutTests(unittest.TestCase):
     """A fan-out where no cluster answered must not be remembered as the answer.
 
-    Confirmed live during a QA run: GET /images returned HTTP 200 with total=0 for three
-    clusters including one the write path reports as not connected. The connection breaker
-    short-circuits before any network call, so the read path cannot tell "nothing there"
-    from "nobody answered". Caching that pins it for the whole TTL, and a cache bypass makes
-    it operator-triggerable: refresh during an outage and good data on screen is replaced by
-    the outage's empty result.
+    The connection breaker short-circuits before any network call, so the read path cannot
+    tell "nothing there" from "nobody answered". Caching that pins it for the whole TTL, and a
+    cache bypass makes it operator-triggerable: refresh during an outage and good data on
+    screen is replaced by the outage's empty result. On a monitoring surface "0 CPU, 0 traffic,
+    0 instances" looks like a healthy idle cluster.
 
-    On a monitoring surface it is worse than on a list. An empty inventory looks broken, so
-    someone investigates. "0 CPU, 0 traffic, 0 instances" looks like a healthy idle cluster.
-
-    The scan discovers handlers rather than naming them, because a ratchet that covers a
-    subset reads as full coverage to the next person. Anything it genuinely cannot infer is
-    named in EXEMPT with the reason it is safe, or asserted explicitly below.
+    The scan discovers handlers rather than naming them, so a new handler is covered. Anything
+    it cannot infer is named in FAN_OUT_EXEMPT with the reason it is safe, or asserted below.
     """
 
     # Handlers whose degraded path is real but not expressible as "guard the cache write".
     FAN_OUT_EXEMPT = {
         # Returns early with is_online=False for a disconnected node, before reaching any
-        # cache.set. The `_` discard is the instance list, not the reachability signal:
-        # reachability comes from node.connected, checked at routers/monitoring.py:861.
+        # cache.set. Reachability comes from node.connected (routers/monitoring.py,
+        # get_node_metrics).
         "get_node_metrics",
     }
 
@@ -261,8 +247,8 @@ class DegradedFanOutTests(unittest.TestCase):
         for path, fn in self._get_handlers():
             if fn.name in self.FAN_OUT_EXEMPT:
                 continue
-            # note: the dashboard reads the fleet through services/monitoring_sweep.read_fleet,
-            # which calls list_all_vms itself; a plain read_fleet() call is the same fan-out.
+            # The dashboard reads the fleet through services/monitoring_sweep.read_fleet, which
+            # calls list_all_vms itself; a plain read_fleet() call is the same fan-out.
             reads_fleet = any(
                 isinstance(c, ast.Call) and getattr(c.func, "id", None) == "read_fleet"
                 for c in ast.walk(fn)
@@ -276,10 +262,9 @@ class DegradedFanOutTests(unittest.TestCase):
                 continue
             checked += 1
 
-            # Names that could carry the connected-nodes half of a fan-out result.
-            # note: collected from every 2-tuple unpack in the handler, not only from a
-            # direct list_all_vms() assignment, because the binding is often one hop away:
-            # `(all_vms, connected_nodes), statuses = await asyncio.gather(task, ...)`.
+            # Names that could carry the connected-nodes half of a fan-out result, collected
+            # from every 2-tuple unpack in the handler because the binding is often one hop
+            # away: `(all_vms, connected_nodes), statuses = await asyncio.gather(task, ...)`.
             # A `_` discard contributes no name, which is the case worth catching.
             guard_names = set()
             for node in ast.walk(fn):
@@ -310,8 +295,6 @@ class DegradedFanOutTests(unittest.TestCase):
                 ) and id(call) not in guarded:
                     offenders.append(f"{path.name}:{call.lineno} {fn.name} caches unguarded")
 
-        # note: 2 since GET /monitoring/network was removed; it summed counters the list path
-        # never fills and always answered zero.
         self.assertGreaterEqual(checked, 2, "the scan stopped finding fan-out handlers")
         self.assertEqual(
             offenders,
@@ -323,12 +306,9 @@ class DegradedFanOutTests(unittest.TestCase):
     def test_every_handler_reporting_unreachable_guards_its_cache_write(self):
         """The scan above only sees handlers that call list_all_vms.
 
-        Nine wrapper routers fan out through run_in_executor instead, so they were invisible
-        to it and every one of them cached a total outage: /networks, /profiles, /ipam,
-        /storage/volumes and both storage-pool resource endpoints pinned an empty result for
-        120 to 180 seconds. This scan discovers by the property that actually matters, which
-        is that the handler reports unreachable_nodes at all, so a new fan-out is covered the
-        day it is written.
+        Wrapper routers that fan out through run_in_executor (/networks, /profiles, /ipam,
+        /storage/volumes) are invisible to it. This scan discovers by whether the handler
+        reports unreachable_nodes at all, so a new fan-out is covered the day it is written.
         """
         offenders, checked = [], 0
         for path, fn in self._get_handlers():
@@ -351,8 +331,8 @@ class DegradedFanOutTests(unittest.TestCase):
                 continue
             checked += 1
 
-            # any `if <name>:` will do. The guard names differ by handler (answered,
-            # connected_nodes), and pinning the vocabulary would only invite a rename.
+            # Any `if <name>:` counts; the guard names differ by handler (answered,
+            # connected_nodes).
             guard_names = {
                 node.test.id
                 for node in ast.walk(fn)
@@ -365,9 +345,9 @@ class DegradedFanOutTests(unittest.TestCase):
                 if id(c) not in guarded
             ]
 
-        # 7 at the time of writing: instances, vms, networks, profiles, ipam,
-        # storage_pools, storage_volumes. Six more report unreachable_nodes without caching
-        # at all, so the rule does not apply to them.
+        # The floor counts instances, vms, networks, profiles, ipam, storage_pools and
+        # storage_volumes. Handlers that report unreachable_nodes without caching at all are
+        # outside this rule.
         self.assertGreaterEqual(checked, 7, "the scan stopped finding reporting handlers")
         self.assertEqual(
             offenders,
@@ -435,10 +415,8 @@ class BypassBudgetTests(unittest.TestCase):
     """The bypass needs its own budget, and it cannot be keyed on the client IP.
 
     Every browser reaches the API through the Next.js rewrite proxy, so the socket
-    address the middleware sees is one container for the whole tenancy. Observed in the
-    access log: 429s attributed to a single client ip across a dozen paths and several
-    users. An IP-keyed budget for a forced fan-out would therefore let one operator's
-    refreshes throttle everyone else, which is a worse failure than the one it prevents.
+    address the middleware sees is one container for the whole tenancy. An IP-keyed budget
+    for a forced fan-out would let one operator's refreshes throttle everyone else.
     """
 
     def _keys(self, query: str, auth: str | None = None):
@@ -464,10 +442,9 @@ class BypassBudgetTests(unittest.TestCase):
         """The middleware and the handler must agree on what "fresh" means.
 
         `fresh: bool = False` is parsed by pydantic, which coerces t, T, y and Y as well
-        as the obvious spellings. The middleware matched a hand-written set that had none
-        of them, so `?fresh=t` bypassed the response cache and yielded no `fresh:` bucket,
-        leaving a forced fan-out counted only against the general limit. Both sides are now
-        the same parser, and this pins that they stay so.
+        as the obvious spellings. A middleware with its own spelling list would let
+        `?fresh=t` bypass the response cache with no `fresh:` bucket, counted only against
+        the general limit. Both sides use the same parser, and this pins that they stay so.
         """
         from pydantic import TypeAdapter, ValidationError
 
@@ -523,10 +500,9 @@ class SingleFlightDecoratorTests(unittest.TestCase):
     """The decorator must stay invisible to FastAPI's parameter resolution.
 
     FastAPI builds query parameters, dependencies and the response model from
-    inspect.signature of the registered callable. A wrapper that loses the signature
-    silently turns every parameter into an unfilled positional argument, and the failure
-    surfaces as a 500 at request time rather than at import, so a structural test is the
-    only cheap guard.
+    inspect.signature of the registered callable. A wrapper that loses the signature turns
+    every parameter into an unfilled positional argument, and the failure surfaces as a 500
+    at request time rather than at import.
     """
 
     def test_signature_survives_the_wrapper(self):
@@ -566,15 +542,13 @@ class SingleFlightDecoratorTests(unittest.TestCase):
     def test_a_leader_that_raised_is_not_recorded_as_a_completed_rebuild(self):
         """A failed rebuild must not hand the next arrival a licence to read the cache.
 
-        mark_rebuilt used to sit in the finally, so a leader that answered 503 still
-        recorded a finished rebuild. The waiter behind it then took the fresh=False branch
-        and served the very cache it had asked to bypass, which on these endpoints is kept
-        warm by the metrics collector. Two operators clicking refresh at the same moment
-        during an outage got different answers, one a 503 and one a stale 200.
+        mark_rebuilt runs only after the leader succeeds. A leader that answered 503 and
+        still recorded a rebuild would send the waiter behind it down the fresh=False
+        branch, serving the cache it asked to bypass, which the metrics collector keeps warm.
 
-        The follower has to arrive before the leader fails, which is the whole point:
-        sequentially the second request's arrival timestamp is already newer than the
-        mark, so it does the work either way and the defect is invisible.
+        The follower has to arrive before the leader fails: sequentially, the second
+        request's arrival timestamp is already newer than the mark, so it does the work
+        either way and the defect is invisible.
         """
         import asyncio
 
@@ -610,7 +584,7 @@ class SingleFlightDecoratorTests(unittest.TestCase):
         self.assertEqual(single_flight._locks, {}, "the lock bookkeeping leaked")
 
     def test_concurrent_forced_reads_still_collapse_into_one_rebuild(self):
-        """The counterpart: fixing the failure path must not break the success path."""
+        """When the leader succeeds, concurrent forced reads collapse into its one rebuild."""
         import asyncio
 
         from app.core import single_flight
@@ -633,14 +607,10 @@ class SingleFlightDecoratorTests(unittest.TestCase):
         self.assertEqual(seen.count(False), 2)
 
     def test_every_fleet_fan_out_is_serialised(self):
-        """Which endpoints collapse concurrent forced reads was nobody's decision.
+        """A fleet-wide handler that takes `fresh` collapses concurrent forced reads.
 
-        Six of the sixteen handlers taking `fresh` carried the decorator and ten did not,
-        with nothing recording why. The undecorated ones included /networks, /profiles,
-        /ipam, /storage/volumes and /projects, all of which fan out across every cluster in
-        scope, so ten operators clicking refresh at the same moment meant ten parallel
-        fan-outs against the same hardware. The rate limit does not help: it bounds one
-        operator, and this is the many-operator case.
+        Without it, ten operators clicking refresh at the same moment mean ten parallel
+        fan-outs against the same hardware. The rate limit bounds each operator separately.
 
         The rule discovers rather than lists: a handler that takes `fresh` and reaches the
         whole fleet must be serialised, or be exempt for a stated reason.
@@ -651,8 +621,8 @@ class SingleFlightDecoratorTests(unittest.TestCase):
             "_read_all_pool_resources(",
         )
         EXEMPT = {
-            # Scoped to one node via its host parameter, and it returns is_online=False for
-            # a disconnected one before doing any work. There is no fleet fan-out to collapse.
+            # Scoped to one cluster via node_name, and it returns is_online=False for a
+            # disconnected one before doing any work. There is no fleet fan-out to collapse.
             "get_node_metrics",
         }
 
@@ -702,9 +672,8 @@ class SingleFlightDecoratorTests(unittest.TestCase):
 class SharedBypassCounterTests(unittest.TestCase):
     """The shared counter must limit when Redis answers and must not block when it does not.
 
-    A rate limiter that fails closed converts a Redis outage into a total product outage.
-    That is strictly worse than the thing it protects against, so the fallback direction is
-    the property worth pinning.
+    A rate limiter that fails closed converts a Redis outage into a total product outage, so
+    the fallback direction is the property worth pinning.
     """
 
     def _with_redis(self, client):
@@ -798,10 +767,10 @@ class SharedBypassCounterTests(unittest.TestCase):
 class FailureIsLabelledTests(unittest.TestCase):
     """A failed host must be labelled, not merely excluded from the cache.
 
-    The earlier guard only proved a degraded fan-out was not cached. That passed while the
-    guard was inert: images.py caught its own per-node failure and returned a valid empty
-    response, so the "did anyone answer" counter never reached zero and the false empty was
-    cached anyway. Structural presence is not behaviour. This asserts the label instead.
+    A guard that only proves a degraded fan-out is not cached can pass while inert: a router
+    that catches its own per-node failure and returns a valid empty response keeps the "did
+    anyone answer" counter above zero, and the false empty is cached anyway. This asserts the
+    label instead.
     """
 
     PER_HOST = {
@@ -843,7 +812,7 @@ class FailureIsLabelledTests(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_flattening_handlers_report_which_nodes_were_lost(self):
-        """Category B returns one flat list, so the only way to name a failed node is a
+        """These handlers return one flat list, so the only way to name a failed node is a
         top-level field. A handler that drops the name reports an outage as an empty list."""
         expected = {
             "profiles.py", "network_acls.py", "lxd_operations.py", "lxd_warnings.py",
@@ -879,33 +848,27 @@ class FailureIsLabelledTests(unittest.TestCase):
 class ServiceLayerMustNotSwallowUnreachableTests(unittest.TestCase):
     """A service method that returns empty when it cannot connect blinds every caller.
 
-    This is the bug class that survived two fixes. The router was taught to label an
-    unreachable host, and the label never appeared, because one layer down
-    `list_images` did `if client is None: return []`. The router saw a successful empty
-    result and had nothing to label. Against the real fleet, fourteen dead clusters all
-    reported reachable=True with zero images.
+    A service that does `if client is None: return []` hands its router a successful empty
+    result with nothing to label, so a dead cluster reports reachable=True and zero items.
 
-    The rule is narrow and checkable: inside the LXD service layer, discovering that
-    there is no client is a failure and must be raised. Callers can decide how to present
-    it; they cannot invent information the service threw away.
+    Inside the LXD service layer, discovering that there is no client is a failure and must
+    be raised. Callers can decide how to present it; they cannot recover information the
+    service threw away.
     """
 
     SERVICES = pathlib.Path(__file__).resolve().parents[1] / "app" / "services" / "lxd"
 
     EXEMPT = {
-        # Returns (items, connected) where the second element IS the reachability signal,
+        # Returns (items, connected) where the second element is the reachability signal,
         # which is how instances and VMs report connected_nodes to their routers.
-        # note: this used to name "_fetch_instances_for_node", which has never existed under
-        # app/. An exemption for a function that does not exist relaxes nothing and hides
-        # that it is relaxing nothing, which is why test_every_exemption_names_a_real_function
-        # now guards the set itself.
+        # test_every_exemption_names_a_real_function checks that every name here exists.
         "_fetch_vms_from_node",
     }
 
-    # (file, function, variable) where a None client genuinely is not a connection failure.
+    # (file, function, variable) where a None client is not a connection failure.
     TYPED_EXEMPT = {
-        # The cluster was reached successfully a few lines above; this is a per-project
-        # client that could not be opened, which is an operation failure, not an outage.
+        # The cluster was reached a few lines above; this is a per-project client that could
+        # not be opened, which is an operation failure rather than an outage.
         ("instance.py", "create_instance", "create_client"),
     }
 
@@ -971,11 +934,8 @@ class ServiceLayerMustNotSwallowUnreachableTests(unittest.TestCase):
         LXDConnectionError and LXDOperationError are siblings off Exception
         (exceptions.py), while typed availability errors subclass LXDConnectionError. Routers
         map connection failures to 503 and operations to 400, 404 or 500 depending on the
-        handler.
-
-        Raising the operation type from a `client is None` branch is what produced 14 x
-        HTTP 500 on GET /api/v1/projects/blitz01, and a 404 claiming an instance did not
-        exist on a cluster that was merely offline.
+        handler, so the operation type from a `client is None` branch turns an offline
+        cluster into a 500, or a 404 claiming an instance does not exist.
         """
         offenders = []
         for path in sorted(self.SERVICES.glob("*.py")):
@@ -1017,12 +977,11 @@ class ServiceLayerMustNotSwallowUnreachableTests(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_a_connection_error_is_not_rewrapped_by_a_broad_handler(self):
-        """Raising the right type is only half the fix.
+        """Raising the right type is not enough on its own.
 
-        projects.py raised inside a try whose `except Exception` re-wrapped it as
-        LXDOperationError, so changing the type alone accomplished nothing at all. Any try
-        that raises the connection type while also catching Exception needs the
-        passthrough, as images.py has.
+        A try whose `except Exception` re-wraps the raise as LXDOperationError undoes the
+        type. Any try that raises the connection type while also catching Exception needs
+        the passthrough, as images.py has.
         """
         offenders = [
             f"{path.name}:{lineno} raises {self.CONNECTION_ERROR} inside a try whose broad "
@@ -1034,11 +993,10 @@ class ServiceLayerMustNotSwallowUnreachableTests(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_every_exemption_names_a_real_function(self):
-        """An exemption for a function that does not exist is worse than no exemption.
+        """Every exemption names a function that exists.
 
-        It relaxes nothing while reading as though it does, so nobody re-examines it. This
-        set spent an unknown period exempting `_fetch_instances_for_node`, which has never
-        existed anywhere under app/.
+        An exemption for a missing function relaxes nothing while reading as though it does,
+        so nobody re-examines it.
         """
         defined = set()
         for path in self.SERVICES.glob("*.py"):
@@ -1059,15 +1017,14 @@ class ServiceLayerMustNotSwallowUnreachableTests(unittest.TestCase):
 class UnreachableIsNotTheSameAsErroringTests(unittest.TestCase):
     """A node that erred mid-listing must not be reported as a node that is down.
 
-    Reproduced live: deleting a network while another request listed them raised
-    "Network not found", the helper treated any exception as unreachability, and a healthy
-    node came back with zero networks and a banner saying it could not be reached. The
-    forced-refresh path made this easy to hit, because it lists for real on every click
-    instead of serving cache.
+    Deleting a network while another request lists them raises "Network not found". A
+    helper that treats any exception as unreachability shows a healthy node with zero
+    networks and a banner saying it could not be reached; the forced-refresh path lists for
+    real on every click, so this is easy to hit.
 
-    So the two conditions get two answers. No client means unreachable and must raise, and
-    must pass through the generic handler untouched. Anything else that goes wrong while
-    listing is partial data: log it, return what was collected, do not condemn the node.
+    No client means unreachable: raise, and pass through the generic handler untouched.
+    Anything else that goes wrong while listing is partial data: log it, return what was
+    collected, do not condemn the node.
     """
 
     HELPERS = [
@@ -1088,11 +1045,10 @@ class UnreachableIsNotTheSameAsErroringTests(unittest.TestCase):
     def test_the_raise_is_not_swallowed_by_the_helper_s_own_broad_handler(self):
         """Presence of both strings is not the property; reaching the caller is.
 
-        Six of these helpers raised the right type and caught it in an inner per-item
-        handler, while their own outer `except Exception` turned the raise straight back
-        into an empty list. Every substring the previous version of this test looked for
-        was present the whole time, so a breaker-tripped cluster reported "this node has
-        nothing" on six endpoints and was never named in unreachable_nodes.
+        A helper can raise the right type and catch it in an inner per-item handler while
+        its own outer `except Exception` turns the raise back into an empty list. A
+        substring check passes on that, while a breaker-tripped cluster reports "this node
+        has nothing" and is never named in unreachable_nodes.
         """
         offenders = [
             f"{filename}:{lineno} raises {CONNECTION_ERROR} inside a try whose own broad "
@@ -1110,8 +1066,8 @@ class UnreachableIsNotTheSameAsErroringTests(unittest.TestCase):
         self.assertGreaterEqual(len(self.HELPERS), 9)
 
     def test_a_listing_error_does_not_re_raise(self):
-        """The generic handler must not re-raise: that is what turned a transient item
-        failure into 'this whole node is down'."""
+        """The generic handler must not re-raise: that turns a transient item failure into
+        'this whole node is down'."""
         offenders = []
         for filename in self.HELPERS + ["networks.py"]:
             tree = ast.parse((ROUTERS / filename).read_text())
@@ -1133,10 +1089,9 @@ class NeverQueriedNodesAreNamedTests(unittest.TestCase):
     """A fan-out asks connection_manager.get_node_names(), which is only the nodes holding a
     live client. Everything Vault has registered beyond that is never queried at all, so a
     handler that fills unreachable_nodes from failed tasks alone reports an empty fleet as a
-    healthy one. networks.py shipped without this seeding while nine sibling routers had it,
-    and no test could see the difference because each router was only ever read on its own."""
+    healthy one."""
 
-    # two idioms subtract from the same scoped fleet: the wrappers subtract the nodes they
+    # Two idioms subtract from the same scoped fleet: the wrappers subtract the nodes they
     # asked, instances/vms subtract the nodes that answered. Match the shared prefix so a
     # router with no seeding at all still fails.
     SEED = "set(lxd_service.get_node_names()) - set("
@@ -1144,12 +1099,9 @@ class NeverQueriedNodesAreNamedTests(unittest.TestCase):
     # A router that reads exactly one caller-named host has no fleet to under-report: the only
     # node in scope is the one that was asked for, and it is named directly when its client is
     # absent. Seeding from get_node_names() there would invent unreachable nodes the caller
-    # never asked about. Listed rather than pattern-matched so a genuine fan-out cannot join by
-    # accident, and each entry carries why.
-    #
-    # note: empty since GET /snapshots became a fan-out. The test below is written so an empty
-    # set still asserts something, because a list of exemptions that has run dry is otherwise
-    # indistinguishable from a test that was quietly disabled.
+    # never asked about. Listed rather than pattern-matched so a fan-out cannot join by
+    # accident, and each entry carries why. The set may be empty; the test below still
+    # asserts something then, so an empty list cannot pass for a disabled test.
     SINGLE_HOST_READS: set = set()
 
     def _routers_reporting_unreachable(self):
@@ -1165,8 +1117,7 @@ class NeverQueriedNodesAreNamedTests(unittest.TestCase):
 
         Stated as a two-way rule so it keeps working while the exempt set is empty: a router may
         answer with the single-host literal only if it is exempt, and an exempt router must use
-        it. Written the other way round, an empty set would make this pass while asserting
-        nothing, which is the failure mode the exemption list itself was meant to avoid.
+        it.
         """
         for filename in sorted(self.SINGLE_HOST_READS):
             source = (ROUTERS / filename).read_text()
@@ -1264,17 +1215,16 @@ class CachedPayloadsWrittenBeforeTheFieldStillParseTests(unittest.TestCase):
             [],
             "a cached payload written before this field existed would fail to parse",
         )
-        # a scan over nothing passes for the wrong reason. 11: the IPAM wrapper moved its
-        # declaration into the shared FanoutReachability base, which is itself scanned.
+        # A scan over nothing passes for the wrong reason. The shared FanoutReachability base
+        # is scanned like any other model.
         self.assertGreaterEqual(checked, 11)
 
 
 class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
     """The prewarm writes the payload the endpoint later serves, so any field the endpoint sets
-    must be set here too. Leaving unreachable_nodes to its model default wrote an empty list into
-    the cache, and every unforced read reported a healthy fleet while fourteen clusters were down.
-    The forced path was correct throughout, which is why the endpoint tests all passed. The same
-    shape mismatch previously made GET /nodes answer 500 for a whole TTL."""
+    must be set here too. Left to its model default, unreachable_nodes caches an empty list and
+    every unforced read reports a healthy fleet while clusters are down, even though the forced
+    path and every endpoint test stay correct."""
 
     def _models_declaring(self, field):
         source = (ROUTERS.parent / "models" / "schemas.py").read_text()
@@ -1313,17 +1263,15 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
             "a prewarm builds this model without unreachable_nodes, so the cached payload "
             "reports a healthy fleet and the banner never appears on an unforced read",
         )
-        # a scan over nothing passes for the wrong reason
-        # note: 1 since the instances prewarm went; its key was never read by GET /instances.
+        # A scan over nothing passes for the wrong reason.
         self.assertGreaterEqual(constructed, 1)
 
     def test_a_prewarm_refuses_to_write_a_fan_out_nobody_answered(self):
         """The endpoint guard is worthless if the collector reinstates the outage.
 
-        instances.py and vms.py both refuse to cache a fan-out where no cluster answered.
-        The collector writes those exact keys 30s later and had no such refusal, so the
-        guard closed the front door while the prewarm walked in the back. The signal is a
-        fetcher returning None, which the caller's existing `if data:` already honours.
+        vms.py refuses to cache a fan-out where no cluster answered, and the collector
+        writes the same key, so it needs the same refusal. The signal is a fetcher
+        returning None, which the caller's `if data:` honours.
         """
         collector = ROUTERS.parent / "services" / "metrics_prewarm.py"
         tree = ast.parse(collector.read_text())
@@ -1360,9 +1308,8 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
     def test_every_prewarm_states_the_ttl_its_endpoint_uses(self):
         """A single hardcoded TTL in the helper is a second, invisible cache policy.
 
-        It was 180 for all four, against endpoints using 30, 180, 120 and 60, so the
-        instances list survived six times longer than GET /instances intends. The TTL is
-        the endpoint's decision and belongs at the call site.
+        The TTL is the endpoint's decision and belongs at the call site, so a prewarmed
+        entry lives exactly as long as its endpoint intends.
         """
         collector = ROUTERS.parent / "services" / "metrics_prewarm.py"
         tree = ast.parse(collector.read_text())
@@ -1391,13 +1338,10 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
                     ttl, ast.Name, "the helper must pass its ttl argument through, not a literal"
                 )
 
-        # (cache-key prefix -> the ttl its handler uses). Sources, all cache.set calls:
-        # routers/vms.py list_vms, routers/regions.py build_regions_overview.
-        # note: no instances:list. That prewarm wrote a key GET /instances never reads.
-        # note: no storage_pool_resources and no nodes:availability. Both are warmed through
-        # their own handler or resolver, which writes the entry with its own TTL and fence.
-        # note: no regions:overview either since 2026-11-04: it is served stale-while-revalidate
-        # and warmed through build_regions_overview, which stores its own envelope.
+        # (cache-key prefix -> the ttl its handler uses), from the cache.set in
+        # routers/vms.py list_vms. Storage pool resources, node availability and the regions
+        # overview are warmed through their own handler, resolver or builder, which writes
+        # the entry with its own TTL, fence or envelope, so they are not listed here.
         expected = {
             "vms:list": 180,
         }
@@ -1411,8 +1355,8 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
             if not (isinstance(key_arg, ast.Call) and key_arg.args):
                 continue
             # A key may be a literal or one of the versioned constants in app.core.cache
-            # (RESOURCE_SCHEMA_VERSION), which is how a prewarm stays pinned to the key its
-            # endpoint actually writes when that key gains a schema version.
+            # (RESOURCE_SCHEMA_VERSION), which keeps a prewarm pinned to the key its endpoint
+            # writes when that key gains a schema version.
             key_node = key_arg.args[0]
             if isinstance(key_node, ast.Constant):
                 key = key_node.value
@@ -1425,8 +1369,7 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
             else:
                 continue
             # As with the key above, a TTL may be a literal or a constant in app.core.cache.
-            # A shared constant is the stronger form: it makes the endpoint and the prewarm
-            # impossible to drift apart, where two matching literals only happen to agree.
+            # A shared constant keeps the endpoint and the prewarm from drifting apart.
             ttl_node = next((kw.value for kw in call.keywords if kw.arg == "ttl"), None)
             if isinstance(ttl_node, ast.Constant):
                 ttl = ttl_node.value
@@ -1443,8 +1386,6 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    # note: this used to sit a third of the way up the file, above eight of the ten test
-    # classes, so a direct run collected only FreshBypassTests and reported success for
-    # about twenty tests it never saw. pytest collects the whole file either way, which is
-    # why CI stayed honest. Bottom of the file, as the other fourteen suites have it.
+    # Kept at the bottom of the file: placed higher, a direct run would collect only the
+    # test classes above it. pytest collects the whole file either way.
     unittest.main()

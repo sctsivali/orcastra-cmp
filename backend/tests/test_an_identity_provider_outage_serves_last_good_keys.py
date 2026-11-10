@@ -1,9 +1,8 @@
 """An identity provider outage does not sign users out, block a worker, or answer with a 500.
 
-Seen live on 2026-10-14: auth.orca.id answered 502 to about one HTTP/1.1 request in three and then
-nothing at all for three hours. The JWKS refresh ran on a blocking client inside the async request
-path, held no further attempts back, and let the failure escape as a plain-text 500 while the
-keys fetched an hour earlier were still in memory and would have verified the token.
+The JWKS refresh is async and never raises. While the identity provider is down, keys fetched
+earlier keep verifying tokens up to auth_jwks_max_stale, further fetch attempts are spaced out,
+and past that the answer is a structured 503 with Retry-After.
 """
 
 import asyncio
@@ -182,7 +181,7 @@ def test_no_keys_and_no_idp_is_a_503_not_a_500(clock) -> None:
 
 
 def test_the_identity_503_survives_the_production_handler() -> None:
-    """The client keys on the code; main.py used to flatten every 503 dict into a string."""
+    """The client keys on the error code, so the app's handler must keep the 503 dict intact."""
     from app.main import app
 
     request = Request({

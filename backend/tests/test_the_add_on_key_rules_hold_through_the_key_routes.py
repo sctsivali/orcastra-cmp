@@ -101,7 +101,7 @@ def unchanged(keys: Dict[str, Any], *, deletes: bool = True) -> None:
     assert vault.store[_FakeVault._path(ADDON, "metadata")]["capabilities"] == ["inventory.read", "lxd.proxy"]
 
 
-# note: grant edits
+# Grant edits.
 
 @pytest.mark.parametrize("who", list(USERS))
 @pytest.mark.parametrize("route, payload", [
@@ -179,7 +179,7 @@ async def test_a_malformed_edit_body_is_422_and_writes_nothing(
     assert keys["vault"].writes == [] and keys["reached"] == [] and keys["log"].calls == []
 
 
-# note: delete
+# Delete.
 
 class _Down:
     statements: List[Any] = []
@@ -188,7 +188,7 @@ class _Down:
         raise ConnectionError("database is down: postgresql://user:pw@db/app")
 
 
-# note: claim_unreadable holds the organization tables and no installations table, so the ownership
+# claim_unreadable holds the organization tables and no installations table, so the ownership
 # read answers (nothing owned) and the claim read is the one that fails. ownership_unreadable fails
 # the first read, which is the ownership check.
 DELETES = [
@@ -242,7 +242,7 @@ async def test_delete_spellings_of_a_claimed_add_on_credential(keys: Dict[str, A
     unchanged(keys)
 
 
-# note: the other methods, the kill switch, and who may call
+# Other methods, the kill switch, and who may call.
 
 METHODS = [("GET", "", 200), ("PUT", "", 405), ("PATCH", "", 405), ("POST", "", 405),
            *[(m, "/capabilities", 405) for m in ("GET", "POST", "PATCH", "DELETE")],

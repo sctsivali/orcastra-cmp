@@ -1,10 +1,9 @@
 """A console whose instance powers down closes with 1012, so the browser comes back after a restart.
 
-Measured 2026-10-30 on LXD 5.21 (qa-console-desktop on blitzkrieg): after a restart, LXD kept the
-serial console's websocket open and answering pings, but the new boot went to a new QEMU process.
-The page said "Connected" over a console that never printed again. Every restart path (the API,
-a forced restart, `reboot` inside the guest) emits instance-shutdown or instance-stopped as the
-old process goes; the relay ends on that event.
+On LXD 5.21, after a restart LXD keeps the serial console's websocket open and answering pings, but
+the new boot goes to a new QEMU process, so the page would say "Connected" over a console that
+never prints again. Every restart path (the API, a forced restart, `reboot` inside the guest) emits
+instance-shutdown or instance-stopped as the outgoing process exits; the relay ends on that event.
 """
 
 import asyncio

@@ -1,17 +1,15 @@
 """The value a read resolves must be the value everything downstream uses.
 
-This is the shape the audit kept finding, in four more places after the first pass:
-
-* `InstanceWrapper` never carried `location`, so every single-instance read reported the cluster
-  member as None while the list payload, which reads the LXD response directly, had it right.
-* `delete_vm` resolved which project it deleted from and returned a bare `True`, so the router
-  stamped the tags, the webhook, the upstream event and the audit row with the project the caller
-  had ASKED for. A caller that named none had all four written against "default", naming a project
-  the deletion never touched.
-* A rebuild job is driven by an unreferenced task, so a restart loses the driver while the row
-  stays mid-flight forever.
-* The events stream forwarded any frame it could not attribute to an instance, so a tenant on a
-  shared cluster received their neighbours' storage, image and project operations.
+* `InstanceWrapper` carries `location`, so a single-instance read reports the cluster member as
+  the list payload, which reads the LXD response directly, does.
+* `delete_vm` returns the project it deleted from, and the router stamps the tags, the webhook,
+  the upstream event and the audit row with it. Stamping the requested project instead would
+  write "default" for a caller that named none, a project the deletion never touched.
+* A rebuild job is driven by an unreferenced task, so a restart can lose the driver while the row
+  stays mid-flight; a recovery sweep claims only rows no worker can still be driving.
+* The events stream drops, for a tenant, any frame it cannot attribute to an instance, so a
+  tenant on a shared cluster does not receive its neighbours' storage, image and project
+  operations.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -33,7 +31,7 @@ def test_the_instance_wrapper_carries_the_cluster_member():
 
 
 def test_a_wrapper_without_a_location_is_none_rather_than_missing():
-    """A standalone host reports no location, which must read as None, not raise."""
+    """A standalone host reports no location, which must read as None instead of raising."""
     from app.services.lxd.utils import InstanceWrapper
 
     wrapped = InstanceWrapper({"name": "ct-a", "status": "Running"}, object(), "default")
@@ -42,7 +40,7 @@ def test_a_wrapper_without_a_location_is_none_rather_than_missing():
 
 @pytest.mark.asyncio
 async def test_delete_returns_the_project_it_actually_deleted_from(monkeypatch):
-    """The router stamps four side effects with this. A bare True made them all say "default"."""
+    """The router stamps four side effects with this; a bare True would put them on "default"."""
     from app.services.lxd import instance as instance_module
     from app.services.lxd.instance import InstanceManager
 
@@ -65,8 +63,8 @@ async def test_delete_returns_the_project_it_actually_deleted_from(monkeypatch):
 async def test_the_delete_wait_runs_off_the_event_loop_and_outlasts_the_pooled_read(monkeypatch):
     """The pooled client reads for 8 seconds; tearing down a root disk takes longer.
 
-    The read died first, the ReadTimeout became an LXDOperationError and the caller was answered
-    500 for a delete LXD had completed. Same rule as stop and restart beside it.
+    Waiting on the pooled client would turn its ReadTimeout into an LXDOperationError and answer
+    500 for a delete LXD completed. Stop and restart follow the same rule.
     """
     from app.services.lxd import instance as instance_module
     from app.services.lxd.instance import InstanceManager, _DELETE_WAIT_SECONDS
@@ -109,9 +107,9 @@ def test_the_rebuild_recovery_sweep_only_claims_what_no_worker_can_be_driving():
 
 
 def test_the_events_stream_drops_a_frame_it_cannot_attribute_for_a_tenant(monkeypatch):
-    """A frame naming no instance was forwarded to everyone, including tenants who share a cluster.
+    """A frame naming no instance must not reach a tenant who shares the cluster.
 
-    Asserted against the real predicates rather than a copy of them, so the test moves if they do.
+    Asserted against the real source rather than a copy of the predicates, so it moves with them.
     """
     import inspect
 

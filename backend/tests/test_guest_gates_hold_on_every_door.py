@@ -2,17 +2,11 @@
 The guest gates hold whatever spelling, family, method or value a key sends, on every door.
 
 Each case sends one request through the real route (tests/_guest_gate_doors.py) and asserts the
-status, the capability the refusal names, the audit record the gate leaves and whether anything
-reached the cluster. Covered here:
-
-- V1: a guest path (exec, console, files, backups, exec output, image export and secret) is refused
-  for its path before its body is read, so an odd-cased body is 403 plus a record, and an odd-cased
-  migration body is 400 plus a record.
-- decision 13 and round 1d: public truthy on POST /1.0/images, for every source type, and on PUT or
-  PATCH of an image, costs instance.files, while public false, null or absent is sent.
-- custom volume backups cost instance.files for every volume type and method (decided with 10).
-- decision 17: storage bucket keys are refused for every key and method, like /certificates, with a
-  refused_for_every_key record since the security review, and /proxy and MCP have no bucket operation.
+status, the capability the refusal names, the audit record and whether anything reached the
+cluster. A guest path is refused for its path before its body is read (an odd-cased body 403, an
+odd-cased migration body 400, both recorded); a truthy `public` on an image create or update and a
+custom volume backup cost instance.files; storage bucket keys are refused for every key, like
+/certificates.
 """
 
 from typing import Any, Dict, Optional
@@ -56,9 +50,9 @@ def _sent(seen: Any, method: str) -> None:
     assert seen.refusals == []
 
 
-# note: V1: the path is judged before the body
+# A guest path is judged before its body.
 
-# note: each is (action segment, capability, audit action).
+# Each is (action segment, capability, audit action).
 GUEST_ACTIONS = [("exec", "instance.exec", EXEC_ACTION), ("console", "instance.exec", EXEC_ACTION),
                  ("files", "instance.files", FILES_ACTION), ("backups", "instance.files", FILES_ACTION)]
 GUEST_TEMPLATES = [
@@ -211,7 +205,7 @@ async def test_mcp_refuses_an_odd_source_and_an_exec_with_records(door: Any) -> 
                                    ("capability_not_granted", EXEC_ACTION)]
 
 
-# note: decision 13 and round 1d: a public image costs files
+# A public image costs files.
 
 SOURCES = {
     "instance": {"type": "instance", "name": "web-1"},
@@ -220,7 +214,7 @@ SOURCES = {
     "snapshot": {"type": "snapshot", "name": "web-1/s0"},
     "upper-type": {"type": "INSTANCE", "name": "web-1"},
     "local-fingerprint": {"type": "image", "fingerprint": FP},
-    # note: a trusted catalogue; any other server is refused (test_a_key_cannot_make_the_cluster_fetch_from_anywhere.py)
+    # A trusted catalogue; any other server is refused (test_a_key_cannot_make_the_cluster_fetch_from_anywhere.py).
     "pull": {"type": "image", "mode": "pull", "protocol": "simplestreams", "server": "https://images.lxd.canonical.com",
              "alias": "ubuntu/24.04"},
     "push": {"type": "image", "mode": "push", "fingerprint": FP},
@@ -258,7 +252,7 @@ def test_a_private_image_create_is_sent_for_every_source(door: Any, source: str,
 
 @pytest.mark.parametrize("public", PUBLIC_FALSY, ids=repr)
 def test_a_private_image_from_a_url_is_never_sent(door: Any, public: Any) -> None:
-    """The daemon would fetch any URL a key names (owner decision 2026-11-08)."""
+    """The daemon would fetch any URL a key names."""
     seen = door.raw(NO_GUEST, "POST", "/1.0/images", body=_image_body(SOURCES["url"], public))
     _refused(seen, 403, "pull_source_not_allowed", "pull_source_not_allowed")
 
@@ -316,8 +310,8 @@ def test_a_body_on_a_read_or_delete_is_never_judged(door: Any, method: str, path
     assert "json" not in seen.cluster.session.calls[-1][2] or seen.cluster.session.calls[-1][2]["json"] is None
 
 
-# note: OrcaHub v1.32.0 (orcastra.client-image.js), its private publish, its pull, its alias create and its
-# image delete, with its preset key.
+# OrcaHub's own image writes: its private publish, its pull, its alias create and its image
+# delete, with its preset key.
 ORCAHUB_PUBLISH = {"source": {"type": "snapshot", "name": "web-1/snap-0"},
                    "aliases": [{"name": "mkt/acme/appliance-3f2a", "description": "Appliance"}],
                    "public": False, "compression_algorithm": "gzip"}
@@ -348,7 +342,7 @@ def test_orcahubs_key_cannot_make_its_published_image_public(door: Any, body: Di
              403, "instance.files", "capability_not_granted")
 
 
-# note: custom volume backups cost files
+# Custom volume backups cost files.
 
 VOLUME_TYPES = ["custom", "container", "virtual-machine", "image"]
 BACKUP_TAILS = ["backups", "backups/b0", "backups/b0/export"]
@@ -399,7 +393,7 @@ def test_a_volume_path_that_is_not_a_backup_is_sent(door: Any, method: str, path
     _sent(door.raw(NO_GUEST, method, path, body=body), method)
 
 
-# note: decision 17: bucket keys are refused for every key
+# Bucket keys are refused for every key.
 
 BUCKET_KEY_PATHS = ["keys", "keys/k1", "keys/k1/extra"]
 

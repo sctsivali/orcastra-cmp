@@ -1,10 +1,10 @@
 """A project delete LXD is still doing is settled by an exact read, and never leaks the transport.
 
-Reproduced live on 2026-10-23: a delete sent seconds after the project's last instance went took
-longer than the pooled client's 8 s read. The route answered 400 with
-`HTTPSConnectionPool(host='100.66.12.102', ...) Read timed out`, the project stayed, and the call
-had run on the event loop, freezing the worker for those 8 s. Grants must go only once the
-project is known to be gone, and a follow-up must never take a same-name newcomer's rules.
+A delete sent seconds after the project's last instance went can outlast the pooled client's 8 s
+read. Answered as it comes, that is a 400 carrying `HTTPSConnectionPool(host=..., ...) Read timed
+out` while the project stays, and run on the event loop it freezes the worker for those 8 s.
+Grants must go only once the project is known to be gone, and a ProjectDeleteFollowup row must
+never take a same-name newcomer's rules.
 """
 
 from __future__ import annotations
@@ -168,7 +168,7 @@ class _Service:
 
 def _open_row(fakes, name: str, rule_ids, *, state: str = "pending", lease_seconds: float = -1.0,
               deadline_minutes: float = 10.0, origin: str = "route"):
-    """An open follow-up as an earlier request (or a worker that died) left it."""
+    """An open ProjectDeleteFollowup row as an earlier request (or a worker that died) left it."""
     from app.models.project_delete_models import ProjectDeleteFollowup
 
     now = datetime.now(timezone.utc)
@@ -218,7 +218,7 @@ def test_a_404_that_lands_an_earlier_delete_revokes_only_what_that_delete_captur
     revoked: List[Any] = []
 
     async def forget(_db, held_by=None, **kwargs):
-        # held_by collects the delete event's audience (test_an_addon_hears_only_its_installers_projects).
+        # held_by collects the delete event's audience (test_an_addon_hears_only_its_installers_projects.py).
         revoked.append(kwargs)
         return ""
 
@@ -381,8 +381,8 @@ async def test_a_crash_between_sending_and_the_answer_is_settled_by_another_work
 
 @pytest.mark.asyncio
 async def test_a_row_left_by_a_dead_request_is_claimed_again_after_a_wait(durable) -> None:
-    # Found live: the first pass found the project still there and released the row, which cleared
-    # its lease; a `sending` row was claimable only by an expired lease, so it was never taken again.
+    # A first pass that finds the project still there releases the row, which clears its lease. A
+    # `sending` row is claimable only by an expired lease, so the released row must turn `pending`.
     await project_delete_store.open_intent(
         HOST, "web", rule_ids={11}, origin="route", requester="qa-partner", scope_project=None
     )
@@ -404,8 +404,8 @@ async def test_a_row_left_by_a_dead_request_is_claimed_again_after_a_wait(durabl
 
 @pytest.mark.asyncio
 async def test_a_settled_row_is_announced_once_not_by_every_worker(durable) -> None:
-    # Seen live: settling released the lease, and a second worker's sweep claimed the row and
-    # announced it again 150 ms later.
+    # Settling keeps the lease, or a second worker's sweep would claim the row and announce it
+    # again.
     _open_row(durable, "web", {11})
     (claimed,) = await project_delete_store.claim_due(8)
     await project_delete_store.mark_settled(claimed.id)
@@ -692,8 +692,8 @@ def test_a_delete_that_lands_while_an_earlier_one_is_open_is_announced_as_its_ow
 
 @pytest.mark.asyncio
 async def test_a_long_wait_before_the_project_went_does_not_use_up_its_announcement_retries(durable) -> None:
-    # Seen live: a row probed every 10 s for six minutes carried attempts=39 into the announcement,
-    # where a first failure would have been treated as the twentieth.
+    # A row probed for minutes can carry attempts=39; carried into the announcement, its first
+    # failure would count as one of many.
     _open_row(durable, "web", {11})
     (claimed,) = await project_delete_store.claim_due(8)
     long_waited = replace(claimed, attempts=39)

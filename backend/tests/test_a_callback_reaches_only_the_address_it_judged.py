@@ -1,9 +1,9 @@
 """A request to a stored `app_url` connects to the address it judged, under the boundary it passed.
 
-The lifecycle webhook, the member push and the organization refresh each built a plain httpx
-client from the stored URL, so the name was resolved again at every call: a name that answered a
-public address when it was stored could answer this network's Vault later (RC5 acceptance FU-4,
-2026-11-06). Each carries a credential, so a redirect must not take one anywhere either.
+The lifecycle webhook, the member push and the organization refresh must not build a plain httpx
+client from the stored URL: the name would be resolved again at every call, and a name that
+answered a public address when it was stored could answer this network's Vault later. Each carries
+a credential, so a redirect must not take one anywhere either.
 """
 
 import ast

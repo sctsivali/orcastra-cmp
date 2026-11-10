@@ -1,10 +1,9 @@
 """An Administrator is recognised as one on the add-on routes.
 
-The three extension routers asked `Role.ADMIN.value in user.roles`. AuthenticatedUser.roles holds the
-token's raw "role_*" group names, so that was never true: an Administrator could see and manage add-ons
-only in organizations it belonged to, and the Administrator exception of an owning add-on's rotation
-did not apply. They now ask rbac.is_admin, which maps groups the way require_admin does. The users
-below are built the way core/auth.py builds them from a token.
+AuthenticatedUser.roles holds the token's raw "role_*" group names, so `Role.ADMIN.value in
+user.roles` is never true. The extension routers ask rbac.is_admin, which maps groups the way
+require_admin does; otherwise an Administrator would reach add-ons only in its own organizations.
+The users below are built the way core/auth.py builds them from a token.
 """
 
 import re
@@ -68,7 +67,7 @@ async def test_an_administrator_reaches_an_installation_s_webhooks_outside_its_o
 async def test_the_rotate_route_tells_the_service_who_is_an_administrator(
     monkeypatch: pytest.MonkeyPatch, user: AuthenticatedUser, expected: bool
 ) -> None:
-    # note: what the service does with it is pinned in test_an_add_on_rotation_decides_on_a_locked_row
+    # What the service does with it is pinned in test_an_add_on_rotation_decides_on_a_locked_row.
     seen: Dict[str, Any] = {}
 
     async def _load(_db: Any, _install_id: int, _user: Any) -> tuple:

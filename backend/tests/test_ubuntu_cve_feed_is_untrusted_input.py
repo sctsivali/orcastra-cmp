@@ -362,12 +362,12 @@ def test_an_oversized_record_is_abandoned_while_streaming(public_dns) -> None:
         ))
 
 
-# --- security review 2026-10-29 ------------------------------------------------------------------
+# --- hostile numbers and stamps ---------------------------------------------------------------
 
 
 def test_an_integer_too_large_for_a_float_reads_as_no_score() -> None:
-    """A score of 1e400 written as an integer raised OverflowError past RecordInvalid, which threw
-    the whole record away upstream and failed POST .../check when read back from Redis."""
+    """A score of 1e400 written as an integer overflows a float; it reads as no score instead of
+    discarding the whole record, also when the stored copy is read back from Redis."""
     data = published()
     data["cvss3"] = 10**400
     data["impact"]["baseMetricV3"]["cvssV3"]["baseScore"] = 10**400
@@ -402,7 +402,7 @@ def test_a_stored_state_with_forged_numbers_neither_raises_nor_is_believed(store
     assert asyncio.run(service.check(now=NOW))[CVE]["failures"] == 1
 
 
-# Second security review, 2026-10-29: the low findings on the feed's fetch and schedule.
+# --- schedule, deadline and mirror limits -----------------------------------------------------
 
 
 def test_a_stamp_from_the_future_makes_the_record_due() -> None:

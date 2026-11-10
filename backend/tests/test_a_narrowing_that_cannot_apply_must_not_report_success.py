@@ -1,22 +1,13 @@
-"""Two security actions that reported success while doing nothing when Vault was unreachable.
+"""Two security actions must refuse, not report success, when Vault cannot apply them.
 
-The request path reads an installation's capabilities and clusters from the Vault key, not from
-the database row. So a Vault write that is skipped rather than raised leaves the row saying one
-thing and the credential doing another, with the operator shown the row.
-
-- `_rewrite_key_grant` swallowed a read failure and returned. `rescope_install` then committed the
-  narrower grant while the credential kept the wider one, so a narrowing silently did not happen.
-- `_retire_key` swallowed a read failure and returned. `rotate_install_credential` saves the new
-  key first, so the rotation completed while the superseded credential stayed live to its original
-  expiry, a year by default. Rotation is what an operator does when a credential may have leaked.
-
-Both now raise. That is safe in both cases because the caller commits the row afterwards, so the
-row never diverges: a failed rescope changes nothing, and a failed rotation leaves `api_key_id` on
-the old key while the newly written one is claimed by nothing and reclaimed by the reconcile
-sweep's orphan pass.
-
-Vault sealing itself is a live condition on this deployment rather than a hypothetical, which is
-what makes these reachable.
+The request path reads an installation's grant from the Vault key, not the database row, so a
+skipped Vault write leaves the row the operator sees and the credential disagreeing.
+A swallowed failure in `_rewrite_key_grant` would let `rescope_install` commit a narrower grant
+while the credential keeps the wider one; in `_retire_key`, which `rotate_install_credential` calls
+after saving the new key, it would leave a possibly leaked credential live to its expiry (a year by
+default). Raising is safe: the caller commits the row afterwards, so a failed rescope changes
+nothing and a failed rotation leaves `api_key_id` on the superseded key while the reconcile sweep's
+orphan pass reclaims the new one.
 """
 
 import pytest
@@ -87,7 +78,7 @@ def test_a_rescope_whose_write_fails_also_refuses(monkeypatch) -> None:
 
 def test_a_rescope_that_can_write_does_not_refuse(monkeypatch) -> None:
     """The positive twin. Without it both tests above would pass against a function that always
-    raised, which would break rescope entirely rather than fix it."""
+    raises, which would break rescope entirely."""
     written: list = []
 
     class Working:

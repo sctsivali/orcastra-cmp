@@ -1,10 +1,9 @@
 """`used_by` names nothing outside the caller's project bound, on every list.
 
 On a cluster shared by two organizations a record in the default project (a profile, a
-network, a pool, a volume, an ACL) is used by both organizations' instances. The bound was
-applied to profiles only, by a wrapper the other routers did not have, and the shared filter
-ran inside `if tenant_acl_active():`, which a Partner never enters. The bound now lives in
-the shared filter, ahead of the tenant ACL, and every list calls it for every role.
+network, a pool, a volume, an ACL) is used by both organizations' instances. The bound lives in
+the shared filter, ahead of the tenant ACL, and every list calls it for every role: a call
+inside `if tenant_acl_active():` would never run for a Partner.
 """
 
 import ast
@@ -67,7 +66,7 @@ def test_the_bound_runs_before_the_tenant_acl(bounded, monkeypatch):
 
 
 def test_every_list_filters_used_by_outside_the_tenant_branch():
-    """The mutant that reintroduces the leak: moving the call back under the ACL guard."""
+    """A filter call nested under the tenant ACL guard leaks used_by to a Partner."""
     routers = pathlib.Path(__file__).resolve().parents[1] / "app" / "routers"
     handlers = {
         "networks.py": "list_networks",

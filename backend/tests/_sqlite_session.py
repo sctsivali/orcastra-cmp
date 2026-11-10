@@ -4,8 +4,8 @@ Scripted fakes answer whatever the test author expected a query to return, so a 
 term reads the same as a present one. This runs the handler's own statements against real rows.
 Only tables without Postgres-only column types can be created here (no JSONB, no ARRAY).
 
-note: a Postgres partial unique index is created without its WHERE clause by SQLite, which makes
-it a full unique index. Such indexes are rebuilt below with the same predicate.
+SQLite creates a Postgres partial unique index without its WHERE clause, which makes it a full
+unique index, so such indexes are rebuilt below with the same predicate.
 """
 
 from typing import Any, Iterable, List, Type
@@ -131,10 +131,10 @@ def with_json_tables(db: "AsyncSessionFacade", *models: Type[Any]) -> "AsyncSess
         for column in table.columns:
             if isinstance(column.type, JSONB):
                 column.type = JSON()
-                # note: a JSONB default is a Postgres cast ('{}'::jsonb) SQLite cannot parse.
+                # A JSONB default is a Postgres cast ('{}'::jsonb) SQLite cannot parse.
                 column.server_default = None
             elif column.primary_key and isinstance(column.type, BigInteger):
-                # note: SQLite assigns a row id only to an INTEGER PRIMARY KEY, never a BIGINT one.
+                # SQLite assigns a row id only to an INTEGER PRIMARY KEY, never a BIGINT one.
                 column.type = Integer()
         # A foreign key needs its target in the same metadata; existing tables are skipped below.
         pending.extend(fk.column.table for fk in source.foreign_keys)
@@ -145,7 +145,7 @@ def with_json_tables(db: "AsyncSessionFacade", *models: Type[Any]) -> "AsyncSess
 def installation_rows(db: "AsyncSessionFacade", *claims: tuple) -> "AsyncSessionFacade":
     """The two key columns of extension_installations, one (api_key_id, previous_api_key_id) row each.
 
-    note: the full model has Postgres-only columns (ARRAY, JSONB), so SQLite holds only the columns the
+    The full model has Postgres-only columns (ARRAY, JSONB), so SQLite holds only the columns the
     claim and the current-credential lookups name (services/add_on_credential_edits.py).
     """
     db.sync.execute(text(

@@ -1,14 +1,10 @@
 """The monitoring dashboard must not invent its own status vocabulary.
 
-/monitoring/dashboard used to decide a cluster's state by substring-matching the text of its
-error, and emitted "pending_trust", a value that is in no enum. A host that was simply powered
-off came back labelled a certificate problem, which sends an operator to rotate a certificate on
-a machine that is not answering. models/cluster_status.py was written to end exactly that, and
-/clusters was fixed at the time while this endpoint was left behind.
-
-These tests pin the endpoint to the shared vocabulary, and pin it against the same two failures
-that test_a_dead_cluster_is_not_labelled_pending_trust.py pins for /clusters: a host that never
-answered, and one that answered and refused our certificate.
+Substring-matching the error text would label a powered-off host a certificate problem
+("pending_trust", a value in no enum) and send an operator to rotate a certificate on a machine
+that is not answering. These tests pin /monitoring/dashboard to models/cluster_status.py and to
+the two cases test_a_dead_cluster_is_not_labelled_pending_trust.py pins for /clusters: a host
+that never answered, and one that answered and refused the dashboard's certificate.
 """
 
 import pytest
@@ -26,7 +22,7 @@ ONLINE = "nuc2"
 
 def _nodes():
     return [
-        # never answered: no auth was ever read, and the breaker recorded an offline failure
+        # Never answered: no auth was read, and the breaker recorded an offline failure.
         NodeStatus(
             name=DEAD,
             endpoint="https://dead:8443",
@@ -34,7 +30,7 @@ def _nodes():
             reachable=False,
             error="Cannot connect to LXD endpoint.",
         ),
-        # answered and refused us
+        # Answered and refused the dashboard's certificate.
         NodeStatus(
             name=UNTRUSTED,
             endpoint="https://untrusted:8443",
@@ -42,9 +38,8 @@ def _nodes():
             reachable=True,
             error="Certificate not trusted by hypervisor.",
         ),
-        # note: resources are not decoration here. resources.py only sets connected=True once
-        # it has actually read them, and the dashboard loop skips a connected node that has
-        # none, so a resourceless "online" node would not be a realistic fixture.
+        # resources.py sets connected=True only once it has read resources, and the dashboard
+        # loop skips a connected node that has none, so an online fixture needs them.
         NodeStatus(
             name=ONLINE,
             endpoint="https://nuc2:8443",
@@ -116,7 +111,7 @@ def _by_name(client):
 
 
 def test_every_status_is_a_real_enum_member(client):
-    """The regression that mattered: "pending_trust" is in no enum and must never be emitted."""
+    """"pending_trust" is in no enum and must never be emitted."""
     allowed = {s.value for s in ClusterStatus}
     for name, node in _by_name(client).items():
         assert node["cluster_status"] in allowed, (name, node["cluster_status"])
@@ -131,13 +126,13 @@ def test_a_cluster_that_answered_and_refused_us_is_not_authorized(client):
 
 
 def test_the_two_failures_are_not_the_same_status(client):
-    """The whole point. Before the fix both read pending_trust."""
+    """A dead host and one that refused the certificate need different remedies."""
     nodes = _by_name(client)
     assert nodes[DEAD]["cluster_status"] != nodes[UNTRUSTED]["cluster_status"]
 
 
 def test_only_the_untrusted_cluster_gets_the_trust_hint(client):
-    """The CLI hint on a dead host is what sent operators to the wrong machine."""
+    """A trust hint on a dead host sends an operator to the wrong remedy."""
     nodes = _by_name(client)
     assert "config trust" in nodes[UNTRUSTED]["status_message"]
     assert "config trust" not in nodes[DEAD]["status_message"]
@@ -154,16 +149,16 @@ def test_a_connected_cluster_is_online(client):
 
 
 def test_the_trust_hint_names_the_right_cli_for_an_incus_cluster(client):
-    """resources.py leaves node_type None for exactly the untrusted node, so the hint used to
-    fall back to lxc and told an Incus operator to run a command that does not exist."""
+    """resources.py leaves node_type None for the untrusted node, so the hint takes the family
+    from registration metadata; an lxc fallback names a command Incus does not have."""
     message = _by_name(client)[UNTRUSTED]["status_message"]
     assert "incus config trust add-certificate" in message, message
     assert "lxc config trust" not in message
 
 
 def test_the_trust_hint_is_not_said_twice(client):
-    """derive_status already ends its untrusted message with a generic "Add trust on the
-    cluster.", so appending the concrete command produced that instruction twice in one line."""
+    """derive_status ends its untrusted message with a generic "Add trust on the cluster.", so
+    the concrete command replaces it instead of repeating the instruction."""
     message = _by_name(client)[UNTRUSTED]["status_message"]
     assert message.lower().count("on the cluster") == 1, message
     assert "Add trust on the cluster" not in message, message

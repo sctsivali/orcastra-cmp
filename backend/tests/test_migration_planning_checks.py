@@ -1,6 +1,6 @@
 """Database-backed plan blockers: OrcaHub-billed projects and endpoints held by another job.
 
-note: the OrcaHub checks run against SQLite tables copied with JSON for JSONB, so the join and
+The OrcaHub checks run against SQLite tables copied with JSON for JSONB, so the join and
 every WHERE term are real. The endpoint check reads one MigrationJob row, which is scripted.
 """
 
@@ -190,8 +190,8 @@ async def test_the_endpoint_query_matches_both_keys_on_either_side(
 
 @pytest.mark.parametrize(("phase", "words"), [("source_retained", "still in retention"), ("final_sync", "still running")])
 async def test_a_project_relocation_blocks_every_plan_that_touches_its_projects(phase: str, words: str) -> None:
-    """Security review: the new project holds no lock during retention, so an instance moved out
-    of it would become another job's retained source that the relocation's rollback deletes."""
+    """The new project holds no lock during retention, so an instance moved out of it would
+    become another job's retained source that the relocation's rollback deletes."""
     [blocker] = await active_endpoint_blockers(_OneRow(("job-1", phase, "project")), _request())
 
     assert "project relocation" in blocker["message"] and words in blocker["message"]

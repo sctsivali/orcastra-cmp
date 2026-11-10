@@ -1,9 +1,8 @@
 """A list that names a missing cluster says why, and says it only to who may hear it.
 
-Six of seven rows in the Instances banner read "no reason reported" because only a cluster past
-the inventory wall carried a reason; one the breaker skipped, or that this worker holds no client
-for, carried nothing. The text is an operator diagnosis, so a Tenant gets none of it, and on a
-cluster shared with another organization it must not name what that organization owns.
+A cluster the breaker skipped, or one this worker holds no client for, needs a reason as much as
+one past the inventory wall. The text is an operator diagnosis, so a Tenant gets none of it, and on
+a cluster shared with another organization it must not name what that organization owns.
 """
 
 import ast

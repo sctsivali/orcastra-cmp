@@ -1,17 +1,16 @@
 """A task the cluster finished stays finished, whatever frame arrives next.
 
 The events stream delivers an operation's frames out of order, twice, and from a daemon whose
-clock is not this database's. Two followers can overlap during a hand-over. The one statement
-that absorbs all of that is the monotonic UPDATE: the cluster's verdict (a terminal status with
-a status code of 200 or more, which only a terminal frame writes) is final, `pending` never
-overrides `running`, an older non-terminal frame is a no-op, and a no-op bumps no `seq`, so the
-tailer never re-sends a row nothing happened to. A verdict the dashboard's audit set (no code,
-or an open one) yields to the cluster's terminal frame and never to an open frame, and `lost`
-yields to anything the cluster reports: the scratch-database round trip found a Pending frame,
-a router success and a cluster Failure leaving the row on success.
+clock is not this database's, and two followers can overlap during a hand-over. The monotonic
+UPDATE absorbs all of that: the cluster's verdict (a terminal status with a status code of 200
+or more, which only a terminal frame writes) is final, `pending` never overrides `running`, an
+older non-terminal frame is a no-op, and a no-op bumps no `seq`, so the tailer never re-sends an
+unchanged row. A verdict the dashboard's audit set (no code, or an open one) yields to the
+cluster's terminal frame but never to an open frame, and `lost` yields to anything the cluster
+reports.
 
 These drive `upsert_operation` against a session that records what it compiled and pin the
-text of the statement and the parameters it carried, which is what a hermetic test can prove.
+statement text and the parameters it carried.
 """
 
 from datetime import datetime, timedelta, timezone

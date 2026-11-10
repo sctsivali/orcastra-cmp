@@ -1,19 +1,10 @@
 """The bound on a Partner must not be writable by that Partner.
 
-Found by an adversarial review of the project-scoping work, and confirmed against the code
-before it was fixed.
-
-`get_visible_projects` builds a Partner's allowed project set, on a cluster carrying more than
-one organization, out of `TenantPolicyRule.project_name` rows belonging to their own
-organizations. Those rows are written through `POST /tenant-access/policies`, which is open to
-a Partner and which validated `cluster_id` twice and `project_name` not at all: the field is
-declared `project_name: str = Field(default="*", max_length=255)` with a validator on
-`permissions` only.
-
-So the party the bound constrains was the party that wrote it. A Partner could name another
-organization's project on a cluster their own org legitimately holds, and on the next request
-that project sat inside their bound, which is read AND write on that project's networks, ACLs,
-profiles and instance devices.
+On a cluster carrying more than one organization, `get_visible_projects` builds a Partner's
+allowed project set from `TenantPolicyRule.project_name` rows of their own organizations, and
+`POST /tenant-access/policies` lets a Partner write those rows. Without a check, a Partner could
+name another organization's project and gain read AND write on its networks, ACLs, profiles and
+instance devices.
 
 The guard refuses a rule naming a project the caller cannot already see. `project_is_visible`
 answers True when no bound applies, so this is inert for an Admin and on any single-org
@@ -78,7 +69,7 @@ class TestItDoesNotBiteWhereNoBoundApplies:
 
 
 def test_both_rule_writers_are_guarded():
-    """A ratchet. A third route that writes a rule reopens the escalation."""
+    """A ratchet: every function that builds a rule must call the project guard."""
     import ast
     import pathlib
 

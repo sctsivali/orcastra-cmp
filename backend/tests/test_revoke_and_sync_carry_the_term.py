@@ -1,9 +1,8 @@
 """The revoke is audited, and the policy sync carries the paid term and keeps OrcaHub's expiry current.
 
-revoke-tenant-access wrote no audit record, so a buyer's access disappearing left no trace an
-operator could read. The policy sync took an assignment expiry only when it created the
-assignment, so a later change from OrcaHub never landed, and it stored a naive value in a
-timestamptz column.
+revoke-tenant-access writes an audit record, so an operator can see when a buyer's access ended.
+The policy sync updates the expiry of an existing assignment as well as a new one, and stores it as
+an aware UTC value in the timestamptz column.
 """
 
 from __future__ import annotations

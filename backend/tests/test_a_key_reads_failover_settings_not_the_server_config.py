@@ -1,10 +1,10 @@
 """A marketplace may learn how a cluster recovers from a lost member, and nothing else at /1.0.
 
-OrcaHub discloses to buyers whether a listing survives a host failure. LXD keeps the deciding
-switch, `cluster.healing_threshold`, in the server configuration, which the raw proxy does not
-serve because the same object carries the server certificate, its listen addresses and, before
-LXD 6, `core.trust_password`. GET /integrations/clusters/failover reads it on the server side and
-returns numbers only. These tests hold both halves: the numbers arrive, the rest never does.
+OrcaHub tells buyers whether a listing survives a host failure. LXD keeps the deciding switch,
+`cluster.healing_threshold`, in the server configuration, which the raw proxy does not serve
+because the same object carries the server certificate, its listen addresses and, before LXD 6,
+`core.trust_password`. GET /integrations/clusters/failover reads it server side and returns
+numbers only. These tests check that the numbers arrive and nothing else does.
 """
 
 import inspect
@@ -85,7 +85,7 @@ def test_an_unset_key_on_a_trusted_read_is_lxds_default() -> None:
 
 
 def test_an_untrusted_read_vouches_for_nothing() -> None:
-    """An untrusted answer carries no configuration; its thresholds are unknown, not defaults."""
+    """An untrusted answer carries no configuration, so every threshold is unknown (None)."""
     result = project_failover_config(_raw_root(auth="untrusted"))
     assert result["healing_threshold_seconds"] is None
     assert result["offline_threshold_seconds"] is None

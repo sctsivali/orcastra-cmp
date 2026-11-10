@@ -1,12 +1,10 @@
-"""Decision 19's one-org rule, with decisions 14 and 15, sent through the real POST /integrations/sync.
+"""The one-org rule, with the destination and creator-role rules, via the real POST /integrations/sync.
 
 A push rebinds the creator's personal clusters only when its organizations list names exactly one
 organization and the key claims exactly that one after the push, any source, active or not. The
 claim is organizations.api_key_id, written by the organization upsert, so the cases vary what the
-key held before the push and what the push lists, adds, refuses, re-links or reactivates, and then
-read what the rebind saw. Removes in the same push never unclaim an organization. Decision 15 still
-picks the destination inside the one org, and decision 14 still refuses an Admin or unknown
-creator, after the count.
+key held before the push and what the push lists, adds, refuses, re-links or reactivates. Removes
+in the same push never unclaim an organization.
 
 Every case asserts the status, where each cluster ended up, the share audit, the rebind record,
 the exact rebind warning and how many strict Authentik role reads the rebind made.
@@ -170,7 +168,7 @@ async def run(hub: Dict[str, Any], seeds: Sequence[Tuple[str, Dict[str, Any]]],
               pushes: Sequence[Tuple[Sequence[OrgRef], List[Dict[str, Any]]]], **key_extra: Any) -> AsyncSessionFacade:
     db = sqlite_session(*org_tables())
     if key_extra.get("extension_install_id") is not None:
-        # note: an add-on credential claims only while it is its installation's current key
+        # An add-on credential claims only while it is its installation's current key.
         installation_rows(db, (K_PARTNER, None))
     for name, kw in seeds:
         await seed(db, name, **kw)
@@ -187,7 +185,7 @@ def one(orgs: Sequence[OrgRef], members: List[Dict[str, Any]]) -> List[Tuple[Seq
 
 OWN = one(["own"], [U(C, "own")])
 
-# note: id, seeds, pushes, destination slug, warning. The count is read after the org upsert.
+# Id, seeds, pushes, destination slug, warning. The count is read after the org upsert.
 COUNTS = [
     ("none_before_one_pushed", [], OWN, "own", None),
     ("none_before_two_pushed", [], one(["own", "buyer"], [U(C, "own"), U(F, "buyer")]), None, ("count", 2)),
@@ -296,7 +294,8 @@ async def test_only_the_exact_remove_spelling_removes(hub: Dict[str, Any], actio
     expect(hub, await placed(db), "own", None)
 
 
-# note: decision 14 inside the one-org rule. The count comes first, so two orgs never ask Authentik.
+# The creator-role rule inside the one-org rule: an Admin or unknown creator is refused, and an
+# add-on credential never rebinds. The count comes first, so two orgs never ask Authentik.
 
 D14 = [
     ("partner_one_org", {ROLE_PARTNER}, ["own"], {}, "own", None),
@@ -323,7 +322,7 @@ async def test_decision_14_after_the_count(
     expect(hub, await placed(db), dest, warn)
 
 
-# note: decision 15 inside the one-org rule: named in this push, as partner, in that org, row read back
+# The destination rule inside the one org: named in this push, as partner, in that org, row read back.
 
 D15 = [
     ("named_user_in_the_only_org", [], one(["own"], [U(CO, "own"), U(C, "own", "USER")]), None, ("dest", 0)),
@@ -384,7 +383,7 @@ async def test_the_count_is_per_key(hub: Dict[str, Any]) -> None:
     assert hub["warnings"]() == [WARN["count"].format(k=K_ATTACKER, n=2)]
 
 
-# note: value types and bounds on the organization half of the body
+# Value types and bounds on the organization half of the body.
 
 ORG_FIELDS = ["id", "name", "slug", "description"]
 BAD = [True, 1, 1.5, None, ["x"], {"x": 1}]

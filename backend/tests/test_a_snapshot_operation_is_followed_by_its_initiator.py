@@ -1,9 +1,9 @@
-"""The caller who started a snapshot operation can read how it ended, and nobody else can.
+"""Only the caller who started a snapshot operation can read how it ended.
 
 `GET /operations/{id}` needs the project's single owning organization, and a shared cluster's
-`default` project has none, admin included, so the console never learned that a slow snapshot
-delete had failed there. Each snapshot write now records its initiator, and
-`/instances/{name}/snapshot-operations/{id}` answers that initiator only, on that instance.
+`default` project has none, so not even an Admin could follow a slow snapshot delete there.
+Each snapshot write records its initiator, and `/instances/{name}/snapshot-operations/{id}`
+answers that initiator only, on that instance.
 """
 
 import pytest

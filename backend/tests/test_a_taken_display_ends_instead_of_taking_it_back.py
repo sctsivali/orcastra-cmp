@@ -1,11 +1,10 @@
 """A viewer whose display another viewer took ends with 4409, instead of taking it back in a loop.
 
 QEMU serves one SPICE client per display; a new one takes the display from the last. LXD then
-drops the old viewer's sockets the same way a broken network does, so the old browser saw 1011,
-reconnected, took the display back, and the two viewers traded it every second or two, each turn
-a new LXD operation (measured 2026-10-30 with two tabs on qa-console-desktop). The newest owner
-now marks itself the instance's display before it connects, and a relay whose LXD side ends
-under someone else's mark says so.
+drops the earlier viewer's sockets the same way a broken network does, so a browser told 1011
+reconnects and takes the display back, and two viewers trade it every second or two, each turn a
+new LXD operation. The newest owner marks itself the instance's display before it connects, and
+a relay whose LXD side ends under someone else's mark says so.
 """
 
 import asyncio
@@ -169,7 +168,7 @@ async def test_the_owner_forgets_its_mark_when_it_leaves(cluster):
 
 
 async def test_a_viewer_without_a_display_group_never_claims_a_takeover(cluster):
-    """A channel that opened its own operation (no group) keeps the old ending: 1011."""
+    """A channel that opened its own operation (no group) still ends with 1011."""
     await cluster.store.mark_display("nuc2", "default", "vm-a", "op-someone-else")
     browser = FakeBrowser()
     task = asyncio.create_task(viewer(browser, group=None).run())
@@ -217,7 +216,7 @@ async def test_a_cancelled_relay_stops_its_power_watch(cluster):
 
 
 async def test_the_mark_is_renewed_and_forgotten_in_one_redis_step():
-    """GET then EXPIRE or DEL let a leaving viewer delete a newer viewer's mark in between."""
+    """Separate GET and EXPIRE or DEL calls would let a leaver delete a newer viewer's mark."""
 
     class Client:
         def __init__(self) -> None:

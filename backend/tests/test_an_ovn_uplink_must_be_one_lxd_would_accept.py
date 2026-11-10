@@ -1,13 +1,11 @@
 """An OVN network can only be uplinked to a managed bridge or physical network.
 
-The create form offered every interface the node reported and the API forwarded
-whatever came back, so an operator could pick another OVN network, a macvlan interface or the
-loopback as an OVN uplink. LXD refuses all of those, and the refusal arrived late enough that
-operators saw an instance stuck in Creating with no reason shown.
+LXD refuses another OVN network, a macvlan interface, the loopback or an unmanaged interface as an
+OVN uplink, and its refusal arrives late enough to leave an instance in Creating with no reason
+shown. The API refuses those candidates up front.
 
-The candidate list here is the real inventory of one LXD 6.9 host as captured on 2026-09-09: 23 networks,
-of which 11 are unmanaged, loopback or of a type LXD does not accept. That is the shape the
-partner's dropdown had too.
+The candidate list below is the inventory of one LXD 6.9 host: 19 networks, of which 7 are
+unmanaged, loopback or of a type LXD does not accept.
 """
 
 import pytest
@@ -17,7 +15,7 @@ from pydantic import ValidationError
 from app.routers.networks import NetworkCreateRequest, validate_uplink
 
 
-# Taken from `GET /1.0/networks?recursion=1` on nuc1 (sivali1), LXD 6.9.
+# Taken from `GET /1.0/networks?recursion=1` on an LXD 6.9 host.
 NUC1_NETWORKS = {
     "acmebr0": {"type": "bridge", "managed": True},
     "c2fs-mgmt": {"type": "bridge", "managed": True},
@@ -99,7 +97,7 @@ def test_a_name_that_does_not_exist_is_refused():
 
 
 def test_the_refusal_names_the_uplinks_that_would_work():
-    """A rejection that does not say what to pick instead just moves the guessing."""
+    """A refusal must say which networks would work instead."""
     with pytest.raises(HTTPException) as exc:
         validate_uplink(ovn("lo"), FIELD_NETWORKS)
     assert "br-uplink" in exc.value.detail
@@ -114,7 +112,7 @@ def test_a_node_with_no_usable_uplink_says_so_rather_than_listing_nothing():
 
 
 def test_every_candidate_nuc1_offers_today_is_judged_the_way_lxd_would():
-    """11 of nuc1's 23 networks cannot be an uplink. Each one must be refused."""
+    """7 of the host's 19 networks cannot be an uplink. Each one must be refused."""
     usable, refused = [], []
     for name in NUC1_NETWORKS:
         try:
@@ -161,9 +159,8 @@ class TestRestrictedUplinks:
         assert "restricts uplinks" in exc.value.detail
 
     def test_the_list_is_ignored_when_the_project_is_not_restricted(self):
-        """LXD ignores the whole restricted.* family unless `restricted` is true, and most
-        projects on this fleet set it to false explicitly. Honouring the list regardless
-        would narrow the choice for nearly every project."""
+        """LXD ignores the whole restricted.* family unless `restricted` is true. Many projects
+        set it to false explicitly; honouring the list regardless would narrow their choice."""
         config = {"restricted": "false", "restricted.networks.uplinks": "br-uplink"}
         validate_uplink(ovn("uplink"), FIELD_NETWORKS, config)
 
@@ -178,11 +175,10 @@ class TestRestrictedUplinks:
 
 
 def test_both_write_paths_validate_the_uplink():
-    """A ratchet, because create was guarded and update was not.
+    """Create and update both call validate_uplink.
 
-    `network` is in ALLOWED_NETWORK_CONFIG_KEYS, so PUT /networks/{name} could set an OVN
-    uplink LXD refuses while POST /networks refused the identical value. Guarding only the
-    create left the defect reachable through the other door.
+    `network` is in ALLOWED_NETWORK_CONFIG_KEYS, so PUT /networks/{name} can set an OVN uplink
+    as well as POST /networks. Guarding only one of them leaves the other open.
     """
     import ast
     import pathlib

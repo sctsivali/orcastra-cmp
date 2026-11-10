@@ -1,12 +1,11 @@
 """
 Recorded exec output costs `instance.exec` in both of LXD's log layouts.
 
-LXD before 5.21 wrote a recorded exec's output beside the instance logs, as logs/exec_<uuid>.stdout.
+LXD before 5.21 writes a recorded exec's output beside the instance logs, as logs/exec_<uuid>.stdout.
 LXD 5.21 and later write it under logs/exec-output/<file>, serve the listing at logs/exec-output,
-and allow both only to a can_exec entitlement. The raw proxy's guest gate priced only the old
-layout, so a read key without `instance.exec` listed logs/exec-output and read another caller's
-stdout (`DB_PASSWORD=...` in the probe). Dev's own recorded exec (services/lxd/guest_output.py)
-reads and deletes its output at that path.
+and allow both only to a can_exec entitlement. A gate that priced only one layout would let a read
+key without `instance.exec` list and read another caller's stdout. The dashboard's own recorded
+exec (services/lxd/guest_output.py) reads and deletes its output under logs/exec-output.
 
 Every test drives the real raw_proxy handler or the real gate. The session records the request it
 would have sent, so "refused" means nothing reached the cluster.
@@ -94,7 +93,7 @@ def test_every_exec_output_path_costs_exec(path: str) -> None:
     + ["/1.0/instances/exec-output", "/1.0/instances/exec-output/logs/lxc.log"],
 )
 def test_an_ordinary_log_and_an_instance_named_exec_output_stay_open(path: str) -> None:
-    """Dev's split stays: a monitoring key reads a crash log at `read`."""
+    """A monitoring key reads a crash log at `read`; only exec output costs exec."""
     assert guest_access_capability_for(path) is None
 
 
@@ -152,7 +151,7 @@ def _log_directories_guest_output_reads() -> List[str]:
 
 
 def test_ratchet_the_directory_the_recorded_exec_reads_costs_exec() -> None:
-    """New layout: wherever dev's recorded exec reads its output from, a key pays exec to read it."""
+    """Wherever the dashboard's recorded exec reads its output, a key pays exec to read it."""
     directories = _log_directories_guest_output_reads()
     assert directories, "guest_output.py no longer reads exec output through .logs[...]; update this ratchet"
     for directory in set(directories):

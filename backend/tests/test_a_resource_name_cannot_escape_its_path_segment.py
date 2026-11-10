@@ -1,20 +1,12 @@
 """A resource name in a URL path must not be able to change the request's query.
 
-Found by a security review of this branch, and confirmed end to end against the installed
-uvicorn, pylxd and requests rather than reasoned about:
-
-  1. uvicorn percent-decodes the path AFTER splitting off the query string, so a request for
-     `/networks/br0%3Fproject=orgA?host=nuc1` reaches the handler with
-     `network_name == "br0?project=orgA"` and the route's own `project` parameter still None.
-  2. pylxd's `_APINode.__getitem__` builds the path by f-string concatenation, unquoted.
-  3. `requests` then appends its own params with `&`.
-
-So the URL leaving this process was `/1.0/networks/br0?project=orgA&project=default`, which
-LXD reads as project `orgA`. Every authorization check had already passed for `default`. It
-applied to GET, PUT and DELETE alike, which made it a cross-tenant write, not only a read.
-
-The fix is to encode every user-supplied name that becomes a path segment. These tests pin
-both halves: the encoder, and the fact that no call site skips it.
+uvicorn percent-decodes the path after splitting off the query, so
+`/networks/br0%3Fproject=orgA?host=node1` reaches the handler as
+`network_name == "br0?project=orgA"`. pylxd's `_APINode.__getitem__` concatenates it unquoted and
+`requests` appends its own params with `&`, so unencoded the URL leaving this process is
+`/1.0/networks/br0?project=orgA&project=default`, which LXD reads as project `orgA` after every
+check passed for `default`: a cross-tenant read and write (GET, PUT, DELETE). These tests pin the
+encoder and that no call site skips it.
 """
 
 import ast
@@ -93,14 +85,14 @@ def _offending_subscripts():
             if not isinstance(node, ast.Subscript) or not _is_api_chain(node):
                 continue
             index = node.slice
-            # A literal collection name is written by us, not by a caller.
+            # A literal collection name comes from the code, never from a caller.
             if isinstance(index, ast.Constant) and isinstance(index.value, str):
                 continue
-            # The one dynamic value that is ours: project_scope walks a fixed set of
-            # collection names it chooses itself.
+            # The one dynamic value the code chooses: project_scope walks a fixed set of
+            # collection names.
             if isinstance(index, ast.Name) and index.id == "collection":
                 continue
-            # note: lxd_segment is safe_segment plus a 400 for an empty or dot segment
+            # lxd_segment is safe_segment plus a 400 for an empty or dot segment.
             if (
                 isinstance(index, ast.Call)
                 and isinstance(index.func, ast.Name)
@@ -115,27 +107,24 @@ def _offending_subscripts():
 
 
 def test_no_call_site_puts_a_raw_value_into_an_lxd_path():
-    """A ratchet, because this is a whole-codebase property and the review found it in ten
-    files at once. A new endpoint that indexes a name without safe_segment reopens it."""
+    """A whole-codebase property: a new endpoint that indexes a name without safe_segment
+    reopens the injection."""
     offenders = _offending_subscripts()
     assert offenders == [], "\n".join(offenders)
 
 
 # ── the second way a name reaches the path: pylxd's manager API ────────────────────────────────
 #
-# The ratchet above walks `client.api[...]` subscripts, which is where this codebase builds a
-# path by hand. It is blind to the other route into the same URL. `client.instances.get(name)`
-# looks like an ORM call and is not one:
+# The check above walks `client.api[...]` subscripts, where this codebase builds a path by
+# hand. `client.instances.get(name)` reaches the same URL and looks like an ORM call, but is not:
 #
 #     @classmethod
 #     def get(cls, client, name):
 #         response = client.api[cls._endpoint][name].get()
 #
-# pylxd does the subscripting itself, with the name exactly as handed over. So a manager call
-# carries the identical injection, and the first ratchet reported a clean tree while 31 call
-# sites across 11 files passed an unencoded name. Several were reachable from an unvalidated
-# route parameter: `storage_pools.py` declares `pool_name: str` as a bare Path with no pattern,
-# and the integration proxy takes its instance name from a JSON body.
+# pylxd subscripts the name exactly as handed over, so a manager call carries the same
+# injection. Names reach these calls from route parameters without a pattern and from JSON
+# bodies, ex; the instance name the integration proxy receives.
 
 MANAGER_ATTRS = frozenset(
     {
@@ -173,7 +162,7 @@ def _offending_manager_calls():
             if not node.args:
                 continue
             first = node.args[0]
-            # a literal is written by us, not by a caller
+            # A literal comes from the code, never from a caller.
             if isinstance(first, ast.Constant):
                 continue
             if (

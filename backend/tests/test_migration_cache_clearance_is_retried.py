@@ -1,7 +1,7 @@
-"""A migration's cache clearance is only delivered once the shared cache really cleared.
+"""A migration's cache clearance counts as delivered only once the shared cache cleared.
 
-Projects, project usage and tags were cleared best effort, so during a Redis outage the row was
-marked delivered and those views kept showing the instance on its old cluster for a full TTL.
+Projects, project usage and tags require the shared cache. Cleared best effort, a Redis outage
+would mark the row delivered while those views show the instance on its old cluster for a TTL.
 """
 
 from __future__ import annotations

@@ -1,13 +1,12 @@
-"""Retention runs before the snapshot is taken, and the order is the whole point.
+"""Retention runs before the snapshot is taken.
 
-Prune-after-create means peak occupancy is `keep_last + 1`, and that peak lands at exactly the
-instant a concurrent manual snapshot would be refused by `assert_capacity`. Pruning first means the
-schedule never occupies more than `keep_last`, so the two spare slots stay the operator's at every
-moment rather than most of them.
+Prune-after-create peaks at `keep_last + 1`, at exactly the instant a concurrent manual snapshot
+would be refused by `assert_capacity`. Pruning first keeps the schedule at or under `keep_last`,
+so the spare slots stay the operator's at every moment.
 
-It also decides what a genuinely full instance means. With the prune already done, a capacity
-refusal can only be the operator's OWN snapshots filling the instance, so the refusal names theirs
-instead of the schedule quietly deleting something it does not own to make room.
+It also defines a full instance. With the prune done, a capacity refusal can only be the
+operator's own snapshots filling the instance, so the refusal names them and the schedule never
+deletes a snapshot it does not own to make room.
 """
 
 import asyncio
@@ -39,7 +38,7 @@ def test_the_delete_is_recorded_before_the_create():
 
 
 def test_peak_occupancy_never_exceeds_keep_last():
-    """Fire the same schedule repeatedly and watch the high-water mark, not just the end state."""
+    """Runs the schedule repeatedly and checks the high-water mark as well as the end state."""
     node = FakeInstanceNode(snapshots=ops_rows(12, 3))
     svc = service(FakeClient(node))
     peak = len(node.snapshots)
@@ -55,7 +54,7 @@ def test_peak_occupancy_never_exceeds_keep_last():
 
 def test_a_full_instance_refuses_and_names_the_operators_own_snapshots():
     """Five snapshots an operator took by hand. The schedule has nothing of its own to prune, so
-    the refusal has to be about theirs rather than the schedule deleting one to make room."""
+    it refuses instead of deleting one of theirs to make room."""
     manual = [
         snapshot_row(f"ops-maintenance-{i}-20260909T090000Z", f"2026-09-0{i}T09:00:00Z")
         for i in range(1, 6)
@@ -73,10 +72,9 @@ def test_a_full_instance_refuses_and_names_the_operators_own_snapshots():
 
 
 def test_a_prune_that_fails_does_not_cancel_the_snapshot():
-    """A cleanup failing is not a reason to lose a restore point.
+    """A failed prune does not cost a restore point.
 
-    Every snapshot carries its own `expires_at`, so LXD removes the overshoot without help. Skipping
-    the create to protect the prune would trade the thing that matters for the thing that does not.
+    Every snapshot carries its own `expires_at`, so LXD removes the overshoot without help.
     """
     node = FakeInstanceNode(snapshots=ops_rows(12, 3))
     svc = service(FakeClient(node))
@@ -104,9 +102,9 @@ def test_a_prune_that_fails_does_not_cancel_the_snapshot():
 def test_a_prune_the_daemon_accepts_then_fails_is_not_counted_as_pruned():
     """The delete is accepted (202) and its operation then fails.
 
-    LXD answers the wait of a failed operation with an error-typed body. The wait used to raise on
-    that, which is the only way this loop learned the prune had failed; it now reads the failure
-    back, so the loop has to look at it or the failed prune is audited as a success.
+    LXD answers the wait of a failed operation with an error-typed body. The wait returns that
+    failure instead of raising, so the loop must check it or the failed prune is audited as a
+    success.
     """
     node = FakeInstanceNode(snapshots=ops_rows(12, 3))
     node.operation_status = {"op-delete": "Failure", "*": "Success"}

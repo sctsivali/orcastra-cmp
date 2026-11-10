@@ -1,13 +1,10 @@
 """A powered-off cluster must not read as a certificate problem.
 
-/clusters used to compute `ClusterStatus.ONLINE if connected else NOT_AUTHORIZED`, so every
-unreachable cluster showed as "Pending Trust" on the Clusters page. On the dev fleet that was
-seven clusters at once, each one sending an operator to rotate a certificate on a host that
-was simply not answering. OFFLINE was never emitted by that endpoint at all.
-
-The root cause was upstream of the ternary: connect_with_vault_cert raised the same
-LXDConnectionError for "answered and refused us" and "never answered", so the caller had
-nothing to branch on. These tests pin both halves.
+Reporting every failed connect as NOT_AUTHORIZED ("Pending Trust" on the Clusters page)
+would send an operator to rotate a certificate on a host that is not answering.
+connect_with_vault_cert raises LXDAuthorizationError for "answered and refused us" and
+LXDConnectionError for "never answered", so /clusters can report OFFLINE for the second.
+These tests pin both halves.
 """
 
 import pytest
@@ -105,7 +102,7 @@ def test_a_cluster_that_answered_and_refused_us_is_pending_trust(client):
 
 
 def test_the_two_failures_are_not_the_same_status(client):
-    """The whole point. Before the fix both read not_authorized."""
+    """An unreachable cluster and an untrusted one never share a status."""
     body = client.get("/clusters").json()
     statuses = {c["cluster_id"]: c["status"] for c in body["clusters"]}
     assert statuses[DEAD] != statuses[UNTRUSTED]

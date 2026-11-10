@@ -3,7 +3,7 @@
 A key's activity is its dashboard trail (create, download, delete, with the client each came from)
 and what LXD reported under its certificate. The scope is the key list's: an administrator reads
 everything, an owner reads their keys (also once deleted), a key that predates the owner field
-stays on cluster scope, and nobody reads another owner's key. Use on a cluster is matched by the
+stays on cluster scope, and no owner reads another owner's key. Use on a cluster is matched by the
 certificate fingerprint LXD reports as the requestor, on the key's own cluster.
 """
 

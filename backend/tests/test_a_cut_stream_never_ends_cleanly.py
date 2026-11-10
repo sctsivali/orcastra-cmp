@@ -1,10 +1,10 @@
 """A download that did not finish must not look finished at the HTTP level.
 
-important: raising is not enough here. Every middleware in this app is `BaseHTTPMiddleware`, and on
+Raising is not enough here. Every middleware in this app is `BaseHTTPMiddleware`, and on
 Starlette 1.7 its `_StreamingResponse` sends the terminal chunk when the inner app stops, and only
-then re-raises. A chunked archive therefore ended normally, with its gzip stream cut short, which
-a browser reports as a finished download of a corrupt file. Live on 2026-10-30 with lxd-agent
-killed mid-archive: 44 MB of gzip with no end marker, terminal chunk present.
+then re-raises. A chunked archive cut mid-stream (ex; lxd-agent killed mid-archive) would end
+normally with its gzip stream cut short, which a browser reports as a finished download of a
+corrupt file.
 """
 
 from starlette.applications import Starlette

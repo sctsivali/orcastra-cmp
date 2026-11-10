@@ -1,9 +1,8 @@
 """A caller's roles come from the groups in their own token, on every request.
 
-Roles used to be cached per user in Redis for a minute, ahead of the token's groups. The entries
-were plain JSON, so anyone able to write to Redis could give their own account Admin on REST, on
-the WebSocket ticket mint and at a socket's connect, and a demoted user kept the old role until the
-entry expired. There is no such cache now; these tests plant the old entry and show it is ignored.
+A per-user role cache in Redis would let anyone able to write to Redis grant their own account
+Admin, and would keep a demoted user's old role until the entry expired. These tests plant such an
+entry and show it is ignored.
 """
 
 from app.core.auth import AuthenticatedUser

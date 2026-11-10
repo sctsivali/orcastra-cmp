@@ -1,10 +1,8 @@
 """While Vault is sealed or unreachable, API keys answer 503, never "invalid" and never "none".
 
-Measured on the RC5 acceptance Vault window (2026-11-05, throwaway Vault, sealed): a key that had
-just answered whoami 200 was told 401 "Invalid API key", and the key list answered 200 with zero
-keys, fresh or not. An integration reads the 401 as a revoked credential and an operator reads the
-empty list as every key gone, while /clusters in the same window answered 503 vault_unavailable.
-A 404 from Vault still means the key is not there.
+An integration reads a 401 as a revoked credential and an operator reads an empty key list as
+every key gone, so an outage answers 503 `api_key_store_unavailable`, as /clusters answers
+vault_unavailable. A 404 from Vault still means the key is not there.
 """
 
 from __future__ import annotations
@@ -125,8 +123,8 @@ def test_the_answer_keeps_its_code_through_the_sanitizer() -> None:
 def test_a_malformed_key_id_is_still_not_found() -> None:
     """The client refuses a dot or empty path segment before any request: not an outage.
 
-    Found by the security review of this change: `..` as a key id reached the new 503, so anyone
-    could fake the "Vault is down" answer and an integration with a bad id would retry forever.
+    If `..` as a key id reached the 503, anyone could fake the "Vault is down" answer, and an
+    integration with a bad id would retry forever.
     """
 
     class _Refusing(_Vault):
@@ -139,7 +137,7 @@ def test_a_malformed_key_id_is_still_not_found() -> None:
 
 
 def test_one_unreadable_key_document_does_not_hide_the_rest() -> None:
-    """A 500 on one key's document while Vault answers the LIST is that document, not an outage."""
+    """A 500 on one key's document while Vault answers the LIST skips only that document."""
 
     class _OneBroken(_Vault):
         def vault_read(self, path: str, use_cache: bool = True) -> Dict[str, Any]:

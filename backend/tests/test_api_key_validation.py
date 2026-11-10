@@ -1,19 +1,13 @@
 """
 Security properties of the process-local API key validation cache.
 
-`validate_api_key` used to perform 6 to 7 blocking Vault round trips inline on the event
-loop for every external request. It now offloads them once and caches the validated
-metadata in process memory for a short TTL.
+`validate_api_key` runs its blocking Vault round trips off the event loop and caches the
+validated metadata in process memory for a short TTL. That is only safe if all of these hold:
 
-Caching an authentication decision is only safe if all of these hold, so each is asserted:
-
-  - the cache key covers the secret as well as the id, so a wrong secret can never be served
-    from a cached entry
-  - revocation is immediate, not TTL-delayed, because the eviction hook is wired into the
-    revoke, delete and permission-update paths, and because it publishes a shared tombstone
-    the other uvicorn workers honour (prod runs four of them, each with its own cache)
-  - revoked, inactive and expired states are re-checked on every request, including cache
-    hits, so a key cannot outlive its own metadata
+  - the cache key covers the secret as well as the id, so a wrong secret is never served
+  - revocation is immediate: eviction runs on revoke, delete and permission update, and
+    publishes a tombstone the other uvicorn workers, each with its own cache, honour
+  - revoked, inactive and expired states are re-checked on every request, cache hits included
   - a missing key reports 401, never 404, so the endpoint does not leak which ids exist
   - a degraded Vault produces a bounded 503 rather than a parked worker
 """
@@ -133,11 +127,9 @@ async def test_revocation_is_immediate_not_ttl_delayed(monkeypatch) -> None:
         ({"is_revoked": True}, "revoked"),
         ({"is_active": False}, "inactive"),
         ({"expires_at": "2000-01-01T00:00:00"}, "expired"),
-        # note: the naive case above was the only one covered, which is why nothing caught that
-        # the other notations answered 500 instead of 401. Measured against the deployment before
-        # the fix: the Z and offset forms raised TypeError on the comparison, the malformed one
-        # raised ValueError, and neither had a handler on this path. The empty string skipped the
-        # check entirely and the key was accepted.
+        # Every notation must answer 401: a Z suffix or an offset must not raise TypeError on the
+        # comparison, a malformed value must not raise ValueError, and an empty string must not
+        # skip the check.
         ({"expires_at": "2000-01-01T00:00:00Z"}, "expired, Z suffix"),
         ({"expires_at": "2000-01-01T00:00:00+00:00"}, "expired, explicit offset"),
         ({"expires_at": "2000-01-01T07:00:00+07:00"}, "expired, non-UTC offset"),
@@ -168,7 +160,7 @@ async def test_missing_key_reports_401_not_404(monkeypatch) -> None:
 
 
 async def test_degraded_vault_yields_a_bounded_503(monkeypatch) -> None:
-    """A stalled Vault must not park the worker. Bounded 503 beats an unbounded wait."""
+    """A stalled Vault must not park the worker: validation answers 503 at its timeout."""
     monkeypatch.setattr(integrations, "VALIDATE_KEY_TIMEOUT", 0.5)
 
     def _stalls(key_id: str, key_secret: str) -> Dict[str, Any]:
@@ -187,10 +179,8 @@ async def test_degraded_vault_yields_a_bounded_503(monkeypatch) -> None:
 
 
 def test_revocation_reaches_the_other_workers_not_just_the_one_that_served_it(monkeypatch) -> None:
-    """Regression: the metadata cache is per-process, so a local-only eviction left a revoked
-    key usable on every worker that did not serve the revoke, for the whole TTL. With
-    WEB_CONCURRENCY=4 that is three of four requests continuing to authenticate a key the
-    operator had just killed.
+    """The metadata cache is per-process, so a local-only eviction would leave a revoked key
+    usable for the whole TTL on every worker that did not serve the revoke.
     """
     digest = integrations._api_key_digest(KEY_ID, KEY_SECRET)
     integrations._store_key_metadata(digest, KEY_ID, {"id": KEY_ID, "is_active": True})
@@ -208,7 +198,7 @@ def test_revocation_reaches_the_other_workers_not_just_the_one_that_served_it(mo
 
     monkeypatch.setattr(integrations, "get_cache_manager", lambda: _SharedCache())
 
-    # A different worker revokes the key: it only publishes, it cannot touch our local dict.
+    # A different worker revokes the key: it only publishes, it cannot touch this local dict.
     published[(integrations._REVOKED_NS, KEY_ID)] = True
 
     assert integrations._cached_key_metadata(digest) is None, (
@@ -218,8 +208,8 @@ def test_revocation_reaches_the_other_workers_not_just_the_one_that_served_it(mo
 
 
 def test_a_cache_outage_cannot_break_authentication(monkeypatch) -> None:
-    """The tombstone lookup is a safety net, not a dependency: if the shared cache is down the
-    key must still validate off the local entry rather than every external request failing.
+    """If the shared cache is down, the key must still validate off the local entry instead of
+    every external request failing on the tombstone lookup.
     """
     digest = integrations._api_key_digest(KEY_ID, KEY_SECRET)
     integrations._store_key_metadata(digest, KEY_ID, {"id": KEY_ID, "is_active": True})

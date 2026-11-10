@@ -1,12 +1,10 @@
 """Absence is reported as absence, and a count is counted rather than inferred.
 
-Every section of GET /1.0/resources is optional and varies by LXD version and by host type. A
-page that shows detected facts only fails in a specific way: it must render nothing where the
-node said nothing, never a plausible default and never a row of blanks that reads as a
-detection failure on hardware that plainly has a motherboard.
+Every section of GET /1.0/resources is optional and varies by LXD version and host type. Where
+the node said nothing the profile carries nothing: no plausible default and no row of blanks.
 
-The MicroCloud fold is here too. One NodeStatus row can be an entire cluster, so a singular
-fact folded naively is one member's box wearing the cluster's name.
+One NodeStatus row can be a whole MicroCloud, so the fold keeps a singular fact only when every
+member agrees on it.
 """
 
 from app.models.schemas import HardwareProfile
@@ -39,10 +37,10 @@ def test_the_cpu_walk_counts_cores_and_threads_from_the_topology():
 
 
 def test_cpu_total_is_not_mistaken_for_a_core_count():
-    """The Jetson reports a total and no socket array at all.
+    """The Jetson reports a total and no socket array.
 
-    `cores = cores or total` is the tempting line and it would claim a topology the node never
-    described. Eight logical CPUs is the only fact available, so it is the only one reported.
+    Copying the total into `cores` would claim a topology the node never described, so only the
+    eight logical CPUs are reported.
     """
     cpu = build_hardware_profile(JETSON_ORIN_NX_RESOURCES).cpu
 
@@ -53,7 +51,7 @@ def test_cpu_total_is_not_mistaken_for_a_core_count():
 
 
 def test_a_socket_vendor_is_normalized_but_a_model_name_is_not():
-    """GenuineIntel is a register value, not a name an operator reads. The model is theirs."""
+    """The vendor register value (GenuineIntel) is normalized; the model name is kept."""
     socket = build_hardware_profile(DUAL_SOCKET_HOST_RESOURCES).cpu.sockets[0]
 
     assert socket.vendor == "Intel"
@@ -71,7 +69,7 @@ def test_a_payload_with_no_system_section_still_reports_cpu_and_memory():
 
 
 def test_an_absent_system_section_is_none_rather_than_a_row_of_blanks():
-    """SystemInfo() with eight Nones renders as eight empty rows, which is worse than hiding."""
+    """SystemInfo() with eight Nones would render as eight empty rows."""
     assert build_hardware_profile(NESTED_CONTAINER_RESOURCES).system is None
     assert build_hardware_profile({"system": {}}).system is None
 
@@ -81,10 +79,7 @@ def test_threads_with_no_numa_node_report_zero_nodes():
 
 
 def test_architecture_is_never_defaulted():
-    """routers/regions.py defaults a missing architecture to x86_64. This must not copy it.
-
-    An aarch64 fleet reported as x86_64 is exactly the invented value this page exists without.
-    """
+    """routers/regions.py defaults a missing architecture to x86_64; the profile reports none."""
     payload = {"cpu": {"total": 4}, "memory": {"total": 1}}
     assert build_hardware_profile(payload).cpu.architectures == []
 
@@ -96,23 +91,20 @@ def test_free_memory_is_never_negative():
 
 
 def test_an_empty_body_reports_not_detected():
-    """The UI reads this flag to show nothing rather than a screen of confident zeros."""
+    """The UI reads this flag to show nothing instead of zeros."""
     assert build_hardware_profile(None).detected is False
     assert build_hardware_profile({}).detected is False
 
 
 def test_a_malformed_section_does_not_cost_the_caller_the_whole_profile():
-    """Hardware is decoration on a page whose numbers come from elsewhere."""
+    """A malformed section yields an undetected profile instead of an error."""
     profile = build_hardware_profile({"cpu": "not a dict", "memory": {"total": 1}})
     assert isinstance(profile, HardwareProfile)
     assert profile.detected is False
 
 
 def test_a_spinning_disk_is_not_labelled_a_solid_state_one():
-    """The branch this replaced read `rotational`, a key LXD does not emit.
-
-    It was therefore always False, and every SATA disk in every fleet was reported as an SSD.
-    """
+    """LXD emits no `rotational` key; `rpm` decides between HDD and SSD."""
     assert storage_types_from_disks({"disks": [{"type": "sata", "rpm": 7200}]}) == ["HDD"]
     assert storage_types_from_disks({"disks": [{"type": "sata", "rpm": 0}]}) == ["SATA SSD"]
 
@@ -145,7 +137,7 @@ def test_a_mixed_cluster_reports_no_single_machine():
 
 
 def test_a_homogeneous_cluster_keeps_the_fact_every_member_agrees_on():
-    """The fold is agreement, not blanket suppression. A rack of identical machines says so."""
+    """A fact every member agrees on survives the fold."""
     profiles = [build_hardware_profile(m, member=f"m{i}") for i, m in enumerate(HOMOGENEOUS_MICROCLOUD_MEMBERS)]
     folded = merge_hardware_profiles(profiles)
 
@@ -199,10 +191,9 @@ def test_folding_nothing_reports_not_detected():
     assert merge_hardware_profiles([]).detected is False
     assert merge_hardware_profiles([HardwareProfile(detected=False)]).detected is False
 def test_a_dmi_placeholder_is_treated_as_absent():
-    """A barebones NUC on the live fleet reports "Default string" as its vendor and product.
+    """A barebones board reports "Default string" as its vendor and product.
 
-    That is a real value the machine emits and a useless one, and rendering it as the machine's
-    make and model reads as a broken page rather than as an unprogrammed board.
+    Shown as the make and model it reads as a broken page, so a DMI placeholder counts as absent.
     """
     payload = {
         "system": {

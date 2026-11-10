@@ -1,10 +1,10 @@
 """The fleet size phase reads only what the caller may see, stops on time, and never fails the list.
 
 Sizes come from a second read per snapshot-holding instance, run after the visibility filter.
-Every test here pins one of the ways that phase could regress into the listing it follows: a
-failed size read condemning a cluster, a slow storage driver holding the request past its
-budget, a cap applied silently, a cache that outlives a mutation, or a holder measured for a
-tenant who cannot see it. Each docstring names the ablation that turns it red.
+Each test pins one way that phase could break the listing: a failed size read condemning a
+cluster, a slow storage driver holding the request past its budget, a cap applied silently, a
+cache that outlives a mutation, or a holder measured for a tenant who cannot see it. Each
+docstring names the ablation that turns it red.
 """
 
 import time
@@ -29,8 +29,8 @@ def _reads(client):
 
 
 def _read(svc, path="/snapshots", **kwargs):
-    """One read on a fresh client. Note that _client empties the list cache and the sizes map,
-    so a test about the cache holds one client across its reads."""
+    """One read on a fresh client. _client empties the list cache and the sizes map, so a test
+    about the cache holds one client across its reads."""
     client = _client(svc, **kwargs)
     try:
         return _get(client, path)
@@ -76,7 +76,7 @@ def test_a_size_phase_that_times_out_does_not_mark_the_cluster_unreachable(monke
 
     The budget is shrunk to a fraction of a second and the only holder answers after a full
     second, so the read is started, abandoned, and counted unmeasured while the cluster stays
-    answered. The request must return well inside the old per-cluster budget.
+    answered. The request must return before the abandoned read would have finished.
     """
     from app.services.snapshots import fleet_sizes
 
@@ -143,8 +143,8 @@ def test_the_fleet_holder_cap_yields_partial_with_counts(monkeypatch):
     assert body["size_measurement"] == "partial"
     assert body["measured_instances"] == 1
     assert body["unmeasured_instances"] == 1
-    # Hosts are visited in sorted order, so the budget goes to HOST ("nuc2") before
-    # OTHER_HOST ("pandora"), on every request alike.
+    # Hosts are visited in sorted order, so the budget goes to HOST before OTHER_HOST, on
+    # every request alike.
     assert len(_reads(mine)) == 1
     assert _reads(theirs) == []
 
@@ -311,7 +311,7 @@ def test_a_cached_entry_missing_a_snapshot_name_is_a_miss():
         newer = dict(SNAP, name="ops-probe-20260909T000000Z")
         cluster.api.instances.all_projects_listing[0]["snapshots"].append(dict(newer))
         cluster.node.snapshots_by_instance[(PROJECT, INSTANCE)].append(dict(newer, size=30))
-        # Only the list cache is dropped; the sizes map is deliberately left warm.
+        # Only the list cache is dropped; the sizes map stays warm.
         _drop_list_cache()
 
         body = _get(client)
@@ -342,8 +342,8 @@ def test_no_holder_means_measured_with_zero_counts():
 
 @pytest.mark.parametrize("path", ["/snapshots", f"/snapshots?host={HOST}&project={PROJECT}"])
 def test_the_narrowed_read_shares_the_size_phase(path):
-    """One idea, one implementation: a read naming a cluster and a project measures through
-    the same phase as the fleet-wide one."""
+    """A read naming a cluster and a project measures through the same phase as the fleet-wide
+    one."""
     cluster = _cluster([(PROJECT, INSTANCE)])
 
     body = _read(service(cluster), path)

@@ -1,9 +1,10 @@
 """Two-key enrollment, the owner-key read and an owner key's own removal, through the external routes.
 
-An owner key presents another key's id and secret; when the secret verifies, the key could own the
-organization and its minter is on the organization's side, it joins the owner set. A missing key and a
-wrong secret answer the same sentence, repeated failures lock the (vouching key, new key) pair out, and
-the routes are limited per vouching key and organization. The secret appears in no response, log line or audit record.
+An owner key presents another key's id and secret. The new key joins the owner set when the secret
+verifies, the key could own the organization and its minter is on the organization's side. A missing
+key and a wrong secret answer the same sentence, repeated failures lock the (vouching key, new key) pair
+out, and the routes are rate limited per vouching key and organization. The secret never appears in a
+response, log line or audit record.
 
 Everything here is 404 while INTEGRATION_MULTI_OWNER_ENABLED is off, and validate reports the feature
 only while it is on.
@@ -74,7 +75,7 @@ class _Cache:
 
 @pytest.fixture
 def world(monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any]:
-    # note: the secret hash is keyed by SECRET_KEY, read on every call
+    # The secret hash is keyed by SECRET_KEY, read on every call.
     monkeypatch.setenv("SECRET_KEY", "test-secret-key-for-hmac-only")
     owner_key_enrollment.reset_limits()
     db = sqlite_session(*org_tables())
@@ -82,7 +83,7 @@ def world(monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any]:
                         created_by="system", is_active=True))
     db.sync.commit()
     org_id = db.sync.query(Organization.id).filter(Organization.slug == "acme-cloud").scalar()
-    # note: a partner for longer than a day, so its keys are on the organization's side (party_check)
+    # A partner for longer than a day, so its keys are on the organization's side (party_check).
     db.add(OrganizationMember(organization_id=org_id, user_email=MINTER, role="partner", joined_at=SETTLED))
     db.sync.commit()
     vault = _Vault({})
@@ -243,7 +244,7 @@ async def test_a_key_minted_outside_the_organization_is_refused(world: Dict[str,
     world["vault"].store[_Vault._path(OWNER, "metadata")] = metadata(OWNER, created_by="old-minter@example.test")
     response = await call(world, OWNER, "POST", OWNER_KEYS, enroll())
     assert response.status_code == 403 and response.json()["detail"]["error"] == "new_key_outside_organization"
-    # a key minted by a partner of the organization is on its side once the partner row is a day old
+    # A key minted by a partner of the organization is on its side once the partner row is a day old.
     world["vault"].store[_Vault._path(NEW, "metadata")] = metadata(NEW, created_by=MINTER)
     minter_joined(world, datetime.now(timezone.utc))
     fresh = await call(world, OWNER, "POST", OWNER_KEYS, enroll())
@@ -256,7 +257,7 @@ async def test_a_key_minted_outside_the_organization_is_refused(world: Dict[str,
 async def test_a_minter_who_left_cannot_enroll_a_key_of_its_own(
     world: Dict[str, Any], caplog: pytest.LogCaptureFixture, left: str
 ) -> None:
-    """Both keys are MINTER's, but MINTER no longer runs acme-cloud: having minted the vouching key is not enough.
+    """Both keys are MINTER's, but MINTER has left acme-cloud: having minted the vouching key is not enough.
 
     An owner key writes the organization's members, so a minter who left could also push itself back as a
     partner. Such a row is fresh, and a fresh row does not count for a day.

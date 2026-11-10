@@ -1,29 +1,14 @@
 """
-Regression guard for the resumable-upload staging path.
+The resumable-upload staging path, `append_request_body`.
 
-The uploaders used to do `chunk = await request.body()` and then write it inline:
-
-    chunk = await request.body()
-    new_offset = row.upload_offset + len(chunk)
-    if new_offset > row.total_bytes or new_offset > row.max_bytes:
-        raise HTTPException(status_code=413, ...)
-    with open(row.staging_path, "ab") as f:
-        f.write(chunk)
-
-Two things are wrong with that and both are reachable from one request. The 413 is
-evaluated only after the whole body is already in memory, so it protects the disk but
-never the process; and the append is a sync write on the event loop, repeated per chunk
-for the entire file.
-
-This module asserts the four properties that make both impossible:
+Reading the whole body before the size check protects the disk but not the process, and a sync
+write per chunk blocks the event loop for the entire file. This module asserts:
 
   1. an oversized body is rejected without being fully read
   2. the write does not run on the event loop thread
   3. the loop keeps ticking while a slow write is outstanding
   4. a rejected PATCH leaves the staging file at the offset the caller started from,
      so the DB row and the file cannot disagree
-
-Before the fix, 1, 2 and 4 fail.
 """
 
 import asyncio
@@ -40,10 +25,9 @@ from app.core.upload_stream import append_request_body
 
 
 class FakeRequest:
-    """Minimal stand-in: the helper only ever calls `.stream()`.
+    """Minimal stand-in: the helper only calls `.stream()`.
 
-    Records how many chunks were actually pulled, which is what proves the body is not
-    drained before the size check runs.
+    Counts the chunks pulled, which proves the body is not drained before the size check.
     """
 
     def __init__(self, chunks: List[bytes]) -> None:
@@ -185,22 +169,17 @@ async def test_the_loop_keeps_running_while_a_slow_write_is_outstanding(
     await beat
     ticked = len(ticks) - before
 
-    # A nominal loop ticks ~100x/s; requiring 10x/s leaves room for a busy box while still
-    # failing hard when the loop is parked (pre-fix this is ~0 for the write window).
+    # A nominal loop ticks ~100x/s; requiring 10x/s over the 0.3 s write leaves room for a busy
+    # host and still fails when the loop is blocked.
     assert ticked >= 3, f"event loop starved during the write: only {ticked} ticks"
 
 
 async def test_a_file_longer_than_the_offset_is_healed_not_appended_past(staging) -> None:
-    """The invariant that keeps a resumed upload from silently corrupting.
+    """A resumed upload overwrites stray bytes past the committed offset.
 
-    The session row is the authority on how many bytes are committed. The staging file can
-    legitimately be longer than that: a rollback that could not run leaves the extra bytes
-    behind, and a write whose caller already timed out keeps going in its thread and lands
-    afterwards. Opened "ab" the next chunk would be written past those stray bytes, leaving a
-    gap that no later check catches because expected_sha256 is optional.
-
-    Here the row says 4 bytes are committed while the file holds 4 good bytes plus 6 stray
-    ones. Resuming at 4 must overwrite the strays, not skip past them.
+    The session row is the authority on committed bytes. The file can be longer: a rollback
+    that could not run, or a write whose caller already timed out, leaves extra bytes behind.
+    Appending past them would leave a gap nothing catches, since expected_sha256 is optional.
     """
     with open(staging, "wb") as f:
         f.write(b"HEAD" + b"XXXXXX")
@@ -231,10 +210,8 @@ async def test_a_missing_staging_file_is_recreated_rather_than_crashing(tmp_path
 async def test_a_session_leaves_no_staging_file_until_the_first_write(tmp_path) -> None:
     """No file may exist before there are bytes to put in it.
 
-    The routers used to create an empty staging file before committing the session row. Any
-    failure between the two leaked the file, and nothing reclaims a staging file that has no
-    row: the recovery loop only re-drives imports that are stuck. Two such leaks were found on
-    the dev box. Creating on first write removes the window entirely.
+    Nothing reclaims a staging file without a session row (the recovery loop only re-drives
+    stuck imports), so the file is created on first write and a failure before then leaks none.
     """
     path = str(tmp_path / "not-yet.iso")
     assert not os.path.exists(path)

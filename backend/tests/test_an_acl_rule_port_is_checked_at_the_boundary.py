@@ -1,11 +1,10 @@
 """
 An ACL rule's ports are checked before the daemon sees them.
 
-The dialog passed "Destination port" through untouched and had no source-port field at all,
-so LXD's refusal of a bad port arrived as its raw text through a 500, and a port on an ICMP
-rule (which LXD refuses outright) was only discovered after a round trip. The rule LXD applies
-(a port, a comma list, or a low-high range, 1..65535, only with tcp or udp) is applied here on
-create and on update, with the direction, rule number and field named.
+The rule LXD applies (a port, a comma list, or a low-high range, 1..65535, only with tcp or
+udp) is applied here on create and on update, and a violation is a 422 naming the direction,
+rule number and field. Otherwise a bad port, or any port on an ICMP rule, would come back as
+the daemon's raw text through a 500 after a round trip.
 """
 
 from types import SimpleNamespace

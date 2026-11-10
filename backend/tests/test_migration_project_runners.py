@@ -141,8 +141,8 @@ async def test_a_refused_transfer_aborts_and_undoes_only_what_the_job_created(mo
 async def test_a_target_start_the_daemon_refuses_aborts_instead_of_retrying(monkeypatch: pytest.MonkeyPatch) -> None:
     """LXD accepts the start, then its start validation fails (ex; a MAC already on that member).
 
-    The target never ran, so this is an abort: found live, where treating it as unknown made
-    reconciliation start it again on every backoff while the fenced source stayed down.
+    The target never ran, so this is an abort. Treated as unknown, reconciliation would start it
+    again on every backoff while the fenced source stays down.
     """
     source, target = _source(), _target()
     target.fail_async.add(("start", "web-1"))
@@ -273,7 +273,7 @@ async def test_workloads_move_to_a_member_one_at_a_time(monkeypatch: pytest.Monk
     assert job.phase == "completed"
     assert {row["location"] for row in cluster.instances.values()} == {"m2"}
     assert cluster.instances[("web", "web-1")]["status"] == "Running"
-    # Rolling: web-1 is stopped, moved, and started before nothing else is touched.
+    # Rolling: web-1 is stopped, moved, then started.
     web_calls = [call for call in cluster.calls if call[1] == "web-1"]
     assert web_calls == [("stop", "web-1"), ("relocate", "web-1"), ("start", "web-1")]
     assert calls["updates"][-1]["status"] == "success"
@@ -297,8 +297,8 @@ async def test_a_failed_member_move_puts_every_workload_back(monkeypatch: pytest
 
 
 async def test_a_resume_after_the_autostart_fence_still_matches_the_approved_contract(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Found live: the retention transaction failed after activation had fenced autostart, and
-    the resumed job then read the fenced source as a changed definition."""
+    """The retention transaction fails after activation fenced autostart; the resumed job must
+    not read the fenced source as a changed definition."""
     source, target = _source(), _target()
     install(monkeypatch)
     job, resources, request = plan(source, target, source_project="web", target_project="web")
@@ -326,8 +326,8 @@ async def test_a_resume_after_the_autostart_fence_still_matches_the_approved_con
 
 @pytest.mark.parametrize("runner", ["rollback", "finalize"])
 async def test_a_teardown_is_refused_while_another_job_holds_the_project(monkeypatch: pytest.MonkeyPatch, runner: str) -> None:
-    """Security review: an instance moved out of the new project during retention is another
-    job's retained source, and the relocation's rollback must not delete it."""
+    """An instance moved out of the new project during retention is another job's retained
+    source, and the relocation's rollback must not delete it."""
     source, target = _source(), _target()
     job, _resources, calls = await _relocate(monkeypatch, source, target)
     calls["fence_conflict"].append("Another migration (abcd1234) holds a lock in project 'web'. Finish it first.")
@@ -344,8 +344,8 @@ async def test_a_teardown_is_refused_while_another_job_holds_the_project(monkeyp
 
 
 async def test_a_project_on_the_default_profiles_finalizes_without_touching_them(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Security review: without its own profiles a project lists, and would write, the default
-    project's profiles. Neither the drift check nor the delete may count or touch them."""
+    """Without its own profiles a project lists, and would write, the default project's
+    profiles. Neither the drift check nor the delete may count or touch them."""
     source, target = FakeCluster("cluster-a"), _target()
     source.add_project("web", {"features.images": "false", "features.profiles": "false", "limits.instances": "10"})
     source.profiles[("default", "shared")] = {"name": "shared", "description": "", "config": {}, "devices": {}}
@@ -387,8 +387,8 @@ async def test_a_resumed_finalize_still_knows_the_base_images(monkeypatch: pytes
 
 
 async def test_finalize_that_finds_drift_after_a_delete_stops_in_manual_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Security review pass 3: after this run deleted a source, going back to retention would
-    offer a rollback that cannot restore it."""
+    """After this run deleted a source, going back to retention would offer a rollback that
+    cannot restore it."""
     source, target = _source(), _target()
     job, _resources, calls = await _relocate(monkeypatch, source, target)
     job.phase, job.status = "cleaning_up", "running"

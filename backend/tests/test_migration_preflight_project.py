@@ -253,7 +253,7 @@ def test_cached_images_are_not_carried_and_only_warned(monkeypatch: pytest.Monke
 
 
 def test_an_alias_less_base_image_is_disposable_but_a_named_one_is_not(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Found live: LXD keeps the image an instance was created from without the cached flag."""
+    """LXD keeps the image an instance was created from without the cached flag."""
     instance = _instance("web-1", **{"volatile.base_image": "base1"})
     base = {"fingerprint": "base1", "cached": False, "aliases": []}
     source, target = _patch(monkeypatch, resources=_resources([instance], images=[base]))

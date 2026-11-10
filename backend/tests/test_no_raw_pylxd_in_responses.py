@@ -1,18 +1,12 @@
-"""Regression guard: a handler must not return a raw pylxd object.
+"""Guard: a handler must not return a raw pylxd object.
 
 pylxd returns dict subclasses (`model.AttributeDict`) and slot-based models. Pydantic recognises
-neither, and the failure happens while FastAPI renders the response, AFTER the handler has
+neither, and the failure happens while FastAPI renders the response, after the handler has
 returned, so the handler's own try/except never catches it. The caller gets a bare 500 and the
 log carries `PydanticSerializationError: Unable to serialize unknown type`.
 
-Found live on `GET /networks/{name}/state`, which returned `network.state()` directly and 500'd
-for an authorized partner on a healthy cluster. `routers/storage_pools.py:27` already carried a
-single-purpose serialiser for `StorageResources` with a comment describing the same failure, so
-this was the second sibling to hit it and the reason for a shared `jsonable_lxd`.
-
-The rule: the result of a pylxd accessor that returns a model must not flow straight into a
-returned dict literal. Wrap it in `jsonable_lxd` (services/lxd/utils.py) or build the shape
-explicitly.
+The rule: a local assigned from a pylxd accessor that returns a model must not reach a returned
+expression unless it passes through a serialiser such as `jsonable_lxd` (services/lxd/utils.py).
 """
 
 import ast
@@ -33,16 +27,15 @@ def _offenders(tree: ast.AST) -> List[int]:
         if not isinstance(node, ast.Return) or node.value is None:
             continue
         for sub in ast.walk(node.value):
-            # a bare `something.state()` sitting inside the returned expression
+            # A bare `something.state()` inside the returned expression.
             if (
                 isinstance(sub, ast.Call)
                 and isinstance(sub.func, ast.Attribute)
                 and sub.func.attr in MODEL_ACCESSORS
             ):
                 found.append(node.lineno)
-        # `state = x.state()` then `return {"state": state}` is the shape that actually shipped,
-        # so also flag a returned Name that was assigned from a model accessor in the same
-        # function. Handled by the caller below, which has the function scope.
+        # `state = x.state()` then `return {"state": state}` needs the function scope, so the
+        # test below flags a returned Name assigned from a model accessor in the same function.
     return found
 
 

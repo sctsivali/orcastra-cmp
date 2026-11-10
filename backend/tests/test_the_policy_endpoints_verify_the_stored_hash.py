@@ -1,24 +1,12 @@
-"""The two policy endpoints authenticated against a hash they could never compute.
+"""The two policy endpoints authenticate through the shared API key dependency.
 
-`generate_api_key_pair` stores HMAC-SHA256(SECRET_KEY, secret). `verify_api_key_secret` recomputes
-it the same way, and every endpoint reached through `validate_api_key` used it.
+`generate_api_key_pair` stores HMAC-SHA256(SECRET_KEY, secret) and `verify_api_key_secret`
+recomputes it the same way. A handler that compares a plain SHA-256 of the presented secret with
+that stored hash can never match, so it answers 401 to every caller, and an inline check also
+skips the expiry check and the cross-worker revocation tombstone that `validate_api_key` performs.
 
-`POST /integrations/external/sync-policies` and `GET /integrations/external/policies` did not.
-Both re-implemented authentication inline and compared a *plain* SHA-256 of the presented secret
-against that stored HMAC:
-
-    computed_hash = hashlib.sha256(api_key_secret.encode()).hexdigest()
-    if not hmac.compare_digest(computed_hash, stored_hash):
-        raise HTTPException(status_code=401, detail="Invalid API key secret")
-
-A keyed hash and an unkeyed one over the same input do not collide, so the comparison could not
-succeed for any key this system has ever issued. Both endpoints answered 401 to every caller,
-OrcaHub included. The hand-rolled block also skipped the expiry check and the cross-worker
-revocation tombstone that `validate_api_key` performs.
-
-The first test is the ablation: it demonstrates the arithmetic that made the old code unusable,
-and it passes against both the old and the new tree because it tests the hashing, not the
-handler. The rest pin that the handlers no longer carry a private copy of authentication.
+`POST /integrations/external/sync-policies` and `GET /integrations/external/policies` take their
+key from that dependency, and no handler hashes a presented secret itself.
 """
 
 import ast
@@ -52,7 +40,7 @@ def _secret_key():
 
 
 def test_a_plain_sha256_can_never_match_an_issued_key() -> None:
-    """Why the old comparison was not merely wrong but unreachable."""
+    """A plain SHA-256 of the secret never equals the stored keyed hash."""
     import hashlib
 
     _key_id, key_secret, stored_hash = generate_api_key_pair()
@@ -69,7 +57,7 @@ def test_a_plain_sha256_can_never_match_an_issued_key() -> None:
     "handler", [sync_policies_from_external, get_policies_for_external]
 )
 def test_the_handler_takes_its_key_from_the_shared_dependency(handler) -> None:
-    """Not a header it parses itself: that is how the private copy drifted out of date."""
+    """The key comes from the shared dependency, never from headers the handler parses itself."""
     parameters = inspect.signature(handler).parameters
     assert "api_key" in parameters, f"{handler.__name__} does not take a validated key"
 
@@ -86,10 +74,9 @@ def test_the_handler_takes_its_key_from_the_shared_dependency(handler) -> None:
 
 
 def test_no_handler_hashes_a_presented_secret_by_hand() -> None:
-    """The whole class of defect, not just the two instances of it.
+    """verify_api_key_secret is the only place a presented secret may be hashed.
 
-    verify_api_key_secret is the only place a presented secret may be hashed. A second copy is
-    how these two endpoints ended up on a scheme the issuer never used.
+    A second copy can drift onto a scheme the issuer never used.
     """
     tree = ast.parse(ROUTER_SOURCE)
     offenders = []

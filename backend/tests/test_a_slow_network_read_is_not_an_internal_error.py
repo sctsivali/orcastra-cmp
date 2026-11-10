@@ -1,10 +1,10 @@
-"""A network state read against a slow cluster is a 504, not a broken dashboard.
+"""A network state read against a slow cluster answers 504 and never 500.
 
-Found live: `GET /networks/lxdbr0/state?host=nuc2` answered 500 while nuc2 was merely slow, and
-`main.py` replaces a 500's body with an opaque reference, so the operator got an id and no
-reason. The same taxonomy the member resource read already uses applies here.
+`main.py` replaces a 500's body with an opaque reference, so a slow cluster answered as 500
+gives the operator an id and no reason. The network routes use the same taxonomy as the member
+resource read.
 
-The fakes raise the shape production actually produces. `connection.py` mounts `Retry(read=0)`,
+The fakes raise the shape production produces. `connection.py` mounts `Retry(read=0)`,
 urllib3 treats that 0 as a counter rather than as False, and requests maps the result to a
 plain ConnectionError, so `isinstance(exc, ReadTimeout)` never fires on the pooled path.
 """
@@ -51,12 +51,11 @@ class _Networks:
 
 
 class _ApiNode:
-    """The raw-API shape the network routes address now.
+    """The raw-API shape the network routes address.
 
-    They used to reach the daemon through `client.networks.get(name)`; naming a project means
-    addressing `client.api.networks[name]` instead, so the failure this file is about is raised
-    from there. The transport error itself is unchanged, which is the point: a timeout is still
-    a timeout however the path is built.
+    Naming a project means addressing `client.api.networks[name]` rather than
+    `client.networks.get(name)`, so the failure is raised from there. The transport error is
+    the same however the path is built.
     """
 
     def __init__(self, exc: Exception) -> None:

@@ -1,20 +1,16 @@
 """A grant of one project must not reach a resource that no project contains.
 
-`projects: ["tenant-a"]` is enforced by binding the request to that project, which is a real
-boundary for instances, images, volumes and snapshots. It is not a boundary for a resource whose
-identity IS a project name, nor for one that lives above projects entirely.
+`projects: ["tenant-a"]` is enforced by binding the request to that project, which bounds
+instances, images, volumes and snapshots. It does not bound a resource whose identity is a
+project name, nor one that lives above projects entirely.
 
-Both proxy doors authorised only the AMBIENT project and then took the target from elsewhere. On
-the operation proxy the target is `params["name"]`, so `delete_project` with `project: "tenant-a"`
-and `params: {"name": "tenant-b"}` passed the cluster check, the project check and the admin level
-check, and then destroyed another tenant's project. On the raw proxy the target is in the path, so
-`DELETE /1.0/projects/tenant-b` carrying `project=tenant-a` did the same thing. A storage pool is
-worse in kind: it is cluster-wide and its definition carries a source path on the LXD host, which
-runs as root.
-
-The operation-proxy half was newly reachable, because those six operations previously answered
-"Unknown operation". The raw-proxy half predates this and is closed here because it is the same
-rule through a different door, and fixing one while leaving the other is not a fix.
+Authorising only the ambient project fails when the target comes from elsewhere. On the operation
+proxy the target is `params["name"]`, so `delete_project` with `project: "tenant-a"` and
+`params: {"name": "tenant-b"}` would pass the cluster, project and admin-level checks and destroy
+another tenant's project. On the raw proxy the target is in the path, as in
+`DELETE /1.0/projects/tenant-b` carrying `project=tenant-a`. A storage pool is cluster-wide and
+its definition carries a source path on the LXD host, which runs as root. Both proxies apply the
+same rule.
 """
 
 import ast
@@ -39,7 +35,7 @@ NARROW = ["tenant-a"]
 WILDCARD = ["*"]
 
 
-# ── the raw proxy door ─────────────────────────────────────────────────────────────────────
+# ── The raw proxy door ─────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -64,7 +60,7 @@ def test_a_narrow_grant_cannot_change_what_no_project_contains(path: str, method
 
 @pytest.mark.parametrize("path", ["/1.0/projects/tenant-b", "/1.0/storage-pools/default"])
 def test_a_wildcard_grant_still_reaches_them(path: str) -> None:
-    """`*` means every project on the cluster, so it was never bounded by one."""
+    """`*` means every project on the cluster, so no single project bounds it."""
     assert_project_scope_allows_path(path, "DELETE", WILDCARD)
 
 
@@ -72,16 +68,16 @@ def test_a_wildcard_grant_still_reaches_them(path: str) -> None:
 def test_reading_topology_is_still_allowed(path: str) -> None:
     """Refusing GET would break integrations that legitimately enumerate the cluster.
 
-    Disclosure is a smaller harm than destruction and the trade is deliberate, so a read stays
-    open for every grant. The operation proxy narrows its own `list_projects` result, which the
-    raw proxy cannot do without rewriting LXD's response.
+    Disclosure is a smaller harm than destruction, so a read stays open for every grant. The
+    operation proxy narrows its own `list_projects` result, which the raw proxy cannot do without
+    rewriting LXD's response.
     """
     assert_project_scope_allows_path(path, "GET", NARROW)
 
 
-# note: the narrow-key write rule is an allowlist now, so a lookalike such as
-# `/storage-pools-not-really` is refused like any resource outside it, and the prefix-boundary
-# case (`/instances-archive`) lives in test_project_limited_keys_are_bounded.py.
+# The narrow-key write rule is an allowlist, so a lookalike such as `/storage-pools-not-really`
+# is refused like any resource outside it. The prefix-boundary case (`/instances-archive`) lives
+# in test_project_limited_keys_are_bounded.py.
 @pytest.mark.parametrize(
     "path", ["/1.0/instances/web-1", "/1.0/images/abc", "/1.0/operations/abc"]
 )
@@ -98,7 +94,7 @@ def test_an_absent_projects_field_is_treated_as_narrow() -> None:
         assert_project_scope_allows_path("/1.0/projects/other", "DELETE", None)
 
 
-# ── the operation proxy door ───────────────────────────────────────────────────────────────
+# ── The operation proxy door ───────────────────────────────────────────────────────────────
 
 
 def test_every_unboundable_operation_is_declared_cluster_wide() -> None:
@@ -121,7 +117,7 @@ def test_every_unboundable_operation_is_declared_cluster_wide() -> None:
 
 
 def test_the_operation_handler_enforces_the_cluster_wide_rule() -> None:
-    """Structural: the set existing is not the same as the handler consulting it."""
+    """Structural: `proxy_operation` consults the cluster-wide set and the unrestricted check."""
     tree = ast.parse(ROUTER.read_text())
     handler = next(
         node
@@ -153,7 +149,7 @@ def test_the_raw_proxy_handler_enforces_the_same_rule() -> None:
 
 
 def test_every_cluster_wide_operation_costs_admin() -> None:
-    """Belt and braces: the project rule is not the only thing standing in front of these."""
+    """Cluster-wide operations also cost `admin`, so the project rule is not their only guard."""
     cheap = {
         operation: PROXY_OPERATION_LEVELS[operation]
         for operation in CLUSTER_WIDE_OPERATIONS

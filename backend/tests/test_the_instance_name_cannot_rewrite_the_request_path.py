@@ -1,20 +1,14 @@
 """A path parameter must not be able to change which resource the request addresses.
 
 pylxd builds every URL by string concatenation with no escaping (`_APINode.__getitem__` at
-pylxd/client.py:189-202). The snapshot routes put TWO caller-controlled segments into one path:
+pylxd/client.py:189-202). The snapshot routes put two caller-controlled segments into one path:
 
     /1.0/instances/{instance_name}/snapshots/{snapshot_name}
 
-`snapshot_name` is validated. `instance_name` was not, and it comes FIRST, so a `?` or `#` in it
-truncates everything after it into the query string or the fragment. The daemon then sees
-
-    DELETE /1.0/instances/{instance_name}
-
-which is an instance delete, not a snapshot delete. FastAPI hands the handler the percent-decoded
-value, so `%3F` on the wire arrives as a literal `?` here.
-
-The same hazard exists on the read and restore paths, where it silently answers about a different
-resource instead of the one that was asked for.
+`instance_name` comes first, so a `?` or `#` in it pushes everything after it into the query
+string or the fragment, and the daemon sees `DELETE /1.0/instances/{instance_name}`: an instance
+delete. FastAPI hands the handler the percent-decoded value, so `%3F` on the wire arrives as a
+literal `?`. On the read and restore paths the same truncation answers about a different resource.
 """
 
 from urllib.parse import quote, urlsplit
@@ -53,13 +47,13 @@ def _client(svc) -> TestClient:
 
 
 def _built_path(instance_name: str, snapshot_name: str) -> str:
-    """The path the daemon would actually receive, given pylxd's unescaped concatenation."""
+    """The path the daemon would receive, given pylxd's unescaped concatenation."""
     url = f"https://fake:8443/1.0/instances/{instance_name}/snapshots/{snapshot_name}"
     return urlsplit(url).path
 
 
 def test_the_truncation_is_real_before_asserting_the_guard():
-    """Proves the hazard exists, so the guard below is not testing a straw man."""
+    """The hazard exists, so the guard tests below are meaningful."""
     assert _built_path("ct-victim?x=", "ops-x") == "/1.0/instances/ct-victim", (
         "a '?' in the instance name must be shown to truncate the path, or this file proves nothing"
     )
@@ -82,7 +76,7 @@ def test_delete_refuses_an_instance_name_that_could_rewrite_the_path(hostile):
 
 @pytest.mark.parametrize("hostile", PATH_TRUNCATING)
 def test_the_read_path_refuses_it_too(hostile):
-    """A truncated GET answers about the instance instead of its snapshots, which is a silent lie."""
+    """A truncated GET would answer about the instance instead of its snapshots."""
     node = FakeInstanceNode()
     client = _client(service(FakeClient(node)))
     response = client.get(

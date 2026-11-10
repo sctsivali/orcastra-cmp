@@ -4,7 +4,7 @@ A key grant, a snapshot schedule, a migration plan and a running migration job e
 fingerprint they were approved against, so a re-registered cluster of the same name does not
 inherit them. A Let's Encrypt renewal changes that fingerprint without changing the registration,
 so each of them accepts a fingerprint in the cluster's renewal lineage, and still refuses anything
-else. A self-signed cluster has no lineage: its rule did not change.
+else. A self-signed cluster has no lineage, so a changed fingerprint still ends each of them.
 """
 
 import asyncio
@@ -155,7 +155,7 @@ def _planner(monkeypatch, manager, *, pinning_on=True):
 
 @pytest.mark.asyncio
 async def test_a_plan_records_a_missing_pin_before_refusing(monkeypatch) -> None:
-    """The reported failure: Hetzner had never been pinned, so every plan was refused."""
+    """A cluster that was never pinned is pinned on demand instead of refusing every plan."""
     manager = _Manager({}, pin_on_refresh={"hetzner": RENEWED})
     service_ = _planner(monkeypatch, manager)
     assert await service_._fingerprints(_request()) == (NEW, NEW)

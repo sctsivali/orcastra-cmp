@@ -1,8 +1,8 @@
 """An integration key's secret is rotated in place: same key id, new secret, the old one dead at once.
 
-Rotating by minting a new key left every organization the old key synced refusing the new one
-(a key may only update the orgs it owns), so org and member sync stopped. These run the real
-rotate handler and the real key validation against an in-memory Vault and cache.
+Minting a new key instead would leave every organization the old key synced refusing the new one
+(a key may only update the orgs it owns), stopping org and member sync. These run the real rotate
+handler and the real key validation against an in-memory Vault and cache.
 
 A rotation hands its caller a working secret, unlike a revoke or a delete. So a Partner, the key's
 creator included, rotates it only when every cluster it grants is inside their scope, and one who
@@ -153,7 +153,7 @@ async def test_rotation_keeps_the_id_and_kills_the_old_secret(world) -> None:
 
 async def test_another_workers_cached_copy_of_the_old_secret_is_dropped(world) -> None:
     await _rotate()
-    # another worker still holds the old secret's entry in its own process cache
+    # Another worker still holds the old secret's entry in its own process cache.
     integrations._store_key_metadata(integrations._api_key_digest(KEY, world["old"]), KEY, dict(world["metadata"]))
     assert not await _valid(world["old"]), "the shared tombstone must override a stale local hit"
 
@@ -248,14 +248,14 @@ def test_the_raw_backfill_never_writes_over_a_rotation(world, monkeypatch) -> No
 
 
 def test_the_raw_backfill_still_fills_the_hash_it_verified(world, monkeypatch) -> None:
-    """The guard narrows the backfill, it does not remove it."""
+    """The guard narrows the backfill without removing it."""
     old_hash = world["vault"].docs[f"{BASE}/secret"]["hash"]
     world["vault"].docs[f"{BASE}/secret"] = {"hash": old_hash}
     _legacy_validation(world, monkeypatch, old_hash)
     assert world["vault"].docs[f"{BASE}/secret"] == {"hash": old_hash, "raw": world["old"]}
 
 
-# note: the callback URL. Any /sync caller holding the key's secret sets app_url, and the OrcaHub
+# The callback URL. Any /sync caller holding the key's secret sets app_url, and the OrcaHub
 # callbacks send the raw secret there, so a URL planted with a leaked secret would receive the new one.
 
 ATTACKER = "https://collector.example.test"
@@ -281,8 +281,8 @@ async def test_a_callback_url_planted_with_the_old_secret_never_receives_the_new
 async def test_a_url_set_while_the_secret_is_written_never_receives_the_new_one(world, monkeypatch) -> None:
     """A write that lands meanwhile carries the old secret's tag, so no callback uses it.
 
-    note: the sync's own write cannot land here (it takes the key's lock and checks its secret,
-    see test_a_callback_url_belongs_to_the_secret_that_set_it). This is the last layer: the binding.
+    The sync's own write cannot land here (it takes the key's lock and checks its secret, see
+    test_a_callback_url_belongs_to_the_secret_that_set_it.py); this pins the last layer, the binding.
     """
     from app.models.db_models import Organization as Org
     from app.services import orcahub_sync
@@ -320,7 +320,7 @@ async def test_a_key_without_a_callback_url_is_rotated_without_touching_its_meta
     assert _rotations(world)[0]["details"]["callback_url_cleared"] is False
 
 
-# note: who may rotate. Managing a key needs its side (_authorize_api_key), and a rotation hands
+# Who may rotate. Managing a key needs its side (_authorize_api_key), and a rotation hands
 # over a working secret, so a Partner who did not mint the key is also held to the key's reach.
 
 @pytest.fixture
@@ -439,10 +439,10 @@ async def test_the_creator_and_an_admin_rotate_without_the_mint_check(world, par
         org_scope._allowed_clusters_var.reset(token)
 
 
-# note: a key that owns organizations is rotated only by a current partner of its home organization.
+# A key that owns organizations is rotated only by a current partner of its home organization.
 # Minting it is a fact about the past: a partner who left the organization still matches created_by,
-# and so do the buyer organizations provisioning created with the minter as created_by. Nor does a
-# partner row in a buyer organization count: OrcaHub makes every buyer's founder a partner of it.
+# and so do the buyer organizations provisioning created with the minter as created_by. A partner row
+# in a buyer organization does not count either: OrcaHub makes every buyer's founder a partner of it.
 
 FOUNDER = AuthenticatedUser(user_id="f", email="founder@example.test", groups=["role_partner"])
 
@@ -451,10 +451,10 @@ async def _seller_with_buyers(*, minter_partners: Any = None, home_partners: tup
     """The seller's home (1) and two buyers provisioning made (2, 3) on KEY, all bound to c1.
 
     The successor runs the seller and registered c1 there, so the sales prove which organization is the
-    key's home; each buyer is stamped with the key's minter as created_by, and OrcaHub made the founder
-    of buyer 2 a partner of it. `minter_partners` adds a partner row for the minter: "home" for one who
-    still runs the seller, "buyer" for one who left it and then bought from it, so that buyer 3 is
-    theirs. `home_partners` adds other partners of the seller.
+    key's home. Each buyer carries the key's minter as created_by, and the founder of buyer 2 is its
+    partner. `minter_partners` adds a partner row for the minter: "home" for one who still runs the
+    seller, "buyer" for one who left it and then bought from it (buyer 3). `home_partners` adds other
+    partners of the seller.
     """
     from app.models.db_models import Organization as Org, OrganizationCluster, OrganizationMember
 
@@ -513,11 +513,11 @@ async def test_the_creator_who_is_a_partner_of_an_owned_organization_rotates(wor
 async def test_before_its_first_sale_only_an_administrator_rotates_a_key_that_owns_organizations(
     world, partner_scope
 ) -> None:
-    """The creator runs the seller's organization, but nobody has bought through the key yet.
+    """The creator runs the seller's organization, but no sale has gone through the key yet.
 
-    Only a sale proves which organization is the key's home. "Not sold yet" cannot be told apart from
-    a sale whose bindings were deleted since, which once let a buyer left alone on the key inherit it,
-    so until then the rotation is an administrator's, and the refusal says so.
+    Only a sale proves which organization is the key's home, and "not sold yet" cannot be told apart
+    from a sale whose bindings were deleted since, so until then only an administrator rotates the
+    key, and the refusal says so.
     """
     from app.core import org_scope
 
@@ -566,9 +566,9 @@ async def test_a_minter_who_left_the_seller_cannot_rotate_through_the_buyers_it_
 ) -> None:
     """Provisioning stamps a buyer organization with the key's minter as created_by.
 
-    That kept the minter "running" the buyer and kept its cluster in their scope (org_scope counts
-    created_by), so after their partner row in the seller was removed they still rotated the
-    seller's owner key and took a working secret for every organization it owns.
+    That keeps the buyer's cluster in the minter's scope (org_scope counts created_by), but once
+    their partner row in the seller is removed it must not let them rotate the seller's owner key and
+    take a working secret for every organization it owns.
     """
     from app.core import org_scope
     from app.models.db_models import Organization as Org, OrganizationCluster, OrganizationMember
@@ -604,8 +604,8 @@ async def test_a_minter_who_left_the_seller_cannot_rotate_through_the_buyers_it_
 async def test_a_minter_who_left_and_bought_from_the_seller_cannot_rotate_its_key(world, monkeypatch) -> None:
     """The departed minter's own buyer organization carries the seller's key and their partner row.
 
-    That row used to count, and the creator skips the side rule, so they took a working secret for
-    every organization the key owns and cut off the seller's live connection.
+    That row does not count. The creator skips the side rule, so counting it would hand them a working
+    secret for every organization the key owns and cut off the seller's live connection.
     """
     monkeypatch.setattr(integrations, "_authorize_api_key", REAL_AUTHORIZE)
     _stored(world, created_by=OWNER.email)
@@ -642,9 +642,9 @@ async def test_a_buyer_that_is_the_oldest_synced_organization_lends_nothing_once
     Only the proof of a sale names the home (cluster_parties.home_partner_keys), and the buyer's
     binding is one provisioning made, so the minter who left and partners that buyer gets nothing.
 
-    The buyer holds no live access rule on c1, so since 2026-10-27 its provisioning binding no longer
-    puts c1 in the founder's scope at all (org_scope._query_owned_clusters): the key is out of reach
-    and reads as not found, one step earlier than the 403 this used to stop at.
+    The buyer holds no live access rule on c1, so its provisioning binding does not put c1 in the
+    caller's scope at all (org_scope._query_owned_clusters): the key is out of reach and reads as
+    not found, before the home-organization check.
     """
     from app.models.db_models import Organization as Org, OrganizationCluster, OrganizationMember
 
@@ -708,7 +708,7 @@ async def test_ownership_that_cannot_be_read_rotates_nothing(world, partner_scop
     assert world["vault"].writes == []
 
 
-# note: the organizations the key owns stay with it, which is the reason rotation exists
+# The organizations the key owns stay with it; that is why rotation keeps the key id.
 
 async def test_rotation_keeps_the_id_and_the_organizations_it_owns(world) -> None:
     db = with_json_tables(sqlite_session(*org_tables()), TenantAccessPolicy, TenantPolicyRule)
@@ -726,7 +726,7 @@ async def test_rotation_keeps_the_id_and_the_organizations_it_owns(world) -> Non
     assert (org.api_key_id, org.name) == (KEY, "Own Renamed")
 
 
-# note: the route's own gates
+# The route's own gates
 
 def _route(user: AuthenticatedUser) -> TestClient:
     from app.core.database import get_db
@@ -736,7 +736,7 @@ def _route(user: AuthenticatedUser) -> TestClient:
     app.include_router(integrations.router)
     app.dependency_overrides[get_current_user] = lambda: user
     app.dependency_overrides[integrations.org_scope_dependency] = lambda: None
-    # note: the rotation takes the key's lock on the request's database session
+    # The rotation takes the key's lock on the request's database session.
     app.dependency_overrides[get_db] = lambda: _orgs()
     return TestClient(app, raise_server_exceptions=False)
 

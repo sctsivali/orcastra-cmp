@@ -1,8 +1,8 @@
 """The browser fixtures in frontend/e2e speak the backend's real plan, job and settings contract.
 
 The golden file is generated from the production presenters and planner helpers, never written
-by hand, so a backend contract change fails here instead of leaving the synthetic browser suite
-green against a shape the server no longer sends. After an intended change, regenerate it:
+by hand, so a backend contract change fails here instead of leaving the browser suite green
+against a shape the server does not send. After an intended change, regenerate it:
 
     UPDATE_MIGRATION_E2E_CONTRACT=1 python -m pytest tests/test_migration_e2e_contract.py
 """

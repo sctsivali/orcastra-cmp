@@ -1,16 +1,14 @@
-"""A Tenant sees a reference only when it names an instance the Tenant may see (owner, 2026-11-05).
+"""A Tenant sees a reference only when it names an instance the Tenant may see.
 
-The audit at cb4f981a (backlog A1-A7) found one predicate behind several leaks:
-`tenant_can_view_lxd_reference` parsed a reference that names no instance (a profile, a network,
-an ACL, a custom volume, an image) to (project, None), and `check_tenant_permission` then passed it
-on ANY rule in that project. A Tenant granted one instance in a project it shares with another
-party therefore read that party's profiles, ACL bodies and volumes, and a project list carried
-the whole project inventory plus its config. Live on 2026-11-05 the QA tenant's `/projects`
-named an instance its policy does not grant (`qa-rc5-c2`) and the project's `features.*` config.
+A reference that names no instance (a profile, a network, an ACL, a custom volume, an image)
+parses to (project, None), which `check_tenant_permission` would pass on any rule in that
+project. A Tenant granted one instance in a project it shares with another party would then read
+that party's profiles, ACL bodies and volumes, and a project list would carry the whole project
+inventory plus its config.
 
-Owner decision 2026-11-05: strict. A Tenant keeps instance references only; a record reached
-only through a profile or a network disappears from its view. Partners and Admins (no ACL) keep
-every reference, held to the Partner project bound as before.
+A Tenant keeps instance references only; a record reached only through a profile or a network
+disappears from its view. Partners and Admins (no ACL) keep every reference, still held to the
+Partner project bound.
 """
 
 from app.core import org_scope
@@ -24,8 +22,8 @@ from app.models.schemas import ProjectInfo
 from app.routers.networks import NetworkInfo
 
 HOST = "cluster-a"
-# One rule on one instance in project p, the shape the QA fixture has: the Tenant shares p with
-# another party's instance, profile, ACL and volume.
+# One rule on one instance in project p, which the Tenant shares with another party's instance,
+# profile, ACL and volume.
 ACL = {HOST: {("p", "mine"): {"view", "console"}}}
 WIDE = {HOST: {("p", "*"): {"view"}}}
 

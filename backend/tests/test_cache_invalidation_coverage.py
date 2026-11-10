@@ -1,27 +1,18 @@
-"""Regression guard: a mutation must drop the cached list it just made stale.
+"""A mutation must drop the cached list it just made stale.
 
 Every list endpoint caches its response under `<kind>:list:...` in the `api_responses`
 namespace. A handler that mutates the same kind and does not clear it leaves readers on a
-stale list until the TTL expires: 30s for instances and projects, 180s for profiles, storage
-volumes and storage pools.
-
-This was not theoretical. A Playwright run created an instance through the API, waited for it
-to report Running, then loaded /inventory/instances and the page header read
-"All Instances (0 of 23)" while the backend already had 24. `create_instance` was the only
-lifecycle handler in its file that never invalidated; start, stop, restart and delete all did.
-The same asymmetry existed in vms.py, and profiles, storage volumes, storage pools and
-projects invalidated nothing at all.
+stale list until the TTL expires. The failure is silent: the endpoint returns 200 and the
+operator does not see their own change.
 
 The rule enforced here: if a router's list endpoint caches, every mutating handler in that
-router must call an invalidation helper. The check is structural because the failure is
-silent, the endpoint returns 200 and the operator simply does not see their own change.
-
-network_acls.py is absent on purpose. It caches nothing, so it has nothing to invalidate.
+router must call an invalidation helper. network_acls.py caches nothing, so it has nothing
+to invalidate.
 """
 
 # The check is per module, not per resource kind, so a router that caches one thing and
-# mutates another is a false positive. Each exemption states why, and the list should stay
-# this short: a new name here is a claim that needs the same justification.
+# mutates another is a false positive. Each exemption states why; a new one needs the same
+# justification.
 EXEMPT = {
     # Pulls the organization roster from OrcaHub. The only thing this module caches in
     # api_responses is the API-key list (`integrations:api_keys:list*`), which a roster
@@ -33,8 +24,8 @@ EXEMPT = {
     # Read-only validation uses POST because the full prospective create payload is its input.
     "preflight_create_instance",
     # Durable create invalidates only after daemon state changes or terminal readback. Invalidating
-    # on HTTP acceptance would let an older in-flight list repopulate stale state before create
-    # settles; the worker owns the generation-safe invalidation instead of this router handler.
+    # when the request is accepted would let an older in-flight list repopulate stale state before
+    # create settles; the worker owns the generation-safe invalidation instead of this handler.
     "create_instance",
     # POST because the request names clusters and options in a body; it reads the inventory
     # an integration may see (capability inventory.read) and writes nothing.
@@ -64,9 +55,8 @@ INVALIDATORS = {
     "invalidate_after_access_change",
     "delete_pattern",
 }
-# note: `delete` counts only in the cache's own shape, delete("<namespace>", key). As a bare name
-# it also matched pylxd's instance.delete() and SQLAlchemy deletes, so a handler that removed a
-# resource and cleared nothing passed this check.
+# `delete` counts only in the cache's own shape, delete("<namespace>", key). As a bare name it
+# would also match pylxd's instance.delete() and SQLAlchemy deletes.
 CACHE_NAMESPACES = {"api_responses", "vault_list", "lxd_resources", "tags"}
 
 
@@ -125,7 +115,7 @@ def _invalidates(fn: ast.AST) -> bool:
             continue
         if isinstance(node.func, ast.Attribute) and node.func.attr in INVALIDATORS:
             return True
-        # the lifecycle routes clear through core.cache's outcome helper, called by name
+        # The lifecycle routes clear through core.cache's outcome helper, called by name.
         if isinstance(node.func, ast.Name) and node.func.id == "clear_instance_lists_after_failure":
             return True
         if _is_cache_delete(node):
@@ -179,10 +169,9 @@ if __name__ == "__main__":  # pragma: no cover
 
 
 def test_instance_lifecycle_clears_the_storage_volume_list() -> None:
-    """LXD backs every instance with a root volume of type `virtual-machine`, so a create or a
-    delete changes the storage volume list even though no volume endpoint was called. Leaving
-    it cached served the pre-create list for its full 180s TTL, which is how a round trip that
-    had genuinely created a VM could not find its root disk.
+    """LXD backs every instance with a root volume (type `container` or `virtual-machine`), so a
+    create or a delete changes the storage volume list even though no volume endpoint was
+    called. Left cached, the list would hide a new instance's root disk until its TTL.
     """
     from app.core.cache import CacheManager
 

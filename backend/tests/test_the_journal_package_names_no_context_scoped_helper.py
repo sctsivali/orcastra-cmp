@@ -2,7 +2,7 @@
 
 The follower, the sink, the seed and the prune loop are lifespan tasks with no request behind
 them, so every org-scope ContextVar is unset, and unset is the permissive value. The rule that
-keeps `app/services/snapshots` honest (`test_a_background_run_does_not_inherit_a_request_scope`)
+`test_a_background_run_does_not_inherit_a_request_scope` holds for `app/services/snapshots`
 applies to the whole of `app/services/task_journal`: rows are written as facts, and scope is
 applied on read by `app/core/task_scope.py` and the routers, which live outside this package.
 """
@@ -26,7 +26,7 @@ FORBIDDEN = {
     "tenant_acl_active",
     "project_is_visible",
     "get_tenant_acl",
-    # The remaining readers of the scope ContextVars (a review found them missing).
+    # The remaining readers of the scope ContextVars.
     "tenant_may_see_project",
     "visible_projects_for",
 }
@@ -62,7 +62,7 @@ def test_the_journal_package_names_no_context_scoped_helper():
 
 
 def test_the_forbidden_list_still_matches_the_helpers_that_exist():
-    """A ratchet naming functions that have been renamed away guards nothing."""
+    """Every name on the list must still exist; a renamed helper would slip past the scan."""
     import app.core.org_scope as org_scope
     import app.core.tenant_visibility as tenant_visibility
 

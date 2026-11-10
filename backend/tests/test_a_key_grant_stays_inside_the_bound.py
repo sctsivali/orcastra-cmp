@@ -1,9 +1,9 @@
 """An API key's grant, and the tenant rules a key writes, stay inside what their author may reach.
 
-Minting and editing a key checked cluster ids only, and only a secret rotation asked the project
-bound. On a cluster another party also holds, a partner could name that party's project, or '*', and
-the key then acted on it through the raw proxy, /proxy and provisioning. Provisioning and the policy
-sync checked only the key's own grant, which '*' satisfies for every project on the cluster. The
+Minting and editing a key ask the project bound as well as the cluster ids. On a cluster another
+party also holds, a partner naming that party's project, or '*', would otherwise get a key acting on
+it through the raw proxy, /proxy and provisioning. Provisioning and the policy sync also ask who
+names the project, because the key's own grant of '*' satisfies every project on the cluster. The
 party is read from real rows on SQLite.
 """
 
@@ -40,9 +40,8 @@ def scope():
 
 # ── the dashboard grant ────────────────────────────────────────────────────────────────────────
 
-# note: `default` beside another party is refused since 2026-11-05 (owner): it carries that party's
-# instances, and a key reaches it through the raw proxy and /proxy, as the LXD TLS keys already
-# refuse it (services/lxd_key_bounds.py).
+# `default` beside another party is refused: it carries that party's instances, which a key reaches
+# through the raw proxy and /proxy. LXD TLS keys refuse it the same way (services/lxd_key_bounds.py).
 @pytest.mark.parametrize("cluster,project", [
     (MIXED, "*"), (MIXED, "theirs"), (SOLO, "*"), (MIXED, "default"),
 ], ids=["wildcard-beside-another-party", "another-partys-project", "wildcard-where-another-party-holds-alone",
@@ -157,7 +156,7 @@ def test_provisioning_and_the_sync_ask_who_names_the_project_before_writing() ->
     import inspect
 
     provision = inspect.getsource(integrations.provision_tenant_access)
-    # once where the organization exists, once just before a new one is written
+    # Once where the organization exists, once just before a new one is written.
     assert provision.count("await refuse_a_project_another_party_holds(") == 2
     assert provision.index("await refuse_a_project_another_party_holds(") < provision.index("db.add(org)")
     assert provision.rindex("await refuse_a_project_another_party_holds(") < provision.index("org = Organization(")

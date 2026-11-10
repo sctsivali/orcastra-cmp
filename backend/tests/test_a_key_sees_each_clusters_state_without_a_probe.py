@@ -1,12 +1,10 @@
 """`GET /integrations/clusters` says what state each cluster is in, from caches only.
 
-The route (and MCP `orcastra_list_clusters`, which runs it) promised a live status and returned
-none. Its rows also read `name` and `server_type`, which Vault never stores, so every cluster came
-back as its raw id and as LXD, and a tripped cluster vanished into `unreachable` with the
-breaker's raw exception text, Vault address included. Found by the live MCP QA on nuc2.
-
-Owner decision (2026-10-14): the state comes from what the server already holds, never a probe on
-the key's request; unknown is null; a tripped cluster stays a row with a curated reason.
+The route also backs MCP `orcastra_list_clusters`. The state comes from what the server already
+holds, never a probe on the key's request, and an unknown state is null. Name and type come from
+the stored registration (`display_name`, `type`). A tripped cluster stays a row with a curated
+reason instead of moving to `unreachable` with the breaker's raw exception text, which can carry
+the Vault address.
 """
 
 import asyncio
@@ -27,8 +25,8 @@ VAULT_TEXT = "Failed to read https://vault.internal:8200/v1/secret/data/lxd/clus
 
 
 def _now() -> datetime:
-    # note: per call, never at import. The suite reaches this file minutes after collection, and
-    # a trip stamped "5 s ago" from an import-time clock is already past the breaker's 60 s TTL.
+    # Per call, never at import. The suite reaches this file minutes after collection, and a
+    # trip stamped "5 s ago" from an import-time clock is already past the breaker's 60 s TTL.
     return datetime.now(timezone.utc)
 
 

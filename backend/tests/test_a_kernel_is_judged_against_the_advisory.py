@@ -88,7 +88,7 @@ def test_an_exposed_verdict_says_only_a_reboot_clears_it():
     finding = assess(CVE_2026_99999, _facts("5.15.0-185-generic", "Ubuntu", "22.04"), today=TODAY)
     assert "reboot" in finding.reason
     assert "Livepatch" in finding.reason
-    # with no read of Ubuntu's record, the reason says the data is built in and from when
+    # With no read of Ubuntu's record, the reason says the data is built in and from when.
     assert finding.reason.startswith("Built-in data from 2026-10-19 lists no fixed Ubuntu 5.15 kernel.")
     assert (finding.source, finding.checked_at) == ("built-in", None)
     assert "canonical-livepatch status" in finding.check_command

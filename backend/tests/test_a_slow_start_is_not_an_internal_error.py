@@ -1,16 +1,14 @@
 """A start that outlives the pooled read timeout must not surface as a 500.
 
 `start(wait=True)` holds the HTTP response open for the whole LXD operation, and the pooled
-client only allows an 8s read (`DEFAULT_LXD_TIMEOUT`). Against a loaded cluster the READ timed
-out while the instance went on starting, so `start_vm` raised a raw requests ConnectionError,
-the router's `except Exception` turned it into `500 Internal server error. Reference: ...`, and
-the operator was told the server broke about an action that had in fact succeeded. Observed
-live at 8.9s on a busy cluster, with the instance reaching Running anyway.
+client only allows an 8s read (`DEFAULT_LXD_TIMEOUT`). On a loaded cluster that READ times out
+while the instance goes on starting, and a raw requests ConnectionError reaching the router's
+`except Exception` becomes `500 Internal server error. Reference: ...` for an action that
+succeeded.
 
-`stop`/`restart` never had this: both rebind onto a client whose read timeout outlives the wait
-(`_rebind_for_wait`). Start was the odd one out, in three places. What is pinned here is that
-asymmetry staying closed, plus the retype that keeps a genuine transport failure a 503 rather
-than an internal fault.
+`stop`/`restart` rebind onto a client whose read timeout outlives the wait
+(`_rebind_for_wait`), and every start goes through `_start_and_wait` for the same reason. A
+genuine transport failure is retyped so it stays a 503 rather than an internal fault.
 """
 
 import ast
@@ -91,7 +89,7 @@ def test_the_start_waits_on_a_client_that_outlives_the_pooled_read_timeout():
 
 
 def test_it_falls_back_to_the_pooled_instance_rather_than_failing():
-    """A cluster we cannot build a second client for must still get the old behaviour."""
+    """Without a second client, the start runs on the pooled instance instead of failing."""
     cm = _ConnectionManager(client=None)
     pooled = _Instance()
 
@@ -103,7 +101,7 @@ def test_it_falls_back_to_the_pooled_instance_rather_than_failing():
 
 @pytest.mark.asyncio
 async def test_a_transport_failure_is_retyped_so_the_router_answers_503(monkeypatch):
-    """Raw requests errors reached `except Exception` and became a 500 with a reference id."""
+    """A raw requests error reaching `except Exception` would become a 500 and a reference."""
     mgr = _manager(_ConnectionManager())
     instance = _Instance()
 
@@ -126,10 +124,10 @@ async def test_a_transport_failure_is_retyped_so_the_router_answers_503(monkeypa
 
 
 def test_no_start_call_bypasses_the_long_timeout_helper():
-    """The ratchet. Three call sites drifted from stop/restart; a fourth must not.
+    """Every `start(wait=...)` goes through the long-timeout helper.
 
     Matches `<anything>.start(wait=...)` in the service module and allows it only inside the
-    helper itself, so a new start path cannot quietly reintroduce the 8s read.
+    helper itself, so a new start path cannot reintroduce the 8s read.
     """
     source = pathlib.Path(inspect.getfile(instance_module)).read_text()
     tree = ast.parse(source)

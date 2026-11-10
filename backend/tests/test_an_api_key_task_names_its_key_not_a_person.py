@@ -2,9 +2,8 @@
 
 An integration request carries no user; its request context has a null actor and the audit
 record names the key in `details.api_key_id`, the public half of the credential. The journal
-row must say `api_key` and name that key, with `actor_email` empty, because a row that showed
-some operator's address for an action their integration took would be wrong in the way that
-looks right.
+row says `api_key` and names that key, with `actor_email` empty: an operator's address on an
+action their integration took would misattribute it.
 """
 
 from app.services.task_journal.sink_mapping import record_to_log_row, record_to_task, source_for

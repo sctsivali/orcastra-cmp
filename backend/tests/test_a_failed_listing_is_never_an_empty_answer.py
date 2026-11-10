@@ -1,15 +1,10 @@
 """A cluster whose listing failed is named, never reported as a cluster with nothing.
 
-Seen on the first production deployment on a real MicroCloud: Storage Pools, Volumes, ISO
-Images, Identities and Groups rendered zero rows for a cluster holding dozens of each, with
-the banner naming only the one host that was genuinely offline. Every helper caught
-`Exception`, returned `[]`, the handler counted the cluster as answered, and pools and
-volumes then cached that emptiness for 180 seconds. The only failure that ever reached the
-banner was "no client at all".
-
-The rule: a listing that failed puts the cluster in `unreachable_nodes` with a reason in
-`node_errors`; a listing that lost some rows puts it in `partial_nodes`; nothing degraded is
-cached; Tenants get the lists but not the reasons.
+A helper that caught `Exception` and returned `[]` would render zero rows for a cluster
+holding dozens, count the cluster as answered, and let pools and volumes cache that
+emptiness. The rule: a listing that failed puts the cluster in `unreachable_nodes` with a
+reason in `node_errors`; a listing that lost some rows puts it in `partial_nodes`; nothing
+degraded is cached; Tenants get the lists but not the reasons.
 
 Hermetic: a fake pylxd client whose API node answers or raises per path, the real routers,
 the real fan-out code, no Redis, no network.
@@ -330,11 +325,11 @@ def _seeded_app(module, attempted):
 
 
 def test_a_cluster_this_worker_has_not_tried_yet_blocks_the_cache(monkeypatch):
-    """One worker's missing client must not become every worker's answer for 180 s.
+    """One worker's missing client must not become every worker's cached answer.
 
-    The cache is shared by the workers. A cluster registered after this worker booted is
-    named unreachable by the seeding until the next healer tick connects it; a body written
-    meanwhile would tell every other worker's users the cluster is down.
+    A cluster registered after this worker booted is named unreachable by the seeding until
+    the next healer tick connects it; a body cached meanwhile would tell every other worker's
+    users the cluster is down.
     """
     from app.routers import storage_pools, storage_volumes
 
@@ -348,12 +343,11 @@ def test_a_cluster_this_worker_has_not_tried_yet_blocks_the_cache(monkeypatch):
 
 
 def test_a_cluster_this_worker_tried_and_found_down_is_cached_for_one_healer_cadence(monkeypatch):
-    """A fleet with a dead cluster is the normal case (production runs 2 of 5 connected).
+    """A fleet with a dead cluster is the normal case, so its body is still cached.
 
-    Refusing to cache whenever any cluster is unreachable made every page open a live read
-    of every cluster that did answer, and five concurrent readers queued to ten seconds.
-    A body naming a cluster this worker tried is a correct answer; it is remembered for 60 s
-    rather than 180 so a recovery shows within the healer's cadence.
+    Refusing to cache would make every page read every answering cluster live. A body naming
+    a cluster this worker tried is a correct answer; it is kept for DEGRADED_CACHE_TTL, shorter
+    than the normal TTL, so a recovery shows within the healer's cadence.
     """
     from app.routers import storage_pools, storage_volumes
 

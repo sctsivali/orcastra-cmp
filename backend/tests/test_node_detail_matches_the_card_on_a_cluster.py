@@ -1,11 +1,9 @@
 """GET /nodes/{name}/resources must agree with the /nodes card on a clustered host.
 
-/nodes aggregates every member of a MicroCloud; the detail endpoint built its body from
-/1.0/resources, which a cluster answers for whichever member the connection landed on. The
-node dialog opened from a card saying 6 cores and 12 GiB then showed 2 cores and 4 GiB on
-every tab but System, and a project quota was bounded by one member's free memory. On a
-clustered host the detail now returns the same aggregate the card does; a standalone host is
-unchanged.
+/nodes aggregates every member of a MicroCloud, while /1.0/resources answers for whichever
+member the connection landed on. On a clustered host the detail returns the same aggregate the
+card does, so the node dialog and a project quota see the whole cluster rather than one member.
+A standalone host is built from its own body.
 """
 
 from types import SimpleNamespace
@@ -18,7 +16,7 @@ from app.services.lxd.lxd_service import LXDService
 
 class _Client:
     def __init__(self, clustered: bool) -> None:
-        # `auth: trusted` because resolve_clustered only believes a trusted /1.0 body
+        # `auth: trusted` because resolve_clustered only believes a trusted /1.0 body.
         self.host_info = {"auth": "trusted", "environment": {"server_clustered": clustered, "server_name": "mc1"}}
         self.api = SimpleNamespace(resources=SimpleNamespace(get=lambda: SimpleNamespace(
             status_code=200, json=lambda: {"metadata": {"cpu": {"total": 2}, "memory": {"total": 4}}}
@@ -37,8 +35,8 @@ def _service(client, monkeypatch, aggregate):
         calls.append(node_name)
         return aggregate
 
-    # dev's layout: the clustered decision lives in node_resources.resources_for_host, which
-    # both the dict facade and the detail read go through
+    # The clustered decision lives in node_resources.resources_for_host, which both the dict
+    # facade and the detail read go through.
     monkeypatch.setattr(nr_module, "aggregate_microcloud_resources", _aggregate)
     monkeypatch.setattr(svc_module, "build_gpu_inventory", lambda body, records: None)
     monkeypatch.setattr(svc_module, "list_instance_records", lambda client: ([], True))

@@ -1,8 +1,7 @@
 """The monitoring sweep: one log line per collection, bounded status reads, capped warnings.
 
-Before this the sweep had no timing at all, so a cycle that took 30 to 90 seconds could not be
-attributed, and the status fan-out had no wall clock: one cluster that accepted a connection and
-never answered held every collection behind it.
+Per-phase timing lets a slow cycle be attributed, and the status fan-out has a wall clock so a
+cluster that accepts a connection and never answers cannot hold every collection behind it.
 """
 
 import asyncio

@@ -1,13 +1,12 @@
 """A worker that dies without cleaning up must not leave sessions listed forever.
 
-The original reaper only ever deleted sessions ALREADY marked disconnected, and a
-worker killed by the OOM killer or a SIGKILL never runs its cleanup, so its sessions
-stayed "connected" with nothing able to retire them. There was no last_seen and no
-heartbeat, so nothing could even tell the difference.
+A worker killed by the OOM killer or a SIGKILL never runs its cleanup, so its sessions
+stay "connected" unless something else can retire them. Each live worker beats its
+sessions into Redis with a timestamp.
 
-Freshness is reader-side on purpose: a snapshot older than the stale window is gone,
-whether or not Redis got round to expiring the field. That means a delete lost during
-a Redis blip cannot strand a session either.
+Freshness is decided by the reader: a snapshot older than the stale window is gone,
+whether or not Redis has expired the field, so a delete lost during a Redis blip cannot
+strand a session either.
 """
 
 import time
@@ -45,7 +44,7 @@ async def test_a_session_that_stops_beating_leaves_the_shared_view():
     assert [s["session_id"] for s in snapshots] == ["op-dead"]
 
     # the worker is killed: its last beat recedes past the stale window and no further
-    # beat arrives. The key is still in Redis - nothing deleted it - but it is not live.
+    # beat arrives. The key is still in Redis (nothing deleted it), but it is not live.
     await registry.publish(
         [s.to_snapshot("w1", time.time() - (STALE + 1)) for s in live], ttl_seconds=STALE
     )

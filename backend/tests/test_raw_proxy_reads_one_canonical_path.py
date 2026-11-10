@@ -1,23 +1,13 @@
 """
 Every raw-proxy guard and the URL raw_proxy sends read one canonical path.
 
-Each guard used to parse the raw string its own way (decode once or twice, split on `?` only,
-refuse `..` only, strip the string prefix `/1.0`), while requests (urllib3 2.x) removes `.`
-segments and never sends a fragment, and LXD decodes once. So the guards judged one request and
-LXD served another:
-
-| sent                                         | before                    | LXD served            |
-|----------------------------------------------|---------------------------|-----------------------|
-| /1.0/certificates#x                          | allowed                   | the trust store       |
-| /1.0/./certificates                          | allowed                   | the trust store       |
-| /1.0/auth/identities/tls                     | allowed                   | a trusted TLS client  |
-| /1.0/instances/c1/./exec                     | allowed, no capability    | exec as root          |
-| /1.0/instances/c1/exec#                      | allowed, no capability    | exec as root          |
-| /1.0/instances/c1/./files?path=/etc/shadow   | allowed, no capability    | the guest's files     |
-| /1.0/instances?%2570roject=b                 | project popped once       | project b             |
-
-The migration fence read the path a third way and skipped a path with a fragment, so
-`PUT /1.0/instances/web-01/state#x` resumed a fenced source.
+requests (urllib3 2.x) removes `.` segments and never sends a fragment, and LXD decodes once. A
+guard that parses the raw string any other way (decoding twice, splitting on `?` only, refusing
+`..` only, stripping the string prefix `/1.0`) judges one request while LXD serves another:
+`/1.0/certificates#x` and `/1.0/./certificates` reach the trust store, `/1.0/instances/c1/./exec`
+runs exec without the capability, and `/1.0/instances?%2570roject=b` switches the project. The
+migration fence reads the same path, so `PUT /1.0/instances/web-01/state#x` cannot resume a fenced
+source.
 """
 
 from typing import Any, Dict, List, Tuple
@@ -231,7 +221,7 @@ async def test_a_granted_exec_still_reaches_the_cluster_as_judged() -> None:
 
 
 async def test_a_wildcard_project_value_is_encoded_not_joined() -> None:
-    """A `*` grant may name any project, and the name used to be joined into the query raw."""
+    """A `*` grant may name any project, so the name is encoded into the query, never joined raw."""
     outcome, session = await call_raw_proxy(WILDCARD, "GET", "/1.0/instances", project="p&all-projects=true#")
     assert outcome.status_code == 200
     _, query = lxd_reads(session.urls[0])

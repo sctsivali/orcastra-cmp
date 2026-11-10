@@ -1,13 +1,8 @@
 """A backend that was down for a day takes ONE snapshot, not a day's worth.
 
-Not because catching up is expensive. Because every catch-up snapshot would capture the same state,
-the current one. A snapshot's entire value is the moment it captured, so a late one is not a late
-version of the missed one: it is a different snapshot wearing a misleading timestamp in its name.
-Producing five of those produces five restore points nobody can go back to, and fills a cap of five
-doing it.
-
-What an operator does need is to know the gap happened, which is what `missed_runs` and the
-`.missed` audit are for.
+Every catch-up snapshot would capture the same state, the current one, under the timestamp of a
+slot it did not capture. Replaying the gap would only fill the retention cap with restore points
+that do not exist. The gap is recorded instead, in `missed_runs` and the `.missed` audit.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -40,8 +35,7 @@ def test_the_gap_is_counted_rather_than_replayed():
 
 
 def test_an_uninterrupted_schedule_counts_nothing_missed():
-    """The control. Without it the counter could increment on every run and this file would still
-    look green."""
+    """The control. Without it a counter that increments on every run would still pass."""
     schedule = FakeSchedule(last_run_slot=datetime(2026, 9, 8, 3, 0, tzinfo=UTC))
     now = datetime(2026, 9, 9, 3, 0, 20, tzinfo=UTC)
     schedule.due_slot = choose_slot(schedule, now)

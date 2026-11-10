@@ -398,7 +398,7 @@ def test_an_omitted_pool_is_left_to_the_daemon_default():
 
 
 def test_a_quota_refusal_reads_in_the_operators_words() -> None:
-    """The figure carries its unit, so a config key beside it only said the limit twice."""
+    """The refusal states the figure with its unit and names no config key."""
     from app.services.lxd.create_preflight import _quota_refusal
 
     assert _quota_refusal("cpu", "", 6, 4) == (

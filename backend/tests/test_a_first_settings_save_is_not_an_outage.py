@@ -1,15 +1,11 @@
 """Nothing stored yet is not the same as the store being unavailable.
 
-`store_secrets` merges rather than replaces, so it reads what is already there first. A guard was
-added to stop a read failure being swallowed, because swallowing it turned the merge into a
-replace and one Vault hiccup destroyed every other secret on that installation while answering
-200. That guard was right.
+`store_secrets` merges rather than replaces, so it reads what is already there first. A read
+failure must not be swallowed: that turns the merge into a replace, and one Vault error destroys
+every other secret on the installation while answering 200.
 
-It was also too wide. `vault_read` raises for a path that has never been written, and that is
-exactly the empty case a first save is in, so the first settings save on every installation
-answered 503 "the secret store is unavailable" while Vault was healthy and unsealed.
-
-Both halves are pinned here, because fixing one by breaking the other is the obvious wrong move.
+`vault_read` also raises for a path that has never been written, which is the empty case a first
+save is in; that save must succeed rather than answer 503. Both halves are pinned here.
 """
 
 import pytest
@@ -19,7 +15,7 @@ from app.services import extension_settings
 
 
 class VaultThatHasNothingYet:
-    """What Vault does for a path nobody has written: a 404, raised, not an empty dict."""
+    """Vault answers a read of a never-written path with a raised 404."""
 
     def __init__(self) -> None:
         self.written: dict = {}
@@ -63,8 +59,7 @@ def test_the_first_save_on_an_installation_succeeds() -> None:
 
 
 def test_a_store_that_is_genuinely_down_still_refuses() -> None:
-    """The half that must survive the fix above. Treating every read failure as empty is what
-    turned a merge into a replace and lost secrets nobody retyped."""
+    """Treating every read failure as empty would turn a merge into a replace and lose secrets."""
     with pytest.raises(HTTPException) as refusal:
         extension_settings.store_secrets(VaultThatIsDown(), 1, {"api_token": "s3cret"})
 

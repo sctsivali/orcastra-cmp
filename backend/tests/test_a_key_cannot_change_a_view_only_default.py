@@ -2,10 +2,9 @@
 
 `default` on a cluster another party also holds is view only for a Partner in the browser
 (test_default_is_view_only_where_another_party_holds_the_cluster.py). That rule reads the request's
-own org scope, which no key route carries, so a key minted before it kept writing there and kept
-opening sessions and files on the other party's guests through the structured proxy, MCP and the
-raw proxy (RC5 acceptance FU-1, 2026-11-06). The rule is now judged from the key's creator: the
-party from the database, the role from Authentik. Reads stay open, an Admin's key is exempt, and
+own org scope, which no key route carries, so for a key it is judged from the key's creator: the
+party from the database, the role from Authentik. It covers writes, guest sessions and guest files
+through the structured proxy, MCP and the raw proxy. Reads stay open, an Admin's key is exempt, and
 an unanswered identity provider is a retryable 503, never a verdict.
 """
 
@@ -232,7 +231,7 @@ def test_a_browser_tenant_rule_naming_a_view_only_default_is_refused() -> None:
         _refuse_a_project_the_caller_cannot_see(SimpleNamespace(cluster_id=WHOLE, project_name="default"))
 
 
-# ── where a write really lands (security review of the follow-up round) ─────────────────────────
+# ── where a write lands ─────────────────────────────────────────────────────────────────────────
 
 async def test_a_structured_copy_out_of_default_is_refused(view_only) -> None:
     params = {"name": "stolen", "source": {"type": "copy", "source": "their-vm", "project": "default"}}

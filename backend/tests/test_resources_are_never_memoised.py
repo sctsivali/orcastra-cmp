@@ -1,25 +1,12 @@
-"""Node resource numbers must be read live, never from pylxd's permanent memo.
+"""Node resource numbers must be read live on each request, never from pylxd's permanent memo.
 
-pylxd caches the /1.0/resources body on the client object and never invalidates it:
+pylxd's `Client.resources` property (pylxd/client.py) stores the /1.0/resources body in
+`_resource_cache` on first read and never invalidates it. Clients are pooled for the life of
+the process, so it returns the body from when that worker first connected, and whichever
+worker serves a cache miss writes its frozen copy into Redis.
 
-    @property
-    def resources(self):
-        if self._resource_cache is None:
-            ...
-            self._resource_cache = response.json()["metadata"]
-        return self._resource_cache
-
-This app pools clients for the life of the process by design, so every reader of
-`client.resources` was handed the body captured when that worker first connected. With
-WEB_CONCURRENCY=4 that meant four frozen snapshots per cluster, and whichever worker served a
-cache miss wrote its own into Redis. Measured on the dev fleet, the shared regions body cycled
-through exactly four distinct memory_used values per host, with two unrelated hosts moving in
-identical lockstep. Real host memory does not do that.
-
-The behavioural test below is the one that reproduces the report: the fake client faithfully
-reproduces pylxd, memo and all, so reading through the memo returns a pinned number and reading
-live does not. The AST guard is what keeps it fixed, because `client.resources` is invisible in
-review: it looks exactly like the obvious thing to write.
+The fake client keeps pylxd's memo so the behavioural tests can tell a memo read from a live
+one; the AST guard keeps new `client.resources` call sites out.
 """
 
 import ast
@@ -31,7 +18,7 @@ from app.services.lxd.resources import ResourceManager
 
 
 APP = Path(__file__).resolve().parents[1] / "app"
-# The one module allowed to speak about the memo, and it only does so in prose.
+# The module that owns the live read and documents the memo.
 ALLOWED = {"freshness.py"}
 
 
@@ -53,7 +40,7 @@ def _resource_property_reads(tree: ast.AST):
 
 
 def test_no_module_reads_the_memoised_resources_property():
-    """The ratchet. No allowlist: a new call site is always a regression."""
+    """No module outside ALLOWED reads `client.resources`."""
     offenders = []
     for path in sorted(APP.rglob("*.py")):
         if path.name in ALLOWED:
@@ -148,7 +135,7 @@ def _body(memory_used):
 
 
 def test_repeated_reads_track_the_host():
-    """The reported bug: the Memory tab sat on one number while the host moved."""
+    """Two reads return two samples, so the Memory tab follows the host."""
     client = _FakeClient([_body(30_000_000_000), _body(31_500_000_000)])
     manager = ResourceManager()
 
@@ -163,7 +150,7 @@ def test_repeated_reads_track_the_host():
 
 
 def test_the_memo_would_have_pinned_it():
-    """Ablation, in-test: prove the fake reproduces the defect rather than assuming it."""
+    """The fake's memo pins the first body, so the test above tells the two paths apart."""
     client = _FakeClient([_body(30_000_000_000), _body(31_500_000_000)])
 
     assert client.resources["memory"]["used"] == 30_000_000_000

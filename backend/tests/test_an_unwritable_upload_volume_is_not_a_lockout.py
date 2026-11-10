@@ -1,25 +1,13 @@
 """An unwritable staging volume must not lock an integration out for six hours.
 
-The chain, all of it reachable from a correct-looking deployment: `appuser` had no pinned uid,
-prod bind-mounts `/var/orcastra/uploads`, and Docker creates a missing bind-mount source
-root-owned. Every guard on the create path still passes, because `_ensure_dir`'s makedirs
-succeeds on an existing directory and the disk-usage check only stats it. So the first failure
-is the first PATCH, at `os.open(..., O_CREAT)`.
+Docker creates a missing bind-mount source root-owned, and such a staging directory passes every
+guard on the create path: `_ensure_dir`'s makedirs succeeds on an existing directory and the
+disk-usage check only stats it. The first failure is the first PATCH, at `os.open(..., O_CREAT)`.
+A session left `pending` there holds one of MAX_ACTIVE_SESSIONS (2) slots for its API key until
+the six-hour TTL, so two failed PATCHes would lock the key out.
 
-From there it compounded:
-
-  * `PermissionError` escaped `append_request_body` unchanged, and there is no catch-all
-    exception handler registered, so the caller got a bare 500 with no reference id;
-  * the row never left `pending`, which is an ACTIVE status, so it kept holding one of only
-    MAX_ACTIVE_SESSIONS (2) slots for that API key;
-  * `_gc_expired` ran only from inside `create_upload`, so the key could not trigger the sweep
-    that would free its own slots: every create was refused first.
-
-Two failed PATCHes therefore locked the key out for the full six-hour TTL.
-
-What is asserted here: the filesystem refusal is classified, a client disconnect is NOT, the
-session is retired so its slot is freed, and the sweep loop survives a bad iteration and is
-cancellable.
+Asserted here: the filesystem refusal is classified and a client disconnect is not, the session
+is retired so its slot is freed, and the sweep loop survives a bad iteration and is cancellable.
 """
 
 import asyncio
@@ -31,7 +19,7 @@ from app.core.upload_stream import UploadStagingUnavailable, _is_storage_refusal
 
 
 class TestClassification:
-    """Which OSErrors mean 'the volume refused us' rather than 'the client went away'."""
+    """Which OSErrors mean the volume refused the write rather than the client went away."""
 
     @pytest.mark.parametrize(
         "err",
@@ -53,9 +41,8 @@ class TestClassification:
         ],
     )
     def test_a_dropped_client_is_not_a_storage_refusal(self, exc):
-        """The trap this narrowing exists for. These are all OSError subclasses, and treating
-        them as a storage fault would retire a session because a client's connection dropped,
-        which is precisely what a resumable upload protocol exists to survive."""
+        """These are OSError subclasses too. Treating them as a storage fault would retire a
+        session over a dropped connection, which a resumable upload must survive."""
         assert _is_storage_refusal(exc) is False
 
     def test_an_errno_less_oserror_is_not_a_storage_refusal(self):
@@ -64,15 +51,14 @@ class TestClassification:
 
 class TestTheExceptionType:
     def test_it_is_a_503_not_a_500(self):
-        """A backend storage fault is retryable once an operator fixes it, and is emphatically
-        not a cluster outage. Same reasoning as LXDLocalStorageError in main.py."""
+        """A backend storage fault is retryable once an operator fixes it, and is no cluster
+        outage. Same reasoning as LXDLocalStorageError in main.py."""
         exc = UploadStagingUnavailable("staging is not writable")
         assert exc.status_code == 503
 
     def test_callers_identify_it_by_type_not_by_message(self):
-        """The routers catch this class. Matching on the detail string would be the
-        substring-assertion trap: the guard would keep passing after the message was reworded
-        and the row would silently stop being retired."""
+        """The routers catch this class. Matching on the detail string would stop retiring the
+        row as soon as the message was reworded."""
         assert issubclass(UploadStagingUnavailable, Exception)
         exc = UploadStagingUnavailable("anything at all")
         assert isinstance(exc, UploadStagingUnavailable)
@@ -99,14 +85,14 @@ class _Db:
 
 
 class TestRetirement:
-    """The behaviour the four PATCH handlers now share."""
+    """The behaviour the four PATCH handlers share."""
 
     @pytest.mark.asyncio
     async def test_a_staging_failure_frees_the_slot(self):
         row = _Row()
         db = _Db()
 
-        # This mirrors the handler's except branch exactly.
+        # Mirrors the handlers' except branch.
         try:
             raise UploadStagingUnavailable("staging is not writable")
         except UploadStagingUnavailable:

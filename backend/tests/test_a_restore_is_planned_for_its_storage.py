@@ -1,9 +1,9 @@
 """A restore the instance's storage cannot perform is refused before anything is written.
 
-ZFS rolls back only to the newest snapshot. The console's safety copy is by construction newer than
-the target, so on ZFS every restore with a safety copy was refused by the daemon after the copy had
-been written (seen on nuc2, 2026-10-25). The plan is read first, and a restore that cannot run is a
-409 with the reason, with no safety copy left behind.
+ZFS rolls back only to the newest snapshot. The console's safety copy is by construction newer
+than the target, so on ZFS every restore with a safety copy would be refused by the daemon after
+the copy had been written. The plan is read first, and a restore that cannot run is a 409 with the
+reason, with no safety copy left behind.
 """
 
 import pytest
@@ -146,7 +146,7 @@ def test_other_drivers_keep_the_safety_copy_then_restore():
 
 
 def test_an_unreadable_driver_proceeds_as_before(monkeypatch):
-    """Unknown is not refused: the daemon's own refusal is now reported, so nothing is hidden."""
+    """An unknown driver is not refused; the daemon's own refusal is reported if it comes."""
     from app.services.snapshots import restore_plan
 
     def _boom(*a, **k):
@@ -203,8 +203,8 @@ def test_a_caller_without_snapshot_access_cannot_read_the_plan(monkeypatch):
 
 
 def test_a_tenant_plan_does_not_name_the_storage_driver():
-    # The pool's driver is the provider's storage (owner decision 2026-10-26): a tenant learns
-    # what it may do, not which backend makes it so.
+    # The pool's driver is the provider's storage: a tenant learns what it may do, not which
+    # backend decides it.
     blocked = plan_restore("zfs", ROWS, OLD, name_driver=False)
     newest = plan_restore("zfs", ROWS, NEW, name_driver=False)
     for plan in (blocked, newest):
@@ -213,7 +213,7 @@ def test_a_tenant_plan_does_not_name_the_storage_driver():
         assert "only roll back to its newest snapshot" in plan.reason
     assert not blocked.restorable and NEW in blocked.reason
     assert newest.restorable and not newest.safety_snapshot_supported
-    # an operator's plan still names it
+    # An operator's plan still names it.
     assert "ZFS" in plan_restore("zfs", ROWS, OLD).reason
 
 

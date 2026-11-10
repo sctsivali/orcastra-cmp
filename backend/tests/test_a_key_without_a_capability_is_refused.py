@@ -1,16 +1,13 @@
 """An external API key may only reach the endpoint families it was issued for.
 
-Before capabilities existed, `external_router` authenticated a key and then let it do everything
-on that router. A key created as "Custom Application" for a read-only integration could call
-`POST /integrations/sync` and create an organization, add members, and have a `partner` role
-pushed into Authentik as a global system role. The application type was a label with no effect,
-so nothing distinguished that key from OrcaHub's.
+Without capabilities, a key that `external_router` authenticates could do everything on that
+router: a read-only "Custom Application" key could call `POST /integrations/sync`, create an
+organization, add members and have a `partner` role pushed into Authentik as a global system role.
 
-The awkward half is the keys already in Vault. They carry no `capabilities` field, they are read
-back as raw dicts without passing through any Pydantic model, and inventing a restrictive default
-for them would revoke access from a running integration. So an ABSENT field means legacy and
-grants everything, while an EXPLICIT empty list grants nothing. That is the same distinction
-`granted_level` already draws, and both halves are pinned here.
+Keys issued before capabilities existed carry no `capabilities` field and are read back as raw
+dicts without any Pydantic model; a restrictive default would revoke a running integration's
+access. So an ABSENT field means legacy and grants everything, while an EXPLICIT empty list grants
+nothing. `granted_level` draws the same distinction, and both halves are pinned here.
 """
 
 import asyncio
@@ -41,14 +38,9 @@ def _key(capabilities: Optional[List[str]] = None, *, legacy: bool = False) -> D
 
 # What the `orcahub` preset must contain, spelled out by hand.
 #
-# important: a literal, NOT `set(CAPABILITIES) - GUEST_ACCESS_CAPABILITIES`, which is how the
-# production code computes it. The assertion below used to be written that way, comparing the
-# code's own expression against itself, so it passed for any new vocabulary entry. The test meant
-# to stop a new capability silently widening the one integration in production was green in
-# precisely the case it existed to catch, and doing the wrong thing looked correct.
-#
-# Spelled out, a new capability fails here until somebody decides which side of the line it goes
-# on. That failure is the feature.
+# important: a literal, NOT `set(CAPABILITIES) - GUEST_ACCESS_CAPABILITIES` as the production code
+# computes it. That expression compared against itself passes for any new capability; the literal
+# fails until someone decides which side of the line a new capability goes on.
 ORCAHUB_PRESET = {
     "inventory.read",
     "lxd.proxy",
@@ -75,7 +67,7 @@ def test_an_explicit_null_is_still_legacy() -> None:
 
 
 def test_an_empty_list_grants_nothing() -> None:
-    """The opposite of absent. An operator who granted nothing gets nothing, not everything."""
+    """Unlike an absent field, an explicit empty list grants nothing."""
     empty = _key([])
     assert granted_capabilities(empty) == set()
     for capability in CAPABILITIES:
@@ -85,7 +77,7 @@ def test_an_empty_list_grants_nothing() -> None:
 
 
 def test_a_malformed_field_fails_closed() -> None:
-    """There is one writer and it writes a list, so a non-list is tampering, not a decision."""
+    """The only writer stores a list, so a non-list value is treated as tampering."""
     assert granted_capabilities({"id": "oak_test", "capabilities": "org.sync"}) == set()
     with pytest.raises(HTTPException):
         assert_capability({"id": "oak_test", "capabilities": "org.sync"}, "org.sync")
@@ -107,14 +99,14 @@ def test_a_granted_capability_is_allowed_and_the_others_are_not(capability: str)
 
 
 def test_an_unknown_stored_name_satisfies_nothing() -> None:
-    """A grant that names something we do not implement must not become a wildcard."""
+    """A stored name that is not a known capability must not become a wildcard."""
     key = _key(["lxd.everything"])
     for capability in CAPABILITIES:
         with pytest.raises(HTTPException):
             assert_capability(key, capability)
 
 
-# ── the dependency the routers actually use ────────────────────────────────────────────────────
+# ── the dependency the routers use ─────────────────────────────────────────────────────────────
 
 def test_the_dependency_refuses_before_the_handler_runs() -> None:
     dep = require_capability("org.sync")
@@ -133,14 +125,12 @@ def test_the_dependency_passes_the_key_through_when_granted() -> None:
 # ── the application type presets ───────────────────────────────────────────────────────────────
 
 def test_orcahub_keeps_every_capability_except_reaching_inside_a_guest() -> None:
-    """The only integration in production. Its defaults preserve today's behaviour, with one
-    deliberate exception.
+    """`orcahub` gets every capability outside guest access.
 
-    `orcahub` is written as `set(CAPABILITIES)`, so it widens automatically whenever the
-    vocabulary grows. That is right for another read or another proxy verb and wrong for
-    `instance.exec` and `instance.files`, which run commands and read files inside a customer's
-    guest. Widening into those would grant the production integration a power nobody chose for
-    it, on the deploy that introduced them.
+    The preset is `set(CAPABILITIES)` minus `GUEST_ACCESS_CAPABILITIES`, so it widens whenever
+    the vocabulary grows. That suits another read or proxy verb. `instance.exec` and
+    `instance.files` run commands and read files inside a customer's guest, so the integration
+    must not gain them on the deploy that adds them.
     """
     assert default_capabilities_for("orcahub") == ORCAHUB_PRESET
     assert GUEST_ACCESS_CAPABILITIES, "the exclusion is meaningless if the set is empty"
@@ -151,15 +141,15 @@ def test_orcahub_keeps_every_capability_except_reaching_inside_a_guest() -> None
 def test_no_preset_seeds_guest_access(app_type: str, capability: str) -> None:
     """Reaching inside a guest is never a default of an application type.
 
-    An operator picking "MCP Server" is choosing a shape of integration, not consenting to root
-    in someone's container. Every one of these has to be ticked on purpose.
+    An application type such as "MCP Server" picks the shape of an integration; root inside a
+    container has to be granted explicitly.
     """
     assert capability not in default_capabilities_for(app_type)
 
 
 @pytest.mark.parametrize("app_type", ["mcp", "agent"])
 def test_an_agent_preset_cannot_write_authorization_data(app_type: str) -> None:
-    """The point of the feature: a key handed to an agent cannot mint orgs or grant tenants."""
+    """A key handed to an agent cannot mint orgs or grant tenants."""
     granted = default_capabilities_for(app_type)
     assert "org.sync" not in granted
     assert "tenant.provision" not in granted
@@ -182,16 +172,13 @@ def test_a_preset_default_is_a_copy() -> None:
 # ── nothing may silently promote a scoped key back to legacy ───────────────────────────────────
 
 def test_no_metadata_writer_can_drop_the_capabilities_field() -> None:
-    """An absent field means unrestricted, so losing it is a privilege escalation, not a bug.
+    """An absent field means unrestricted, so a writer that drops it escalates privilege.
 
-    Six functions write a key's metadata back to Vault. Five read the existing dict first and
-    mutate one field, which preserves `capabilities` by construction; `create_api_key` builds a
-    fresh dict and sets it explicitly. A future writer that builds a dict from scratch and forgets
-    the field would turn a scoped key into a legacy one with full access to the external router,
-    silently and permanently, with no error anywhere.
-
-    Structural because it has to be: the promoted key still authenticates and still works, so
-    nothing observable fails until someone uses a capability they were never granted.
+    The metadata writers either read the stored dict and change one field, which preserves
+    `capabilities`, or build a fresh dict and set it explicitly (`create_api_key`). A writer that
+    builds a dict and forgets the field turns a scoped key into a legacy one with full access to
+    the external router. The check is structural because the promoted key still authenticates,
+    so nothing fails until it uses a capability it was never granted.
     """
     import ast
     from pathlib import Path
@@ -237,13 +224,12 @@ def test_no_metadata_writer_can_drop_the_capabilities_field() -> None:
 # ── every write in sync_data is behind org.sync, including the one that does not look like one ──
 
 def test_setting_the_callback_url_needs_org_sync() -> None:
-    """`app_url` is the third write in `sync_data`, and the easiest to mistake for bookkeeping.
+    """`app_url` is the third write in `sync_data`, and easy to mistake for bookkeeping.
 
     `refresh_organizations` fetches `{app_url}/api/external/organizations` and feeds the response
-    straight into `_upsert_synced_organizations`. A key that could set it without `org.sync` would
-    therefore reach organization creation by the back door, which is exactly the power the
-    handler gates, and would also aim an authenticated server-side request at a host of its
-    choosing. Gating `organizations` and `members` alone left this open.
+    into `_upsert_synced_organizations`. A key that could set it without `org.sync` would reach
+    organization creation indirectly, and could aim an authenticated server-side request at a
+    host of its choosing.
     """
     import ast
     import inspect
@@ -257,8 +243,8 @@ def test_setting_the_callback_url_needs_org_sync() -> None:
             continue
         test_src = ast.unparse(node.test)
         body_src = ast.unparse(node.body)
-        # The guard must be the FIRST statement inside the branch, so everything the branch
-        # goes on to do is covered by it. A check buried below a write guards nothing.
+        # The guard must be the FIRST statement inside the branch, so it covers everything
+        # the branch does; a check below a write does not guard that write.
         first = ast.unparse(node.body[0]) if node.body else ""
         if "org.sync" in first and "assert_capability" in first:
             guarded.append(test_src)
@@ -275,9 +261,8 @@ def test_setting_the_callback_url_needs_org_sync() -> None:
 def test_every_write_in_sync_data_is_named_by_a_capability_guard() -> None:
     """A new write added to this handler must not inherit `inventory.read` by accident.
 
-    The handler's dependency is `inventory.read`, which is the read half. Anything that mutates
-    state has to be listed here with the guard that covers it, so adding a fourth write means
-    deciding which capability it needs rather than getting the weakest one for free.
+    The handler's dependency is `inventory.read`, the read half. Every call that mutates state is
+    listed here with the guard that covers it, so a new write needs an explicit capability.
     """
     import inspect
 
@@ -307,15 +292,14 @@ def test_every_write_in_sync_data_is_named_by_a_capability_guard() -> None:
     )
 
 
-# ── every capability is placed on purpose ──────────────────────────────────────────────────────
+# ── every capability is assigned a side ────────────────────────────────────────────────────────
 
 def test_every_capability_is_either_preset_or_deliberately_withheld() -> None:
-    """A new capability has to be assigned a side, and this is what forces that.
+    """A new capability has to be assigned a side.
 
-    The two sets partition the vocabulary: whatever `orcahub` gets, plus whatever is withheld from
-    every preset. A name in neither is a capability somebody added without deciding whether the
-    production integration and 17 legacy keys should receive it, and the default answer the code
-    gives is yes.
+    The two sets partition the vocabulary: what `orcahub` gets, plus what every preset withholds.
+    A name in neither was added without deciding whether the integration and legacy keys should
+    receive it, and the code's default answer is yes.
     """
     assert set(CAPABILITIES) == ORCAHUB_PRESET | GUEST_ACCESS_CAPABILITIES, (
         "a capability is in neither ORCAHUB_PRESET nor GUEST_ACCESS_CAPABILITIES: "
@@ -330,15 +314,15 @@ def test_the_two_sides_do_not_overlap() -> None:
 # ── the gate that does not grandfather ─────────────────────────────────────────────────────────
 
 def test_the_explicit_dependency_refuses_a_legacy_key() -> None:
-    """The whole point. A legacy key satisfies `require_capability` and must not satisfy this.
+    """A legacy key satisfies `require_capability` and must not satisfy this.
 
     `granted_capabilities` returns None for a key issued before the field existed, and
-    `has_capability` reads None as everything. That keeps older integrations working, and it is
-    the wrong answer for a power that did not exist when the key was issued.
+    `has_capability` reads None as everything. That keeps older integrations working, but is
+    wrong for a power that did not exist when the key was issued.
     """
     legacy = _key(legacy=True)
 
-    # The inheriting gate lets it through, which is the behaviour being contrasted, not a bug.
+    # The inheriting gate lets a legacy key through; that is the contrast under test.
     assert asyncio.run(require_capability("instance.exec")(api_key=legacy)) is legacy
 
     with pytest.raises(HTTPException) as exc:
@@ -359,7 +343,7 @@ def test_the_explicit_dependency_still_refuses_a_scoped_key_without_it() -> None
 
 
 def test_the_two_gates_are_named_apart() -> None:
-    """A traceback and an OpenAPI dump have to say which gate ran, or a review cannot tell whether
-    a never-inherited capability was wired to the inheriting variant by mistake."""
+    """A traceback and an OpenAPI dump must say which gate ran, so a never-inherited capability
+    wired to the inheriting variant by mistake is visible."""
     assert require_capability("instance.exec").__name__ == "require_instance_exec"
     assert require_explicit_capability("instance.exec").__name__ == "require_explicit_instance_exec"

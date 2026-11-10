@@ -1,6 +1,6 @@
 """Terminal and console socket upgrades have a per-client-IP budget, refused without accepting.
 
-The HTTP limiter never sees a WebSocket, and a refused interactive socket is now accepted and then
+The HTTP limiter never sees a WebSocket, and a refused interactive socket is accepted and then
 closed so the page can read why. uvicorn holds such a socket until the client answers the close,
 inside the worker's --limit-concurrency, so without a budget one client could hold those slots with
 sockets that never authenticate. Over budget the upgrade is refused before accept, which holds
@@ -124,7 +124,7 @@ def test_each_client_ip_has_its_own_budget():
 def test_behind_a_trusted_proxy_the_forwarded_client_is_counted():
     limiter = _middleware(limit=1)
     proxy = "172.18.0.2"  # the edge proxy's container address, trusted by the default TRUSTED_PROXY_CIDRS
-    # note: public addresses. A documentation range (203.0.113.0/24) counts as private, and a private
+    # Public addresses: a documentation range (203.0.113.0/24) counts as private, and a private
     # forwarded address is ignored unless ALLOW_PRIVATE_FORWARDED_IPS says otherwise.
     first, second = "195.178.110.104", "142.132.147.94"
 

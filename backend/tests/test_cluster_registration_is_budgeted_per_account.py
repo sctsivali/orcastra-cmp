@@ -1,9 +1,9 @@
 """Registration and certificate renewal are budgeted per signed-in account.
 
-Registration probes an endpoint the caller types and issues a Vault PKI certificate. Private
-targets are the point, so the endpoint is not filtered, and the only limit was the per-address
-bucket, which a caller behind a trusted private range could step around (RC5 acceptance FU-7,
-2026-11-06). A failed certificate also returned the PKI error text in a 201 body.
+Registration probes an endpoint the caller types and issues a Vault PKI certificate.
+Private targets are expected, so the endpoint is not filtered, and a per-address bucket
+alone can be stepped around from behind a trusted private range. A failed certificate
+must not return the PKI error text.
 """
 
 import ast

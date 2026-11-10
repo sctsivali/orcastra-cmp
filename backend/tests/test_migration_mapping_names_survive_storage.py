@@ -1,8 +1,8 @@
 """Mapping names are infrastructure names, not secrets, and must reach the worker unchanged.
 
-The stored plan request went through the key-based secret redaction, so a network called
-`private` or a profile called `cloud-init` came back as `[redacted]`: the plan previewed fine,
-then execute rebuilt the request from storage and failed on a network named `[redacted]`.
+Key-based secret redaction on the stored plan request would turn a network called `private` or
+a profile called `cloud-init` into `[redacted]`: the plan previews fine, then execute rebuilds
+the request from storage and fails on a network named `[redacted]`.
 """
 
 from __future__ import annotations

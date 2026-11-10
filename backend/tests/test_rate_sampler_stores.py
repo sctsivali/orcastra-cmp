@@ -30,7 +30,7 @@ def _sample(t, cpu):
 
 
 def test_four_workers_sharing_redis_agree_after_one_seed(shared_redis):
-    """Regression: a per-process baseline answered "calculating" once per worker."""
+    """One seed in the shared store serves every worker; none answers "calculating" again."""
     workers = [RateSampler("ns", POLICY) for _ in range(4)]
 
     first = workers[0].observe("i", _sample(100.0, 0.0))

@@ -1,11 +1,7 @@
-"""`GET /extensions/self` is the endpoint every doc tells an add-on to poll, and it said nothing
-about the credential lapsing.
+"""`GET /extensions/self` tells an add-on when its credential lapses.
 
-Its own docstring calls it the reconcile backstop: poll this rather than assume the grant you were
-given is the grant you hold. But an installation credential lives 365 days and the first signal it
-had ended was a 401 in production, which is exactly the failure `expiry_state` was written to
-prevent. `whoami` already answered this, under a different name, on a route no extensions page
-recommends.
+It is the reconcile backstop the add-on docs say to poll. An installation credential lives 365 days
+by default, so without the `expiry_state` fields the first sign of expiry would be a 401.
 
 The handler is exercised rather than grepped: a structural check would pass against a response that
 computed the field and then dropped it.
@@ -87,14 +83,14 @@ def test_it_reports_when_the_credential_lapses() -> None:
     body = _describe(expires)
 
     assert body["credential"]["expires_at"] == expires
-    # Floors, and that is the honest direction: a credential with 29 days and 23 hours left has
-    # 29 whole days, and rounding up would tell an add-on it has a day it does not.
+    # Floors: a credential with 29 days and 23 hours left has 29 whole days, and rounding up would
+    # promise an add-on a day it does not have.
     assert body["credential"]["expires_in_days"] == 29
     assert body["credential"]["state"] == "active"
 
 
 def test_it_warns_before_the_401_rather_than_after() -> None:
-    """The whole point: a window in which an add-on can act, not a post-mortem."""
+    """An add-on is warned while it can still renew, before the credential lapses."""
     body = _describe(utc_isoformat(now_utc() + timedelta(days=3)))
 
     assert body["credential"]["state"] == "expiring", (
@@ -119,7 +115,7 @@ def test_an_expired_credential_is_named_as_expired() -> None:
 
 
 def test_the_rest_of_the_answer_is_unchanged() -> None:
-    """The positive twin for every assertion above: the endpoint still answers what it always did."""
+    """The credential block adds to the answer; the installation fields are still there."""
     body = _describe(utc_isoformat(now_utc() + timedelta(days=30)))
 
     assert body["installed"] is True

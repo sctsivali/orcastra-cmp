@@ -1,24 +1,14 @@
 """A pylxd path must be built with indexing, never passed as a positional string.
 
 `client.api` is already rooted at `<endpoint>/1.0`, and every verb forwards its positional
-arguments straight to the underlying requests Session:
-
-    def get(self, *args, **kwargs):
-        response = self.session.get(self._api_endpoint, *args, **kwargs)
-
+arguments straight to the underlying requests Session after `self._api_endpoint`.
 `requests.Session.get(url, params=None, **kwargs)` takes **params** second, `post` and `put`
 take **data** second, and `delete` takes nothing second at all. So a call written as
 `client.api.get('/1.0/network-acls?recursion=1')` does not request that path. It requests the
-API root with the path as the query string, and the response parses into nothing.
+API root with the path as the query string, and the response parses into nothing; a positional
+`delete` raises `TypeError`. A per-item error handler can hide either, so a list reads empty.
 
-That is not hypothetical. Seven calls across two routers were written this way, and the whole
-Network ACL feature was inert because of it: the list endpoint answered `total: 0` for every
-cluster while logging one swallowed "'str' object has no attribute 'get'" per node, create and
-update addressed the root, and delete raised `TypeError: Session.delete() takes 2 positional
-arguments but 3 were given`. Nothing surfaced, because the inner handler that keeps one bad
-item from condemning a whole node also hid the fact that every item was bad.
-
-The correct idiom is already used elsewhere in this codebase:
+The correct idiom:
 
     client.api["storage-pools"][pool_name].get(params={"target": member_name})
 """
@@ -39,7 +29,7 @@ def _api_calls_with_a_positional_path(source: str):
         func = node.func
         if not isinstance(func, ast.Attribute) or func.attr not in VERBS:
             continue
-        # the receiver must be `<x>.api`, which is the node rooted at /1.0
+        # The receiver must be `<x>.api`, which is the node rooted at /1.0.
         receiver = func.value
         if not (isinstance(receiver, ast.Attribute) and receiver.attr == "api"):
             continue
@@ -75,11 +65,9 @@ def _api_nodes_indexing_the_version_again(source: str):
 
 
 def test_nothing_indexes_the_version_segment_twice():
-    """`client.api` IS /1.0, so indexing "1.0" again targets /1.0/1.0 and hits nothing.
+    """`client.api` is /1.0, so indexing "1.0" again targets /1.0/1.0 and hits nothing.
 
     pylxd's own client calls `self.api.get()` for that resource, which is the shape to copy.
-    Found in lxd_server.py, where a server-config PUT was addressing /1.0/1.0 and so never
-    wrote the config it was given.
     """
     offenders = [
         f"{path.relative_to(APP.parent)}:{lineno} indexes '1.0' on a node already rooted there"
@@ -90,7 +78,7 @@ def test_nothing_indexes_the_version_segment_twice():
 
 
 def test_the_detector_catches_each_broken_shape():
-    """The guard is worthless if it only matches the exact lines already fixed."""
+    """The detector catches plain and f-string paths on each verb."""
     broken = """
 def h(client, name, body):
     client.api.get('/1.0/network-acls?recursion=1')
@@ -115,12 +103,11 @@ def h(client, name, body):
 
 
 def test_a_raw_session_call_is_not_an_offender():
-    """`client.api.session` is a requests Session, where a positional URL IS the signature.
+    """`client.api.session` is a requests Session, where a positional URL is the signature.
 
-    ipam.py deliberately drops to it to inject a timeout that `_APINode` would not, and without
-    that timeout the call blocks forever against a silent node and burns a pool thread. The
-    rule is "a path positional to an _APINode verb", not "a positional argument anywhere under
-    .api", so widening this guard must not swallow that call.
+    ipam.py calls it directly to set a timeout `_APINode` would not; without it the call blocks
+    forever against a silent node and holds a pool thread. The rule covers a path positional to
+    an _APINode verb only, so widening the guard must not catch this call.
     """
     raw = """
 def h(client, full_url, t):

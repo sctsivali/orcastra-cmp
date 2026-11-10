@@ -3,8 +3,9 @@
 Deregistering a cluster ends it for every organization that holds it, a new certificate replaces the
 owner's pending renewal, and the name and location are the cluster's own. A bridge network, an OVN
 uplink and the ACLs they use live in the default project, which a project bound always leaves
-visible, so writing one changes the cluster for every project on it. Each route checked the cluster
-scope only. The party is read from real rows on SQLite; everything past the guard is a recorder.
+visible, so writing one changes the cluster for every project on it. The cluster scope alone is not
+enough for any of these. The party is read from real rows on SQLite; everything past the guard is a
+recorder.
 """
 
 import inspect

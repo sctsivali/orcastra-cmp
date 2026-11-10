@@ -1,12 +1,11 @@
 """A rescope and the reconcile sweep decide on the locked installation row and reach every live credential.
 
-Both read the installation row unlocked and rewrote the Vault grant of the key it named, from a cached
-read written back whole. A rotation in between left the new key with the old scope, which the sweep
-never healed because it compares the row with itself, and the same race could restore a retired key.
-Both now lock the row (lock_installation), lock every credential that still authenticates
-(live_credentials: the current key and the previous one inside its grace window), read each uncached,
-and write the grant onto all of them. The sweep also works from plain candidate values, so one failed
-row no longer ends the pass.
+With an unlocked read of the installation row, a rotation in between leaves the new key with a stale
+scope, which the sweep cannot heal because it compares the row with itself, and the same race can
+restore a retired key. Both lock the row (lock_installation), lock every credential that still
+authenticates (live_credentials: the current key and the previous one inside its grace window), read
+each uncached, and write the grant onto all of them. The sweep works from plain candidate values, so
+one failed row does not end the pass.
 """
 
 import ast
@@ -55,7 +54,7 @@ def in_grace(record: Any, minutes: int) -> Any:
     return record
 
 
-# note: live_credentials
+# live_credentials
 
 def test_the_previous_key_is_live_only_inside_its_grace_window() -> None:
     record = SimpleNamespace(api_key_id=KEY, previous_api_key_id=OLD,
@@ -68,7 +67,7 @@ def test_the_previous_key_is_live_only_inside_its_grace_window() -> None:
     assert extension_credential_guard.live_credentials(SimpleNamespace(api_key_id=KEY)) == [KEY]
 
 
-# note: the rewrite
+# The grant rewrite
 
 def test_a_narrowing_reaches_the_previous_key_inside_its_grace(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(integrations, "evict_api_key_cache", lambda _k: None)
@@ -79,7 +78,7 @@ def test_a_narrowing_reaches_the_previous_key_inside_its_grace(monkeypatch: pyte
     real = vault.vault_read
 
     def _read(path: str, use_cache: bool = True) -> Dict[str, Any]:
-        if path.endswith("/metadata"):  # note: the secret path is never mirrored
+        if path.endswith("/metadata"):  # The secret path is never mirrored.
             reads.append(use_cache)
         return real(path, use_cache)
 
@@ -129,7 +128,7 @@ def test_the_retirement_reads_uncached(monkeypatch: pytest.MonkeyPatch) -> None:
     assert seen == [False]
 
 
-# note: rescope
+# Rescope
 
 async def test_a_rescope_locks_the_row_then_every_live_key_then_writes(
     surface: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
@@ -172,7 +171,7 @@ async def test_a_rescope_locks_the_row_then_every_live_key_then_writes(
         assert vault.store[_FakeVault._path(key_id, "metadata")]["capabilities"] == ["inventory.read", "lxd.proxy"]
 
 
-# note: the sweep
+# The reconcile sweep
 
 def _sweep(db: ScopeDB, monkeypatch: pytest.MonkeyPatch, store: CredentialStore, locked: List[Any]) -> int:
     async def _bound(_db: Any, organization_id: int) -> set:
@@ -203,7 +202,7 @@ def test_a_row_uninstalled_meanwhile_is_skipped(monkeypatch: pytest.MonkeyPatch)
 def test_the_row_read_under_the_lock_decides(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = FakeInstall(id=1, organization_id=1, api_key_id="k-old",
                        granted_scope=[{"cluster_id": "a"}, {"cluster_id": "lost"}])
-    # note: a rotation committed meanwhile, and a rescope already narrowed the row
+    # A rotation committed meanwhile, and a rescope already narrowed the row.
     locked = FakeInstall(id=1, organization_id=1, api_key_id="k-new", granted_scope=[{"cluster_id": "a"}])
     store = CredentialStore()
     assert _sweep(ScopeDB(installs=[seen], bindings={1: {"a"}}), monkeypatch, store, [locked]) == 0
@@ -229,7 +228,7 @@ def test_a_narrowing_rewrites_the_key_the_locked_row_names(monkeypatch: pytest.M
     assert list(store.rewritten) == ["k-new"], "the retired key was rewritten"
 
 
-# note: ratchets
+# Lock and read ordering in the source
 
 def _first_calls(module: Any, function_name: str) -> Dict[str, int]:
     tree = ast.parse(inspect.getsource(module))

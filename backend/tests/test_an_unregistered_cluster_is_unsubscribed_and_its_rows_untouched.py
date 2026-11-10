@@ -1,10 +1,10 @@
-"""The registry loop follows a cluster the moment it is registered and lets go of one that is
-deleted, without touching the rows either one already has.
+"""The registry loop follows a newly registered cluster and lets go of a deleted one, without
+touching the rows either one already has.
 
-Both directions of the thirty-second sync: a new id gets a firehose subscription and a
-consumer, and its first `connected` hub frame seeds it; a removed id has its consumer cancelled,
-its subscription dropped and its state row set to `unregistered`. No task or log row is deleted
-or rewritten: non-admins lose them with the scope, and the prune loop removes them in time.
+On each thirty-second sync a new id gets a firehose subscription and a consumer, and its first
+`connected` hub frame seeds it; a removed id has its consumer cancelled, its subscription dropped
+and its state row set to `unregistered`. No task or log row is deleted or rewritten: non-admins
+lose them with the scope, and the prune loop removes them in time.
 """
 
 import asyncio

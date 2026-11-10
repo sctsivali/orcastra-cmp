@@ -1,14 +1,11 @@
 """A key's last use is recorded with its clock, and never by rewriting the key document.
 
-`last_used_at` was written with a naive `datetime.utcnow().isoformat()`. A date-time string with no
-offset is parsed as local time by JavaScript, so the add-on health panel rendered a credential used
-at noon in Jakarta as having been used at five in the morning. `credential_expires_at`, beside it,
-was always written through `utc_isoformat`.
+JavaScript parses a date-time string with no offset as local time, so `last_used_at` carries a UTC
+offset, like `credential_expires_at` beside it (`utc_isoformat`).
 
-It was also written by rewriting the whole key document from a cached read without the key's lock,
-on every authenticated request at most once per five minutes per worker. That write could put back
-a grant a cleanup had just removed, an old `is_revoked`, or old capabilities. The use now goes to
-its own table (services/api_key_usage.py).
+The use goes to its own table (services/api_key_usage.py). Rewriting the whole key document from a
+cached read without the key's lock could put back a grant a cleanup had just removed, an old
+`is_revoked`, or old capabilities.
 """
 
 import ast

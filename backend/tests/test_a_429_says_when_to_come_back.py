@@ -1,15 +1,14 @@
 """A 429 tells the client when to come back and which budget it hit.
 
-`Retry-After` was a constant 30 in a 60 s sliding window: a client throttled one second
-before its window cleared was told to wait half a minute, and one throttled at the start of
-the window was told to come back while still throttled. The remainder is what the window
-itself knows, so the header carries it. The response also names the bucket (ip, subnet,
-fresh) so a burst in the access log is diagnosable without a metrics stack.
+`Retry-After` is the remainder of the 60 s sliding window, so a client is neither kept
+waiting after its window clears nor told to come back while still throttled. The response
+also names the bucket (ip, subnet, fresh) so a burst in the access log is diagnosable
+without a metrics stack.
 
 The ip bucket is enforced per worker at the full configured value (only the fresh bucket is
 shared through Redis). A shared counter would turn a deployment that set 100 for one browser
-into 100 for the whole VM, which is worse, so that rule is pinned here rather than changed,
-and the upgrade guide describes the arithmetic the code actually does.
+into 100 for the whole VM, so that rule is pinned here and the upgrade guide describes the
+same arithmetic.
 """
 
 import math

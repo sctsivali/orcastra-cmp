@@ -1,10 +1,10 @@
-"""A My Keys audit row reaches an Administrator and the person who acted, nobody else.
+"""A My Keys audit row reaches only an Administrator and the person who acted.
 
-The rows carry `cluster_id=<the key's node>` and `resource_name=<key id>`, so the cluster and
-project scope let every partner on a shared cluster read another partner's key ids from the
-Cluster Log. A key id was the one thing standing between a partner and another owner's PFX
-download, so the log handed out the missing half of that exploit. The rule exists twice (the
-SQL and its Python twin), and both are held to the same answer here.
+The rows carry `cluster_id=<the key's node>` and `resource_name=<key id>`, so cluster and
+project scope alone would let every partner on a shared cluster read another partner's key
+ids from the Cluster Log. A key id must stay private: it is one half of what another owner's
+PFX download needs. The rule exists twice (the SQL and its Python twin), and both are held to
+the same answer.
 """
 
 import contextvars
@@ -82,7 +82,7 @@ def test_a_partner_reads_only_the_key_rows_they_acted_in(engine) -> None:
     assert {"key-mine", "key-mine-cased"} <= by_sql
     assert "key-theirs" not in by_sql
     assert "cleanup-theirs" not in by_sql
-    # Ordinary cluster rows keep the cluster scope they always had.
+    # Ordinary cluster rows keep plain cluster scope.
     assert "instance-row" in by_sql
 
 

@@ -20,7 +20,7 @@ class FakeBrowser:
         self.closed: Optional[Tuple[int, str]] = None
         self.close_event = asyncio.Event()
 
-    # what the test drives
+    # Driven by the test.
     def type_bytes(self, data: bytes) -> None:
         self.incoming.put_nowait({"type": "websocket.receive", "bytes": data})
 
@@ -30,7 +30,7 @@ class FakeBrowser:
     def leave(self) -> None:
         self.incoming.put_nowait({"type": "websocket.disconnect", "code": 1001})
 
-    # what the proxy calls
+    # Called by the proxy.
     async def receive(self) -> dict:
         return await self.incoming.get()
 

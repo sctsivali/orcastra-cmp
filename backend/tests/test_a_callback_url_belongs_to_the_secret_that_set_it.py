@@ -2,13 +2,12 @@
 
 A /sync carrying org.sync stores `app_url`, and the member push, the removal push and the lifecycle
 webhook send the key's raw secret there while the organization refresh sends its hash. A sync that
-authenticated with a secret just before that secret was rotated could still write its URL after
-the rotation had cleared it, outside any lock and without checking the secret again, and the next
-member push carried the NEW secret to it.
+authenticated with a secret just before that secret was rotated must not write its URL after the
+rotation cleared it, or the next member push would carry the new secret to it.
 
-Now the sync writes the URL under the key's lock, from Vault rather than its mirror, and only while
-the secret it presented is still the key's secret and the key is active. The URL is stored with a
-tag of that secret, and every callback uses it only while the tag matches the current secret. These
+The sync writes the URL under the key's lock, from Vault rather than its mirror, and only while the
+secret it presented is still the key's secret and the key is active. The URL is stored with a tag
+of that secret, and every callback uses it only while the tag matches the current secret. These
 run the real sync, rotation, refresh and callback credential code against an in-memory Vault.
 """
 
@@ -91,7 +90,7 @@ async def _no_callback_reaches(world: Dict[str, Any], monkeypatch: pytest.Monkey
     assert outbound == []
 
 
-# note: the race the review found
+# A sync racing a rotation.
 
 async def test_a_sync_in_flight_across_a_rotation_cannot_plant_its_url(
     world, monkeypatch, outbound  # noqa: F811
@@ -151,10 +150,11 @@ async def test_a_sync_with_the_current_secret_sets_the_url_every_callback_uses(
 
 
 async def test_a_slow_url_write_keeps_the_key_lock_until_it_lands(world, monkeypatch) -> None:  # noqa: F811
-    """The write used to run under a timeout. When Vault answered slowly the sync stopped waiting and
-    left the lock while the thread went on, and its write of the whole key document, read before a
-    revoke that took the lock meanwhile, put the revoked key back. Now the sync holds the lock until
-    the write lands, so the revoke runs after it and stands.
+    """The sync holds the key lock until a slow URL write lands, so a revoke runs after it and stands.
+
+    Giving up on a slow Vault write would release the lock while the thread went on, and its write
+    of the whole key document, read before a revoke that took the lock meanwhile, would put the
+    revoked key back.
     """
     import asyncio
     import threading
@@ -208,7 +208,7 @@ async def test_a_sync_that_presents_no_secret_stores_no_url(world) -> None:  # n
     assert _stored_url(world) is None
 
 
-# note: by shape, so a new reader of the stored URL cannot skip the binding
+# Checked by shape, so a new reader of the stored URL cannot skip the binding.
 
 # Every function under app/ that reads a stored app_url, and why that is safe.
 READERS = {
@@ -254,7 +254,7 @@ def _calls(where: str) -> set:
 
 
 @pytest.mark.parametrize("where", [
-    # note: _get_orcahub_credentials tries each owner key through _credentials_of
+    # _get_orcahub_credentials tries each owner key through _credentials_of.
     "services/orcahub_sync.py:_credentials_of",
     "routers/integrations.py:refresh_organizations",
 ])

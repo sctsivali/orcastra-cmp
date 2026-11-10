@@ -1,9 +1,9 @@
 """A GPU card is classified by driver, and only by driver.
 
-The Jetson Orin NX is the hardware that forces this. It enumerates two DRM cards for one
-physical GPU, so counting cards double-counts capacity, and the two heuristics that look
-obvious both promote the display controller into sellable capacity: the display card owns a
-render node (renderD128), and its driver_version is the kernel string "5.15.148-tegra".
+The Jetson Orin NX enumerates two DRM cards for one physical GPU, so counting cards
+double-counts capacity. Two obvious heuristics would both promote its display controller into
+sellable capacity: the display card owns a render node (renderD128), and its driver_version is
+the kernel string "5.15.148-tegra".
 """
 
 from app.services.lxd.gpu import build_gpu_inventory, classify_gpu_card, parse_gpu_cards
@@ -112,7 +112,7 @@ def test_a_bmc_display_controller_is_display_not_unknown() -> None:
 
 
 def test_a_virtio_gpu_reported_by_its_pci_transport_is_display() -> None:
-    """A nested LXD VM reports driver "virtio-pci" and product "Virtio 1.0 GPU" (Console Lab)."""
+    """A nested LXD VM reports driver "virtio-pci" and product "Virtio 1.0 GPU"."""
     card = {"driver": "virtio-pci", "vendor": "Red Hat, Inc.", "product": "Virtio 1.0 GPU"}
     classified = classify_gpu_card(card)
     assert (classified.gpu_class, classified.is_compute, classified.attachable) == ("display", False, False)

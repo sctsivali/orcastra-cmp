@@ -1,9 +1,9 @@
 """The channels of one SPICE display share one LXD console operation.
 
-spice-html5 opens a socket per channel (main, display, inputs, cursor). Each used to create its own
-LXD operation, control socket and tracked session, which cost four rounds of cluster setup per
-console and showed four sessions where the operator opened one. The channels now meet in the
-SPICE session store: the first creates the operation, the rest join it with a data socket only.
+spice-html5 opens a socket per channel (main, display, inputs, cursor). The channels meet in the
+SPICE session store: the first creates the LXD operation, control socket and tracked session, the
+rest join it with a data socket only. One operation per channel would cost four rounds of cluster
+setup per console and show four sessions where the operator opened one.
 """
 
 import asyncio
@@ -253,8 +253,8 @@ def test_the_vga_tickets_of_one_display_carry_one_group():
 
 
 async def test_a_record_copied_into_another_group_is_refused(store):
-    """Fernet has no associated data: a sealed record moved to another group's key used to decrypt
-    and attach a stranger's channels to the victim's display. The record now names its own key."""
+    """Fernet has no associated data, so the record names its own key: a sealed record moved under
+    another group's key must not attach a stranger's channels to the victim's display."""
     await store.publish("victim-group", {"data_url": "wss://cluster/1.0/operations/op-1/websocket?secret=s",
                                          "operation_id": "op-1", "host": "nuc2", "project": "default", "instance": "vm-a"})
     victim_key = next(k for k in store._local if k.endswith(":op"))

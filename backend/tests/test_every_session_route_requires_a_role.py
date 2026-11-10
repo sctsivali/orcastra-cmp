@@ -1,10 +1,9 @@
 """Every route a dashboard session reaches passes through a role check, except the one that says why.
 
 rbac.refuse_unmapped lives in require_roles, require_permissions and require_authenticated. A route
-that reads get_current_user without any of them would answer a caller with no role, which is the
-empty dashboard of issue #17 coming back through a side door. Selection is by dependant tree, so a
-new route is covered the moment it is added. Sockets identify their caller through ws_user, which
-refuses the same caller.
+that reads get_current_user without any of them would answer a caller with no role. Selection is by
+dependant tree, so a new route is covered the moment it is added. Sockets identify their caller
+through ws_user, which refuses the same caller.
 """
 
 import os

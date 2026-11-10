@@ -1,7 +1,7 @@
 """Cache generation fences for monitoring and cluster-member reads.
 
-These handlers fan out to LXD before writing relatively long-lived cache entries. A mutation
-may invalidate the old entry while that fan-out is still running, so the read must not put its
+These handlers fan out to LXD before writing relatively long-lived cache entries. A mutation may
+invalidate the cached entry while that fan-out is still running, so the read must not put its
 pre-mutation result back after the invalidation.
 """
 

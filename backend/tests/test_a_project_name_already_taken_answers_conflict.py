@@ -1,9 +1,8 @@
 """Creating a project under a name the cluster already has answers 409, not 400.
 
-The QA fixture re-run on 2026-11-05 met `400 Could not create project: Project "qa-rc5-bz" already
-exists`. A conflict is the caller's to resolve by choosing another name or reusing the project, and
-the other create routes (images, profiles, networks through lxd_http_error) already say 409. Any
-other refusal LXD gives the create keeps its 400.
+A conflict is the caller's to resolve by choosing another name or reusing the project, and the
+other create routes (images, profiles, networks through lxd_http_error) also answer 409. Any other
+refusal LXD gives the create keeps its 400.
 """
 
 import asyncio

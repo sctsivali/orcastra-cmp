@@ -2,8 +2,8 @@
 
 routers/console.py keeps its own _verify_instance_access because its tests drive it through that
 module's names; core/instance_access.py is the copy the terminal, the ticket mint and the
-periodic re-authorization use. Two copies of a security rule drift unless something holds them
-together, and this is that something: every scope, grant and flag combination, both functions.
+periodic re-authorization use. This test holds the two copies of the rule together across every
+scope, grant and flag combination.
 """
 
 import itertools

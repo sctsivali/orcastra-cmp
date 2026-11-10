@@ -1,11 +1,9 @@
 """
 Locks in the semantics run_blocking depends on.
 
-The subtle part, and the reason this file exists: cancelling the await does NOT stop the
-worker thread. If that were misunderstood, the helper would look like it bounds the work
-while actually leaking a thread per call, and the pool would drain one request at a time
-until the process served nothing. That is the failure mode the RC3 outage was made of, so
-the behaviour is asserted rather than assumed.
+Cancelling the await does NOT stop the worker thread. A helper that ignored this would seem
+to bound the work while leaking a thread per call, and the pool would drain one request at a
+time until the process served nothing, so the behaviour is asserted here.
 """
 
 import asyncio
@@ -89,9 +87,9 @@ async def test_the_loop_keeps_running_while_the_call_is_outstanding(pool):
 
 
 async def test_in_flight_is_released_only_when_the_thread_really_finishes(pool):
-    """This is what asyncio.shield buys. Without it the future is cancelled at the cap and
-    the slot would be freed while the thread is still holding it, understating how much of
-    the pool a dead peer has pinned."""
+    """asyncio.shield keeps the slot. Without it the future is cancelled at the cap and the
+    slot would be freed while the thread still holds it, understating how much of the pool a
+    dead peer has pinned."""
     released = threading.Event()
 
     with pytest.raises(BlockingTimeout):

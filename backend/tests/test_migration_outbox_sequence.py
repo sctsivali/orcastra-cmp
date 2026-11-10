@@ -1,7 +1,7 @@
 """Several events on one outbox channel in one transaction get consecutive sequence numbers.
 
-Found live: a project relocation enqueues one webhook per instance in its retention transaction,
-and with autoflush off every one of them read the same max sequence and collided.
+A project relocation enqueues one webhook per instance in its retention transaction. With
+autoflush off, each would otherwise read the same max sequence and collide.
 """
 
 from __future__ import annotations
@@ -28,12 +28,12 @@ def db() -> Iterator[AsyncSessionFacade]:
             if isinstance(column.type, JSONB):
                 column.type = JSON()
             if column.primary_key and isinstance(column.type, BigInteger):
-                column.type = Integer()  # SQLite autoincrements INTEGER PRIMARY KEY only
+                column.type = Integer()  # SQLite autoincrements INTEGER PRIMARY KEY only.
             if column.server_default is not None and "::" in str(getattr(column.server_default, "arg", "")):
                 column.server_default = None
         table.indexes.clear()
     metadata.create_all(facade.sync.get_bind())
-    facade.sync.autoflush = False  # as the application sessions run (core/database.py)
+    facade.sync.autoflush = False  # As the application sessions run (core/database.py).
     try:
         yield facade
     finally:

@@ -1,9 +1,8 @@
 """A target start that keeps failing reaches manual recovery instead of looping.
 
-reconcile_staged wrote reconciliation_streak=0 every time it moved a job back to
-target_validating, even when every target had been adopted long before. Each failed start then
-counted as the first unknown again, so the five-attempt cap never fired and the job retried a
-start every minute with the source fenced and stopped.
+reconcile_staged keeps reconciliation_streak when it moves a job with adopted targets back to
+target_validating. Resetting it would count each failed start as the first unknown again, so
+the five-attempt cap would never fire while the source stays fenced and stopped.
 """
 
 from __future__ import annotations

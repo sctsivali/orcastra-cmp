@@ -3,8 +3,8 @@
 The key scripts run for real here, under every POSIX shell the host has (dash, bash, busybox ash),
 in a throwaway home, against the tricks a guest user could play: a link where the file should be, a
 FIFO, a folder owned by someone else, a change made between read and write. The shadow summary runs
-through the real awk program against fixture lines, so the claim "never prints a hash" is tested,
-not asserted.
+through the real awk program against fixture lines, so "never prints a hash" is checked on real
+output.
 """
 
 import ast
@@ -24,8 +24,8 @@ UID = os.getuid()
 
 
 def test_the_digests_are_pinned():
-    # A change to a script that runs as root inside customers' guests is a reviewed change: update
-    # this table in the same commit, and say why in its message.
+    # These scripts run as root inside guests, so a change must be deliberate: update this table
+    # in the same commit and say why in its message.
     assert {name: scripts.digest(name) for name in scripts.SCRIPTS} == {
         "inventory": "1a00b60233c7e30e",
         "sudo-verdicts": "4a610fe204393279",

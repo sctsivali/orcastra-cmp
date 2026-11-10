@@ -1,15 +1,12 @@
-"""The sweep that closes the window the request path deliberately leaves open.
+"""The reconcile sweep closes the drift window the request path leaves open.
 
 `extension_scope` refuses a suspended or missing installation from a cached snapshot, and skips
 the two-table join that decides whether the installing partner still reaches every cluster in the
-grant. Its own docstring says that drift is left to a reconcile sweep. For a while the sweep did
-not exist: the config knob, both audit actions and the join key in the credential metadata were
-all present, with no implementation and nothing scheduling one. So the stored grant was trusted
-indefinitely, which on a platform where clusters are rented means one tenant's add-on reading the
-next tenant's workload after the hardware changed hands.
+grant; that drift is left to this sweep. Without it the stored grant would be trusted
+indefinitely, and where clusters are rented one tenant's add-on could read the next tenant's
+workload after the hardware changes hands.
 
-These assert both passes do their work AND that they can tell there was work to do. A sweep that
-returns a confident zero because it looked in the wrong place is indistinguishable from a clean
+A sweep that returns zero because it looked in the wrong place is indistinguishable from a clean
 tree, so every case here pairs the change it expects with a case that must not change.
 """
 
@@ -51,7 +48,7 @@ class FakeResult:
 class ScopeDB:
     """Answers the scope pass's one query. Kept separate from the orphan pass's fake because
     `select(ExtensionInstallation)` renders every column, `previous_api_key_id` among them, so a
-    single fake dispatching on the statement text matched the wrong branch."""
+    single fake dispatching on the statement text would match the wrong branch."""
 
     installs: List[FakeInstall]
     bindings: Dict[int, Set[str]]
@@ -59,15 +56,14 @@ class ScopeDB:
     rollbacks: int = 0
 
     async def execute(self, _statement):
-        # note: returns every row. Filtering here would have hidden the suspended-row bug, since
-        # the fake would have reproduced the same mistake the code was making.
+        # Returns every row. Filtering here would mirror a status filter in the real query and
+        # hide it.
         return FakeResult(list(self.installs))
 
     async def commit(self):
-        # important: models `ck_ext_install_scope_nonempty`. The previous fake just counted
-        # commits, so the total-loss branch looked fine here while the real database rejected it,
-        # rolled the suspension back with it, and aborted the whole pass on every tick. A fake
-        # that does not model the constraint cannot test the constraint.
+        # Models `ck_ext_install_scope_nonempty`: the real database refuses an empty grant on
+        # commit, and the suspension rolls back with it. A fake without the constraint cannot
+        # test it.
         for install in self.installs:
             if install.granted_scope == []:
                 raise IntegrityError(
@@ -93,11 +89,10 @@ class OrphanDB:
 
 @dataclass
 class CredentialStore:
-    """What the sweep actually did to the credential, which is the half nothing asserted.
+    """What the sweep did to the credential.
 
     The request path authorizes clusters from the Vault key, never from the row, so a narrowing
-    that only writes the row changes nothing an add-on can feel. That was the defect, and it was
-    invisible because no fake here had a credential in it to check.
+    that only writes the row changes nothing an add-on can feel.
     """
 
     rewritten: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
@@ -108,7 +103,7 @@ class CredentialStore:
         if self.fail_on == install.api_key_id:
             raise RuntimeError("vault is sealed")
         self.rewritten[install.api_key_id] = list(install.granted_scope or [])
-        # note: what the real rewrite returns for a key whose capabilities it left unchanged
+        # What the real rewrite returns for a key whose capabilities it left unchanged.
         return capability_audit_fields({"capabilities": []}, {"capabilities": []})
 
     def revoke(self, _client, key_id: str) -> None:
@@ -141,9 +136,9 @@ def _run_scope_pass(db: ScopeDB, monkeypatch, store: Optional[CredentialStore] =
     monkeypatch.setattr(sweep, "_rewrite_key_grant", store.rewrite)
     monkeypatch.setattr(sweep, "revoke_install_credential", store.revoke)
 
-    # note: ScopeDB answers every statement with installation rows, so the read of what a revoked
+    # ScopeDB answers every statement with installation rows, so the read of what a revoked
     # credential owns is answered here instead: nothing. test_an_add_on_credential_keeps_its_
-    # organizations covers the record when it does own some.
+    # organizations.py covers the record when it does own some.
     async def _owns_nothing(_db, _key_id):
         return []
 
@@ -163,8 +158,8 @@ def test_a_grant_is_trimmed_to_what_the_organization_still_reaches(monkeypatch) 
     assert changed == 1
     assert install.granted_scope == [{"cluster_id": "nuc2"}]
     assert install.status == "active", "it still reaches something, so it must not be suspended"
-    # The assertion that was missing, and the reason the pass did nothing for a day: the request
-    # path reads the credential, so a narrowing that stops at the row is not a narrowing.
+    # The request path reads the credential, so the credential must be narrowed as well as the
+    # row.
     assert store.rewritten["k1"] == [{"cluster_id": "nuc2"}], (
         "the row was trimmed and the credential was not, so the add-on keeps the cluster"
     )
@@ -180,9 +175,9 @@ def test_an_installation_left_reaching_nothing_is_suspended(monkeypatch) -> None
     assert changed == 1
     assert install.status == "suspended"
     assert "no longer reaches" in (install.suspend_reason or "")
-    # important: the grant is NOT emptied. `ck_ext_install_scope_nonempty` refuses an empty one,
-    # so writing it raised on commit and rolled the suspension back with it. The last grant stays
-    # as the record of what was withdrawn and the credential is revoked instead.
+    # The grant is not emptied. `ck_ext_install_scope_nonempty` refuses an empty one,
+    # and the failed commit would roll the suspension back with it. The last grant stays as the
+    # record of what was withdrawn, and the credential is revoked instead.
     assert install.granted_scope == [{"cluster_id": "sold-on"}]
     assert store.revoked == ["k2"], "reaching nothing must revoke the credential, not just the row"
     assert db.rollbacks == 0, "the constraint must never be hit in the first place"
@@ -204,12 +199,11 @@ def test_a_grant_that_still_fits_is_left_alone(monkeypatch) -> None:
 
 
 def test_the_scope_pass_does_not_filter_by_status() -> None:
-    """The behavioural cases below cannot see this on their own, and that is the point.
+    """The scope pass reads suspended installations as well as active ones.
 
-    important: ScopeDB returns whatever it holds without honouring a WHERE clause, so restoring
-    `status == "active"` to the real query leaves them green. Discovered by ablating: the two
-    tests written for this bug both passed against the reintroduced bug. A fake that does not model
-    the filter cannot test the filter, so the filter is asserted here on the statement itself.
+    ScopeDB returns whatever it holds without honouring a WHERE clause, so the behavioural cases
+    below stay green if `status == "active"` is added to the real query. The filter is asserted
+    here on the statement itself.
     """
     import inspect
 
@@ -223,9 +217,8 @@ def test_the_scope_pass_does_not_filter_by_status() -> None:
 
 
 def test_a_suspended_installation_is_narrowed_too(monkeypatch) -> None:
-    """Resume only flips the status back, so a suspended row skipped by the sweep comes back
-    holding a grant its organization no longer has. Filtering on active looked like a saving and
-    left exactly that window open."""
+    """Resume only sets the status to active, so a suspended row skipped by the sweep would return
+    holding a grant its organization does not have."""
     install = FakeInstall(
         id=4, organization_id=3, api_key_id="k4", status="suspended",
         granted_scope=[{"cluster_id": "nuc2"}, {"cluster_id": "sold-on"}],
@@ -293,7 +286,7 @@ def test_a_credential_no_installation_claims_is_revoked(monkeypatch) -> None:
 
 
 def test_an_ordinary_key_is_never_touched(monkeypatch) -> None:
-    """A key with no install marker belongs to the integrations surface, not to an add-on."""
+    """A key with no install marker belongs to the integrations surface rather than an add-on."""
     count, vault = _run_orphan_pass(
         installs=[],
         vault_keys=[{"id": "someone-elses-key", "name": "OrcaHub"}],
@@ -304,8 +297,8 @@ def test_an_ordinary_key_is_never_touched(monkeypatch) -> None:
 
 
 def test_a_superseded_key_inside_its_grace_window_survives(monkeypatch) -> None:
-    """Rotation retires the old key by shortening its expiry, so it is still legitimately usable
-    and is not an orphan. Revoking it here would break the overlap rotation exists to provide."""
+    """Rotation retires the superseded key by shortening its expiry, so it is still usable and is
+    not an orphan. Revoking it here would break the overlap rotation exists to provide."""
     count, vault = _run_orphan_pass(
         installs=[
             FakeInstall(
@@ -357,12 +350,10 @@ def test_the_marker_field_is_the_one_the_credential_actually_writes() -> None:
 
 
 def test_the_sweep_is_actually_scheduled() -> None:
-    """The knob, both audit actions and the join key all existed while no sweep did.
+    """`main` calls start_reconcile_sweep with the configured interval.
 
-    important: this walks the AST for a CALL rather than grepping the source. The first version
-    asserted the name appeared in `main`, which the `from ... import start_reconcile_sweep` line
-    satisfies on its own, so replacing the call left the test green. That is the same shape as the
-    defects this whole file exists to prevent, so it was worth fixing rather than loosening.
+    This walks the AST for a call rather than grepping the source: the
+    `from ... import start_reconcile_sweep` line alone would satisfy a name check.
     """
     import ast
     import inspect
@@ -377,7 +368,7 @@ def test_the_sweep_is_actually_scheduled() -> None:
     }
     assert "start_reconcile_sweep" in called, "nothing calls start_reconcile_sweep"
 
-    # And it must be given the documented interval rather than a hardcoded one.
+    # It must be given the configured interval rather than a hardcoded one.
     source = inspect.getsource(main)
     assert "extension_reconcile_interval_seconds" in source, "the interval knob is not read"
 
@@ -393,12 +384,9 @@ def test_both_audit_actions_have_an_emitter(action: str) -> None:
 
 
 def test_a_sealed_vault_delays_one_row_rather_than_ending_the_pass(monkeypatch) -> None:
-    """One bad row used to abort the whole scope pass, and then every later tick too.
+    """One failing row rolls back on its own and does not end the scope pass.
 
-    The total-loss branch wrote an empty grant, the CHECK constraint refused it, and the
-    IntegrityError escaped to the loop's blanket handler. So one totally-drifted installation
-    stopped unrelated partial narrowings from ever being applied. Here the first row cannot reach
-    Vault and the second still gets its narrowing.
+    Here the first row cannot reach Vault and the second still gets its narrowing.
     """
     stuck = FakeInstall(
         id=6, organization_id=3, api_key_id="stuck",
@@ -419,9 +407,8 @@ def test_a_sealed_vault_delays_one_row_rather_than_ending_the_pass(monkeypatch) 
 
 
 def test_the_scope_pass_rewrites_the_credential_not_only_the_row() -> None:
-    """Structural, because the behavioural cases above cannot see a regression that removes the
-    Vault call while still trimming the row: they would keep passing on `granted_scope` alone if
-    somebody restored the old body. The request path reads `cluster_permissions` from the key."""
+    """A structural backstop to the cases above: the pass rewrites the credential and never writes
+    an empty grant. The request path reads `cluster_permissions` from the key."""
     import inspect
 
     source = inspect.getsource(sweep._narrow_drifted_scope)

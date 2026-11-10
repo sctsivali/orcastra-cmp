@@ -1,11 +1,11 @@
-"""One click is one log line and one task, not two of each.
+"""One click is one log line and one task.
 
 The router records `instance.start` and the service layer records `lxd.instance.start` for
 the same click. The service twin also fires with no click at all (a rebuild's stop and start,
-start-on-create), under whichever actor created the task, so journaling it would mint phantom
-rows beside the operation rows the follower already writes. The twin is dropped; the router
-record is the one QA asserts on. `lxd.connection.*` has no router twin and is the only record
-of a cluster (re)connect, so it stays, as a log line with a system actor and never a task.
+start-on-create), under whichever actor created the task, so journaling it would add phantom
+rows beside the operation rows the follower already writes. The twin is dropped and the router
+record kept. `lxd.connection.*` has no router twin and is the only record of a cluster
+(re)connect, so it stays, as a log line with a system actor and never a task.
 """
 
 import pytest

@@ -1,9 +1,9 @@
-"""This service is root and acts by path, and a user in the guest can move what a path means.
+"""The file service acts as root by path, and a user in the guest can change what a path names.
 
-OPEN and SETSTAT follow links, and SFTP has neither O_NOFOLLOW nor lsetstat. So a user who owns a
-folder, watching it with inotify, could replace an upload's temp with a link to /etc/shadow and be
-handed that file by the next chown, or have it truncated by the next chunk. No race is even needed
-for a chunked upload, because the temp sits between requests. Each case here is one such swap.
+OPEN and SETSTAT follow links, and SFTP has neither O_NOFOLLOW nor lsetstat. A user who owns a
+folder and watches it with inotify could replace an upload's temp with a link to /etc/shadow and
+be handed that file by the next chown, or have it truncated by the next chunk. A chunked upload
+needs no race, because the temp sits between requests. Each case here is one such swap.
 """
 
 import asyncio

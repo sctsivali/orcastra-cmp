@@ -1,15 +1,11 @@
 """The monitoring dashboard cache must be shared between workers, not per process.
 
-It used to be a pair of module-level dicts with a 35s TTL. With WEB_CONCURRENCY=4 that meant
-four independent snapshots: the background collector only ever warmed the worker it ran in, and
-an operator refreshing the page hopped workers and watched the numbers jump backwards. The
-arithmetic made it worse than stale, it made it useless: under a 10s client poll each worker
-saw a request roughly every 40s, past its own 35s TTL, so the cache missed nearly every time
-and every miss paid a full node fan-out.
+A per-process cache gives each worker its own snapshot: the collector warms only the worker it
+runs in, a refreshing operator hops workers and sees numbers jump backwards, and with a 10 s
+poll spread over several workers each one's 35 s entry expires before it is read again.
 
-Structural rather than a multi-process test, because the failure cannot be reproduced inside
-one interpreter. What can be pinned is that no module state holds the body and that the read
-path goes to the shared cache.
+A multi-process failure cannot be reproduced inside one interpreter, so this pins the
+structure: no module state holds the body, and the read path goes to the shared cache.
 """
 
 import asyncio
@@ -22,7 +18,7 @@ from app.routers import monitoring
 
 
 def test_no_module_state_holds_the_dashboard_body():
-    """The regression guard. These names existing again means the split came back."""
+    """Module-level cache names mean the body is per-process again."""
     for leaked in ("_dashboard_cache", "_dashboard_cache_times", "_dashboard_cache_ttl"):
         assert not hasattr(monitoring, leaked), (
             f"{leaked} is per-process state; the dashboard body belongs in the shared cache"

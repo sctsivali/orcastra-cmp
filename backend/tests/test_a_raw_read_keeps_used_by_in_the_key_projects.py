@@ -1,9 +1,9 @@
 """A raw proxy read by a project-limited key keeps used_by to the key's own projects.
 
 A pool's, network's, profile's or volume's used_by is cluster-wide. The structured proxy and MCP
-already held it to the key's grant (A4, test_a_bounded_key_reads_used_by_in_its_projects_only.py),
-but a plain raw GET of /1.0/storage-pools/<pool> still named every project's instances on a shared
-cluster (RC5 acceptance FU-3). The owner decided on 2026-11-06 that the raw proxy filters too.
+hold it to the key's grant (test_a_bounded_key_reads_used_by_in_its_projects_only.py); the raw
+proxy filters a plain GET such as /1.0/storage-pools/<pool> the same way, so on a shared
+cluster it does not name other projects' instances.
 """
 
 import asyncio

@@ -1,11 +1,10 @@
 """A stored cluster location that is not a complete one reads as no location, everywhere.
 
 Registering a cluster over the API without a location stores {} (lxd_certs/storage.py), and an
-older or hand-edited record can hold null, part of a location, a string or a list. Each reader
-used to take the raw value: GeoLocation(**partial) answered GET /clusters/{id} with 500 and
-degraded the list row to endpoint "unknown", and `.get` on a stored null, string or list crashed
-the facilities, integrations and regions reads. These pin one rule through every reader, and that
-a server fault answers a fixed message while the detail stays in the log.
+older or hand-edited record can hold null, part of a location, a string or a list. A reader that
+takes the raw value fails: `GeoLocation(**partial)` raises, and `.get` on a null, string or list
+crashes. These pin one rule through every reader, and that a server fault answers a fixed message
+while the detail stays in the log.
 """
 
 import asyncio

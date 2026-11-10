@@ -1,11 +1,11 @@
 """State that belongs to a whole cluster is read or changed only where no other party holds it.
 
-LXD auth groups and identities and storage pools belong to no project. A partner held to a project
-bound on a cluster another party holds could still list another party's groups and identities,
-create a group with any permission list, add an identity to one, delete either, and create,
-reconfigure or delete a pool that party's projects use, because every route checked the cluster
-only. The party is read from real rows on SQLite, and the LXD client and the configuration lock are
-recorders, so a refusal is proven to land before either is reached.
+LXD auth groups and identities and storage pools belong to no project, so a cluster check alone
+would let a partner held to a project bound on a cluster another party holds list that party's
+groups and identities, create a group with any permission list, add an identity to one, delete
+either, and create, reconfigure or delete a pool that party's projects use. The party is read
+from real rows on SQLite, and the LXD client and the configuration lock are recorders, so a
+refusal is proven to land before either is reached.
 """
 
 from types import SimpleNamespace
@@ -203,8 +203,8 @@ async def test_a_fleet_listing_leaves_out_another_partys_cluster_entirely(scope,
 @pytest.mark.parametrize("route,kind", [(permissions.list_identities, "identities"), (permissions.list_groups, "groups")])
 async def test_a_fleet_listing_narrows_when_the_database_cannot_answer(scope, lxd, route: Any, kind: str) -> None:
     answer = await route(None, _fleet(), _Down(), _user(SELLER))
-    # note: on this line every non-admin cluster is judged by party, so a database that cannot
-    # answer leaves every one of them out, the seller's own included.
+    # Every non-admin cluster is judged by party here, so a database that cannot answer leaves
+    # every one of them out, the seller's own included.
     assert lxd[kind] == [] and answer.nodes == [] and answer.unreachable_nodes == []
 
 

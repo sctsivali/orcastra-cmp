@@ -1,7 +1,7 @@
 """
 A profile edit carries the ETag it was read with, waits for the daemon, and a stale one is a 412.
 
-The single read now answers `etag`; PUT forwards If-Match and waits for the operation LXD 6.9
+The single read answers `etag`; PUT forwards If-Match and waits for the operation LXD 6.9
 answers a profile PUT with (5.21 answers synchronously and the wait is a no-op). A stale
 precondition, whether the fresh read already contradicts it or the daemon refuses it, is a
 412 with a sentence, and a failed operation is a 400 rather than a success.

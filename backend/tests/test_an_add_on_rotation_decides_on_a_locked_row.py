@@ -1,10 +1,10 @@
 """An add-on rotation and uninstall decide on the locked installation row, and only those who run the
 installation hand its organizations to a new secret.
 
-Two rotations, or a rotation and an uninstall, each read the same api_key_id before either wrote, so
-the second carried or checked a key the first had already retired, and organizations were left on a
-credential no installation claims (lock_installation). And since a rotation carries what the old
-credential owns, the secret it returns owns those organizations, so it is limited the way an
+Without the row lock (lock_installation), two rotations, or a rotation and an uninstall, could each
+read the same api_key_id before either writes; the second would carry or check a key the first already
+retired, leaving organizations on a credential no installation claims. A rotation carries what the old
+credential owns, so the secret it returns owns those organizations, and it is limited the way an
 integration key's rotation is: an Administrator, a partner of the installation's organization, or the
 creator of an organization made in this dashboard.
 """
@@ -67,7 +67,7 @@ def committed_meanwhile(stale: SimpleNamespace, **changes: Any):
     return _locked
 
 
-# note: L1, the decision is made on the locked row
+# The decision is made on the locked row.
 
 async def test_a_rotation_retires_and_carries_from_the_key_the_locked_row_names(
     rotation: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
@@ -174,7 +174,7 @@ async def test_a_row_deleted_meanwhile_answers_404() -> None:
     assert gone.value.status_code == 404
 
 
-# note: L2, who may take the organizations with a new secret
+# Who may take the organizations with a new secret.
 
 @pytest.mark.parametrize("rows, created_by, source", [
     ([(PARTNER.email, "member")], "someone@example.test", "local"),
@@ -264,7 +264,7 @@ async def test_the_route_records_the_refusal_on_the_rotate_action(
     assert record["details"]["api_key_id"] == OLD
 
 
-# note: ratchets, so the order and the one lock site hold
+# Source checks that keep the lock order and the single lock site.
 
 APP = Path(__file__).resolve().parents[1] / "app"
 

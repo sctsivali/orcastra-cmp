@@ -1,12 +1,11 @@
 """Every action the task panel emits is registered, and cancelling is alertable.
 
-`log_activity` falls through to `EventCategory.LXD_INFRA` and `MEDIUM` for an action it does
-not know, silently, so an unregistered action is a record filed under a category nobody chose.
-The other direction matters as much: a registered `task.*` action nothing emits is a control
-wired to nothing, which this codebase has shipped before.
+`log_activity` silently files an action it does not know under `EventCategory.LXD_INFRA` and
+`MEDIUM`, so an unregistered action lands in an unintended category. The other direction
+matters as much: a registered `task.*` action nothing emits is a control wired to nothing.
 
-The cancel route and the follower are built beside this file; a source that is not on disk yet
-is skipped by name rather than invented, and the orphan direction waits for all of them.
+A source missing from disk is skipped by name rather than invented, and the orphan check is
+skipped until every named source exists.
 """
 
 import ast

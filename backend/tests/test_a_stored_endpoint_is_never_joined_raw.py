@@ -1,27 +1,16 @@
 """Ratchet: nothing in lxd_certs may build a URL onto a raw stored endpoint.
 
-The 404 that made a trusted MicroCloud read as "Not Authenticated" was one f-string:
-`f"{endpoint}/1.0/instances"` on a value stored as "https://host:8443/". Three sibling call
-sites in trust.py carried the same shape, and console_service, terminal_service and events_hub
-had already been hardened with a local `.rstrip("/")` - so the codebase looked normalised at a
-glance while the probe path was not. That asymmetry is exactly what a structural guard is for.
+`f"{endpoint}/1.0/instances"` on a value stored as "https://host:8443/" requests a double-slash
+path, LXD answers 404, and a trusted cluster reads as "Not Authenticated".
 
 The rule: inside app/services/lxd_certs/, an f-string that joins a name containing "endpoint"
-to a path must join a normalised value, not the raw name. `normalize_endpoint(endpoint)` inside
-the f-string satisfies it, and so does a preceding `endpoint = normalize_endpoint(...)` binding.
+to a path must join a normalised value. `normalize_endpoint(endpoint)` inside the f-string
+satisfies it, and so does a preceding `endpoint = normalize_endpoint(...)` binding. No baseline
+count: the rule is absolute.
 
-No baseline count. Every in-scope site was converted in one pass, and an absolute rule cannot
-rot the way a count can.
-
-Scope is `lxd_certs/` deliberately, not the whole backend. Running this rule repo-wide reports
-nineteen more joins, and all nineteen are safe for reasons this simple AST check cannot see:
-`image_uploads.py`, `iso_uploads.py` and `lxd/instance.py` bind `endpoint` from
-`client.api._api_endpoint`, which pylxd has already normalised, and `console_service.py`,
-`terminal_service.py` and `lxd/events_hub.py` build their `ws_endpoint` with a local
-`.rstrip("/")`. Teaching the checker those two shapes would make it cleverer and more brittle;
-carrying them as a baseline of nineteen would invite exactly the drift a ratchet exists to
-prevent. `lxd_certs/` is where an endpoint comes straight out of Vault unmediated, which is the
-only place the raw join is dangerous, so that is where the absolute rule applies.
+Scope is `lxd_certs/` because that is where an endpoint comes straight out of Vault. Joins
+elsewhere mostly use pylxd's `client.api._api_endpoint`, which is already normalised, or strip
+the slash locally (lxd/events_hub.py), and this AST check cannot see either.
 """
 
 import ast
@@ -90,7 +79,7 @@ class StoredEndpointIsNormalizedTests(unittest.TestCase):
         )
 
     def test_the_guard_would_catch_the_original_defect(self):
-        """Guard the guard: the pre-fix source must fail this rule."""
+        """Guard the guard: the raw double-slash shape must fail this rule."""
         original = 'test_url = f"{endpoint}/1.0/instances"\n'
         tree = ast.parse(original)
         self.assertEqual(len(_raw_joins(tree, _normalized_names(tree))), 1)

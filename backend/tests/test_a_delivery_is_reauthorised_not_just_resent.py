@@ -1,17 +1,12 @@
-"""Revocation has to be real, and a payload has to be narrow.
+"""A delivery is re-authorised before it is sent, and its payload carries only named fields.
 
-Two properties, both of which are easy to believe are true without being true.
+An installation's stored grant records what an operator consented to. If a delivery consulted only
+that, an add-on would keep hearing about a cluster after the organization lost it, which on rented
+hardware means watching the next tenant's workload. So the dispatcher reloads the installation
+immediately before sending and drops the delivery if the cluster is outside its reach.
 
-The first: an installation's stored grant records what an operator consented to. If a delivery
-consulted only that, an add-on would keep hearing about a cluster after the organization lost it,
-and on a platform where clusters are rented that means one tenant's add-on watching the next
-tenant's workload on hardware that changed hands. So the dispatcher reloads the installation
-immediately before sending and drops the delivery if it no longer reaches.
-
-The second: what leaves this deployment lands on somebody else's infrastructure. The payload is
-built from a typed object with named fields and a filter, not from a dict a caller shapes, because
-the alternative is a rule enforced at review time and review is where this class of leak comes
-from. A field that is obviously useful is often also identifying.
+The payload lands on someone else's infrastructure, so it is built from a typed object with named
+fields and an allow-list filter, never from a dict a caller shapes.
 """
 
 import asyncio
@@ -62,10 +57,9 @@ def _event(**overrides: Any) -> ResourceEvent:
     ],
 )
 def test_a_field_outside_the_allow_list_never_leaves(leak: Dict[str, Any]) -> None:
-    """Passed through `extra`, which exists so a future event can add a field without a new class.
+    """Fields passed through `extra` are filtered against the allow-list, never trusted.
 
-    Filtered rather than trusted, so putting an address in there yields nothing rather than a
-    delivery carrying it.
+    `extra` lets a future event add a field without a new class.
     """
     envelope = build_envelope(
         _event(extra=leak),
@@ -88,11 +82,7 @@ def test_the_fields_that_do_leave_are_the_ones_named() -> None:
 
 
 def test_the_envelope_carries_a_stable_idempotency_key() -> None:
-    """Delivery is at-least-once, so a receiver has to be able to dedupe.
-
-    The id is generated once for the event, not per attempt, which is the property that makes
-    that possible and the one easiest to lose when adding a retry loop.
-    """
+    """Delivery is at-least-once, so the id is fixed once per event for receivers to dedupe."""
     event = _event()
     first = build_envelope(event, deployment_id="d", subscription_id=1, installation_id=7, sequence=1)
     second = build_envelope(event, deployment_id="d", subscription_id=1, installation_id=7, sequence=2)
@@ -162,10 +152,10 @@ def test_a_delivery_is_dropped_when_the_installation_is_suspended() -> None:
 
 
 def test_a_delivery_is_dropped_when_the_cluster_left_the_grant() -> None:
-    """The one a stored grant cannot notice.
+    """The case a stored grant cannot notice: the organization has lost the cluster.
 
-    The subscription is unchanged, the installation is still active, and the event is still one
-    it asked for. What changed is that the organization no longer reaches that cluster.
+    The subscription is unchanged, the installation is still active, and the event is one it asked
+    for.
     """
     reason = asyncio.run(
         dispatcher._still_authorised(
@@ -195,8 +185,9 @@ class FakeDelivery:
 
 
 def test_backoff_uses_full_jitter() -> None:
-    """Equal jitter leaves a synchronised backlog synchronised. Full jitter is the variant that
-    actually spreads a queue resuming after an outage, so the floor has to be able to reach zero.
+    """Full jitter, so the delay can reach zero and a backlog resuming after an outage spreads out.
+
+    Equal jitter would leave that backlog synchronised.
     """
     samples = [dispatcher._next_attempt_delay(2) for _ in range(200)]
     base = dispatcher.RETRY_SCHEDULE_SECONDS[2]
@@ -224,8 +215,7 @@ def test_a_failure_reschedules_until_the_attempts_run_out() -> None:
 
 
 def test_a_subscription_that_keeps_failing_is_suspended() -> None:
-    """Continuing to POST at an endpoint that has refused twenty in a row is us behaving like a
-    reflector rather than a sender."""
+    """After AUTO_SUSPEND_AFTER consecutive failures the subscription is suspended."""
     now = now_utc()
     subscription = FakeSubscription(consecutive_failures=dispatcher.AUTO_SUSPEND_AFTER - 1)
     asyncio.run(

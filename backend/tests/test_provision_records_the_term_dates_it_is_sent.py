@@ -1,7 +1,7 @@
 """provision-tenant-access records the paid term OrcaHub sends, and refuses one that cannot be true.
 
 OrcaHub narrows a buyer's access at the end of a paid term by provisioning again with fewer
-permissions. Orcastra now also takes the dates of that term: `term_ended_at` (view only from then)
+permissions. Orcastra also takes the dates of that term: `term_ended_at` (view only from then)
 and `access_ends_at` (nothing from then). An absent field keeps what is stored, null clears it, an
 older `as_of` is refused, and every refusal happens before an organization or member is written.
 Each real change is audited; a replay that changes nothing is not.

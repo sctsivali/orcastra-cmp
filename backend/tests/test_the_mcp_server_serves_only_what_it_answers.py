@@ -1,13 +1,13 @@
 """The MCP transport serves the methods this server answers, at the sizes its tools promise.
 
-SDK 2.2 registers `subscriptions/listen` on every server. On the 2026-07-28 wire, which the SDK
-selects by the MCP-Protocol-Version header, it is served as an SSE stream pinging every 15 s for
-as long as the client stays connected, `json_response` notwithstanding. The middleware gated only
-tools/call and tools/list, so any key that authenticated, even one holding no capability, could
-hold connections open until a worker's `--limit-concurrency` shed everything, /health included.
+SDK 2.2 registers `subscriptions/listen` on every server. On the `MODERN` protocol revision, which
+the SDK selects by the MCP-Protocol-Version header, it is served as an SSE stream pinging every 15 s
+for as long as the client stays connected, `json_response` notwithstanding. Served, it would let
+any authenticated key, even one holding no capability, hold connections open until a worker's
+`--limit-concurrency` shed everything, /health included.
 
-The SDK also capped a request at 4 MiB, while `lxd_write_file` promises FILE_WRITE_LIMIT decoded,
-whose base64 form is a third larger: the largest documented write never reached a tool.
+The SDK's default request cap is 4 MiB, while `lxd_write_file` promises FILE_WRITE_LIMIT decoded,
+whose base64 form is a third larger.
 """
 
 import asyncio
@@ -132,7 +132,7 @@ def test_the_methods_a_client_asks_for_are_still_answered(mcp_app, monkeypatch, 
     assert response.status_code == 200 and "result" in response.json(), response.text
 
 
-# ── the 2026-07-28 wire authenticates and narrows like the handshake one ───────────────────────
+# ── the modern wire authenticates and narrows like the handshake one ───────────────────────────
 
 def test_the_modern_wire_narrows_tools_list(mcp_app, monkeypatch) -> None:
     _authenticated_as(monkeypatch, _key(["inventory.read"]))

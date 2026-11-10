@@ -400,7 +400,7 @@ def test_status_polling_cannot_fill_the_submit_pool() -> None:
 
 
 def test_the_dialog_status_is_vaults_answer_now_never_a_cached_one(monkeypatch) -> None:
-    """A poll must not get another worker's two-second-old answer: it carried the previous attempt."""
+    """A poll must not get another worker's two-second-old answer: it can carry the previous attempt."""
     vault = FakeVault(monkeypatch, t=3)
     asked: list = []
     original = vault.get
@@ -421,7 +421,7 @@ def test_the_dialog_status_is_vaults_answer_now_never_a_cached_one(monkeypatch) 
 @pytest.mark.parametrize("status,code", [(503, "vault_unreachable"), (503, "vault_unconfirmed"),
                                          (503, "unseal_busy"), (502, "vault_error")])
 def test_unseal_refusals_keep_their_code_through_the_5xx_sanitizer(status, code) -> None:
-    """Found live 2026-10-27: a stopped Vault's 503 reached the browser as a Python dict repr."""
+    """A stopped Vault's 503 keeps its code and message instead of reaching the browser as a dict repr."""
     from app.core.error_sanitizer import public_server_detail
 
     shaped = public_server_detail(status, {"error": code, "message": "Vault did not answer.", "status": {"x": 1}}, "ref")

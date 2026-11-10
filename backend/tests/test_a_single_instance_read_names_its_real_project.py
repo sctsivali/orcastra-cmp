@@ -1,19 +1,10 @@
-"""A single-instance read must report the project the instance is actually in.
+"""A single-instance read must report the project the instance is in.
 
-An instance name is unique per project, not per host, so the project is the difference between
-addressing one workload and addressing another. The list path built `VMInfo(project=...)` from
-the project it resolved. The four single-instance paths did not: they wrote the resolved name
-into a synthetic `config['project']` key that nothing in this codebase or the frontend ever read,
-and left `VMInfo.project` as whatever the bound pylxd client reported, which is the client's
-project rather than the instance's.
-
-Two consequences, both live on this fleet:
-
-* The detail dialog overwrites the list row with the detail payload, so opening any instance
-  outside `default` and switching to Snapshots asked for it in `default` and rendered
-  "Instance not found". Found by opening `acme-a20`, which lives in `central2-rehearsal`.
-* `instances.py` checks the tenant ACL against `vm.project`, so an instance in another project
-  was authorized as though it were in `default`.
+Instance names are unique per project, not per host, and the bound pylxd client reports its own
+project, so the single-instance paths set `VMInfo.project` from the project they resolved, as the
+list path does, and add no synthetic key to `config`. A wrong project breaks the detail dialog
+(it overwrites the list row, so Snapshots for an instance outside `default` asks in `default`)
+and authorization (`instances.py` checks the tenant ACL against `vm.project`).
 """
 
 from types import SimpleNamespace
@@ -29,7 +20,7 @@ HOST = "nuc1"
 
 
 def _instance_stub():
-    # pylxd reports the BOUND client's project here, which is exactly why it cannot be trusted.
+    # pylxd reports the BOUND client's project here, so it cannot be trusted.
     return SimpleNamespace(
         name=NAME,
         status="Stopped",
@@ -89,7 +80,7 @@ async def test_the_resolved_project_lands_on_the_model(manager):
 
 @pytest.mark.asyncio
 async def test_the_project_is_not_smuggled_through_the_config_map(manager):
-    """`config` is the instance's LXD configuration, not a place to park resolved metadata."""
+    """`config` holds the instance's LXD configuration and never resolved metadata."""
     vm = await manager.get_vm(NAME, HOST, REAL_PROJECT)
 
     assert "project" not in (vm.config or {}), (

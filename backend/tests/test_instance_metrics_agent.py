@@ -1,8 +1,8 @@
 """A virtual machine whose guest agent is unreachable reports no in-guest figures.
 
-LXD renders such a VM with processes -1 and CPU and memory as zero. The old reader passed those
-through, so the dialog showed "0.0%", "0 B / 0 B" and "-1" processes as if they were readings.
-Network and disk still come from the host side and stay available.
+LXD renders such a VM with processes -1 and CPU and memory as zero; passed through, the dialog
+would show "0.0%", "0 B / 0 B" and "-1" processes as if they were readings. Network and disk come
+from the host side and stay available.
 """
 
 from types import SimpleNamespace

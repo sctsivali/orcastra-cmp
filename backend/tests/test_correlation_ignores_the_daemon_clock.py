@@ -1,11 +1,10 @@
 """Every correlation window is measured on this database's clock, never on LXD's.
 
-A cluster's clock can sit minutes from the dashboard's. If the fifteen-minute window between a
-dashboard row and its frame were measured on `lxd_created_at`, a skewed daemon would push every
-one of its operations out of the window and the panel would show two rows per click for that
-cluster only, which is the kind of defect nobody reproduces on the box that has NTP. So the
-daemon's timestamps are stored for display and ordering only; every `interval` and
-`make_interval` predicate reads `created_at` or `updated_at`, which Postgres stamped.
+A cluster's clock can sit minutes from the dashboard's. Measured on `lxd_created_at`, the
+fifteen-minute window between a dashboard row and its frame would drop every operation of a skewed
+daemon, and the panel would show two rows per click for that cluster only. The daemon's timestamps
+are stored for display and ordering only; every `interval` and `make_interval` predicate reads
+`created_at` or `updated_at`, which Postgres stamped.
 """
 
 import re

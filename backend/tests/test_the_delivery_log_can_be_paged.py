@@ -1,17 +1,12 @@
-"""The delivery log was a cap, not a page.
+"""The webhook delivery log is paged, with a total and per-state counts.
 
-`list_deliveries` took `limit` (50, max 200) and no `offset`, so the fifty-first delivery was
-unreachable and nothing in the response said the list had been cut. Delivery is at-least-once and
-every retry writes a row, so the log outgrows any cap; filtering by state then narrowed a set that
-had already been truncated, which answers a different question while looking like the right one.
+Delivery is at-least-once and every retry writes a row, so the log outgrows any cap.
+`list_deliveries` takes `limit` and `offset`; `total` follows the state filter, and `counts` (read
+by the health panel) covers every state regardless of the filter.
 
-The same truncation reached the health panel, which reduced over the rows in hand and reported the
-result as how many deliveries had given up altogether.
-
-note: this suite is hermetic, so there is no database here. The fake below does not wave the query
-through: it reads the offset, the limit and the state predicate off the statement the handler
-actually built and applies them itself. A fake that ignored them would pass with the offset deleted,
-which is the failure mode this file exists to prevent, so each test was ablated against exactly that.
+There is no database here. The fake reads the offset, the limit and the state predicate off the
+statement the handler built and applies them itself; a fake that ignored them would pass with the
+offset deleted.
 """
 
 from typing import Any, Dict, List, Optional
@@ -58,7 +53,7 @@ class FakeDB:
     """Answers the four statements the handler issues, honouring what each one asks for.
 
     Dispatch is on the compiled SQL rather than on call order, so reordering the handler does not
-    silently change which canned answer a query receives.
+    change which canned answer a query receives.
     """
 
     def __init__(self, rows: List[Delivery], subscription_ids: List[int]) -> None:
@@ -79,7 +74,7 @@ class FakeDB:
             return _Rows([(sid,) for sid in self.subscription_ids])
 
         if "GROUP BY" in sql:
-            # Recorded rather than asserted here so the assertion lives in the test that cares.
+            # Recorded here, asserted in the test that needs it.
             self.counts_statement_filtered_by_state = state is not None
             tally: Dict[str, int] = {}
             for row in self.rows:
@@ -158,11 +153,11 @@ async def test_the_last_page_reports_no_more_and_an_offset_past_the_end_is_empty
 
 @pytest.mark.asyncio
 async def test_total_follows_the_state_filter_and_counts_deliberately_does_not() -> None:
-    """The two numbers answer different questions, which is why both are returned.
+    """`total` and `counts` answer different questions.
 
     `total` divides the pager, so it has to match what the filter selected. `counts` is what the
-    health panel reads to say how much has failed on this installation, so a filter the operator
-    happens to have applied must not change it.
+    health panel reads to say how much has failed on this installation, so the filter must not
+    change it.
     """
     db = FakeDB(_log(delivered=30, failed=8, dead=2), subscription_ids=[1])
 
@@ -183,7 +178,7 @@ async def test_total_follows_the_state_filter_and_counts_deliberately_does_not()
 
 @pytest.mark.asyncio
 async def test_an_installation_with_no_subscription_still_answers_the_envelope() -> None:
-    """It used to return a bare list, so the caller's total and counts would be undefined."""
+    """An empty result is still the envelope, so the caller's total and counts are defined."""
     db = FakeDB([], subscription_ids=[])
 
     page = await _page(db)
@@ -197,10 +192,9 @@ async def test_an_installation_with_no_subscription_still_answers_the_envelope()
 def _bound(parameter: Any, kind: str) -> Optional[int]:
     """Read a numeric bound off a FastAPI Query, whichever shape this version uses.
 
-    important: the bounds live on the object itself in some releases and in annotated-types entries
-    under `.metadata` in others, and this repo runs a different FastAPI in the venv than in the
-    image. Reading only one shape would pass here and assert nothing against the deployed one.
-    Returning None when neither carries it makes that an outright failure rather than a silent pass.
+    The bounds live on the object itself in some releases and in annotated-types entries under
+    `.metadata` in others, and the venv and the image may run different FastAPI versions. Returning
+    None when neither carries it makes a missing bound fail the assertion.
     """
     direct = getattr(parameter, kind, None)
     if direct is not None:
@@ -213,7 +207,7 @@ def _bound(parameter: Any, kind: str) -> Optional[int]:
 
 
 def test_the_limit_is_bounded_at_both_ends() -> None:
-    """`ge=1` was missing, so limit=0 was accepted and paged through nothing without erroring."""
+    """Without `ge=1`, limit=0 would page through nothing without erroring."""
     import inspect
 
     signature = inspect.signature(extension_webhooks.list_deliveries)

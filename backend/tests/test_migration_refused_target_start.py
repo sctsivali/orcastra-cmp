@@ -1,11 +1,10 @@
 """A target start the daemon definitively refuses is an abort, not an unknown outcome.
 
-Found live (final matrix, cell I12): LXD accepted the start of a staged target, then its start
-validation failed ("MAC address already defined on another NIC"). The job raised MigrationUnknown,
-so reconciliation re-adopted the target and started it again on every backoff, with the fenced
-source down the whole time, until it gave up into manual recovery. A failed start that leaves the
-target stopped proves the target never ran, so the abort runner may discard it and bring the
-source back. A start whose outcome is genuinely unclear stays unknown.
+LXD can accept the start of a staged target and then fail its start validation ("MAC address
+already defined on another NIC"). As an unknown outcome, reconciliation would start it again on
+every backoff while the fenced source stays down. A failed start that leaves the target stopped
+proves it never ran, so the abort runner may discard it and bring the source back. A start whose
+outcome is unclear stays unknown.
 """
 
 from __future__ import annotations

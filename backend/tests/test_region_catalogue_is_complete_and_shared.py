@@ -1,10 +1,8 @@
 """The region catalogue behind the location picker and the regions map.
 
-The picker used to offer 98 kota under a 34-province map, so 416 kabupaten could not be chosen
-at all, Sorong sat in a province it left in 2022, and the IKN point was 35 km from Nusantara.
-These hold the regenerated catalogue to what it claims: every kabupaten and kota of the 2025
-Kepmendagri list, one entry per country standing for the whole country, every id the old
-catalogue shipped still resolving, and the backend reading exactly the file the frontend bundles.
+The catalogue holds every kabupaten and kota of the 2025 Kepmendagri list across 38 provinces and
+one entry per country standing for the whole country. Every id of the legacy catalogue still
+resolves, and the backend reads exactly the file the frontend bundles.
 """
 
 import collections
@@ -55,7 +53,7 @@ def test_outside_indonesia_there_is_one_entry_per_country(raw):
 
 
 def test_a_country_entry_names_no_city(raw):
-    # the site of a cluster abroad is rarely known, so a country entry stands for all of it
+    # The site of a cluster abroad is rarely known, so a country entry stands for all of it.
     for r in raw["regions"]:
         if r["country_code"] != "ID":
             assert r["city"] == r["country_name"] == r["name"], r
@@ -106,9 +104,9 @@ def test_every_entry_is_well_formed(raw):
 @pytest.mark.parametrize(
     "region_id, name, province, south, west, north, east",
     [
-        # bounding boxes drawn independently of the build, from the places themselves
+        # Bounding boxes drawn independently of the build, from the places themselves.
         ("id-3174", "Jakarta Selatan", "Daerah Khusus Ibukota Jakarta", -6.37, 106.75, -6.20, 106.88),
-        # the source row put Wakatobi at longitude 23.5, in Africa
+        # The source row puts Wakatobi at longitude 23.5, in Africa.
         ("id-7407", "Wakatobi", "Sulawesi Tenggara", -6.5, 123.3, -5.0, 124.3),
         ("id-9671", "Sorong (City)", "Papua Barat Daya", -1.0, 131.1, -0.7, 131.5),
         ("id-9503", "Yahukimo", "Papua Pegunungan", -5.2, 139.2, -4.5, 139.8),
@@ -143,8 +141,8 @@ def _in_ring(lng, lat, ring):
     return inside
 
 
-# Natural Earth letters New Zealand in the Tasman Sea and Equatorial Guinea in the Gulf of Guinea;
-# the point must be on the country the map shades, not in the water beside it
+# Natural Earth letters New Zealand in the Tasman Sea and Equatorial Guinea in the Gulf of Guinea.
+# The point must fall on the country the map shades, outside the water beside it.
 @pytest.mark.parametrize("code", ["NZ", "GQ", "JP", "US", "GB", "SG", "FJ", "RU"])
 def test_a_country_point_sits_on_its_own_outline(code):
     entry = get_region_catalog().resolve("c-" + code.lower())
@@ -157,8 +155,8 @@ def test_a_country_point_sits_on_its_own_outline(code):
 
 
 def test_every_country_has_an_outline_the_map_can_shade(raw):
-    # note: the build checks each point against the full-resolution outline; CI has no source
-    # cache, so this is what ties the shipped outlines to the shipped catalogue there
+    # The build checks each point against the full-resolution outline. CI has no source cache, so
+    # this ties the bundled outlines to the bundled catalogue there.
     features = _areas()
     countries = {r["country_code"]: r for r in raw["regions"] if r["id"].startswith("c-")}
     assert set(features) == set(countries)

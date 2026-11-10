@@ -6,8 +6,7 @@ secret key to anyone who may view the bucket, and reads under /storage-pools are
 project rule, so a key granted `read` on one project could collect bucket credentials that outlive
 it. The path and everything below it are refused like the trust store, whatever the grant, in every
 spelling the canonical parser reads as the same request. Bucket reads other than the keys keep their
-behaviour. The integrator makes no /buckets call (its client source was read), and neither /proxy nor
-MCP has a bucket operation.
+behaviour. The integrator makes no /buckets call, and neither /proxy nor MCP has a bucket operation.
 
 Every raw-proxy test drives the real handler; the session records the request it would send.
 """

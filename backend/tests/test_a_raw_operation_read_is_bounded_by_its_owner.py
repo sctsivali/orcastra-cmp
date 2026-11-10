@@ -1,10 +1,9 @@
 """The raw proxy reaches one LXD operation only for a key that holds the operation's project.
 
-raw_proxy bound a request by forcing `?project=` and counted `/operations` as project-bounded.
-LXD ignores `?project=` on `/1.0/operations/{id}` (observed on nuc2, 2026-10-14), so a key granted
-only `tenant-a` that held another project's operation id could read it, wait on it and, holding
-`admin`, cancel it. Found by the security review of the operation-ownership change, which had
-closed REST, the proxy get_operation and both MCP poll tools but not this path.
+raw_proxy bounds a request by forcing `?project=`, but LXD ignores `?project=` on
+`/1.0/operations/{id}`. Without an ownership read, a key granted only `tenant-a` that held another
+project's operation id could read it, wait on it and, holding `admin`, cancel it. REST, the proxy
+get_operation and both MCP poll tools apply the same visibility rule.
 """
 
 import asyncio

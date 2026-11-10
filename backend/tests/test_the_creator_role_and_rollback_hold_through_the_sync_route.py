@@ -1,11 +1,10 @@
-"""Decision 14, the partial-rebind rollback and OrcaHub v1.32.0's sync body, through the sync route.
+"""Creator-role rule, partial-rebind rollback and OrcaHub v1.32.0's sync body, through the sync route.
 
-Decision 14 runs the real AuthentikSyncService against Authentik's HTTP answers: every group the
-request path resolves to Admin never rebinds, and every answer that does not confirm a role is
-unknown and never rebinds. The rollback cases refuse a later cluster in the share audit. The
-OrcaHub cases send the body orcastra.service.js syncOrcastraClustersUnlocked builds: with a buyer
-org in it the key claims two orgs and nothing binds (decision 19), with the seller org alone the
-partner's clusters bind into it.
+The creator-role cases (`test_decision_14_*`) run the real AuthentikSyncService against Authentik's
+HTTP answers: every group the request path resolves to Admin never rebinds, and every answer that
+does not confirm a role is unknown and never rebinds. The rollback cases refuse a later cluster in
+the share audit. The OrcaHub cases send the body its cluster sync builds: with a buyer org in it the
+key claims two orgs and nothing binds; with the seller org alone the partner's clusters bind into it.
 """
 
 import ast
@@ -68,7 +67,7 @@ async def pushed_by_the_creator(db: Any, caplog: pytest.LogCaptureFixture) -> No
     assert (await push(db, K_PARTNER, [P], [m(C, P, "PARTNER")])).status_code == 200
 
 
-# note: decision 14: Admin is whatever the request path resolves to Admin
+# Creator role: Admin is whatever the request path resolves to Admin.
 
 _ADMIN_NAMES = sorted(n for n, r in AUTHENTIK_GROUP_MAP.items() if r == Role.ADMIN)
 GROUP_SETS = [[n] for n in _ADMIN_NAMES] + [
@@ -221,7 +220,7 @@ async def test_decision_14_a_confirmed_partner_still_rebinds(
 async def test_decision_14_open_item_an_alias_admin_is_granted_partner_but_keeps_its_clusters(
     world: Dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,  # noqa: F811
 ) -> None:
-    """A recorded open item: the member sync reads the lenient groups, so it adds role_partner."""
+    """Known gap: the member sync reads the lenient groups, so it adds role_partner."""
     seen = real_authentik(monkeypatch, directory({C: ["authentik Admins"]}))
     db = sqlite_session(*org_tables())
     await pushed_by_the_creator(db, caplog)
@@ -229,7 +228,7 @@ async def test_decision_14_open_item_an_alias_admin_is_granted_partner_but_keeps
     assert [s for s in seen if s.startswith("POST") and s.endswith("/add_user/")]
 
 
-# note: a rebind that fails partway
+# A rebind that fails partway.
 
 @pytest.mark.parametrize("enabled", [True, False], ids=["offboarding_on", "offboarding_off"])
 @pytest.mark.parametrize("refused", [["a-ok"], ["b-refused"], ["a-ok", "b-refused"]], ids=["first", "last", "both"])
@@ -255,7 +254,7 @@ async def test_a_partial_rebind_leaves_nothing_and_the_next_push_moves_all(
     assert sorted(c["target_id"] for c in world["log"].calls) == ["a-ok", "b-refused"]
 
 
-# note: OrcaHub v1.32.0's own sync body
+# OrcaHub v1.32.0's own sync body.
 
 SELLER, BUYER_ORG = "5b0c7a4e-0d7c-4f6e-9a57-1c3f0b8e2d11", "9e1f5d2a-4b6c-4c8d-8e0f-2a3b4c5d6e7f"
 HUB_ORGS = {
@@ -266,7 +265,7 @@ HUB_ORGS = {
 
 def orcahub_body(members: List[Dict[str, Any]], app_url: Any = "https://hub.example.test",
                  orgs: Tuple[str, ...] = (SELLER, BUYER_ORG)) -> Dict[str, Any]:
-    """orcastra.client.js sync(): axios drops app_url when it is undefined."""
+    """OrcaHub's sync body. Its HTTP client drops app_url when it is undefined."""
     sent: Dict[str, Any] = {
         "include_clusters": True, "include_projects": True,
         "organizations": [HUB_ORGS[ext] for ext in orgs],
@@ -286,7 +285,7 @@ def hub(email: str, ext: str, role: str) -> Dict[str, Any]:
 def onboarding(world: Dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any]:  # noqa: F811
     vault = _FakeVault({k: v for k, v in key(K_PARTNER, C).items() if k not in ("raw", "hash")})
     monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: vault)
-    # note: a real secret, because the sync stores app_url only for the key's current secret
+    # A real secret, because the sync stores app_url only for the key's current secret.
     monkeypatch.setenv("SECRET_KEY", "unit-test-secret")
     secret, secret_hash = integrations.generate_api_key_secret()
     vault.store[_FakeVault._path(K_PARTNER, "secret")] = {"hash": secret_hash, "raw": secret}
@@ -372,9 +371,9 @@ async def test_orcahubs_sync_body_with_the_seller_org_alone_binds_into_it(
 async def test_a_buyer_org_naming_the_sellers_creator_as_partner_is_never_the_destination(
     onboarding: Dict[str, Any], caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """OrcaHub lets a buyer org's PARTNER add any existing user as PARTNER (members.js invite,
-    organizationRoleSchema). With the creator absent from the seller's roster the buyer org was the
-    one destination. The key claims both orgs, so nothing binds."""
+    """OrcaHub lets a buyer org's PARTNER invite any existing user as PARTNER. With the creator
+    absent from the seller's roster the buyer org would be the only destination. The key claims
+    both orgs, so nothing binds."""
     caplog.set_level(logging.WARNING, logger=integration_cluster_rebind.__name__)
     db = sqlite_session(*org_tables())
     await personal_cluster(db, "c-cluster", C)
@@ -399,7 +398,7 @@ async def test_a_key_that_also_claims_a_buyer_org_binds_nothing_into_its_own(
     assert_nothing_bound_and_warned(caplog, onboarding, await bound(db))
 
 
-# note: no other surface reaches the rebind or the key edits
+# No other surface reaches the rebind or the key edits.
 
 _TOKENS = ("sync", "member", "organization", "org_", "api_key", "credential", "capabilit", "permission", "rebind")
 
@@ -419,7 +418,7 @@ def test_proxy_has_no_operation_for_a_sync_a_member_or_a_key_edit() -> None:
 
 
 def test_only_the_sync_route_and_key_create_reach_the_rebind() -> None:
-    """reconcile_personal_clusters moves clusters. Key create keeps the ordering until Phase 2 (15)."""
+    """reconcile_personal_clusters moves clusters; only key create and the sync route reach it."""
     app_dir = Path(integrations.__file__).resolve().parents[1]
     callers: Dict[str, List[str]] = {}
     for path in app_dir.rglob("*.py"):

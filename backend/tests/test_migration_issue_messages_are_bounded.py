@@ -1,9 +1,8 @@
 """A preflight issue fits the API's 2000-character field however many instances it names.
 
-Messages joined every instance name, so a large dir-pool project produced a warning longer than
-the response model allows: the plan row was committed, then every read of it answered 500. A
-revised plan also stored a sanitized copy of the report while the approval hash covered the raw
-one, so the next execute asked for re-approval again and again.
+A message joining every instance name of a large project would exceed the response model, so
+the plan row commits and every later read of it answers 500. A revised plan must also store the
+same report the approval hash covers, or every execute asks for re-approval.
 """
 
 from __future__ import annotations

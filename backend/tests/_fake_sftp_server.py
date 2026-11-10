@@ -1,8 +1,8 @@
 """A guest for the SFTP client: an in-memory filesystem speaking v3 over a socket pair.
 
-It behaves like LXD's server where the lab proved it (32 KiB reads, 100 names a batch, RENAME
-replacing a file, MKDIR ignoring its mode, Go's error text). `script` lets a test replace the
-answer to any packet, which is how a hostile guest is written.
+It behaves like LXD's server where that behaviour was observed on a real cluster (32 KiB reads,
+100 names a batch, RENAME replacing a file, MKDIR ignoring its mode, Go's error text). `script`
+lets a test replace the answer to any packet, which is how a hostile guest is written.
 """
 
 import asyncio
@@ -309,7 +309,7 @@ class FakeGuest:
 
 
 async def connected(guest: FakeGuest, *, op_timeout: float = 1.0) -> Tuple[SftpClient, "asyncio.Task[None]"]:
-    """A client talking to `guest`, not yet handshaken. The caller enters it with `async with`."""
+    """A client talking to `guest`, before the handshake. The caller enters it with `async with`."""
     ours, theirs = socket.socketpair()
     ours.setblocking(False)
     theirs.setblocking(False)

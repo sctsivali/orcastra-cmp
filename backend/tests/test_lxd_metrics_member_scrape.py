@@ -1,10 +1,10 @@
 """One /1.0/metrics read per member, shared by the dashboard sweep and every instance dialog.
 
-A scrape without `project` covers every project on the member, so the sweep can read honest
+A scrape without `project` covers every project on the member, so the sweep can read guest
 memory for all of a member's instances at once. The dialog reads the same cached entry, which
-keeps every scrape of a member on one cache key: LXD caches its metrics for 8 seconds and ours
-lasts 10, so a scrape on that one key always lands after LXD's cache expired and its time is the
-sample time the disk I/O rate divides by. A project's own read is the fallback only when the
+keeps every scrape of a member on one cache key: LXD caches its metrics for 8 seconds and this
+cache lasts 10, so a scrape on that one key always lands after LXD's cache expired and its time is
+the sample time the disk I/O rate divides by. A project's own read is the fallback only when the
 member-wide read is refused or too large.
 """
 

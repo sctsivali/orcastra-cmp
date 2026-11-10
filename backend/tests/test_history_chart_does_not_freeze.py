@@ -1,15 +1,11 @@
 """The metrics history chart must keep moving after the store reaches its point cap.
 
 The history endpoint reuses an encoded body while its selection is unchanged, so a repeated read
-does not rebuild up to 8640 points. That memo was once versioned on the number of points. History
-is capped at 8640, so the moment the buffer filled the count stopped changing and every request
-matched the cached entry: the chart froze until a restart, roughly 9.6 hours after startup at
-the 4 s store interval of the time.
-
-The sorted-set store versions a selection on its size, the points inside it and the oldest and
-newest scores, so a rotation at the cap (one point in, the oldest out) is a new version. These
-tests pin both halves at the real cap, through the endpoint: a saturated store that gains a
-point answers it, and an unchanged store answers the same body without fetching a member.
+does not rebuild up to 8640 points. At the cap the point count stays the same, so the sorted-set
+store versions a selection on its size, the points inside it and the oldest and newest scores: a
+rotation at the cap (one point in, the oldest out) is a new version. These tests pin both halves at
+the real cap, through the endpoint: a saturated store that gains a point answers it, and an
+unchanged store answers the same body without fetching a member.
 """
 
 import asyncio
@@ -44,7 +40,7 @@ def saturated(monkeypatch):
     cache.redis_client = redis
     monkeypatch.setattr(monitoring, "get_cache_manager", lambda: cache)
     monkeypatch.setattr(monitoring, "get_scope_cache_key", lambda _name: SCOPE)
-    # note: 8640 points 9 s apart span 21.6 hours; the Postgres refill is not under test here.
+    # 8640 points 9 s apart span 21.6 hours; the Postgres refill is not under test here.
     monkeypatch.setattr(monitoring, "needs_hydrate", lambda _read: False)
     now = datetime.now(timezone.utc)
     points = [_point(now - timedelta(seconds=9 * (HISTORY_MAX_POINTS - i)), i) for i in range(HISTORY_MAX_POINTS)]
@@ -69,7 +65,7 @@ def _newest(body: bytes) -> str:
 
 
 def test_a_saturated_store_still_reports_new_points(saturated):
-    """The regression. Same size, newer content, and a size-versioned memo answered the old body."""
+    """A rotation at the cap keeps the size and changes the content; the memo must not answer it."""
     cache, now = saturated
     first = _read()
     assert len(json.loads(first)) == 60
@@ -86,7 +82,7 @@ def test_a_saturated_store_still_reports_new_points(saturated):
 
 
 def test_an_unchanged_store_is_served_from_the_memo(saturated):
-    """The memo must still do its job, or the fix trades a freeze for a rebuild per request."""
+    """An unchanged store answers from the memo instead of rebuilding the body per request."""
     cache, _ = saturated
 
     first = _read()

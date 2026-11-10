@@ -1,10 +1,9 @@
 """The writer drains in batches, retries a refused batch three times, then lets it go.
 
-A database that is briefly away must not stall every worker's queue behind one batch, and a
-database that is away for good must not hold five thousand records in memory forever. One
-attempt, three retries at 0.5, 1 and 2 seconds, then an error line that says how many records
-were not journaled and where the record of truth still is. A record that cannot even be mapped is
-skipped on its own, so one malformed audit call never blocks the ones behind it.
+A brief database outage must not stall the queue behind one batch, and a long one must not hold
+the full queue in memory. One attempt, three retries at 0.5, 1 and 2 seconds, then an error line
+that counts the records not journaled. A record that cannot be mapped is skipped on its own, so
+one malformed audit call never blocks the ones behind it.
 """
 
 import asyncio

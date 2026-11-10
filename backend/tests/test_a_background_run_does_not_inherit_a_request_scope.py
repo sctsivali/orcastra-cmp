@@ -1,22 +1,13 @@
 """A schedule runs where every authorization primitive answers "allowed".
 
-This is not a hypothetical. Three modules say it about themselves, in their own words:
+Helpers such as `check_tenant_permission`, `verify_cluster_access` and `apply_cluster_filter` read
+request-scoped ContextVars. `run_blocking` copies the caller's context into its worker, but a task
+the lifespan started has no caller, so those ContextVars are unset, and unset is the permissive
+value: calling one from the scheduler would remove the check silently.
 
-* core/blocking.py, on `check_tenant_permission`: "returns True on a None ACL. In a worker that is
-  unconditional, so it fails OPEN."
-* core/org_scope.py, on `verify_cluster_access`: "No-op for admin / dev mode / background tasks."
-* core/org_scope.py, on `apply_cluster_filter`: "Returns all clusters if no scope is active
-  (admin / background task)."
-
-`run_blocking` copies the CALLER's context into its worker, which is what makes those honest inside
-a request. A task the lifespan started has no caller: it inherits a context where every one of
-those ContextVars is unset, and unset is the permissive value. Calling one of them from the
-scheduler would not weaken a check. It would delete it, silently, with no exception and no log line.
-
-So the rule is structural rather than a comment: no module under app/services/snapshots may name
-any of them. Neither existing ratchet covers this. test_cluster_scope_ratchet.py walks only
-app/routers, and test_a_declared_gate_is_a_reached_gate.py watches services/desktop, mcp and
-services/webhooks. Both stay green while a scheduler is wide open.
+So no module under app/services/snapshots may name any of them. test_cluster_scope_ratchet.py walks
+only app/routers and test_a_declared_gate_is_a_reached_gate.py watches services/desktop, mcp and
+services/webhooks, so neither covers this.
 """
 
 import ast
@@ -73,10 +64,9 @@ def test_the_scheduler_package_names_no_context_scoped_helper():
 
 
 def test_the_forbidden_list_still_matches_the_helpers_that_exist():
-    """A ratchet naming functions that have been renamed away guards nothing.
+    """Every forbidden name still exists in org_scope or tenant_visibility.
 
-    It checks the list against org_scope itself rather than against a copy, so a rename that makes
-    one of these unreachable fails here instead of quietly hollowing the rule out.
+    A rename then fails here instead of leaving the ratchet guarding a removed name.
     """
     import app.core.org_scope as org_scope
     import app.core.tenant_visibility as tenant_visibility
@@ -90,7 +80,7 @@ def test_the_forbidden_list_still_matches_the_helpers_that_exist():
 
 
 def test_the_package_declares_the_same_list_it_is_held_to():
-    """The rule is readable beside the code it governs, and this is what keeps the two equal."""
+    """The list schedule_authority declares beside the code stays within the one enforced here."""
     from app.services.snapshots.schedule_authority import forbidden_scope_helpers
 
     declared = set(forbidden_scope_helpers())
@@ -98,7 +88,7 @@ def test_the_package_declares_the_same_list_it_is_held_to():
 
 
 def test_the_runner_authorizes_from_the_database_not_from_a_context():
-    """The positive half. A ban with nothing in its place is a gap, not a guard."""
+    """The runner replaces the banned helpers with checks that read the database."""
     source = (PACKAGE / "schedule_runner.py").read_text()
     assert "authority.db_refusal_for(db, schedule)" in source
     assert "authority.default_view_only_refusal(db, schedule)" in source

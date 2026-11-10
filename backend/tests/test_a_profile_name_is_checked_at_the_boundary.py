@@ -1,11 +1,11 @@
 """
 A profile name is checked before the daemon sees it, and only on create.
 
-LXD refuses almost nothing in a profile name (empty, a slash, `.` and `..`), so a bad name
-used to reach it and come back as a 500. The house rule (a letter first, then letters,
-digits, dots, underscores and hyphens, at most 63) applies on create. The path routes are
-permissive on purpose: a profile `lxc` created with a name outside the house rule must still
-be readable, editable and deletable from the console.
+LXD refuses almost nothing in a profile name (empty, a slash, `.` and `..`), so an unchecked
+bad name reaches it and comes back as a 500. The house rule (a letter first, then letters,
+digits, dots, underscores and hyphens, at most 63) applies on create. The path routes stay
+permissive: a profile `lxc` created with a name outside the house rule must still be
+readable, editable and deletable from the console.
 """
 
 from tests._profile_daemon import Daemon, app
@@ -51,7 +51,7 @@ def test_a_path_name_that_would_leave_its_segment_is_refused(monkeypatch) -> Non
 
 
 def test_a_trailing_newline_is_not_a_name(monkeypatch) -> None:
-    """`$` matches before a final newline, so "web\\n" used to pass and render beside "web"."""
+    """`$` matches before a final newline, so a `$`-anchored pattern lets "web\\n" through."""
     daemon = Daemon()
     tc, _ = app(monkeypatch, daemon)
     r = tc.post("/profiles?host=nuc1", json={"name": "web\n"})

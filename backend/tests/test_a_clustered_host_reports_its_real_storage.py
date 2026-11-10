@@ -1,16 +1,8 @@
 """The clustered aggregate must report storage, and must not report it twice.
 
-Two defects in one line. `node_resources.py` read `member_resources["storage"]["pools"]`, a key
-/1.0/resources does not send, so every clustered host reported zero and no test looked: the GPU
-aggregation fake stubs storage-pools out entirely, and the per-member fan-out test never crosses
-members, so nothing in the suite could see either the zero or the double count waiting behind it.
-
-The real block is `storage.disks`, physical media rather than pool space, so correcting the key
-would have produced a different wrong number. Space exists only per pool per member, and a
-shared backing store reports the whole thing to every member that can see it.
-
-The fixture is the three-member QA stub's own POOLS table, so this file and the browser suite
-assert the same arithmetic against the same numbers.
+/1.0/resources sends no `storage.pools`, and its `storage.disks` block is physical media rather
+than pool space. Space exists only per pool per member, and a shared backing store reports the
+whole of itself to every member that can see it.
 """
 
 from types import SimpleNamespace
@@ -31,7 +23,7 @@ MEMBERS = [
     {"server_name": "microcloud40", "status": "Online", "url": "https://h:8443"},
 ]
 
-# tools/clustered-lxd-stub.py POOLS. `remote` is one Ceph store, seen from two members.
+# Pools per member. `remote` is one Ceph store, seen from two members.
 POOLS: Dict[str, Dict[str, tuple]] = {
     "microcloud20": {"local": ("zfs", 200 * GB, 50 * GB), "remote": ("ceph", 400 * GB, 100 * GB)},
     "microcloud30": {"local": ("zfs", 300 * GB, 30 * GB)},
@@ -46,8 +38,8 @@ RESOURCES = {
     m["server_name"]: {
         "cpu": {"total": 8, "sockets": [{"cores": []}]},
         "memory": {"total": 32 * GB, "used": 8 * GB},
-        # The key the old code read. Present, and deliberately holding media rather than space,
-        # so a regression that goes back to it reports something visibly wrong rather than zero.
+        # Physical media, not pool space: code that sums it reports a visibly wrong total
+        # rather than zero.
         "storage": {"disks": [{"id": "nvme0n1", "size": 1920 * GB, "type": "nvme"}]},
         "gpu": {"cards": []},
         "system": {},
@@ -78,8 +70,8 @@ class _Node:
         return _Node(self._client, self._parts + [item])
 
     def get(self, params: Dict[str, Any] = None, timeout: Any = None) -> _Response:
-        # timeout: project_scope passes one on every read, and a fake that refuses it makes
-        # the read raise, which used to be swallowed into an empty instance list.
+        # project_scope passes a timeout on every read; a fake that refuses it makes the read
+        # raise.
         return self._client.handle(self._parts, params or {})
 
 
@@ -105,9 +97,8 @@ class FakeClient:
 
         if parts == ["cluster", "members"]:
             return _Response(MEMBERS)
-        # The instance read this aggregate depends on. Without these two the read raises, and
-        # before the degraded signal was wired up that silently became "no instances", so this
-        # test asserted a healthy cluster while its instance read was failing every time.
+        # The instance read this aggregate depends on. Without these two the read raises and
+        # the aggregate is reported degraded.
         if parts == ["projects"]:
             return _Response([{"name": "default", "config": {}}])
         if parts == ["instances"]:
@@ -174,8 +165,8 @@ def test_the_pool_rows_carry_their_scope_and_their_members():
 
 
 def test_the_media_block_is_not_mistaken_for_pool_space():
-    """`storage.disks` holds a 1920 GB device per member. If a regression reads it again the
-    total moves to something no pool accounts for, and this catches it by value."""
+    """`storage.disks` holds a 1920 GB device per member; summing it gives a total no pool
+    accounts for."""
     result = _aggregate(FakeClient())
     assert result.storage_total != 3 * 1920 * GB
     assert result.storage_total == sum(p["space_total"] for p in result.storage_pools)
@@ -214,10 +205,9 @@ def test_a_healthy_read_is_not_marked_degraded():
 class OneAnswerPerHost(unittest.TestCase):
     """GET /nodes and GET /nodes/<name>/resources must not disagree about the same host.
 
-    The list path aggregated members and the per-node path did not, so the node detail dialog
-    painted the cluster's capacity from the list row and then replaced it with one member's
-    share as soon as a tab was opened. `resources_for_host` is now the only place that choice
-    is made.
+    `resources_for_host` is the only place that chooses between the members' aggregate and the
+    connected member's own share, so the node detail dialog cannot swap the cluster's capacity
+    for one member's share when a tab opens.
     """
 
     def _own_reading(self):

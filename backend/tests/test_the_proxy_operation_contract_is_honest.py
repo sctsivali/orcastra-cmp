@@ -2,16 +2,12 @@
 
 `proxy_operation` derives a required permission level from the operation name, refuses the
 caller who does not hold it, and only then hands the name to a dispatcher. Those are two
-separate lists, and they drifted: `update_instance` and six administrative operations
-(`create_network`, `delete_network`, `create_storage_pool`, `delete_storage_pool`,
-`create_project`, `delete_project`) were priced in the router and never implemented. A caller
-holding exactly the right grant therefore passed authorization and received
-"Unknown operation: create_project", which reads as a broken server rather than a missing
-feature.
+separate lists. An operation priced but never dispatched lets a caller holding the right grant
+pass authorization and then receive "Unknown operation", which reads as a broken server.
 
-Nothing catches that at runtime. An authorization test passes, because authorization worked. A
-functional test only covers the operations someone remembered to write. So the check is
-structural: the price list and the dispatcher must name the same set of operations.
+An authorization test passes in that case, and a functional test only covers the operations
+someone wrote one for, so the check is structural: the price list and the dispatcher must name
+the same set of operations.
 """
 
 import ast
@@ -32,10 +28,9 @@ SOURCE = Path(__file__).resolve().parents[1] / "app" / "services" / "lxd" / "pro
 
 
 def _dispatched_operations() -> set:
-    """Operation names the dispatcher actually branches on.
+    """Operation names the dispatcher branches on.
 
-    Parsed rather than imported-and-called: the branches need a live pylxd client, and the
-    point is to read what the code says without connecting to anything.
+    Parsed rather than called, because the branches need a live pylxd client.
     """
     tree = ast.parse(SOURCE.read_text())
     function = next(
@@ -95,7 +90,7 @@ def test_every_price_is_a_real_permission_level() -> None:
 
 
 def test_destruction_costs_admin() -> None:
-    """The raw proxy has always demanded admin for a DELETE.
+    """The raw proxy demands admin for a DELETE.
 
     The same act arriving through the operation proxy must not cost less, or `write` becomes a
     quiet path to deleting instances that the other door refuses.
@@ -121,7 +116,7 @@ def test_reads_are_priced_as_reads() -> None:
 def test_every_waiting_operation_is_a_real_operation() -> None:
     """PROXY_WAIT_OPERATIONS selects the wider timeout and the wait=false path.
 
-    A name in it that no longer exists silently stops widening anything.
+    A name in it that is not an operation silently widens nothing.
     """
     unknown = sorted(PROXY_WAIT_OPERATIONS - set(PROXY_OPERATION_LEVELS))
     assert not unknown, f"waiting set names operations that do not exist: {unknown}"
@@ -220,9 +215,9 @@ class _Service:
         ("delete_project", {}),
         ("list_snapshots", {}),
         ("get_operation", {}),
-        # note: these four resolve the name through the instance() closure rather than a
+        # These four resolve the name through the instance() closure rather than a
         # _required call inside their own branch, so the table-versus-branches check below
-        # cannot see them. Covering them here is what actually holds their table rows.
+        # cannot see them. Covering them here is what holds their table rows.
         ("start_instance", {}),
         ("stop_instance", {}),
         ("restart_instance", {}),
@@ -230,10 +225,10 @@ class _Service:
     ],
 )
 def test_a_missing_parameter_is_refused_before_the_cluster_is_touched(operation, params) -> None:
-    """Validating after the lookup blamed the wrong thing and cost a round trip to say it.
+    """Validating after the lookup costs a round trip and blames the wrong thing.
 
-    A request missing `snapshot_name` came back reporting the instance could not be fetched,
-    which points a caller at a name that was fine.
+    A request missing `snapshot_name` would report that the instance could not be fetched, which
+    points a caller at a name that was fine.
     """
     from fastapi import HTTPException
 
@@ -268,7 +263,7 @@ def test_the_required_parameter_table_matches_what_the_branches_demand() -> None
                 names.add(compare.value)
         if not names:
             continue
-        # note: only calls against `params` itself. create_storage_pool validates fields on a
+        # Only calls against `params` itself. create_storage_pool validates fields on a
         # nested `definition` object, which the up-front gate cannot reach and should not try
         # to; that branch owns its own shape.
         fields = {
@@ -299,13 +294,12 @@ def test_the_required_parameter_table_matches_what_the_branches_demand() -> None
 
 
 def test_both_timeout_paths_say_the_work_may_still_be_running() -> None:
-    """Two different timeouts fire here and only one of them used to say so.
+    """Two different timeouts fire here, and both must say the work may still be running.
 
     `PROXY_OP_TIMEOUT` bounds the caller and raises `BlockingTimeout`. The pylxd socket read
-    window is separate, and at 30s it fired first for a create that pulls an image, landing in
-    the broad handler with nothing but "Read timed out". Observed live during QA: a create that
-    reported failure that way left a real instance running on the cluster, which is exactly the
-    state that makes an unattended caller retry into a name collision.
+    window is separate and can fire first (ex; a create that pulls an image). A create reported
+    as a bare failure can leave a real instance running, and an unattended caller would retry
+    into a name collision.
     """
     router = Path(__file__).resolve().parents[1] / "app" / "routers" / "integrations.py"
     tree = ast.parse(router.read_text())
@@ -329,9 +323,8 @@ def test_both_timeout_paths_say_the_work_may_still_be_running() -> None:
 
 def test_the_socket_window_outlasts_the_response_budget() -> None:
     """If the socket cuts in first, the timeout arrives on the path that cannot explain it."""
-    # note: an earlier version asserted the string "PROXY_OP_TIMEOUT" appeared in the file,
-    # which the import at the top satisfies no matter what _client_for does, and banned one
-    # exact literal. Both passed with the defect fully reintroduced. Read the call instead.
+    # Read the call itself: a substring check for "PROXY_OP_TIMEOUT" is satisfied by the
+    # module's import whatever _client_for does.
     tree = ast.parse(SOURCE.read_text())
     function = next(
         node
@@ -353,9 +346,9 @@ def test_the_socket_window_outlasts_the_response_budget() -> None:
         f"the socket can cut in before the budget the caller was given: {read_window}"
     )
 
-    # And every operation with a budget has to reach that scoped client, or the window it
-    # derives is irrelevant. exec did not, so it ran on the pooled 8s window while being told it
-    # had 30 seconds.
+    # Every operation with a budget must reach that scoped client, or the window it derives is
+    # irrelevant: exec would run on the pooled client's short read window while budgeted at
+    # EXEC_TIMEOUT.
     function = next(
         node
         for node in ast.walk(tree)
@@ -407,9 +400,8 @@ def test_both_instance_reads_report_the_code_they_derived_from() -> None:
             for node in ast.walk(tree)
             if isinstance(node, ast.FunctionDef) and node.name == name
         )
-        # note: parse the call, do not grep the source. A substring over unparsed source is
-        # satisfied by an import, a comment or a docstring naming the same thing, which is how
-        # the shared cluster-scope ratchet passed on ten routers while checking nothing.
+        # Parse the call instead of grepping the source: a substring is satisfied by an import,
+        # a comment or a docstring naming the same thing.
         called = any(
             isinstance(node, ast.Call) and getattr(node.func, "id", None) == "status_name"
             for node in ast.walk(function)
@@ -425,7 +417,7 @@ def test_both_instance_reads_report_the_code_they_derived_from() -> None:
 def test_an_operation_lookup_does_not_fall_through_to_a_generic_500() -> None:
     """LXD reaps completed operations, so "not found" is the ordinary late-poll answer.
 
-    Letting it reach the generic handler produced a 500 that the error sanitiser rendered as
+    Through the generic handler it would be a 500 that the error sanitiser renders as
     "Internal server error", which tells a caller nothing it can act on.
     """
     router = Path(__file__).resolve().parents[1] / "app" / "routers" / "integrations.py"

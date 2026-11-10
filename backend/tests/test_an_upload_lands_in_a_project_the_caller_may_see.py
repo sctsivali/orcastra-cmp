@@ -1,6 +1,5 @@
-"""The dashboard upload takes a project, so the project has to be a real name, and the store
-it lands in has to be one the caller may see. The import itself was already project-aware;
-the dialog just never asked.
+"""The dashboard upload takes a project, so the project has to be a valid name, and the store
+it lands in has to be one the caller may see.
 """
 import contextvars
 import os

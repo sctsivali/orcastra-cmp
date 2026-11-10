@@ -1,4 +1,4 @@
-"""What a person can do to a guest's files, against a guest that behaves as the lab proved LXD does."""
+"""What a person can do to a guest's files, against a fake guest that behaves as LXD's SFTP does."""
 
 import asyncio
 import stat

@@ -1,19 +1,13 @@
-"""An issued API key could authenticate and then reach almost nothing readable.
+"""An API key can read clusters, projects and instances through plain GETs.
 
-Measured against the running deployment with a real key: `GET /instances`, `/nodes`, `/projects`
-and even `/integrations/available-clusters` all answered 401, because those are the JWT routers.
-The only readable endpoint in the entire API was `/integrations/regions`. Reading instances meant
-`POST /integrations/raw-proxy` with a body naming an HTTP verb and a `cluster_id` the key had no
-way to discover, and `/docs` is disabled outside debug, so there was no reference to read either.
-
-A 401 on the obvious call, with no documentation, reads as "this needs a login". That is what was
-reported, and it is a correct reading of what the API did.
+`GET /instances`, `/nodes` and `/projects` are JWT routes and answer a key with 401. Without these
+reads, reading instances would mean `POST /integrations/raw-proxy` with a body naming an HTTP verb
+and a `cluster_id` the key has no way to discover.
 
 These reads add no reach: each is the data `POST /integrations/sync` already returns to the same
 caller, through the same fetch helpers, narrowed by the same intersection with the key's grant.
-What changes is the shape. `whoami` is separate: `/validate` answers it already but takes the
-credentials in the BODY, so an integrator sending the headers every other endpoint requires gets
-a 422 and concludes the key is broken.
+`whoami` authenticates with the headers every other endpoint uses; `/validate` takes the
+credentials in the body, so a header-only caller gets a 422 there.
 """
 
 import ast
@@ -47,10 +41,10 @@ def test_a_read_is_confined_to_the_keys_own_clusters() -> None:
 
 
 def test_a_caller_cannot_name_a_cluster_outside_its_grant() -> None:
-    """Intersection, not a lookup. Naming a foreign cluster yields nothing, not an error.
+    """Naming a foreign cluster yields an empty intersection rather than an error.
 
-    An unknown cluster and an unauthorised one are therefore indistinguishable, so neither can be
-    probed, which is the same shape assert_cluster_permission already chose.
+    An unknown cluster and an unauthorised one are indistinguishable, so neither can be probed;
+    assert_cluster_permission behaves the same way.
     """
     assert integrations._clusters_for_key(_key("a", "b"), "victim") == set()
 
@@ -81,14 +75,14 @@ def test_a_read_requires_inventory_read(name: str) -> None:
 
 @pytest.mark.parametrize("name", READS)
 def test_a_read_scopes_through_the_shared_helper(name: str) -> None:
-    """Reinventing the intersection per endpoint is how one of them ends up subtly wider."""
+    """One shared intersection, so no endpoint ends up wider than the others."""
     source = inspect.getsource(getattr(integrations, name))
     assert "_clusters_for_key(api_key, cluster_id)" in source
 
 
 @pytest.mark.parametrize("name", READS)
 def test_a_read_reuses_the_fetch_helper_sync_already_uses(name: str) -> None:
-    # note: the cluster list reaches the helper through _gather_cluster_rows, the row builder it
+    # The cluster list reaches the helper through _gather_cluster_rows, the row builder it
     # shares with sync, which keeps a tripped cluster as a row because its fetch reads only Vault.
     source = inspect.getsource(getattr(integrations, name))
     assert "_gather_per_cluster" in source or "_gather_cluster_rows" in source, (
@@ -101,7 +95,7 @@ def test_a_read_reuses_the_fetch_helper_sync_already_uses(name: str) -> None:
 # ── whoami ─────────────────────────────────────────────────────────────────────────────────────
 
 def test_whoami_authenticates_with_the_headers_everything_else_uses() -> None:
-    """The point of it. /validate takes a body, which is why a header-only caller gets a 422."""
+    """whoami reads the key from headers; /validate takes a body, so a header-only caller gets 422."""
     parameters = inspect.signature(integrations.whoami).parameters
     assert "request" not in parameters, "whoami must not take a body"
     default = parameters["api_key"].default
@@ -109,13 +103,11 @@ def test_whoami_authenticates_with_the_headers_everything_else_uses() -> None:
 
 
 def test_whoami_reports_the_key_and_this_deployments_own_build_and_nothing_else() -> None:
-    """It is exempt from the capability rule, so what it may report has to be bounded here.
+    """whoami is exempt from the capability rule, so what it may report is bounded here.
 
-    Two things, and they are different in kind. The key's own attributes, which the caller already
-    holds. And this deployment's build identity, which the caller does not hold but which is
-    self-reported, says nothing about any other tenant, and is the answer to "which build am I
-    talking to" that an integrator otherwise has to ask a human for. Everything else - another key,
-    the key store, the database - stays out.
+    It reports the key's own attributes, which the caller already holds, and this deployment's
+    self-reported build identity, which says nothing about any other tenant. Other keys, the key
+    store and the database stay out.
     """
     source = inspect.getsource(integrations.whoami)
     tree = ast.parse(source.lstrip())
@@ -139,7 +131,7 @@ def test_whoami_is_a_get_so_it_can_be_a_one_line_curl() -> None:
     assert marker in source
 
 
-# ── the collection reads are GETs, which is the whole complaint ────────────────────────────────
+# ── the collection reads are GETs ──────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("path", ["/clusters", "/projects", "/instances", "/whoami"])
 def test_the_new_reads_are_gets(path: str) -> None:

@@ -1,9 +1,8 @@
-"""Migration 046 removes what deregistrations left behind before the cleanup existed.
+"""Migration 046 removes tag assignments and snapshot schedules left by deregistered clusters.
 
-Until 2026-11-05 deleting a cluster left its instances' tag assignments and snapshot schedules
-(owner decision: sweep them once at upgrade). Only a cluster id whose every registration has ended
-counts as deregistered: an id with an active registration, or with no registration row at all,
-keeps its rows.
+Earlier builds kept them when a cluster was deleted; the migration sweeps them once at upgrade.
+Only a cluster id whose every registration has ended counts as deregistered: an id with an active
+registration, or with no registration row at all, keeps its rows.
 """
 
 from __future__ import annotations

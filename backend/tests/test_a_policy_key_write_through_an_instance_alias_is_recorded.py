@@ -2,8 +2,8 @@
 
 LXD serves both paths as aliases of `/instances` (lxd/instances.go names them as the endpoint's
 aliases), so a PATCH to `/1.0/containers/web-1` is the same instance write as one to
-`/1.0/instances/web-1`. The raw-proxy observer only read `instances`, so the same policy-key write
-through an alias left no record. It stays an observer: the write is sent either way.
+`/1.0/instances/web-1`, and the raw-proxy observer reads it the same way. It stays an observer:
+the write is sent either way.
 """
 
 from typing import Any, Dict, List

@@ -271,7 +271,7 @@ def _lapse_trip(health, host):
 
 
 # A dead peer is retried only after its trip lapses, so between retries nothing is tripped and
-# nothing has connected. Reading that as a cold worker answered the fleet inventory with 503.
+# nothing has connected. That state is a remote partial failure, never a cold worker (503).
 @pytest.mark.asyncio
 @pytest.mark.parametrize("lapsed", [False, True], ids=["tripped", "trip-lapsed"])
 async def test_project_breaker_is_a_remote_partial_failure(monkeypatch, lapsed):

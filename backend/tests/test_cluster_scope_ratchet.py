@@ -1,12 +1,10 @@
 """Every handler that takes a cluster from the caller must check it against the caller.
 
-This class of bug is silent and was widespread: ten routers accepted a `host` or `cluster_id`
-from the request and never compared it to the caller's organisation. A live probe with the
-tenant account returned another organisation's LXD client certificate and private key.
+A handler that accepts a `host` or `cluster_id` and never compares it to the caller's organisation
+can hand out another organisation's data, its LXD client certificate and private key included.
 
-The ratchet is structural rather than behavioural on purpose. The failure is invisible at
-runtime for anyone whose own clusters happen to answer, so it will not show up in a functional
-test; it only shows up when someone points the parameter at a cluster they should not reach.
+The ratchet is structural because the failure is invisible at runtime for anyone whose own clusters
+answer; it shows only when someone points the parameter at a cluster they should not reach.
 """
 
 import ast
@@ -40,7 +38,7 @@ EXEMPT = {
     # Org-level membership check (user_has_access) is the correct boundary here.
     ("organizations.py", "bind_cluster"): "org membership checked via user_has_access",
     ("organizations.py", "unbind_cluster"): "org membership checked via user_has_access",
-    # Break-glass is the mechanism for reaching a cluster you do not own; it has its own gate.
+    # Break-glass reaches a cluster the caller does not own and has its own gate.
     ("break_glass.py", "*"): "enforce_sensitive_access / require_admin is the gate",
 }
 
@@ -73,10 +71,8 @@ def test_every_cluster_taking_handler_checks_the_cluster() -> None:
         if reason:
             continue
         checked += 1
-        # important: a CALL, not the name appearing anywhere in the body. Several handlers
-        # import verify_cluster_access inside the function, so a substring match was satisfied
-        # by the import line alone: deleting the call and leaving the import kept this green.
-        # Proven by ablation on terminal.py before this was tightened.
+        # important: require a call. Several handlers import verify_cluster_access inside the
+        # function, so a substring match would pass on the import line alone.
         gate_calls = [
             inner
             for inner in ast.walk(node)
@@ -181,7 +177,7 @@ def test_router_local_instance_gates_include_project_scope() -> None:
 
 
 def test_the_exempt_list_stays_honest() -> None:
-    """An exemption for a file that no longer exists hides a real handler behind a stale name."""
+    """An exemption naming a missing file hides a real handler behind a stale name."""
     for (filename, _func) in EXEMPT:
         assert (ROUTERS / filename).exists(), f"EXEMPT names {filename}, which does not exist"
 

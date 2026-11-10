@@ -1,11 +1,11 @@
 """An add-on credential that owns OrcaHub organizations keeps them through rotation and uninstall.
 
-An add-on may hold org.sync, so its credential can sync, and so own, an OrcaHub organization. Only
-the owner key may sync it afterwards. A rotation retires the old credential, so it now carries the
-old credential's organizations to the new one in the same commit as the installation row.
-Uninstall destroys both credentials, so it is refused while either owns an organization, and the
-answer names suspending the add-on as the way to stop it now. The reconcile sweep still revokes a
-credential that must stop, and its record names the organizations that freezes.
+An add-on may hold org.sync, so its credential can sync, and so own, an OrcaHub organization; only
+the owner key may sync it afterwards. A rotation moves the old credential's organizations to the
+new one in the same commit as the installation row. Uninstall destroys both credentials, so it is
+refused while either owns an organization, and the answer points to suspending the add-on instead.
+The reconcile sweep still revokes a credential that must stop, and records the organizations that
+freezes.
 """
 
 import asyncio
@@ -113,7 +113,7 @@ async def rotate(db: Session, vault: Any, record: SimpleNamespace, grace: int = 
     return new_key
 
 
-# note: rotation
+# Rotation
 
 @pytest.mark.parametrize("grace", [0, 300], ids=["no-grace", "grace"])
 async def test_a_rotation_carries_the_organizations_to_the_new_credential(rotation: Dict[str, Any], grace: int) -> None:
@@ -155,7 +155,7 @@ async def test_a_rotation_of_a_credential_that_owns_nothing_moves_nothing(rotati
     assert [c for c in rotation["log"].calls if c["action"] == TRANSFER_ACTION] == []
 
 
-# note: uninstall
+# Uninstall
 
 @pytest.fixture
 def teardown(monkeypatch: pytest.MonkeyPatch) -> List[str]:
@@ -239,7 +239,7 @@ async def test_the_route_records_the_refusal_on_the_uninstall_action(
     assert teardown == []
 
 
-# note: the reconcile sweep still revokes, and says what that freezes
+# The reconcile sweep still revokes, and records what that freezes.
 
 async def test_the_sweep_reads_what_a_credential_owns() -> None:
     db = world_db()

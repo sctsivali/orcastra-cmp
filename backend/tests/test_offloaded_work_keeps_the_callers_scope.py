@@ -1,24 +1,15 @@
 """Work moved off the event loop must carry the caller's organization scope with it.
 
 `loop.run_in_executor` does not copy contextvars; `asyncio.to_thread` does, because it wraps
-the call in `ctx.run` itself. This codebase used both, so half the offloaded work saw the
-caller's scope and half saw the defaults, and nothing said which was which.
-
-Three things read a ContextVar and answer permissively when it is unset, which is what makes
-the difference matter rather than merely being untidy:
+the call in `ctx.run` itself. Three readers answer permissively when their ContextVar is unset:
 
   org_scope._allowed_clusters_var   None means "no filter", so the org-scope branch at the top
-                                    of connection.get_client could never deny anything reached
-                                    through a worker thread.
-  org_scope.get_scope_cache_key     returns ":scope=all" on a None var, which is the ADMIN
-                                    cache namespace, so a scoped read computed in a worker
-                                    would write into it.
-  org_scope.check_tenant_permission returns True on a None ACL. In a worker that is
-                                    unconditional: it fails OPEN.
+                                    of connection.get_client denies nothing in a worker thread.
+  org_scope.get_scope_cache_key     returns ":scope=all" on a None var, the Admin cache
+                                    namespace, so a scoped read computed in a worker writes there.
+  org_scope.check_tenant_permission returns True on a None ACL: in a worker it fails open.
 
-Only the first was reachable in practice, and only as a second line of defence behind
-`verify_cluster_access`. The other two are one careless offload away, which is why this is a
-behavioural test rather than a comment.
+`run_blocking` copies the caller's context for each call, and these tests hold it to that.
 """
 
 import asyncio
@@ -54,7 +45,7 @@ class OffloadedScopeTests(unittest.TestCase):
         self.assertEqual({"cluster-a"}, asyncio.run(go()))
 
     def test_it_survives_the_kwargs_path_too(self):
-        """The two submit branches used to be separate; only one of them can be tested by luck."""
+        """run_blocking submits a call with kwargs on its own branch, which carries it too."""
 
         async def go():
             _probe.set({"cluster-b"})
@@ -65,8 +56,8 @@ class OffloadedScopeTests(unittest.TestCase):
         self.assertEqual(({"cluster-b"}, 7), asyncio.run(go()))
 
     def test_the_raw_executor_still_loses_it(self):
-        """The ablation. Without this the test above passes for the wrong reason: a fresh
-        thread would read the same default if the var were never set."""
+        """Control case: a raw executor loses the var, so the tests above prove run_blocking
+        carries it rather than reading a default."""
 
         async def go():
             _probe.set({"cluster-c"})
@@ -87,7 +78,7 @@ class OffloadedScopeTests(unittest.TestCase):
         self.assertIsNone(asyncio.run(go()))
 
     def test_the_org_scope_var_specifically_survives(self):
-        """The behavioural case, against the real var rather than a stand-in."""
+        """The real org-scope var survives the hop as well as the stand-in."""
         from app.core import org_scope
 
         async def go():
@@ -103,12 +94,11 @@ class OffloadedScopeTests(unittest.TestCase):
 
 
     def test_many_calls_at_once_each_get_their_own_context(self):
-        """The trap in the fix: `Context.run` refuses re-entry.
+        """`Context.run` refuses re-entry, so each concurrent offload needs its own copy.
 
-        One `copy_context()` shared by N concurrent offloads raises "cannot enter context"
-        rather than losing the scope quietly, so the copy must be per call. run_blocking copies
-        inside itself, which is what makes ten simultaneous cluster reads safe; routers that
-        build their own task list have to copy inside the comprehension for the same reason.
+        One `copy_context()` shared by N concurrent offloads raises "cannot enter context".
+        run_blocking copies per call; a router that builds its own task list must copy inside
+        the comprehension for the same reason.
         """
 
         from app.core import org_scope
@@ -132,7 +122,7 @@ class OffloadedScopeTests(unittest.TestCase):
         self.assertEqual([{f"c{i}"} for i in range(12)], results)
 
     def test_one_shared_context_is_the_bug_this_avoids(self):
-        """Ablation: prove the failure mode is real, so the per-call copy is not cargo cult."""
+        """Control case: a shared Context does raise, which is why the copy is per call."""
 
         async def scenario():
             loop = asyncio.get_running_loop()

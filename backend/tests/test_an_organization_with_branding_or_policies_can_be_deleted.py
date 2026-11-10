@@ -1,11 +1,10 @@
 """An organization with branding, tenant policies or a desktop control policy can be deleted.
 
 Each of those rows points at its organization through a NOT NULL column whose foreign key cascades
-the delete in the database. The ORM backrefs did not say so, so deleting the organization made
-SQLAlchemy set their organization_id to NULL first, the database refused it, and the route answered
-409 "still referenced by other records" (found live 2026-10-27: a seller organization whose
-branding its buyers follow could not be removed). The backrefs now leave the children to the
-database's cascade.
+the delete in the database. The ORM backrefs leave the children to that cascade; otherwise
+SQLAlchemy sets their organization_id to NULL first, the database refuses it, and the route answers
+409 "still referenced by other records" (ex; a seller organization whose branding its buyers follow
+could not be removed).
 
 SQLite enforces the foreign keys here (PRAGMA foreign_keys=ON), so the cascade is the database's,
 as on Postgres.

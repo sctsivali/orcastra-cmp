@@ -1,7 +1,7 @@
 """One member-name rule wherever a member reaches a ?target=, a cache key or a log line.
 
-Two copies of the same regex were used with re.match, which accepts a trailing newline, and the
-standalone spelling was compared case-sensitively in one place and case-insensitively in another.
+The rule lives in app.core.member_names and uses fullmatch, since re.match with "$" accepts a
+trailing newline, and every standalone spelling ("None", "none", "") compares the same way.
 """
 
 import time

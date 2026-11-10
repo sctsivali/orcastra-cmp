@@ -1,10 +1,10 @@
 """A key that owns an OrcaHub organization is not revoked, deleted or stripped of what it syncs with.
 
 Only the owner key syncs an organization, updates its members and policies and provisions for it,
-and no other key can take it over. Revoking or deleting the owner therefore froze its
-organizations, which is what happened on production on 2026-10-08. The key routes now refuse to
-end an owner, for every caller, an Admin included, and say what to do instead: transfer the
-organizations, delete them, or rotate the secret (an add-on's credential is suspended instead).
+and no other key can take it over, so revoking or deleting the owner would freeze its
+organizations. The key routes refuse to end an owner for every caller, an Admin included, and
+say what to do instead: transfer the organizations, delete them, or rotate the secret (an
+add-on's credential is suspended instead).
 
 These send the real routes through their RBAC gates against SQLite organization rows and an
 in-memory Vault, and assert the status, the structured detail, the audit record, and that
@@ -87,7 +87,7 @@ def denial(owned: Dict[str, Any]) -> Dict[str, Any]:
     return record
 
 
-# note: revoke and delete of an owner
+# Revoke and delete of an owner.
 
 @pytest.mark.parametrize("method, suffix, action, audited", [
     ("POST", "/revoke", "revoke", "integration.api_key.revoke"),
@@ -132,7 +132,7 @@ async def test_a_partner_sees_only_the_organizations_it_belongs_to(
     assert "(acme-cloud and 1 you cannot see)" in detail["message"]
     assert "Ask an administrator to transfer them" in detail["message"]
     nothing_changed(owned)
-    # note: the record names what the answer named. The caller who triggered it can read it.
+    # The record names what the answer named; the caller who triggered it can read it.
     record = denial(owned)
     assert (record["details"]["owned_organization_slugs"], record["details"]["owned_organization_count"],
             record["details"]["owned_organization_hidden_count"]) == (["acme-cloud"], 2, 1)
@@ -150,7 +150,7 @@ async def test_one_organization_reads_in_the_singular(owned: Dict[str, Any]) -> 
     assert "so its sync, member updates and provisioning would stop. Transfer it to another" in detail["message"]
 
 
-# note: what does not count
+# What does not count.
 
 @pytest.mark.parametrize("method, suffix", [("POST", "/revoke"), ("DELETE", "")], ids=["revoke", "delete"])
 async def test_a_key_that_owns_nothing_is_ended_as_before(owned: Dict[str, Any], method: str, suffix: str) -> None:
@@ -165,7 +165,7 @@ async def test_a_key_that_owns_nothing_is_ended_as_before(owned: Dict[str, Any],
 
 async def test_inactive_and_dashboard_organizations_do_not_count(owned: Dict[str, Any]) -> None:
     db = owned["db"]
-    # note: a bulk delete skips the ORM cascade, and SQLite enforces no foreign key, so the owner rows go too
+    # A bulk delete skips the ORM cascade, and SQLite enforces no foreign key, so the owner rows go too.
     db.sync.query(OrganizationOwnerKey).delete()
     db.sync.query(Organization).delete()
     db.sync.commit()
@@ -175,7 +175,7 @@ async def test_inactive_and_dashboard_organizations_do_not_count(owned: Dict[str
     assert (await send(ADMIN, db, "POST", f"{KEYS}/{PLAIN}/revoke")).status_code == 200
 
 
-# note: the order of the checks
+# The order of the checks.
 
 @pytest.mark.parametrize("method, suffix", [("POST", "/revoke"), ("DELETE", "")], ids=["revoke", "delete"])
 async def test_an_id_outside_the_callers_clusters_is_404_before_any_409(
@@ -197,7 +197,7 @@ async def test_ownership_that_cannot_be_read_ends_nothing(owned: Dict[str, Any],
     nothing_changed(owned)
 
 
-# note: withdrawing org.sync or inventory.read freezes the organizations as surely as a revoke.
+# Withdrawing org.sync or inventory.read freezes the organizations just as a revoke does.
 # /sync admits a key holding inventory.read, and its organization half needs org.sync too.
 
 def store(owned: Dict[str, Any], key_id: str, metadata: Dict[str, Any]) -> None:
@@ -263,7 +263,7 @@ async def test_a_key_that_owns_nothing_may_lose_org_sync(owned: Dict[str, Any]) 
     assert response.status_code == 200, response.text
 
 
-# note: an add-on credential that owns organizations
+# An add-on credential that owns organizations.
 
 async def test_an_add_on_owner_is_told_to_suspend_the_add_on(owned: Dict[str, Any]) -> None:
     own(owned["db"], ADDON, "addon-org")
@@ -281,7 +281,7 @@ async def test_an_add_on_owner_is_told_to_suspend_the_add_on(owned: Dict[str, An
     assert (stored["is_revoked"], stored["extension_install_id"]) == (False, addon_metadata()["extension_install_id"])
 
 
-# note: the key list and detail say what each key owns
+# The key list and detail say what each key owns.
 
 async def test_the_key_list_names_what_each_key_owns(owned: Dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     docs = [plain_metadata(), addon_metadata()]

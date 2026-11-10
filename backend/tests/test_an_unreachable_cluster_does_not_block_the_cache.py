@@ -1,10 +1,10 @@
 """A cluster that cannot be reached at all must not stop the rest of the fleet being cached.
 
-Measured on dev: every read of the storage volume list paid the full 25 s read budget, because
-one cluster's listing timed out and `Fanout.cacheable` refused any fan-out with a failure in it.
-A transport failure leaves no rows to misread and the body names the cluster, so the pool,
-volume and IPAM lists remember it for their short degraded TTL. An LXD error answer or a
-partial read is still never cached (test_a_failed_listing_is_never_an_empty_answer.py).
+`Fanout.cacheable` refuses any fan-out with a failure in it, so one cluster timing out would make
+every read of a list pay the full read budget. A transport failure leaves no rows to misread and
+the body names the cluster, so the pool, volume and IPAM lists cache such a read for their short
+degraded TTL. An LXD error answer or a partial read is still never cached
+(test_a_failed_listing_is_never_an_empty_answer.py).
 """
 
 import pytest

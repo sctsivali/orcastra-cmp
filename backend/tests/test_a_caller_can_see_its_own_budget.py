@@ -1,12 +1,9 @@
-"""An integration could not learn its own rate limit, and was told to guess one.
+"""An integration learns its own rate limit instead of guessing one.
 
-The refusal carried a hardcoded `Retry-After: 30` and no ceiling, while the published documentation
-says deployments retune the number. So the one party that has to back off correctly was the only
-party not told what the limit was.
-
-`consume_api_key_budget_state` spends the same request `consume_api_key_budget` always spent and
-keeps the count Redis already returned. The bool-only function is unchanged, because a caller that
-wants a yes or no should not have to care.
+Deployments retune the limit, so the refusal carries the ceiling and the window the store holds
+rather than a fixed `Retry-After`. `consume_api_key_budget_state` spends the same request
+`consume_api_key_budget` spends and keeps the count Redis returned; the bool-only function stays
+for callers that only want a yes or no.
 """
 
 import pytest
@@ -89,10 +86,9 @@ def test_two_keys_do_not_share_a_budget(limiter) -> None:
 
 
 def test_a_store_that_cannot_answer_reports_nothing_rather_than_guessing(monkeypatch) -> None:
-    """Fails open, and stays quiet.
+    """Fails open and reports no budget.
 
-    A remaining budget we cannot compute must not be emitted as one we can: an integration told it
-    has room it does not have is worse served than one told nothing at all.
+    An integration told it has room it does not have is worse served than one told nothing at all.
     """
     monkeypatch.setattr(security, "_shared_consume", lambda *_a, **_k: None)
 
@@ -110,7 +106,7 @@ def test_a_store_that_cannot_answer_reports_nothing_rather_than_guessing(monkeyp
 
 
 def test_the_refusal_carries_the_window_rather_than_a_constant() -> None:
-    """`Retry-After: 30` was hardcoded while the window is configurable."""
+    """Retry-After comes from the window the limiter holds, which is configurable."""
     import inspect
 
     from app.routers.integrations import validate_api_key

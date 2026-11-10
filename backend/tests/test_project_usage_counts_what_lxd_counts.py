@@ -1,11 +1,10 @@
 """GET /projects/{host}/{project}/usage says how much of each project limit is allocated.
 
-The create-instance form had the project's limits (they ride raw in ProjectInfo.config) and
-nothing about how much of them was already spent, so LXD's synchronous refusal was the first
-and only signal. This read sums what LXD sums (lxd/project/limits.go): every instance in the
-project whatever its state, its expanded config, so a profile-inherited limit counts; memory
-through LXD's size suffixes; instance counts by type. A partial read is marked incomplete so
-the form never says "4 of 4" on a floor.
+The create-instance form has the project's limits (they ride raw in ProjectInfo.config); this
+read tells it how much of them is already spent, before LXD refuses. It sums what LXD sums
+(lxd/project/limits.go): every instance in the project whatever its state, its expanded config,
+so a profile-inherited limit counts; memory through LXD's size suffixes; instance counts by
+type. A partial read is marked incomplete so the form never says "4 of 4" on a floor.
 
 Scoped like the list route: a project the caller may not see answers 404, and the body
 carries aggregates only, never an instance name.
@@ -312,8 +311,8 @@ async def test_an_unreachable_cluster_is_503(monkeypatch):
 
 
 async def test_a_project_the_daemon_no_longer_has_is_404_not_500(monkeypatch):
-    # note: the visibility gate answers from the caller's policy, which can name a project that
-    # was deleted a moment ago; the daemon's NotFound then has to be a 404 like the gate's own
+    # The visibility gate answers from the caller's policy, which can name a project that was
+    # deleted a moment ago; the daemon's NotFound then has to be a 404 like the gate's own.
     from app.services.lxd.exceptions import LXDProjectNotFoundError
 
     app = _app(_Service(error=LXDProjectNotFoundError("gone")), monkeypatch)

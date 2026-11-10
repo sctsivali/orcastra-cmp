@@ -1,10 +1,9 @@
 """A policy rule may only name a cluster that is registered.
 
-The OrcaHub-facing writers stored `cluster_id` verbatim; the only check was the API key's own
-grant, which is validated when the key is minted and can carry an id no cluster has. The dev
-installation held 25 rules under `nuc-2`, `pandora-semanan` and `blitz01` after those clusters
-were registered again as `nuc2`, `pandora` and `blitz001`, and every one of them counted for
-nothing in the Partner bound and the tenant ACL. The writers now refuse at the boundary.
+The API key's grant is validated when the key is minted and can carry an id no cluster has, so
+the OrcaHub-facing writers check `cluster_id` against the registry at the boundary. A rule under
+an unregistered id (ex; one left behind after a cluster is registered again under a new name)
+counts for nothing in the Partner bound and the tenant ACL.
 """
 
 import asyncio

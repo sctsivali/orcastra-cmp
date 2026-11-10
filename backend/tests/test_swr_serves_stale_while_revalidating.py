@@ -1,4 +1,4 @@
-"""core/swr.py: serve the last answer at once, replace it in the background, never lie about it.
+"""core/swr.py: serve the last answer at once, replace it in the background, say which it served.
 
 Every wait here ends on an event; the clock is the module's own and is moved by the test.
 """

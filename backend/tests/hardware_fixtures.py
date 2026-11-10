@@ -1,12 +1,11 @@
 """Payloads for the hardware allowlist.
 
-DUAL_SOCKET_HOST_RESOURCES is the poison pill: every asset identifier LXD can emit is present
-and carries a LEAK sentinel, because a stripper can only be tested against a payload that has
-something to strip. The sentinels are distinctive strings so an assertion cannot pass by
-coincidence with a real value.
+DUAL_SOCKET_HOST_RESOURCES carries every asset identifier LXD can emit, each set to a LEAK
+sentinel, so the stripper is tested against a payload that has something to strip. The
+sentinels are distinctive strings so an assertion cannot pass by coincidence with a real value.
 
-NESTED_CONTAINER_RESOURCES is the opposite case, taken from what a nested container actually
-reports: no `system` section at all, no storage, and sockets whose threads carry no NUMA node.
+NESTED_CONTAINER_RESOURCES is the opposite case, as a nested container reports it: no `system`
+section at all, no storage, and sockets whose threads carry no NUMA node.
 """
 
 from typing import Any, Dict, List
@@ -131,8 +130,8 @@ DUAL_SOCKET_HOST_RESOURCES: Dict[str, Any] = {
                 ],
             },
             {
-                # A spinning disk. Under the `rotational` branch this replaced it was reported
-                # as an SSD, because LXD emits no such key.
+                # A spinning disk. LXD emits no `rotational` key, so only `rpm` marks it as
+                # rotational.
                 "id": "sda",
                 "device": "8:0",
                 "model": "WDC WD4003FRYZ-01F0DB0",

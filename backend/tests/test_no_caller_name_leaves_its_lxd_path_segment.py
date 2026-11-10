@@ -1,23 +1,15 @@
 """Ratchet: on every surface an API key reaches, a value put into an LXD URL path is encoded.
 
-pylxd builds a URL by string concatenation (`_APINode.__getitem__`) and the upload routers build
-theirs with f-strings, so a caller's name lands in the path as it is. `x?project=other&` then reads
-or deletes in a project the key was never granted, and `..` is folded out of the path by requests.
-Found on /proxy delete_snapshot and on the image-upload alias reads and repoint delete.
+pylxd builds a URL by string concatenation (`_APINode.__getitem__`) and the upload routers use
+f-strings, so a caller's name lands in the path as it is: `x?project=other&` reaches a project the
+key was never granted, and requests folds `..` out of the path.
 
-Every path segment built from a variable must be `safe_segment(...)` or `lxd_segment(...)`
-(core/lxd_segment.py refuses a dot segment too), or a name assigned only from one of those in the
-same function. A value that came from a request must use `lxd_segment`, since `safe_segment` leaves
-`.` and `..` for requests to fold out of the path. `safe_segment` stays only where the code read the
-value from LXD or built it itself, and each such site is listed in SAFE_SEGMENT_SITES with the reason.
-A key route also reaches LXD through helpers it imports (services/lxd/utils.find_instance_in_projects
-put the one-instance read's caller name into the path with safe_segment, so `..` read LXD's server
-root). So the scan follows every function a scanned module imports from app/, every class it
-constructs, and what those use in turn, and holds them to the same rules. Three shapes are read:
-
-- an f-string naming an LXD resource, where a value follows a `/`
-- a subscript on a pylxd node (`client.api.instances[...]`, `...snapshots[...]`)
-- a pylxd manager lookup (`client.instances.get(...)`, `inst.snapshots.get(...)`).
+Every variable path segment must be `lxd_segment(...)` (core/lxd_segment.py, which also refuses a
+dot segment), a `safe_segment(...)` site listed with its reason in SAFE_SEGMENT_SITES (a value from
+LXD or built by the code), or a name assigned only from one of those in the same function. The scan
+follows every app/ function a scanned module imports, every class it constructs, and what those use
+in turn. It reads three shapes: an f-string naming an LXD resource where a value follows a `/`,
+a node subscript (`client.api.instances[...]`) and a manager lookup (`client.instances.get(...)`).
 """
 
 import ast
@@ -59,7 +51,7 @@ PYLXD_NODE = re.compile(
 )
 MANAGER_LOOKUPS = {"get", "get_by_alias", "exists"}
 
-# note: every safe_segment call in the scanned modules, as (file, function, call), and why its value
+# Every safe_segment call in the scanned modules, as (file, function, call), and why its value
 # cannot come from a request. A new call fails until it is either lxd_segment or listed here.
 SAFE_SEGMENT_SITES: Dict[Tuple[str, str, str], str] = {
     ("app/routers/image_uploads.py", "_resolve_alias_sync", "safe_segment(target)"):
@@ -85,7 +77,7 @@ SAFE_SEGMENT_SITES: Dict[Tuple[str, str, str], str] = {
         "the operation id LXD answered the write with",
 }
 
-# note: what a route is handed rather than hands a name to. A key surface uses the service only through
+# What a route is handed rather than hands a name to. A key surface uses the service only through
 # SERVICE_CALLS, which take a cluster id or read the cluster registry, and the scan checks that. The two
 # bare managers are handed whole to status.probe_clusters, a followed helper, for the availability probe.
 DEPENDENCY_PROVIDERS: Dict[str, str] = {
@@ -96,14 +88,14 @@ SERVICE_CALLS = {
     "cert_manager", "cert_manager.get_cluster_info", "cert_manager.read_registry", "check_node_status",
     "connection_manager", "connection_manager.get_client", "connection_manager.get_project_client",
     "ensure_connection", "get_node_names", "instance_manager.fetch_node_instances",
-    # note: take a project name as well as the cluster id. The proxy validates it with
+    # These two take a project name as well as the cluster id. The proxy validates it with
     # lxd_segment (assert_path_params) and services/lxd/project_delete.py, scanned above,
     # puts it in the path only through safe_segment.
     "delete_project", "project_exists",
 }
-# note: the encoders themselves, which the rules above describe rather than obey.
+# The encoders themselves, which the rules above describe rather than obey.
 ENCODER_MODULES = {APP / "core" / "lxd_segment.py", APP / "core" / "lxd_path.py"}
-# note: the followed helpers that build an LXD path, pinned so a new one is a reviewed addition to the scan.
+# The followed helpers that build an LXD path, pinned so a new one is a reviewed addition to the scan.
 LXD_PATH_HELPERS = {
     ("app/core/cloud_init_config.py", "cloud_init_compared_at"),
     ("app/core/cloud_init_config.py", "proxy_cloud_init_compared_at"),

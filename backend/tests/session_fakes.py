@@ -1,9 +1,8 @@
 """
 Shared doubles for the session-registry tests.
 
-CI runs the suite against a closed Redis port on purpose, so nothing here may open a
-socket. The fake is deliberately thin: it models the handful of hash operations the
-registry actually uses, and nothing else.
+CI runs the suite against a closed Redis port, so nothing here may open a socket. The
+fake models only the hash operations the registry uses.
 """
 
 import asyncio
@@ -50,7 +49,7 @@ class FakeAsyncRedis:
         self.field_ttls: Dict[str, Dict[str, int]] = {}
         self.key_ttl: Dict[str, int] = {}
         self.fail_next = 0          # number of upcoming calls that should raise
-        self.publishes = 0          # round trips actually made, for idle assertions
+        self.publishes = 0          # round trips made, for idle assertions
 
     def raise_if_armed(self) -> None:
         if self.fail_next > 0:
@@ -97,7 +96,7 @@ def reset_session_singletons() -> None:
 
     Both the tracker and the registry are process-wide singletons. Without this a
     session registered by one test is still present in the next one, so results
-    depend on collection order and a passing suite proves nothing.
+    depend on collection order.
     """
     registry_module._registry = None
     tracker_module._tracker = None

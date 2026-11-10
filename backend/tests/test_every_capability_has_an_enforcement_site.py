@@ -1,17 +1,9 @@
 """A capability an operator can tick must be refusable somewhere.
 
-`instance.files` shipped in the vocabulary for months with no endpoint behind it: the create
-dialog marked it elevated and never-inherited, an operator could grant it, and the key it produced
-could not read a file. The exec path even refused an oversized stdin with "use instance.files
-instead", pointing callers at a door that was not there.
-
-Then the desktop family repeated it from the other side: the capabilities were enforced, and the
-consent and grant that were supposed to sit beside them were not.
-
-So this asserts the simplest property that would have caught the first case, and would catch the
-next one: every name in CAPABILITIES appears in a real call to one of the functions that can
-refuse it. It says nothing about whether the refusal is correct, only that a refusal is reachable.
-`test_a_declared_gate_is_a_reached_gate` covers the other half.
+A capability with no enforcement site can be granted from the create dialog and changes nothing.
+Every name in CAPABILITIES must appear in a real call to one of the functions that can refuse it.
+This says nothing about whether the refusal is correct, only that a refusal is reachable;
+tests/test_a_declared_gate_is_a_reached_gate.py covers the other half.
 """
 
 import ast
@@ -36,9 +28,9 @@ ENFORCERS = {
 def _capabilities_named_at_an_enforcement_site() -> Set[str]:
     """Capability names passed to an enforcer, or mapped to one by a lookup table.
 
-    note: two shapes count. A literal argument, `assert_capability(key, "org.sync")`, and a table
-    that maps something to a capability which is then handed to an enforcer, which is how the
-    guest-access family is wired: `GUEST_ACCESS_OPERATIONS[operation]` supplies the name.
+    Two shapes count: a literal argument, `assert_capability(key, "org.sync")`, and a table that
+    maps something to a capability later handed to an enforcer, as in the guest-access family,
+    where `GUEST_ACCESS_OPERATIONS[operation]` supplies the name.
     """
     named: Set[str] = set()
     for file in sorted(APP.rglob("*.py")):
@@ -86,9 +78,8 @@ def test_the_enforcer_list_names_functions_that_exist() -> None:
 
 
 def test_a_capability_that_reaches_inside_uses_the_explicit_enforcer() -> None:
-    """The inheriting gate reads an absent capabilities field as unrestricted, which is what keeps
-    older integrations working and is the wrong answer for a power that did not exist when the key
-    was issued. Most keys in this deployment are in that state."""
+    """The inheriting gate reads an absent capabilities field as unrestricted, which keeps older
+    integrations working but must not grant a power that did not exist when the key was issued."""
     from app.core.api_key_capabilities import GUEST_ACCESS_CAPABILITIES
 
     explicit_sites = 0

@@ -1,9 +1,9 @@
-"""A tag definition is changed or deleted only by an Admin or its creator (owner decision 2026-11-05).
+"""A tag definition is changed or deleted only by an Admin or its creator.
 
 Tags are one fleet-wide registry and deleting one removes every assignment of it, on every
-organization's instances. Any Partner could rename or delete any tag: live on 2026-11-05 qa-partner
-changed (200) and deleted (204) a tag qa-admin had created. Others may still assign a tag; only its
-definition is held. Categories have no creator and no screen edits them, so only an Admin may.
+organization's instances, so another Partner must not rename or delete it. Others may still
+assign a tag; only its definition is held. Categories have no creator and no screen edits them,
+so only an Admin may.
 """
 
 import asyncio

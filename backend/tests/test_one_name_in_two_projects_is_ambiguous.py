@@ -1,9 +1,9 @@
 """An instance name shared by two projects on one cluster is ambiguous, and says so.
 
 `GET /integrations/instances/{name}` (and MCP `orcastra_get_instance`, which runs it) documents a
-409 naming every cluster and project when a name is not unique. Within one cluster the search
-stopped at the first project that held the name, so a key granted every project was handed one of
-the two in silence and the 409 only ever fired across clusters. Found by the live MCP QA on nuc2.
+409 naming every cluster and project when a name is not unique. That holds within one cluster too:
+a search that stops at the first project holding the name would hand a key granted every project
+one of the two in silence.
 """
 
 import asyncio

@@ -1,12 +1,11 @@
 """The grant a Partner's project create writes can only name that project.
 
-`test_a_partner_cannot_widen_their_own_project_bound` pins that the two rule writers a
-Partner reaches refuse a project the caller cannot see. The grant behind a project create is
-a third writer that must not have that guard (by construction the caller cannot see the
-project yet), so its own invariant is pinned here instead: every writer of a policy rule is
-one of a known set, the grant's rule takes its project and cluster from the grant's own
-parameters, and the create calls the grant only after LXD has created the project it names.
-Also here: every project route applies the bound.
+`test_a_partner_cannot_widen_their_own_project_bound` covers the two rule writers a
+Partner reaches, which refuse a project the caller cannot see. The grant behind a project
+create cannot have that guard (the caller cannot see the project yet), so its invariant is
+checked here: every writer of a policy rule is in a known set, the grant's rule takes its
+project and cluster from its own parameters, and the create calls the grant only after LXD
+has created that project. Also here: every project route applies the bound.
 """
 
 import ast
@@ -34,7 +33,7 @@ def test_every_rule_writer_is_a_known_one():
     writers = set()
     for path in BACKEND.rglob("*.py"):
         for fn in _functions(path):
-            # A constructor call, not the model's own __repr__ string.
+            # Constructor calls only; the model's own __repr__ string also names the class.
             if any(
                 isinstance(n, ast.Call) and ast.unparse(n.func) == "TenantPolicyRule"
                 for n in ast.walk(fn)

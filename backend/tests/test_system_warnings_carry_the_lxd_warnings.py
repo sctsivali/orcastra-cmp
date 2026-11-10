@@ -1,10 +1,9 @@
 """The system warnings feed carries the clusters' own LXD warnings.
 
-`_fetch_warnings_for_node` returns a NodeRead. `/warnings/system/all` kept results only when
-they were lists, so every LXD warning was dropped from the feed and its critical/warning/info
-totals counted certificates and offline clusters alone. These pin the feed to the same
-handling as `/warnings`: rows kept, a failed cluster named, the project bound and tenant ACL
-applied.
+`_fetch_warnings_for_node` returns a NodeRead, and `/warnings/system/all` must read its rows,
+or the feed and its critical/warning/info totals cover certificates and offline clusters alone.
+These pin the feed to the same handling as `/warnings`: rows kept, a failed cluster named, the
+project bound and tenant ACL applied.
 """
 
 import asyncio
@@ -155,7 +154,7 @@ def test_kernel_advisories_join_the_feed_and_its_totals(monkeypatch):
     ]
     row = body["kernel_advisories"][0]
     assert row["data_as_of"] == "2026-10-19"
-    # where the verdict came from and when, so the tab can say how current it is
+    # Where the verdict came from and when, so the tab can say how current it is.
     assert (row["source"], row["checked_at"], row["fixed_in"]) == ("ubuntu", "2026-10-29T10:00:00Z", "5.15.0-203.213")
     assert (row["ubuntu_priority"], row["ubuntu_url"]) == ("medium", "https://ubuntu.com/security/CVE-2026-99999")
     assert (body["total"], body["critical"], body["info"]) == (2, 1, 1)

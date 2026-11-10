@@ -1,4 +1,4 @@
-"""Regression guards for destructive and replay-sensitive migration paths."""
+"""Guards for destructive and replay-sensitive migration paths."""
 
 from __future__ import annotations
 

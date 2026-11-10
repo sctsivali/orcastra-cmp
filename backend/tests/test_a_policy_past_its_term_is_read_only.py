@@ -1,7 +1,7 @@
 """A tenant policy follows the paid term it stands for: view only after the term, nothing after access ends.
 
-The owner's decision (2026-10-27): once OrcaHub's paid term is over the buyer may look at the
-instance and do nothing else, and once the retention window is over the buyer sees nothing at all.
+Once OrcaHub's paid term is over the buyer may look at the instance and do nothing else; once the
+retention window is over the buyer sees nothing at all.
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ def test_a_naive_stored_value_is_read_as_utc() -> None:
     assert clamp(FULL, term_ended_at=naive, now=NOW) == {"view"}
 
 
-# ── dates received from the integration ────────────────────────────────────────────────────
+# ── Dates received from the integration ────────────────────────────────────────────────────
 
 
 def test_an_absent_field_keeps_and_a_null_clears() -> None:

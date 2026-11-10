@@ -1,10 +1,9 @@
 """A Tenant monitors its own instances and the clusters' status, never the hosts under them.
 
-GET /monitoring/dashboard handed a Tenant every cluster's hardware threads, memory, storage and
-GPU models, the hypervisor type, the raw status error, the fleet totals and the load on each host,
-which counts every other party's instances on it. GET /monitoring/history drew that host load
-over time, and GET /monitoring/nodes/{node}/metrics read one cluster's hardware. Owner decision
-2026-10-26: a Tenant sees cluster status and its own instances only.
+Host figures (hardware threads, memory, storage, GPU models, hypervisor type, the raw status
+error, fleet totals and each host's load) describe every other party's instances too. GET
+/monitoring/dashboard strips them for a Tenant, and GET /monitoring/history (host load over time)
+and GET /monitoring/nodes/{node}/metrics (one cluster's hardware) refuse a Tenant.
 """
 
 import asyncio

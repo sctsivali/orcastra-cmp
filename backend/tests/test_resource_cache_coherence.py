@@ -329,8 +329,8 @@ def test_upload_ready_uses_strict_shared_cache_invalidation(
     async def inline_to_thread(fn, *args, **kwargs):
         return fn(*args, **kwargs)
 
-    # The contract under test is CacheManager's Redis failure propagation, not Python's
-    # executor wakeup. Keeping it inline also makes this regression deterministic in sandboxed CI.
+    # The test covers CacheManager's Redis failure propagation, so to_thread runs inline; that also
+    # keeps it deterministic in a sandboxed CI.
     monkeypatch.setattr(module.asyncio, "to_thread", inline_to_thread)
     row = Row()
     db = DB()
@@ -474,8 +474,8 @@ _SCHEDULE = SimpleNamespace(cluster_id="nuc2", project="default", instance_name=
 
 
 def test_scheduled_snapshot_refreshes_rows_and_capacity(monkeypatch) -> None:
-    """Ablation: forget the host's whole size map and an hourly schedule on one instance makes
-    the next Snapshots read re-measure every instance on that cluster."""
+    """Only the scheduled instance's size entry is dropped. Dropping the host's whole map would make
+    an hourly schedule on one instance re-measure every instance on that cluster."""
     from app.services.snapshots import fleet_sizes
 
     seen: list[tuple[str, ...]] = []

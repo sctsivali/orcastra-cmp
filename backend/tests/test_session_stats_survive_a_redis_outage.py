@@ -1,14 +1,11 @@
 """Redis going away degrades the session list; it must not break it or hide it.
 
-Terminals keep working when Redis is down - the socket never touched it. What is lost
-is the shared VIEW, so each worker falls back to its own sessions, which is exactly the
-behaviour this change replaced. That is acceptable as a fallback and unacceptable as a
-silent one: a short list is indistinguishable from a correct one, which is how the
-original bug stayed unnoticed. Hence the degraded flag reaching the caller.
+Terminals keep working when Redis is down, since the socket never touches it. What is lost
+is the shared view, so each worker falls back to its own sessions. A short list looks like
+a correct one, so the fallback must not be silent: the caller gets a degraded flag.
 
-Mirrors the invariant already written down at app/core/cache.py:273-281 - Redis
-answering AT ALL is authoritative, and the local view is a Redis-is-down fallback,
-never a miss path.
+Mirrors the invariant in `CacheManager.get_entry` (app/core/cache.py): Redis answering at
+all is authoritative, and the local view is a Redis-is-down fallback, never a miss path.
 """
 
 import time
@@ -57,8 +54,8 @@ async def test_the_breaker_closes_again_and_the_shared_view_returns():
     tracker = get_session_tracker()
     registry = get_session_registry()
 
-    # a second worker, standing in for another process: its session reaches us only
-    # through the shared hash, never through our own dict.
+    # A second tracker stands in for another process: its session reaches this tracker
+    # only through the shared hash, never through its own dict.
     other = SessionTracker()
     other.register(
         session_id="op-theirs",

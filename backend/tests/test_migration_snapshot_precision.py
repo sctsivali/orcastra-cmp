@@ -1,7 +1,7 @@
 """A cross-cluster transfer keeps snapshots at whole-second precision, so the inventory does too.
 
-Found live: the source read ``08:05:55.928374805Z`` and the target ``08:05:55Z`` for the same
-snapshot, so every cross-cluster move of an instance with snapshots stopped in reconciliation.
+The source reads ``08:05:55.928374805Z`` and the target ``08:05:55Z`` for the same snapshot, so a
+full-precision comparison would stop every cross-cluster move with snapshots in reconciliation.
 """
 
 from __future__ import annotations

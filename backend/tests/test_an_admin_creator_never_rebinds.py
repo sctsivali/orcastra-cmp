@@ -1,11 +1,10 @@
 """A key whose creator holds role_admin never rebinds that Admin's personal clusters.
 
-require_partner admits an Admin, so an Admin can mint an integration key, and its created_by is
-the Admin. Whoever holds that key could push the Admin's email into an org the key claimed and
-move the Admin's unbound clusters there. Nothing changed in Authentik, a rebind record was
-written, and the clusters had moved.
+require_partner admits an Admin, so an Admin can mint an integration key whose created_by is the
+Admin. Without this rule, whoever holds that key could push the Admin's email into an org the key
+claimed and move the Admin's unbound clusters there, with nothing changed in Authentik.
 
-The role is read from Authentik when the push arrives. The key's metadata names who minted it and
+The role is read from Authentik when the push arrives: the key's metadata names who minted it but
 not their role, there is no users table, and a role can change after the key was minted. A role
 Authentik cannot answer for rebinds nothing. The strict read itself, against Authentik's HTTP
 answers, is in test_a_creator_role_authentik_cannot_confirm_rebinds_nothing.

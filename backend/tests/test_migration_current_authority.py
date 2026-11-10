@@ -283,8 +283,8 @@ async def test_replacement_account_reusing_email_cannot_become_the_subject_pin()
 
     def handler(request: httpx.Request) -> httpx.Response:
         queries.append(dict(request.url.params))
-        # The original UUID no longer exists. A replacement account may own the old email, but
-        # the verifier must never fall back to an email lookup that would select SECOND_UUID.
+        # The original UUID is gone. A replacement account may own the same email, but the
+        # verifier must never fall back to an email lookup that would select SECOND_UUID.
         return httpx.Response(200, json=_page())
 
     with pytest.raises(AuthorityDeniedError) as raised:
@@ -419,8 +419,8 @@ async def test_timeout_is_retryable_and_transport_text_is_sanitized() -> None:
 
 
 async def test_one_timed_out_lookup_is_retried_once() -> None:
-    """The dev identity provider answers in 0.4 to 2 s and spikes past 4 s under load; one retry
-    turned one plan in six from a 503 into a pass (2026-10-29), and the answer is still Authentik's."""
+    """An identity provider under load can spike past the timeout; one retry absorbs that, and the
+    answer is still Authentik's."""
     calls: list[int] = []
 
     def handler(request: httpx.Request) -> httpx.Response:

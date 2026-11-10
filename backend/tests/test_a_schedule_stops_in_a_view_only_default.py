@@ -1,11 +1,10 @@
 """A snapshot schedule stops in a view-only `default` unless its owner is an Admin.
 
-A schedule a partner created before the view-only `default` rule kept taking snapshots in another
-party's `default` (RC5 acceptance FU-2, 2026-11-06). The worker carries no request scope, so the
-rule is judged from the schedule's owner: the party from the database, the role from Authentik.
-An Admin's schedule keeps running (owner decision 2026-11-06), an unanswered identity provider
-defers the run without counting a failure, and the owner can still pause or delete the schedule,
-which change only the dashboard's own row.
+Without this, a schedule a partner created before the view-only `default` rule would keep taking
+snapshots in another party's `default`. The worker carries no request scope, so the rule is judged
+from the schedule's owner: the party from the database, the role from Authentik. An Admin's
+schedule keeps running, an unanswered identity provider defers the run without counting a failure,
+and the owner can still pause or delete the schedule, which change only the dashboard's own row.
 """
 
 import ast
@@ -98,7 +97,7 @@ async def test_the_rule_reads_the_owner_not_a_request(held) -> None:
     assert refusal.code == OWNER_ROLE_UNREADABLE and refusal.terminal is False
 
 
-# ── the router: an owner withdraws, nobody re-arms ──────────────────────────────────────────────
+# ── the router: pause and delete stay open, resume keeps the rule ───────────────────────────────
 
 def _router_functions():
     source = (Path(schedule_authority.__file__).parents[2] / "routers" / "snapshot_schedules.py").read_text()

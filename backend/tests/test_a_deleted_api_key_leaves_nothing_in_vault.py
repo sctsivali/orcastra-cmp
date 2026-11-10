@@ -1,8 +1,8 @@
 """Deleting an API key removes every version of every record under it from Vault.
 
-A KV v2 data delete only marks the latest version deleted. Deleted keys stayed in the LIST,
-their secret could be undeleted from version history, and the reconcile sweep read every one
-back as a 404 each pass: 1286 of them, about 17 audit lines a second, on the dev deployment.
+A KV v2 data delete only marks the latest version deleted: the key would stay in the LIST, its
+secret could be undeleted from version history, and the reconcile sweep would read it back as a
+404 on every pass.
 """
 
 from typing import List

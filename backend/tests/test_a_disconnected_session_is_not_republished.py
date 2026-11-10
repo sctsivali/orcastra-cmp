@@ -1,12 +1,9 @@
 """A session that ended stays ended, however many heartbeats follow.
 
-unregister() only MARKS a session disconnected. The object stays in the tracker's dict
-for CLEANUP_TTL (five minutes) so the reaper can retire it later. A publisher iterating
-that dict directly would keep re-writing the entry it had just deleted from Redis, once
-per heartbeat, for five minutes: the row would leave the operator's list and come back,
-which reads as exactly the flapping this change removes, now with the opposite cause.
-
-Pins the publisher to live_sessions() rather than to the raw dict.
+unregister() only marks a session disconnected; the object stays in the tracker's dict for
+CLEANUP_TTL so the reaper can retire it later. A publisher iterating that dict would rewrite
+the entry it had just deleted from Redis on every heartbeat, and the row would leave the
+operator's list and come back. The publisher reads live_sessions() instead.
 """
 
 import time
@@ -35,7 +32,7 @@ async def test_live_sessions_excludes_a_disconnected_session():
 
     tracker.unregister("op-1")
 
-    # still in the dict, awaiting the reaper, but no longer live
+    # Still in the dict for the reaper, but not live.
     assert tracker.get("op-1") is not None
     assert tracker.live_sessions() == []
 
@@ -46,7 +43,7 @@ async def test_a_heartbeat_after_disconnect_does_not_restore_the_row():
     registry = get_session_registry()
     _register(tracker)
 
-    # first beat shares it
+    # The first beat publishes it.
     await registry.publish(
         [s.to_snapshot("w1", time.time()) for s in tracker.live_sessions()],
         ttl_seconds=10,
@@ -56,7 +53,7 @@ async def test_a_heartbeat_after_disconnect_does_not_restore_the_row():
     tracker.unregister("op-1")
     await registry.remove("op-1")
 
-    # the beat that follows must have nothing to say about it
+    # The next beat must not publish it again.
     await registry.publish(
         [s.to_snapshot("w1", time.time()) for s in tracker.live_sessions()],
         ttl_seconds=10,

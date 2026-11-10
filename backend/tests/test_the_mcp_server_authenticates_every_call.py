@@ -1,11 +1,10 @@
-"""The MCP surface is a second door onto the same API keys, so it needs the same gate.
+"""The MCP endpoint takes the same API keys as REST, so it needs the same gate.
 
-`external_router` learned the hard way that authentication alone is not a gate: every valid key
-reached every endpoint on it, so a key issued for a read-only integration could mint an
-organization. `test_every_external_endpoint_declares_a_capability` is the ratchet that keeps a new
-REST endpoint from repeating it. An MCP tool is a new endpoint by any other name, and it matches
-neither that test's filename allow-list nor its `router.` decorator filter, so it would have had
-no coverage at all. This file is the MCP half of that ratchet, plus the behaviour it protects.
+Authentication alone is not a gate: a key issued for a read-only integration must not reach a
+write. `test_every_external_endpoint_declares_a_capability` holds every REST endpoint to a
+capability, but an MCP tool matches neither its filename allow-list nor its `router.` decorator
+filter. This file is
+the MCP half of that ratchet, plus the behaviour it protects.
 """
 
 import json
@@ -89,16 +88,14 @@ def _initialize(client: TestClient) -> None:
     })
 
 
-# ── the endpoint exists only when it is turned on ──────────────────────────────────────────────
+# ── the endpoint is served unless it is turned off ─────────────────────────────────────────────
 
 def test_the_endpoint_is_served_by_default(monkeypatch) -> None:
-    """On by default, because the flag was never the boundary.
+    """On by default: the flag is not the security boundary.
 
     The endpoint refuses every request without a valid integration key, and tools/list is narrowed
-    per key, so a key lacking a capability never sees the tools that cost it. What stands in the
-    way is the capability, the per-cluster grant, the project allow-list, and for the desktop
-    family the owning organization's consent. A flag in front of those adds no safety and invites
-    being mistaken for the lock that matters.
+    per key. The boundary is the capability, the per-cluster grant, the project allow-list and, for
+    the desktop family, the owning organization's consent.
     """
     monkeypatch.delenv("MCP_ENABLED", raising=False)
     from app.core.config import get_settings
@@ -112,7 +109,7 @@ def test_the_endpoint_is_served_by_default(monkeypatch) -> None:
 
 
 def test_the_flag_still_turns_it_off(monkeypatch) -> None:
-    """An operator who wants the door gone can still remove it."""
+    """`MCP_ENABLED=false` still removes the endpoint."""
     monkeypatch.setenv("MCP_ENABLED", "false")
     from app.core.config import get_settings
 
@@ -125,8 +122,8 @@ def test_the_flag_still_turns_it_off(monkeypatch) -> None:
 
 
 def test_the_sensitive_tiers_are_offered_but_still_gated(monkeypatch) -> None:
-    """The tier flags decide what is OFFERED. Whether a key may use it is decided elsewhere, and
-    the tests below prove a key without the capability is refused and shown nothing."""
+    """The tier flags decide what is offered. Whether a key may use a tool is checked per call;
+    the tests below show a key without the capability is refused and shown nothing."""
     monkeypatch.delenv("MCP_DESKTOP_TOOLS_ENABLED", raising=False)
     monkeypatch.delenv("MCP_GUEST_TOOLS_ENABLED", raising=False)
     from app.core.config import get_settings
@@ -144,8 +141,8 @@ def test_the_endpoint_is_mounted_when_enabled(mcp_app) -> None:
 # ── the credential ─────────────────────────────────────────────────────────────────────────────
 
 def test_a_request_with_no_credential_is_refused_over_http(mcp_app) -> None:
-    """HTTP 401, not a JSON-RPC error. A missing credential is the caller's operator to fix, and
-    an MCP client surfaces a transport status where it may swallow a protocol error."""
+    """A missing credential is HTTP 401 rather than a JSON-RPC error: an MCP client surfaces a
+    transport status but may swallow a protocol error."""
     with TestClient(mcp_app) as client:
         response = _rpc(client, "initialize", creds=False)
     assert response.status_code == 401
@@ -170,21 +167,12 @@ def test_the_bearer_spelling_is_accepted(mcp_app, monkeypatch) -> None:
 def test_a_rejected_credential_is_refused_over_http_on_every_method(
     mcp_app, monkeypatch, method: str
 ) -> None:
-    """A wrong, revoked, expired or deleted key is 401, not a 200 carrying a protocol error.
+    """A wrong, revoked, expired or deleted key is HTTP 401, never a 200 carrying a protocol error.
 
-    This test previously asserted the opposite, and the opposite was live. The endpoint checked
-    only that credential headers were PRESENT and left verification to the message loop, whose
-    single channel is a JSON-RPC error inside a 200. Two consequences, both measured against the
-    running deployment before the fix:
-
-    A client cannot distinguish that from a tool that failed, so it retries a dead credential
-    rather than telling its operator to fix the key, and revoking a key stops being an
-    unambiguous signal. Revocation is a security control, so its signal has to be legible.
-
-    And `initialize` and `ping` were exempt from authentication altogether, so anyone who could
-    reach the port received the server instructions and the whole capability advertisement with
-    no valid key at all, on a path that spent no per-key budget. That is why this is
-    parametrized over the handshake methods rather than testing `tools/list` alone.
+    A JSON-RPC error inside a 200 looks like a failed tool, so a client would retry a dead
+    credential instead of telling its operator, and revocation would stop being a clear signal.
+    The handshake methods are covered too: unauthenticated, they would hand the server instructions
+    and the capability advertisement to anyone who reaches the port.
     """
     _authenticated_as(monkeypatch, None)
     with TestClient(mcp_app) as client:
@@ -219,8 +207,7 @@ def test_the_credential_is_verified_once_per_request(mcp_app, monkeypatch) -> No
 
 def test_an_unauthenticated_message_reaching_the_middleware_is_refused(monkeypatch) -> None:
     """The endpoint authenticates first, so the middleware never sees an unverified message
-    through the mounted route. It still fails closed rather than serving one, because a gate
-    that relies on its caller is the defect class this package keeps finding."""
+    through the mounted route. It still fails closed, so the gate does not depend on its caller."""
     from mcp.shared.exceptions import MCPError
 
     from app.mcp.auth import ApiKeyMiddleware
@@ -279,10 +266,10 @@ def test_a_key_without_the_proxy_capability_sees_only_inventory(mcp_app, monkeyp
 
 
 def test_a_key_with_an_empty_grant_is_shown_no_proxy_tools(mcp_app, monkeypatch) -> None:
-    """An explicit empty list is a decision the operator expressed, and it grants nothing.
+    """An explicit empty grant grants nothing.
 
-    It is still shown whoami, exactly as REST `/whoami` answers it: that tool reports only what the
-    key holds, which here is nothing, and that is the explanation its operator needs.
+    The key is still shown whoami, as REST `/whoami` answers it: it reports what the key holds,
+    which tells its operator why nothing else is listed.
     """
     _authenticated_as(monkeypatch, _key([], clusters=[]))
     with TestClient(mcp_app) as client:
@@ -294,13 +281,11 @@ def test_a_key_with_an_empty_grant_is_shown_no_proxy_tools(mcp_app, monkeypatch)
 # ── calling a tool the key may not use ─────────────────────────────────────────────────────────
 
 def _refusal_text(response) -> str:
-    """The refusal, from the channel a capability refusal is supposed to take.
+    """Return the refusal text, asserting it took the tool-result channel.
 
-    important: an `isError` tool result, NOT a JSON-RPC error. `app/mcp/errors.py` states the
-    rule and `dispatch.py` already followed it for the per-cluster 403, while the capability gate
-    raised a protocol error for the same class of answer. A protocol error reads to a model as
-    "the server broke", so it retries instead of reporting the one thing a human could fix. These
-    tests asserted the protocol shape and so held the inconsistency in place.
+    A capability refusal is an `isError` tool result, never a JSON-RPC error (`app/mcp/errors.py`).
+    A model reads a protocol error as "the server broke" and retries instead of reporting what a
+    human could fix.
     """
     body = response.json()
     assert "error" not in body, (
@@ -347,12 +332,11 @@ def _registered_tool_names(*, admin: bool = False, guest: bool = False) -> List[
 
 @pytest.mark.parametrize(("admin", "guest"), [(False, False), (True, False), (False, True), (True, True)])
 def test_every_registered_tool_declares_a_capability(admin: bool, guest: bool) -> None:
-    """The MCP analogue of the REST ratchet. A tool without a contract row would authenticate and
-    then run with no capability check at all, which is exactly the defect that ratchet exists for.
+    """The MCP analogue of the REST ratchet: a tool without a contract row would authenticate and
+    then run with no capability check.
 
     Parametrized over the tier flags because the default build registers neither the admin nor the
-    guest tier, so checking only the default would leave the eleven most sensitive tools uncovered
-    by the test written to cover them.
+    guest tier, which hold the most sensitive tools.
     """
     missing = sorted(set(_registered_tool_names(admin=admin, guest=guest)) - set(TOOL_CONTRACT))
     assert not missing, f"these tools are registered with no contract row, so they run ungated: {missing}"
@@ -427,12 +411,12 @@ def mcp_app_full(monkeypatch):
 
 @pytest.mark.parametrize("tool", ["lxd_exec_instance", "lxd_read_file", "lxd_write_file"])
 def test_a_legacy_key_is_refused_every_guest_tool(mcp_app_full, monkeypatch, tool: str) -> None:
-    """A legacy key reads as unrestricted everywhere else, and must not here.
+    """A legacy key, unrestricted everywhere else, is refused every guest tool.
 
     `granted_capabilities` returns None for a key issued before the field existed and
-    `has_capability` reads None as everything, which is what keeps older integrations working. 17
-    of the 22 keys in this deployment are in that state, so the inheriting gate on a guest tool
-    would hand root-in-guest to most of the fleet with nobody deciding it.
+    `has_capability` reads None as everything, which keeps older integrations working. An
+    inheriting gate on a guest tool would hand root-in-guest to every legacy key without anyone
+    deciding it.
     """
     _authenticated_as(
         monkeypatch,
@@ -486,14 +470,12 @@ def test_a_key_granted_exec_does_not_thereby_get_files(mcp_app_full, monkeypatch
 
 
 def test_an_authentication_backend_failure_is_503_not_500(mcp_app, monkeypatch) -> None:
-    """A credential DECISION is an HTTPException; anything else is the backend failing.
+    """A credential decision is an HTTPException; anything else is the backend failing.
 
-    This path grew a dependency it did not used to have. `validate_api_key` now consults the
-    extensions installation row for a credential an add-on install issued, so a database outage
-    reaches authentication where previously only Vault did. Left uncaught it leaves this endpoint
-    as a bare 500, which breaks the one contract it has: that a credential failure is always a
-    clean status a client can act on. `validate_api_key` already answers 503 for the analogous
-    Vault timeout.
+    `validate_api_key` consults the extension installation row for a credential an add-on install
+    issued, so a database outage reaches authentication. Uncaught, it would be a bare 500, where a
+    credential failure must always be a clean status a client can act on. `validate_api_key`
+    answers 503 for the analogous Vault timeout.
     """
     async def _explode(**_: object):
         raise RuntimeError("database is down")

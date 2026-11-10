@@ -1,10 +1,10 @@
 """A guarded fetch connects to the address it judged, not to a name resolved again (DNS rebinding).
 
-`fetch_guarded` resolved the name to judge it, then let httpx resolve it again to connect. A name
-that answers a public address first and 127.0.0.1 the second time passed the check and reached the
-loopback: through `POST /user-preferences/proxy-image`, open to every role, the body came back for
-an `image/*` answer and the error text told an internal port apart from a closed one (security
-review of v1.0.0-RC4..c5199ea1, finding 3). Every hop is now pinned as `post_pinned` pins.
+If `fetch_guarded` resolved the name to judge it and let httpx resolve it again to connect, a name
+that answers a public address first and 127.0.0.1 the second time would pass the check and reach
+the loopback. Through `POST /user-preferences/proxy-image`, open to every role, the body would come
+back for an `image/*` answer and the error text would tell an internal port apart from a closed
+one. Every hop is pinned as `post_pinned` pins.
 """
 
 import asyncio
@@ -23,8 +23,8 @@ def rebinding(monkeypatch):
     """The name answers a public address to every lookup the dashboard makes.
 
     httpx under MockTransport never resolves, so the rebinding itself (a later answer of 127.0.0.1)
-    is not reproducible here; what is, and what closes it, is that the request names the judged
-    literal and never the name a real resolver would be asked again at connect time.
+    is not reproducible here. The tests assert what closes it: the request names the judged
+    literal, never the name a resolver would be asked again at connect time.
     """
     def resolve(host, port, *args, **kwargs):
         if host != "rebind.example":

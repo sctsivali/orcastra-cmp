@@ -1,27 +1,14 @@
 """An untrusted certificate must not seal the door that would replace it.
 
-`_auto_reconnect` rebuilds the pylxd client from a copy of the certificate held in
-`_connection_info`. When the peer answers and refuses that certificate, the old code recorded
-the failure and returned, keeping the refused bytes cached. Every later attempt then presented
-the same certificate and was refused again: 1351 `cert not trusted` events against 265
-successful reconnects, measured on the dev fleet.
+`_auto_reconnect` rebuilds the pylxd client from the certificate copy in `_connection_info`.
+When the peer answers and refuses that certificate, the entry is dropped. Kept, every later
+attempt would present it again: `ensure_connection` skips the Vault re-read while the breaker is
+tripped, and the background healer checks `has_connection_info` before the breaker, so a
+retained entry (which never expires) keeps it from Vault until a `force=True` caller repairs it.
 
-Keeping the entry is not merely wasteful, it is self-sealing, and through two independent
-gates:
-
-  * `ensure_connection` consults the breaker this path trips, so the Vault re-read is skipped
-    for the TTL, and
-  * the background healer checks `has_connection_info` BEFORE it consults the breaker, so a
-    retained entry stops it reaching Vault at all, for as long as the entry survives.
-
-The second is the one that makes the state outlive the 60s TTL: the entry never expires, so the
-healer is permanently short-circuited and only a `force=True` caller can repair the cluster.
-Dropping the entry leaves exactly one gate, the breaker's own TTL, which does expire.
-
-What must NOT change, and is asserted here as well as in test_connection_breaker:
-the failure is still RECORDED, and still as KIND_UNAUTHORIZED. Five callers derive
-`reachable = (kind == KIND_UNAUTHORIZED)`, so clearing it, or recording it as the default
-offline kind, reports a cluster that answered and refused us as plain Offline.
+The failure is still recorded as KIND_UNAUTHORIZED (also asserted in test_connection_breaker):
+callers derive `reachable = (kind == KIND_UNAUTHORIZED)`, so any other kind reports a cluster
+that answered and refused as Offline.
 """
 
 import pytest
@@ -140,16 +127,16 @@ def test_a_trusted_reconnect_still_succeeds_and_clears(manager, monkeypatch) -> 
 
 
 def test_eviction_is_idempotent(manager, monkeypatch) -> None:
-    """Two threads can reach this at once; these dicts carry no lock, so the second must not
-    raise. This is why the code uses pop rather than test-then-delete."""
+    """Two threads can reach this at once and these dicts carry no lock, so eviction uses pop
+    rather than test-then-delete and the second call must not raise."""
     _reconnect_answering(monkeypatch, manager, "untrusted")
     assert _reconnect_answering(monkeypatch, manager, "untrusted") is None
     assert CLUSTER not in manager._connection_info
 
 
 def test_missing_info_still_does_not_trip(manager) -> None:
-    """The neighbouring regression must survive this change: an absent entry is the normal state
-    for a cluster registered after this worker booted, and tripping on it seals the repair."""
+    """An absent entry is the normal state for a cluster registered after this worker booted,
+    and tripping the breaker on it would block the repair."""
     manager._connection_info.pop(CLUSTER, None)
 
     assert manager._auto_reconnect(CLUSTER) is None

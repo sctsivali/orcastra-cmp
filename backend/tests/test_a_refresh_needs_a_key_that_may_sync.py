@@ -1,10 +1,10 @@
 """A refresh is refused to a key that /sync would refuse, and to an add-on credential.
 
-refresh-organizations claims unclaimed organizations and renames owned ones as the key, the writes
-/sync gates on org.sync, but it checked only the key's state and its callback URL. A key whose org.sync
-was withdrawn kept its stored URL, so a refresh still created and claimed organizations from it, and an
-add-on credential that had stored a URL through /sync would have its hash sent there. Both now answer
-409 before the secret is read or the callback called. A key issued before capabilities holds them all.
+refresh-organizations claims unclaimed organizations and renames owned ones, the writes /sync gates
+on. A key that lost org.sync or inventory.read keeps its stored callback URL, and an add-on credential
+may have stored one through /sync, so a refresh would still write organizations or send the key's hash
+to that URL. Both answer 409 before the secret is read or the callback is called. A key issued before
+capabilities existed holds them all.
 """
 
 from typing import Any, Dict, List, Optional

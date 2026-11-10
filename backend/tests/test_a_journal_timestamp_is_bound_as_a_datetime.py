@@ -1,10 +1,9 @@
 """asyncpg binds a `CAST(:ts AS timestamptz)` parameter from a datetime only.
 
-Found live: the first boot of the journal dropped every audit row with
+The audit record carries `@timestamp` as ISO text, and binding text fails with
 `invalid input for query argument $1 ... expected a datetime.date or datetime.datetime
-instance, got 'str'`, because the audit record carries `@timestamp` as ISO text and the
-hermetic fakes never typed the bind. The log insert now coerces at the boundary, and this
-pins the coercion for the two text shapes the writers hand it (an audit record with
+instance, got 'str'`, dropping the row. The log insert coerces at the boundary; this pins
+the coercion for the two text shapes the writers hand it (an audit record with
 microseconds and an offset, an LXD warning with nanoseconds and a Z) plus the passthrough.
 """
 

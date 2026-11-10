@@ -109,7 +109,7 @@ def test_verified_token_names_its_actor(
     client._jwks = {"keys": [jwk]}
     client._jwks_uri = "https://idp.example.test/jwks/"
     client._last_fetched = time.time()
-    # note: no refresh is due, so ensure_keys makes no network call
+    # No refresh is due, so ensure_keys makes no network call.
     client._next_attempt = float("inf")
     monkeypatch.setattr(auth, "_jwks_client", client)
     token = jwt.encode(
@@ -252,7 +252,7 @@ def test_ratchet_ignores_an_ordinary_base64_decode() -> None:
     ) == []
 
 
-# note: the verifier itself, and a token this backend minted and checks by HMAC before it reads it.
+# The verifier itself, and a token this backend minted and checks by HMAC before it reads it.
 # Neither attributes a bearer token to a user.
 _NOT_A_BEARER_READ = {
     APP / "core" / "jwks.py": "the JWKS client that verifies bearer tokens for core/auth.py",

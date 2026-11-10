@@ -1,9 +1,9 @@
 """Legacy Copy Instance admission and low-level copy-payload regressions.
 
-The public endpoint is now only a compatibility adapter for the durable migration engine. It
-must still authorize both endpoints, but it may not fall back to request-scoped daemon copy or
-migration when rollout is disabled. The low-level same-cluster helper remains covered directly
-because the durable worker still relies on its exact LXD payload shape.
+The public endpoint is a compatibility adapter for the durable migration engine. It must
+authorize both endpoints and may not fall back to a request-scoped daemon copy or migration when
+rollout is disabled. The low-level same-cluster helper is covered directly because the durable
+worker relies on its exact LXD payload shape.
 """
 
 import inspect
@@ -216,7 +216,7 @@ def test_same_cluster_helper_reproduces_config_devices_and_profiles():
 
 def test_a_contract_copy_names_the_architecture_and_keeps_a_preserved_mac():
     """LXD 5.21 refuses an explicit-config copy with no architecture when the source lives on the
-    member answering the request ("Architecture is not supported: \"\""). Found live on the lab."""
+    member answering the request ("Architecture is not supported: \"\"")."""
     fake = FakeClient(_CopyableInstanceNode())
     definition = {
         "type": "container",

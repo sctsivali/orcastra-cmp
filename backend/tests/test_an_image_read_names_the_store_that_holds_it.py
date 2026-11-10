@@ -2,8 +2,8 @@
 
 LXD resolves an instance's image inside the target project alone, so a project that isolates
 its images (`features.images=true`) cannot create from a default-store fingerprint. The
-catalogue therefore has to read the store the project really uses, and the Images page has
-to say which store a row came from. Same module as networks, profiles and volumes.
+catalogue reads the store the project uses, and the Images page says which store a row came
+from. `effective_project` picks the store, as it does for networks, profiles and volumes.
 """
 import asyncio
 

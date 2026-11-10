@@ -1,7 +1,7 @@
 """The monitoring WebSocket payload must carry ISO 8601 timestamps.
 
 The page shows the age of the dashboard from its `timestamp`. The broadcaster serialises with
-json.dumps(default=str), which wrote a datetime as "2026-10-07 12:00:00+00:00" with a space, a
+json.dumps(default=str), which writes a raw datetime with a space between date and time, a
 form not every browser's Date.parse accepts.
 """
 

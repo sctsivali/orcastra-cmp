@@ -1,9 +1,8 @@
 """The certificate page names a client certificate the way `lxc config trust list` does.
 
-The owner put the page beside a trust list and could not tell which of twenty-five `orca-*`
-entries was the dashboard's: the page showed no fingerprint, and the API carried one as
-colon-separated uppercase pairs that no operator would match by eye. LXD's fingerprint is the
-lowercase hex SHA-256 of the DER certificate; the trust list prints its first 12 characters.
+LXD's fingerprint is the lowercase hex SHA-256 of the DER certificate; the trust list prints
+its first 12 characters. An operator tells the dashboard's entry apart from similar ones by
+that value, so the page and the API carry it in the same form.
 """
 
 import hashlib
@@ -48,7 +47,7 @@ def test_the_trust_list_prefix_matches_the_start_of_the_full_value():
     [
         "7e8ffe6ae3b6",  # the 12 character prefix the trust list prints
         "A" * 64,  # uppercase
-        ":".join(["ab"] * 32),  # the old colon form
+        ":".join(["ab"] * 32),  # colon-separated pairs
         "g" * 64,  # not hex
         None,
         64,

@@ -1,15 +1,9 @@
 """A pooled client's host_info must not stay frozen at connect time.
 
-pylxd assigns host_info once in __init__ and only rewrites it inside authenticate(). This pool
-never expires a client ("NO TTL-based refresh (connections persist indefinitely while valid)"),
-so server_version, auth and the whole environment block were reported as they were when the
-worker first connected. A cluster upgraded in place kept reporting its old version until the
-backend restarted.
-
-The fix costs nothing: _validate_connection already performs a live GET /1.0 on every pooled
-get_client() and already parses the body to read one field, then threw the rest away. The
-assertion on call count is the point of the test as much as the refresh is - if this ever
-starts costing a second round trip, it stops being the right place to do it.
+pylxd assigns host_info once in __init__ and only rewrites it inside authenticate(), and the
+pool never expires a client, so a cluster upgraded in place would keep reporting its old
+version. _validate_connection already performs a live GET /1.0 on every pooled get_client()
+and refreshes host_info from that body. The call-count assertion keeps it to that round trip.
 """
 
 from app.services.lxd.connection import LXDConnectionManager
@@ -36,7 +30,7 @@ class _Api:
 
 class _Client:
     def __init__(self, connect_time_metadata):
-        # what pylxd captured at connect time
+        # What pylxd captured at connect time.
         self.host_info = connect_time_metadata
         self.api = _Api(connect_time_metadata)
 
@@ -57,7 +51,7 @@ def test_host_info_is_refreshed_from_the_validation_read():
 
 
 def test_the_refresh_costs_no_extra_round_trip():
-    """It rides the read the pool was already paying for."""
+    """The refresh rides the existing validation read."""
     client = _Client({"auth": "trusted", "environment": {}})
 
     _manager()._validate_connection(client, "nuc2")
@@ -76,7 +70,7 @@ def test_an_untrusted_answer_is_still_rejected():
 
 
 def test_an_empty_body_leaves_the_previous_host_info_alone():
-    """Better a known-old body than an empty one: callers index into environment."""
+    """A known-old body is kept over an empty one: callers index into environment."""
     known = {"auth": "trusted", "environment": {"server_version": "5.21"}}
     client = _Client(known)
     client.api.metadata = {}

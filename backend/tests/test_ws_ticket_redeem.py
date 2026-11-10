@@ -2,7 +2,7 @@
 
 Each refusal below is a way a ticket could otherwise be worth more than one socket: replayed,
 spent on another kind of socket, pointed at another instance, or used after the session that
-minted it ended. The old ?token= stays accepted only while WS_QUERY_TOKEN_ENABLED says so.
+minted it ended. A `?token=` query parameter is accepted only while WS_QUERY_TOKEN_ENABLED says so.
 """
 
 import asyncio

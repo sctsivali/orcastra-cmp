@@ -1,7 +1,7 @@
 """Waiting on a long daemon operation in slices, without handing the job to reconciliation early.
 
-note: the clock and the sleep are replaced on the module's own ``time`` and ``asyncio`` names,
-not on the stdlib modules, so the event loop running the test keeps its real clock.
+The clock and the sleep are replaced on the module's own ``time`` and ``asyncio`` names, not on
+the stdlib modules, so the event loop running the test keeps its real clock.
 """
 
 from __future__ import annotations
@@ -253,7 +253,7 @@ def _failing_wait(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_a_failed_operation_is_reported_as_failed_not_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Found live: a VM stop past its timeout parked the job in unknown instead of failing it."""
+    """A VM stop past its timeout fails the job instead of parking it in unknown."""
     _failing_wait(monkeypatch)
     read = _OperationRead({"status": "Failure", "status_code": 400, "err": "Failed shutting down instance"})
 

@@ -1,20 +1,13 @@
 """An installation's reach is an intersection, and it is recomputed rather than trusted.
 
-The rule: what the manifest asked for, intersected with the installing partner's own cluster
-scope, intersected with the clusters the target organization is still bound to. Five checks
-enforce it at install time and a sixth condition covers reaching inside a guest.
+Reach is what the manifest asked for, intersected with the installing partner's own cluster scope
+and with the clusters the target organization is still bound to. Install-time checks enforce it,
+and a further condition covers reaching inside a guest.
 
-Why the stored grant is not the authority. `granted_scope` records what an operator consented to.
-If it were also the licence, an installation would keep working against a cluster the partner
-later lost, and on a platform where clusters are rented that means one tenant's add-on reading
-the next tenant's workload after the hardware changed hands. So suspension and removal are
-checked on every request, and slower drift is caught by the reconcile sweep.
-
-The guest condition is the one that is easy to argue away, so the reasoning is written down.
-`desktop.*` is gated at request time by three further checks. `instance.exec` and
-`instance.files` are gated by the explicit-capability check and nothing else. Without an
-install-time condition, a tick in a dialog would be the only thing between a third-party
-application and root inside a customer's container.
+`granted_scope` records what an operator consented to; it is not the licence. Clusters change
+hands, so suspension and removal are checked on every request and slower drift is caught by the
+reconcile sweep. `instance.exec` and `instance.files` have no request-time gate beyond the explicit
+capability, so installing them needs the organization's guest-access consent.
 """
 
 import asyncio
@@ -38,11 +31,10 @@ class Grant:
 class Consent:
     """Mirrors DesktopConsent, accessors included.
 
-    important: the accessors, not just the fields. The install path used to read `.enabled` and
-    `.allow_input` directly, which was correct only because `consent_for_cluster` pre-composes
-    them, and a fake exposing only the raw fields could not have caught that. Guest access is its
-    own switch now, because gating root-in-guest on the screen-capture toggle meant an
-    organization that enabled screenshots silently authorized a shell inside its containers.
+    The install path must read the `may_*` accessors, which combine `enabled` with each switch. A
+    raw `.allow_input` read ignores `enabled`, and a fake with only the raw fields could not catch
+    it. Guest access is its own switch, so enabling screenshots does not authorize a shell inside
+    the organization's containers.
     """
 
     enabled: bool = True
@@ -128,7 +120,7 @@ def test_an_ordinary_install_is_allowed(monkeypatch) -> None:
 
 
 def test_a_cluster_outside_the_partners_own_scope_is_refused(monkeypatch) -> None:
-    """The check `create_api_key` already applies to an ordinary key, reused verbatim."""
+    """The same check `create_api_key` applies to an ordinary key."""
     with pytest.raises(ScopeRefused) as exc:
         _install(monkeypatch, **{**BASE, "grants": [Grant("blitz01", ["read"], ["default"])]})
     assert exc.value.status_code == 403
@@ -138,11 +130,8 @@ def test_a_cluster_outside_the_partners_own_scope_is_refused(monkeypatch) -> Non
 def test_an_organization_the_caller_does_not_hold_is_not_distinguishable_from_a_missing_one(
     monkeypatch,
 ) -> None:
-    """404, not 403.
-
-    The same shape `_authorize_api_key` uses, and for the same reason: an organization the caller
-    cannot see must not be probeable apart from one that does not exist.
-    """
+    """Answered 404, as in `_authorize_api_key`: an organization the caller cannot see must not be
+    told apart from one that does not exist."""
     with pytest.raises(ScopeRefused) as exc:
         _install(monkeypatch, **{**BASE, "organization_id": 99})
     assert exc.value.status_code == 404
@@ -184,12 +173,9 @@ def test_a_project_wildcard_needs_a_manifest_that_asked_for_one(monkeypatch) -> 
 # ── reaching inside a guest ────────────────────────────────────────────────────────────────────
 
 def test_guest_access_needs_a_standing_organization_decision(monkeypatch) -> None:
-    """Closes the asymmetry between exec and desktop.
-
-    Desktop already needs organization consent, a live break-glass grant and a budget that fails
-    closed. Exec needs the explicit capability and nothing else, so without this an install
-    dialog would be the whole gate on running commands as root inside a customer's container.
-    """
+    """Desktop also needs a live break-glass grant and a budget that fails closed at request time.
+    Exec needs only the explicit capability, so without this an install dialog would be the whole
+    gate on running commands as root inside a customer's container."""
     with pytest.raises(ScopeRefused) as exc:
         _install(monkeypatch, **{
             **BASE,
@@ -209,7 +195,7 @@ def test_guest_access_is_allowed_once_the_organization_has_consented(monkeypatch
 
 
 def test_controlling_a_desktop_is_separated_from_watching_one(monkeypatch) -> None:
-    """The existing policy already splits view from input, so the install respects the split.
+    """The desktop policy splits view from input, and the install respects the split.
 
     Typing into a logged-in session inherits that session's authenticated browser, unlocked
     keyring and validated sudo timestamp, which is a larger power than running a command.
@@ -241,10 +227,10 @@ def test_a_capability_that_does_not_reach_inside_needs_no_consent(monkeypatch) -
 # ── request time ───────────────────────────────────────────────────────────────────────────────
 
 class FakeResult:
-    """The loader selects (installation, extension.status) now, so it reads a row.
+    """The loader selects (installation, extension.status), so it reads a row.
 
-    The add-on's own status rides along because `disabled` was consulted at install and at resume
-    and nowhere else, so disabling a misbehaving add-on left every existing installation working.
+    The add-on's own status rides along so that disabling an add-on also stops its existing
+    installations.
     """
 
     def __init__(self, value, extension_status="published"):
@@ -290,7 +276,7 @@ def _clear_snapshot_cache():
 
 
 def test_a_credential_whose_installation_is_gone_is_refused(monkeypatch) -> None:
-    """The failure this exists to prevent: a Vault key authenticates perfectly well on its own."""
+    """A Vault key authenticates on its own, so the installation behind it is checked too."""
     monkeypatch.setattr(scope, "_install_revoked_elsewhere", lambda _k: False)
     with pytest.raises(ScopeRefused) as exc:
         asyncio.run(scope.assert_install_is_live(FakeDB(None), "oak_missing"))
@@ -310,10 +296,8 @@ def test_a_suspended_installation_stops_working(monkeypatch) -> None:
 def test_a_suspended_installation_is_told_why(monkeypatch) -> None:
     """The reason travels with the refusal.
 
-    Without it the add-on is told only that it is suspended, and when the reconcile sweep is what
-    suspended it, the stored sentence is the only explanation that exists anywhere the add-on can
-    reach. This is a deliberate disclosure of operator-authored text, so it is pinned rather than
-    left to drift.
+    After a reconcile-sweep suspension the stored sentence is the only explanation the add-on can
+    reach. Disclosing this operator-authored text is intended, so it is pinned.
     """
     monkeypatch.setattr(scope, "_install_revoked_elsewhere", lambda _k: False)
     reason = "Reconcile: this organization no longer reaches any cluster in the grant"
@@ -329,7 +313,7 @@ def test_a_suspended_installation_is_told_why(monkeypatch) -> None:
 
 
 def test_a_reasonless_suspension_does_not_grow_a_dangling_colon(monkeypatch) -> None:
-    """The positive twin's edge: an operator may suspend without typing anything."""
+    """An operator may suspend without giving a reason."""
     monkeypatch.setattr(scope, "_install_revoked_elsewhere", lambda _k: False)
     for blank in (None, "", "   "):
         with pytest.raises(ScopeRefused) as exc:
@@ -353,10 +337,10 @@ def test_a_cluster_outside_the_stored_grant_is_refused_at_request_time(monkeypat
 
 
 def test_a_change_published_by_another_worker_drops_the_snapshot(monkeypatch) -> None:
-    """Four uvicorn workers each hold their own copy, so suspension has to cross them.
+    """Each worker holds its own copy, so a suspension has to cross workers.
 
-    Without the tombstone, an installation suspended on worker one keeps working on the other
-    three until their own TTL runs out.
+    Without the tombstone, an installation suspended on one worker keeps working on the others
+    until their own TTL runs out.
     """
     monkeypatch.setattr(scope, "_install_revoked_elsewhere", lambda _k: False)
     db = FakeDB(FakeInstall())
@@ -367,12 +351,9 @@ def test_a_change_published_by_another_worker_drops_the_snapshot(monkeypatch) ->
     assert scope._cached_install("oak_x") is None, "a published change did not drop the snapshot"
 
 
-# The dissenting organization is audit-only. `consent_for_cluster` returns it so the decision can
-# be recorded, not so it can be shown to whoever tripped the gate. A shared cluster carries more
-# than one tenant and the installing partner is not necessarily one of them, so putting that name
-# in a refusal would answer "who else is on this hardware" for anybody able to attempt an install.
-# The call site discards it today; this fails if a later edit decides the unused variable was an
-# oversight.
+# The dissenting organization is audit-only: `consent_for_cluster` returns it to be recorded, never
+# shown. A shared cluster carries more than one tenant, so naming it in a refusal would tell anyone
+# able to attempt an install who else is on that hardware.
 DISSENTER = "acme-competitor-holdings"
 
 
@@ -390,8 +371,7 @@ def test_a_refusal_never_names_the_organization_that_withheld_consent(monkeypatc
 
     message = str(refusal.value)
     assert DISSENTER not in message, f"the refusal named the dissenting organization: {message}"
-    # Proves the refusal that ran is the guest-access one, so the assertion above is not passing
-    # because some unrelated check fired first and never consulted consent at all.
+    # The guest-access refusal ran, so the check above did not pass because an earlier check fired.
     assert "desktop.view" in message
 
 
@@ -399,11 +379,9 @@ def test_a_superseded_key_still_resolves_to_its_installation() -> None:
     """Rotation retires the old key by shortening its expiry, so it stays usable for the grace
     window and `validate_api_key` is what ends it.
 
-    important: wiring the installation check into the auth path broke this the moment it landed.
-    The lookup matched `api_key_id` only, so a rotation moved the row onto the new key and the old
-    one resolved to nothing, which the check turns into a 401. The grace window became a flag day,
-    and it was a live rotation spec that caught it rather than any unit test. The statement must
-    name both columns.
+    important: the lookup must name both `api_key_id` and `previous_api_key_id`. A rotation moves
+    the row onto the new key, so matching the current key alone resolves the old one to nothing,
+    which the installation check turns into a 401 before the grace window ends.
     """
     import inspect
 
@@ -418,12 +396,10 @@ def test_a_superseded_key_still_resolves_to_its_installation() -> None:
 
 
 def test_a_disabled_addon_stops_the_installations_it_already_has() -> None:
-    """`disabled` was consulted at install time and at resume, and nowhere else.
+    """`disabled` also stops credentials already issued, on REST and MCP alike.
 
     Withdrawing an add-on is refused while any organization still has it installed, so `disabled`
-    is the only lever an owner or an administrator has against one that is misbehaving. It
-    refused new installs, refused a resume, and left every credential already issued working on
-    both REST and MCP.
+    is the only lever an owner or an administrator has against one that is misbehaving.
     """
     import asyncio
 
@@ -438,8 +414,8 @@ def test_a_disabled_addon_stops_the_installations_it_already_has() -> None:
 
 
 def test_a_published_addon_is_not_refused_by_that_check() -> None:
-    """The positive twin. Without it the refusal above would pass just as well if the check
-    rejected everything, which is how a gate that is too wide reads as a gate that works."""
+    """The positive twin: without it the refusal above would also pass if the check rejected
+    everything."""
     import asyncio
 
     from app.services.extension_scope import assert_install_is_live

@@ -1,26 +1,11 @@
 """A cluster that did not answer must be named, not quietly left out of the list.
 
-This is the behavioural counterpart to the structural scan in
-test_fresh_bypass_is_wired.py. The structural one asks whether the passthrough exists; this
-one drives the real handler and asks what the operator is actually told.
-
-The distinction matters because the defect it covers was invisible to every check that
-existed. Six helpers raised LXDConnectionError for a missing client and then caught their
-own raise in the outer `except Exception`, returning an empty list. The router saw a
-successful result, counted the node as having answered, and reported nothing unreachable.
-Both substrings the previous scan looked for were present the whole time, supplied by the
-inner per-item handler.
-
-It is also invisible against the live dev fleet, which is why this file exists. There,
-every dead cluster has no cached client at all, so `nodes_to_query` never contains it and
-the never-queried seeding names it regardless of whether the raise reaches the caller. The
-discriminating state is a cluster the connection manager still lists while `get_client`
-returns None, which is the ordinary steady state for a breaker-tripped host. That is
-exactly what the stubs below produce: one registered cluster, present in `nodes_to_query`,
-handing back no client. The seeding contributes nothing, so the node can only be named if
-the raise survives the helper's own handler.
-
-Hermetic. No Vault, no pylxd, no database, no network.
+Drives the real handler (test_fresh_bypass_is_wired.py is the structural scan). A helper that
+raises LXDConnectionError for a missing client and catches its own raise in an outer
+`except Exception` returns an empty list, and the router counts the node as answered. The stubs
+hold the discriminating state: a cluster the connection manager lists while `get_client` returns
+None, as for a breaker-tripped host. A cluster with no cached client never enters
+`nodes_to_query`, and the never-queried seeding would name it either way. Hermetic.
 """
 
 import pytest
@@ -55,7 +40,7 @@ class _BreakerTrippedConnectionManager:
 class _OneRegisteredCluster:
     """Vault's view: the same single cluster the connection manager lists.
 
-    important: identical to nodes_to_query on purpose. The never-queried seeding is
+    important: keep this identical to nodes_to_query. The never-queried seeding is
     `registered - queried`, so here it is empty and cannot mask the defect.
     """
 
@@ -88,7 +73,7 @@ def _app(module) -> TestClient:
 
 
 # (module, path, the key holding the list of items). Every one of these fans out per node
-# and reports unreachable_nodes; the first six are the helpers that swallowed the signal.
+# and reports unreachable_nodes.
 CASES = [
     ("storage_volumes", "/storage/volumes", "volumes"),
     ("ipam", "/ipam", "allocations"),
@@ -121,10 +106,10 @@ def test_a_node_with_no_client_is_reported_unreachable(module_name, path, items_
 
 @pytest.mark.parametrize("module_name,path,items_key", CASES)
 def test_an_unanswered_fan_out_is_not_written_to_the_cache(module_name, path, items_key):
-    """The complement: nothing answered, so there is no result worth remembering.
+    """Nothing answered, so there is no result worth caching.
 
-    Caching it pinned the outage for the whole TTL, and on a forced refresh replaced data the
-    operator could still have used with the outage's empty list.
+    Caching it would pin the outage for the whole TTL, and a forced refresh would replace data
+    the operator could still use with the outage's empty list.
     """
     import importlib
 
@@ -162,23 +147,20 @@ def test_an_unanswered_fan_out_is_not_written_to_the_cache(module_name, path, it
 
 
 def test_a_blank_cluster_id_is_refused_before_it_reaches_vault():
-    """`?node=` satisfies a required Query(...) parameter, and 62 of them declare no minimum
-    length. For a scoped caller the empty string then failed the org-scope set and answered
-    403, but an admin has no scope set at all, so verify_cluster_access returned early and the
-    request went on to ask Vault for a cluster named "", logging two ERRORs per attempt.
+    """`?node=` satisfies a required Query(...) parameter, and most declare no minimum length.
 
-    Reachable from the UI rather than only by hand: React Query's refetch() runs the query
-    function even when the query is disabled, so the members page fired exactly this whenever
-    its refresh was clicked with no cluster chosen. Found by the live sweep, in the log.
+    A scoped caller's empty string fails the org-scope set, but an admin has no scope set, so
+    without this guard the request would ask Vault for a cluster named "". The UI can send it:
+    React Query's refetch() runs the query function even when the query is disabled.
 
-    The guard sits in verify_cluster_access because all 122 call sites pass through it.
+    The guard sits in verify_cluster_access, which every cluster-scoped route calls.
     """
     import pytest
     from fastapi import HTTPException
 
     from app.core.org_scope import verify_cluster_access, set_allowed_clusters
 
-    # admin: no scope set, which is the case that used to fall through
+    # admin: no scope set, so the scope check alone would let a blank id through
     set_allowed_clusters(None)
     for blank in ("", "   ", "\t"):
         with pytest.raises(HTTPException) as caught:

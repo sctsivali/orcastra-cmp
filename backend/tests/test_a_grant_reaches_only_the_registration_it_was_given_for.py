@@ -1,8 +1,8 @@
 """An API key grant reaches the registration of a cluster id it was given for, and no later one.
 
 A cluster id is free text and can be registered again after it was deregistered, possibly by
-another organization. Grants matched by id alone, so a key whose only grant was that id, an add-on
-key, or any key a timed-out cleanup missed reached the new cluster. Each registration now has a
+another organization. Matching grants by id alone would let a key whose only grant was that id, an
+add-on key, or any key a timed-out cleanup missed reach the new cluster. Each registration has a
 `registration_id`; a grant carries the one it was written for (services/cluster_generations.py).
 """
 
@@ -302,7 +302,7 @@ def _ignore(*_a: Any, **_k: Any) -> Dict[str, Any]:  # pragma: no cover - shape 
     return {}
 
 
-# ── from the security review ─────────────────────────────────────────────────────────────────
+# ── edge cases ───────────────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -388,8 +388,8 @@ def test_a_creator_still_manages_a_key_whose_every_grant_is_paused_and_no_one_el
 
 
 def test_every_door_that_refuses_a_missing_grant_answers_a_paused_one_with_404() -> None:
-    # Found live: raw-proxy and proxy look the grant up themselves, so a paused nuc-2 grant
-    # answered 403 "No permission" where the published contract says 404 cluster_not_registered.
+    # raw-proxy and proxy look the grant up themselves; each such refusal answers a paused grant
+    # with the published 404 cluster_not_registered instead of 403 "No permission".
     from app.routers import integrations
 
     source = inspect.getsource(integrations)

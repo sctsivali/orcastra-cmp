@@ -1,14 +1,12 @@
 """A session read from another worker looks identical to one read locally.
 
-Two paths now produce the same API body: the local SessionInfo, and a SessionInfo
-rebuilt from a registry snapshot. If they drift, the difference reaches the browser as
-a field that is suddenly undefined on some polls and not others - which is the original
-bug's signature, so it would be misread as a regression in the fix.
+Two paths produce the same API body: the local SessionInfo, and a SessionInfo rebuilt
+from a registry snapshot. If they drift, the browser sees a field that is undefined on
+some polls and not others.
 
-Also pins the deliberate asymmetry: duration is recomputed by the READER, rates are
-carried. Snapshotting duration would make the counter stall between heartbeats and then
-jump; rates cannot be recomputed remotely because the sliding-window samples live in
-the publishing process.
+Duration is recomputed by the READER and rates are carried. A snapshotted duration would
+stall between heartbeats and then jump; rates cannot be recomputed remotely because the
+sliding-window samples live in the publishing process.
 """
 
 import time
@@ -57,7 +55,7 @@ def test_identity_and_accountability_survive_the_round_trip():
 
 def test_a_break_glass_session_is_marked_as_one():
     # scope=org shows a tenant who is on their clusters. An admin's break-glass session
-    # must be distinguishable, or the live view is weaker than the audit trail already is.
+    # must be distinguishable there, as it is in the audit trail.
     ordinary = _live_session()
     ordinary.break_glass_grant_id = None
 
@@ -78,7 +76,7 @@ def test_duration_advances_on_the_readers_clock_not_the_publishers():
     first = remote.to_dict()["duration_seconds"]
     assert first >= 30.0
 
-    # recomputed on every read, so it keeps moving without a new snapshot
+    # Recomputed on every read, so it keeps moving without a new snapshot.
     remote.started_at -= 5.0
     assert remote.to_dict()["duration_seconds"] > first
 
@@ -90,7 +88,7 @@ def test_rates_are_carried_because_the_samples_are_not():
     remote = SessionInfo.from_snapshot(local.to_snapshot("w1"))
 
     assert remote.to_dict()["bandwidth"]["download_rate_bps"] == published
-    # the sliding-window samples themselves stay behind: they are not serializable and
-    # would mean nothing in another process anyway.
+    # The sliding-window samples stay behind: they are not serializable and would mean
+    # nothing in another process.
     assert len(remote._dl_samples) == 0
     assert len(local._dl_samples) > 0

@@ -1,8 +1,8 @@
 """Deregistering a cluster revokes the dashboard's own access to it, best effort.
 
-The dashboard used to leave its trust entries behind on deletion (the endpoint's docstring said so),
-which is how a host collected entries for clusters no dashboard had registered for months. Its own
-current certificate goes last: it is the one that authenticates the removals before it.
+Trust entries left behind on deletion pile up on a host long after no dashboard has the cluster
+registered. The dashboard's own current certificate goes last: it authenticates the removals
+before it.
 """
 
 import pytest

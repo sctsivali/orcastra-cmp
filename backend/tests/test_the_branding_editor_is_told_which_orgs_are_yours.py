@@ -1,21 +1,14 @@
-"""An Admin's organization list is every organization, and nothing in it said which were theirs.
+"""An Admin's organization list is every organization, so it has to say which are the caller's.
 
-The organization branding editor auto-selected the first entry of `GET /organizations`.
-`OrganizationService.list_organizations` orders that query by `Organization.name`, and for an
-Admin it is unfiltered, so "the first one" was whichever customer sorted alphabetically first.
-The sidebar resolves its organization somewhere else: `_get_primary_org_id` takes the caller's
-earliest `OrganizationMember.joined_at`. Two definitions of "your organization" that agree for
-most accounts and silently disagree for anyone who can list more than one.
+`GET /organizations` is ordered by `Organization.name` and unfiltered for an Admin, while the
+sidebar's organization comes from `subject_organization_id` (the organization the account runs,
+then live access, then the earliest membership). The two disagree for anyone who can list more
+than one organization, so the branding editor seeds its selection from the endpoint the sidebar
+reads, and `OrgResponse.is_member` lets it warn before writing to an organization the caller does
+not belong to.
 
-An operator edited ALIMRUGI's branding while watching Sivali Cloud Technology's. Every change
-looked like it reverted, because the sidebar kept re-reading the organization the editor was not
-writing to, and a customer's colours were replaced by somebody who never chose them.
-
-The editor now seeds its selection from the same endpoint the sidebar reads, and `OrgResponse`
-carries `is_member` so it can warn before writing to an organization the caller does not belong
-to. These tests hold the payload half of that: the flag exists, it answers about the CALLER
-rather than about the organization, and it is case-insensitive on the address, because Authentik
-and the member table do not agree on casing.
+These tests cover the payload: the flag exists, it answers about the caller rather than the
+organization, and it ignores case, because Authentik and the member table disagree on casing.
 """
 
 from app.routers.organizations import OrgResponse, _org_to_response
@@ -66,8 +59,8 @@ def test_the_address_comparison_ignores_case():
 
 
 def test_an_unauthenticated_conversion_defaults_to_not_a_member():
-    # _org_to_response is called from several routes; the conservative answer is the safe one,
-    # because is_member drives a warning and a missing warning is the failure that hurts.
+    # _org_to_response is called from several routes. False is the safe default: is_member
+    # drives a warning, and a missing warning is the costly failure.
     org = _Org(1, "Test", ["someone@example.com"])
     assert _org_to_response(org).is_member is False
 
@@ -79,10 +72,11 @@ def test_an_org_with_no_members_is_not_claimed_by_anyone():
 
 
 def test_the_two_orderings_that_caused_this_are_still_different():
-    """The trap itself, written down so a future simplification has to argue with it.
+    """The list order and the sidebar's organization are different rules.
 
-    The list is ordered by name. The sidebar's organization is the earliest membership. Nothing
-    makes those the same organization, and the editor must not assume they are.
+    The list is ordered by name; the sidebar's organization comes from
+    `subject_organization_id`. Nothing makes those the same organization, and the editor must
+    not assume they are.
     """
     import inspect
 
@@ -104,16 +98,11 @@ def test_the_two_orderings_that_caused_this_are_still_different():
 
 
 def test_a_cross_organization_branding_write_is_recorded():
-    """Break-glass is allowed here. It is not allowed to be quiet.
+    """An Admin may write another organization's branding, but the write is logged.
 
     `require_partner()` plus `user_has_access` lets an Admin write any organization's
-    preferences, which is the posture this deployment wants. It is also how a customer's branding
-    was rewritten by an operator who had never chosen that organization, and `updated_by` was the
-    only trace it left: a column nobody reads until they already suspect something.
-
-    Asserted structurally rather than by driving the endpoint, because reproducing it live means
-    writing to an organization the caller does not belong to, which is the act this exists to
-    discourage.
+    preferences (break-glass). Without a log line, `updated_by` would be the only trace.
+    Asserted structurally on the source of `update_org_branding`.
     """
     import ast
     import inspect

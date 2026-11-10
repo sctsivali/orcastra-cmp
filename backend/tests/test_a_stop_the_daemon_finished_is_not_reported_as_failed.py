@@ -1,17 +1,10 @@
-"""A stop whose operation errors but leaves the instance Stopped is a stop, not a 500.
+"""A stop whose operation errors but leaves the instance Stopped succeeds instead of a 500.
 
-Found on the Incus lab (Incus 7.6, Debian 13 cloud VM): a graceful stop sent while the guest is
-still in early boot fails its operation with "The instance is already running", and the instance
-reaches Stopped anyway. Reproduced with the CLI on the host, so it is the daemon's answer, not
-the dashboard's:
-
-    incus launch images:debian/13/cloud qa-incus-repro --vm; sleep 20
-    incus stop qa-incus-repro --timeout 120   -> Error: The instance is already running (20s)
-    incus list qa-incus-repro                 -> STOPPED
-
-The dashboard reported 500 "Could not stop VM" for a stop that had happened. The instance is
-re-read after a failed stop operation: Stopped means done (the daemon's message is logged), and
-anything else is still the error it was.
+On Incus 7.6 (Debian 13 cloud VM) a graceful stop sent while the guest is still in early boot
+fails its operation with "The instance is already running", and the instance reaches Stopped
+anyway; `incus stop` on the host answers the same. So the instance is re-read after a failed
+stop operation: Stopped means done (the daemon's message is logged), and anything else is still
+the error it was.
 """
 
 from __future__ import annotations

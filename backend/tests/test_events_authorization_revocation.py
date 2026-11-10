@@ -110,7 +110,7 @@ class _WebSocket:
             await self._stop_after.wait()
             # Finish the receiver task without an unhandled exception. The handler observes
             # FIRST_COMPLETED and cancels its sender, exactly as it does for a disconnected
-            # browser, while the assertion can inspect the frame decision that woke us.
+            # browser, while the assertion inspects the frame decision that woke the receiver.
             raise asyncio.CancelledError
         await self._never.wait()
         return ""
@@ -180,8 +180,8 @@ def _install_scope_sequence(monkeypatch, *, role: str, outcome: str) -> dict[str
                 {HOST: {PROJECT}},
             )
         if outcome == "cluster-revoked":
-            # The organization still owns the cluster, but the Tenant assignment no longer
-            # does. The real resolver intersects the org cluster set with this empty ACL.
+            # The organization still owns the cluster, but the Tenant assignment is revoked.
+            # The real resolver intersects the org cluster set with this empty ACL.
             return {}, [], {}
         return (
             {HOST: {(PROJECT, "still-authorized"): {"view"}}},

@@ -1,8 +1,8 @@
 """Branding is input like any other: every member of an organization, and for the deployment default
 anyone who opens the sign-in page, is shown it (services/branding/validation.py).
 
-It used to be stored as whatever JSON the editor sent. Now unknown keys are dropped, text is capped
-and cleaned, colours must be colours, and an image must be what it says it is, within its size.
+So it is checked before it is stored: unknown keys are dropped, text is capped and cleaned, colours
+must be colours, and an image must be what it says it is, within its size.
 """
 
 import base64

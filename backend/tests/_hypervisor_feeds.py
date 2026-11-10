@@ -1,7 +1,7 @@
 """Feed bodies as the Snap Store and GitHub publish them, trimmed to what the parser reads.
 
-Taken from the live answers of 2026-11-07: lxd 5.21/stable 5.21.9, 6/stable 6.10.1, and the
-lxc/incus tags up to v7.6.0.
+Copied from real answers: lxd 5.21/stable 5.21.9, 6/stable 6.10.1, and the lxc/incus tags up to
+v7.6.0.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ def channel(track: str, version: str, released_at: Optional[str], *, risk: str =
 
 def lxd_body(tracks: Optional[Dict[str, tuple]] = None, extra: Optional[List[dict]] = None) -> bytes:
     entries = [channel(track, version, at) for track, (version, at) in (tracks or LIVE_LXD).items()]
-    # Every live answer also lists the other risks and architectures; the parser must skip them.
+    # The real answer also lists other risks and architectures; the parser must skip them.
     entries.append(channel("5.21", "5.21.10-aaaaaaa", None, risk="candidate"))
     entries.append(channel("5.21", "5.21.9-2313ff2", None, arch="arm64"))
     entries.extend(extra or [])

@@ -52,8 +52,8 @@ def test_a_tenant_with_console_gets_the_bound_project(partner_scope, monkeypatch
 
 @pytest.mark.parametrize("enforcement", [True, False])
 def test_a_viewer_is_refused_whatever_the_enforcement_flag_says(partner_scope, monkeypatch, enforcement):
-    # important: that flag relaxes a rollout of console grants. Reading it here would let every
-    # viewer set root's password the moment an operator switched it off.
+    # That flag relaxes the console-grant rollout. Honouring it here would let every viewer set
+    # root's password once an operator switches it off.
     monkeypatch.setattr(get_settings(), "tenant_perm_enforcement_enabled", enforcement, raising=False)
     _tenant_with(monkeypatch, {"view", "operate", "file_transfer", "snapshot"})
     with pytest.raises(HTTPException) as refused:

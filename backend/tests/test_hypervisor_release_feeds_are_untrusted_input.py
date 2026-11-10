@@ -3,7 +3,7 @@
 
 Nothing identifying the deployment or its Clusters is sent. A body that does not parse fails its
 own engine only, the last good copy is kept through failures, reads back off, a store that was
-tampered with is re-validated, and turned off the check reads nothing and says nothing.
+tampered with is re-validated, and a check turned off reads and reports nothing.
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """A relocated project's own records follow it to its new identity, and back.
 
-note: as in test_migration_metadata_cutover.py, the tables are created from a copy of their
+As in test_migration_metadata_cutover.py, the tables are created from a copy of their
 metadata with JSON in place of JSONB. The statements under test run on the production models.
 """
 
@@ -155,8 +155,8 @@ async def test_project_records_follow_the_relocated_project(db: AsyncSessionFaca
 
 @pytest.mark.asyncio
 async def test_a_policy_assigned_to_tenants_keeps_reaching_exactly_them(db: AsyncSessionFacade) -> None:
-    """Security review: re-homing a rule into another cluster's managed policy would hand the
-    project to that policy's tenants."""
+    """Re-homing a rule into another cluster's managed policy would hand the project to that
+    policy's tenants."""
     _seed(db, TenantAccessPolicy, {
         "id": 9, "organization_id": ORG, "name": managed_policy_name("cluster-b"), "source": "local",
         "created_by": "ops@example.test",

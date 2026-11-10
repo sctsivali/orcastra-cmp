@@ -1,21 +1,13 @@
-"""The dashboard proxy let an unauthenticated caller pick the IP the backend trusts.
+"""The dashboard proxy does not let an unauthenticated caller pick the IP the backend trusts.
 
-`buildForwardHeaders` in the Next proxy reads `x-forwarded-for` and four siblings off the INBOUND
-request, checks only that the value is a syntactically valid non-private address, and re-emits it
-as `x-orcastra-client-ip`. The backend treats that header as highest-priority truth because the
-frontend container sits inside the default trusted-proxy CIDRs.
-
-For a request arriving from a real reverse proxy that is right. The dashboard port is also
-reachable directly, and there the value is whatever the caller typed. So a caller could choose the
-address it was rate-limited on and audited by, and rotate it to make the per-IP bucket bound
-nothing. That last part matters beyond this endpoint: it is the property the API-key rate-limit
-work leaned on, which stated that unauthenticated traffic stays on the per-IP bucket.
-
-The fix is the default, in both places that set it. The code default alone would have been
-theatre, because the compose files passed `true` explicitly and would have overridden it.
+When forwarding is on, `buildForwardHeaders` in the Next proxy reads `x-forwarded-for` and four
+siblings off the inbound request and re-emits a valid non-private value as `x-orcastra-client-ip`,
+which the backend trusts because the frontend container sits inside the default trusted-proxy CIDRs.
+Behind a real reverse proxy that is right, but the dashboard port is also reachable directly, where
+a caller could choose the address it is rate-limited and audited by and escape the per-IP bucket.
+So forwarding is off by default in the code and in the compose files, which would override it.
 
 These are structural because the behaviour lives in a TypeScript proxy this suite cannot execute.
-What they pin is that the default cannot drift back without someone editing an asserted line.
 """
 
 from pathlib import Path
@@ -38,11 +30,7 @@ def test_the_proxy_only_forwards_a_client_ip_when_asked_to() -> None:
 
 @pytest.mark.parametrize("compose", COMPOSE, ids=lambda p: p.name)
 def test_compose_does_not_switch_it_back_on(compose: Path) -> None:
-    """Where the first version of this fix would have failed silently.
-
-    The code default is irrelevant while the compose file passes an explicit value, so both have
-    to agree or the change is decoration.
-    """
+    """An explicit value in the compose file overrides the code default, so both must agree."""
     source = compose.read_text()
     assert "FORWARD_CLIENT_IP_HEADERS:-true}" not in source, (
         f"{compose.name} defaults the forwarding on, overriding the code default"
@@ -53,8 +41,8 @@ def test_compose_does_not_switch_it_back_on(compose: Path) -> None:
 def test_the_proxy_still_strips_the_headers_it_does_not_trust() -> None:
     """Turning forwarding off must not leave the raw inbound headers reaching the backend.
 
-    The backend reads several of these directly, so passing them through would move the same
-    hole one layer down instead of closing it.
+    The backend reads several of these directly, so passing them through would reopen the same
+    hole one layer down.
     """
     source = PROXY.read_text()
     for header in (
@@ -67,7 +55,7 @@ def test_the_proxy_still_strips_the_headers_it_does_not_trust() -> None:
 
 
 def test_the_reason_is_recorded_where_the_default_is() -> None:
-    """This default looks arbitrary and inverting it looks harmless; both are why it drifted."""
+    """The comment above the default says what turning it on trusts, since inverting it looks harmless."""
     source = PROXY.read_text()
     window = source.split("const FORWARD_CLIENT_IP_HEADERS")[0][-1200:]
     assert "trusted" in window.lower() and "audit" in window.lower(), (

@@ -1,9 +1,9 @@
 """The source autostart fence is keyed on its intent, like the NIC fence.
 
-A crash, lease loss or failed readback between the boot.autostart patch and the write that
-marks the source fenced left a source whose live autostart was already off while the journal
-said nothing was fenced. The resumed job derived the contract from that live value, found it
-changed, and stopped in manual recovery with the targets already running.
+A crash, lease loss or failed readback can land between the boot.autostart patch and the
+write that marks the source fenced. The resumed job must rebuild the approved source from
+the intent, or it reads the live value as drift and stops in manual recovery with the
+targets running.
 """
 
 from __future__ import annotations

@@ -4,18 +4,10 @@
 api_key_id)`` and auto-creates one when that misses. ``Organization.slug`` carries its own
 unique index, ``ix_organizations_slug``, so a slug already held under a different
 ``external_id`` misses the lookup and violates the constraint on INSERT. The
-``IntegrityError`` was unhandled and escaped the request.
+``IntegrityError`` must be turned into a 409 rather than escape the request.
 
-Observed live on the rebuilt stack at 2026-08-21T00:45:02, during a QA harness run::
-
-    POST /api/v1/integrations/provision-tenant-access -> 500
-    asyncpg.exceptions.UniqueViolationError: duplicate key value violates
-    unique constraint "ix_organizations_slug"
-
-Behavioural rather than structural. An earlier ratchet in this suite was written as a
-substring scan and passed while the endpoint stayed broken, so this drives the handler and
-asserts the status the caller receives. The fake session raises on ``flush`` exactly as
-asyncpg does through SQLAlchemy, which is the only thing the guard can react to.
+The tests drive the handler and assert the status the caller receives. The fake session
+raises on ``flush`` as asyncpg does through SQLAlchemy, which is all the guard can react to.
 """
 
 import asyncio
@@ -135,8 +127,8 @@ class _RegistryKnowsNuc2(unittest.TestCase):
 
         self._registry = cluster_registry.registered_cluster_ids
         cluster_registry.registered_cluster_ids = _registered
-        # note: the sessions below answer by call count, so the project gate's own query would
-        # shift them. Which party names a project is pinned in test_a_key_grant_stays_inside_the_bound.
+        # The sessions below answer by call count, so the project gate's own query would shift
+        # them. Which party names a project is pinned in test_a_key_grant_stays_inside_the_bound.py.
         self._project_gate = integrations.refuse_a_project_another_party_holds
         integrations.refuse_a_project_another_party_holds = _nobody_else_names_it
 
@@ -190,16 +182,10 @@ class ForeignKeyOwnershipTests(_RegistryKnowsNuc2):
     """The refusal must name the real reason: another integration owns the organisation.
 
     `provision_tenant_access` folds `api_key_id` into its lookup, so a caller whose key does
-    not own an existing org misses it and falls through to the create. The database then
-    refuses on `uq_org_source_external_id` or `ix_organizations_slug`. That is the right
-    outcome by the wrong route, and the caller was told a slug was taken when the actual
-    reason is ownership. Observed live: `/integrations/sync` answered 200 eight times while
-    logging "Refusing sync of organization suka-hati ... owned by api key X, caller is Y",
-    and `provision-tenant-access` answered 500 three times on the same organisation in the
-    same window, because it has no equivalent guard.
-
-    This denies nothing the constraints did not already deny. It only replaces a misleading
-    conflict with an accurate one.
+    not own an existing org misses it and falls through to the create, where the database
+    refuses on `uq_org_source_external_id` or `ix_organizations_slug` and the caller would be
+    told a slug is taken. The ownership guard denies nothing the constraints do not already
+    deny; it replaces a misleading conflict with an accurate one, as sync does.
     """
 
     def test_an_org_owned_by_another_key_is_refused_by_name(self):
@@ -223,7 +209,7 @@ class ForeignKeyOwnershipTests(_RegistryKnowsNuc2):
         db = _OwnedElsewhereSession(owner)
 
         # Reaches the create, so the fake's flush raises the duplicate-slug IntegrityError
-        # and we land on the conflict path rather than the ownership one.
+        # and the conflict path answers rather than the ownership one.
         with self.assertRaises(HTTPException) as caught:
             asyncio.run(provision_tenant_access(body=_Body(), api_key=_api_key(), db=db))
 
@@ -234,14 +220,9 @@ class ForeignKeyOwnershipTests(_RegistryKnowsNuc2):
 class RevokeOwnershipTests(unittest.TestCase):
     """Revoke must agree with provision, and keep its idempotency.
 
-    `revoke_tenant_access` folds `api_key_id` into the same lookup, so it missed for two
-    different reasons and one `if not org` merged them. No such organisation is an
-    idempotent success and stays one. An organisation owned by another key is not: the
-    empty 200 told the caller a revoke had succeeded while nothing was touched, and after
-    the provision guard the pair disagreed on the identical condition.
-
-    Code-read finding rather than an observed failure: nothing in the log shows revoke
-    being called, so this is a reachable path that is not currently exercised.
+    `revoke_tenant_access` folds `api_key_id` into the same lookup, so a miss has two
+    causes. No such organisation is an idempotent success. An organisation owned by another
+    key is a 409, as in provision; an empty 200 would report a revoke that touched nothing.
     """
 
     def test_an_org_owned_by_another_key_is_refused(self):
@@ -255,7 +236,7 @@ class RevokeOwnershipTests(unittest.TestCase):
         self.assertIn("suka-hati", str(caught.exception.detail))
 
     def test_no_such_org_is_still_an_idempotent_success(self):
-        """The case the merge was protecting must survive: revoking nothing is fine."""
+        """Revoking an organisation that does not exist stays a success."""
         db = _SlugTakenSession()  # every lookup misses, so no owner is found either
 
         result = asyncio.run(revoke_tenant_access(body=_Body(), api_key=_api_key(), db=db))

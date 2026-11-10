@@ -1,7 +1,7 @@
 """One follower across the workers, and a leader whose session dies stands down at once.
 
 The election is `pg_try_advisory_lock(20330, 21578)` on a dedicated NullPool connection in
-AUTOCOMMIT; the lock is session-level, so a killed worker frees it without a word. The loser
+AUTOCOMMIT; the lock is session-level, so a killed worker's lock goes with its session. The loser
 retries every `task_journal_follower_retry_seconds`. The leader heartbeats `SELECT 1` every
 fifteen seconds and treats any exception as "the session, and the lock with it, is gone": it
 unsubscribes every host, stops its writer, records `task.journal.follower.lost` and goes back to

@@ -2,12 +2,10 @@
 
 The storage_and_network_operations API extension (present on LXD 6.9) turns create, update
 and delete on networks, network ACLs and storage pools into background operations: the daemon
-answers 202 with an operation and finishes afterwards. The console read a network back
-straight after its POST and got "Network not found" for a network the daemon was still
-creating, so the operator saw an error while the network appeared on the host a moment later,
-and a delete answered before the row was gone. Every write now waits on the operation it got,
-in slices shorter than the pooled client's read timeout; an older daemon answers
-synchronously and the wait is a no-op.
+answers 202 with an operation and finishes afterwards. A read straight after the POST would
+get "Network not found" for a network the daemon is still creating, and a delete would answer
+before the row is gone. Every write waits on the operation it got, in slices shorter than the
+pooled client's read timeout; an older daemon answers synchronously and the wait is a no-op.
 """
 
 from types import SimpleNamespace
@@ -63,8 +61,8 @@ def _deadline_error() -> pylxd_exceptions.LXDAPIException:
 
 class _Operations:
     """client.api.operations[op]: `.wait.get` answers Running until `settle_after` waits, then
-    Success. With `deadline_errors`, a wait whose slice elapses raises the way LXD really
-    answers, and `.get()` on the operation reports its current status; `vanished` makes that
+    Success. With `deadline_errors`, a wait whose slice elapses raises the way LXD answers,
+    and `.get()` on the operation reports its current status; `vanished` makes that
     read a 404, the way a finished operation that LXD already dropped looks."""
 
     def __init__(self, settle_after: int = 1, final: str = "Success",
@@ -330,7 +328,7 @@ def test_an_acl_create_waits_for_its_operation(monkeypatch) -> None:
 
 
 def test_a_bad_acl_name_is_refused_at_the_boundary_not_by_the_daemon(monkeypatch) -> None:
-    """"has space" reached LXD, which refused it, and the refusal came back as a 500."""
+    """An invalid name is refused with a 422 before LXD sees it, never surfaced as a 500."""
     tc, calls, _ = _acl_app(monkeypatch)
     for bad in ("has space", "1abc", "../x", "a" * 64, ""):
         r = tc.post("/network-acls?host=nuc1", json={"name": bad, "ingress": [], "egress": []})
@@ -350,7 +348,7 @@ def test_the_daemon_s_own_refusal_keeps_its_status(monkeypatch) -> None:
 def test_an_elapsed_wait_slice_is_not_a_failure() -> None:
     """LXD answers an elapsed `?timeout=` with "context deadline exceeded" while the operation
     runs on. A NIC address write on a clustered OVN instance takes about six seconds, one
-    second more than a slice, and was reported as refused while the cluster applied it."""
+    second more than a slice, and must not be reported as refused while the cluster applies it."""
     ops = _Operations(settle_after=3, deadline_errors=True)
     client = SimpleNamespace(api=SimpleNamespace(operations=ops))
     lxd_utils.wait_for_lxd_operation(client, _async("op-slow"), timeout=30)
@@ -396,8 +394,7 @@ def test_an_operation_that_vanished_after_an_elapsed_slice_reports_the_wait_erro
 
 def test_a_synchronous_write_is_sent_with_a_read_timeout_that_outlives_it(monkeypatch) -> None:
     """LXD 5.21 finishes a network create before it answers. An OVN create on a three-member
-    cluster ran past the pooled client's 8 s read, so the console reported "Failed to create
-    network" while the daemon created it. The write carries its own read timeout."""
+    cluster can run past the pooled client's 8 s read, so the write carries its own timeout."""
     client, nets, _ = _networks_app(monkeypatch, async_writes=False)
     r = client.post("/networks?host=nuc1", json=BRIDGE)
     assert r.status_code == 200, r.text

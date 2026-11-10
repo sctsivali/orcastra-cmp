@@ -1,19 +1,14 @@
 """Structural guard: a new offload must carry the caller's context.
 
-`core/blocking.run_blocking` now copies the context, and `asyncio.to_thread` always did. Raw
-`loop.run_in_executor` does not, and this codebase has 29 of those left. Every one of them is a
-place where `get_client`'s org-scope filter cannot deny, `get_scope_cache_key` returns the ADMIN
-namespace, and `check_tenant_permission` fails open. None of that announces itself: the code
-runs, the numbers look right, and the check that was supposed to happen simply did not.
+`core/blocking.run_blocking` and `asyncio.to_thread` copy the context; raw
+`loop.run_in_executor` does not, and then `get_client`'s org-scope filter cannot deny,
+`get_scope_cache_key` returns the ADMIN namespace and `check_tenant_permission` fails open, all
+silently. BASELINE only goes down: a new offload uses one of those two, or wraps its callable as
+services/settle_invalidation.py does: `partial(contextvars.copy_context().run, fn, arg)`.
 
-The count only goes down. A new offload uses `run_blocking`, or `asyncio.to_thread`, or wraps
-its callable the way routers/regions.py does:
-
-    partial(contextvars.copy_context().run, fn, arg)
-
-important: the copy has to be INSIDE the loop that builds the tasks. `Context.run` refuses
-re-entry, so one copy shared by ten concurrent threads raises "cannot enter context" rather
-than losing the scope quietly. test_offloaded_work_keeps_the_callers_scope.py pins that.
+important: copy INSIDE the loop that builds the tasks. `Context.run` refuses re-entry, so one
+copy shared by concurrent threads raises "cannot enter context"
+(test_offloaded_work_keeps_the_callers_scope.py).
 """
 
 import ast
@@ -23,8 +18,8 @@ from typing import Dict, List, Tuple
 
 APP = Path(__file__).resolve().parents[1] / "app"
 
-# Every raw `run_in_executor` whose callable is not context-wrapped, by file. Lower a number
-# when you convert a site; never raise one.
+# Raw `run_in_executor` calls whose callable is not context-wrapped, per file. A number is
+# lowered when a site is converted and never raised.
 BASELINE: Dict[str, int] = {
     "routers/cluster_registration.py": 2,
     "routers/image_uploads.py": 3,
@@ -120,7 +115,7 @@ class OffloadsCarryContext(unittest.TestCase):
         )
 
     def test_the_region_fan_out_is_already_converted(self):
-        """The one site proven to reach get_client from a thread. It must stay converted."""
+        """This site reaches get_client from a thread, so it must stay converted."""
         counts, _ = _scan()
         self.assertEqual(0, counts.get("routers/regions.py", 0))
 

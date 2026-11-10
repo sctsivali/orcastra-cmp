@@ -174,9 +174,8 @@ def test_wildcard_snapshot_grant_stays_inside_shared_cluster_project_bound(scope
 
 
 # LXD's own background work, as the events follower records it: an LXD task operation that no
-# outside requestor started. On dev, 91 of 101 open rows were these ("Updating images",
-# "Cleaning up expired backups"), held open for weeks by a sick daemon, and the dock read
-# "Tasks 101".
+# outside requestor started ("Updating images", "Cleaning up expired backups"). A sick daemon can
+# hold these open for weeks, so the dock counts leave them out.
 HOUSEKEEPING = {"kind": "lxd_operation", "operation_class": "task", "actor_kind": "system"}
 
 

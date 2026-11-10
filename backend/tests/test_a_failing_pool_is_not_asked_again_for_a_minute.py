@@ -1,9 +1,9 @@
 """A storage pool whose resources read fails is not asked again for a minute.
 
-One broken ZFS pool on the dev fleet makes LXD fail its resources read after 3.07 s, every time,
-and the node status, the regions overview and the pool resources list each asked for it on every
-build: most of blitzkrieg's 4 s status read. The failure is remembered per worker for
-FAILURE_TTL_S; a success is never cached, so pool usage stays live.
+A broken ZFS pool can make LXD fail its resources read after seconds, every time, and the node
+status, the regions overview and the pool resources list each ask for it on every build. The
+failure is remembered per worker for FAILURE_TTL_S; a success is never cached, so pool usage stays
+live.
 """
 
 from __future__ import annotations
@@ -69,10 +69,10 @@ def test_the_message_names_no_endpoint():
 def test_every_fleet_reader_goes_through_the_memory(path):
     source = (APP / path).read_text()
     assert "pool_resource_failures.read(" in source
-    # A direct pool resources read in a fleet loop would pay the broken pool's 3 s again.
+    # A direct pool resources read in a fleet loop would pay the broken pool's delay again.
     direct = re.findall(r"^\s*\w+ = (?:pool|client\.api\.storage_pools\[[^\]]+\])\.resources\.get\(\)", source, re.M)
     if path == "routers/storage_pools.py":
-        # The single-pool route reads one pool by name on purpose (GET /{pool_name}/resources).
+        # The single-pool route (GET /{pool_name}/resources) reads its one pool directly.
         assert len(direct) <= 1, direct
     else:
         assert direct == [], direct

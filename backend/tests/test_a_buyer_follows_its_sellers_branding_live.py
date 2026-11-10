@@ -1,8 +1,7 @@
-"""A buyer shows its seller's branding as it is now, not as it was on the day of the sale.
+"""A buyer shows its seller's current branding, so a partner's rebrand reaches its tenants.
 
-Provisioning used to copy the seller's row into the buyer once (a partner rebranded and
-none of its tenants saw it). The buyer now carries a link (organizations.provider_organization_id)
-and the layers are read on every request (services/branding/store.py).
+The buyer carries a link (organizations.provider_organization_id) instead of a copy of the seller's
+row, and the layers are read on every request (services/branding/store.py).
 """
 
 from __future__ import annotations

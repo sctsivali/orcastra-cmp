@@ -1,8 +1,8 @@
-"""Closing the renewal dialog no longer loses the command that finishes it.
+"""A pending certificate can be read back after the renewal dialog closes.
 
-Verify reopened from a row showed step two with nothing in it: the command and the certificate
-lived only in the response to the original renew. The pending certificate's public half, its
-fingerprint and the trust command are now readable again. Never its key.
+Reopening Verify from a row needs the pending certificate's public half, its fingerprint and the
+trust command, which are otherwise only in the original renew response. Its private key is never
+returned.
 """
 
 import pytest

@@ -1,10 +1,10 @@
 """A cluster in `TASK_JOURNAL_EXCLUDE_CLUSTERS` is never subscribed, seeded or state-tracked.
 
-A partner's production MicroCloud is registered read-only in the development deployment. Its
-operations must not be copied into this database, it must never become a cancel target, and
-its name must not appear in the dev journal at all. The list is a csv, trimmed, matched without
-regard to case, and consulted on every registry sync, so a cluster excluded after boot is
-released on the next pass.
+An excluded cluster (ex; another party's production cluster registered read-only in a test
+deployment) has no operations copied into this database, never becomes a cancel target, and its
+name never appears in the journal. The list is a csv, trimmed, matched without regard to case,
+and consulted on every registry sync, so a cluster excluded after boot is released on the next
+pass.
 """
 
 import os
@@ -86,5 +86,5 @@ def test_the_sweeps_only_visit_hosts_the_follower_tracks():
     per_host = inspect.getsource(follower_module.JournalFollower._per_host)
     assert "for host in self.connected_hosts():" in per_host
     assert "health.is_tripped(host)" in per_host
-    # One host that raises must not starve the hosts sorted after it (a review finding).
+    # One host that raises must not starve the hosts sorted after it.
     assert "except Exception" in per_host and "continue" in per_host

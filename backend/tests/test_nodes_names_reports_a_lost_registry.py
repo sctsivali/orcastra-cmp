@@ -1,13 +1,12 @@
 """GET /nodes/names says when the registry it answers with is not what Vault said.
 
-The body stays a bare list for the API-key clients of this deprecated route. What a lost
-registry looks like is what changed: the last known fleet with `X-Orcastra-Registry-Readable:
-false` and `Cache-Control: no-store`, or 503 when nothing is known. Never an empty list, which
-is what emptied every picker on the create-instance form for the length of a Vault blip.
+The body stays a bare list for the API-key clients of this deprecated route. A lost registry
+answers with the last known fleet, `X-Orcastra-Registry-Readable: false` and
+`Cache-Control: no-store`, or 503 when nothing is known. Never an empty list, which would empty
+every picker on the create-instance form for the length of a Vault blip.
 
-The read runs through run_blocking on the availability pool with its own budget, because the
-LIST used to run synchronously inside this async route and a slow Vault held every request
-on the worker. On expiry the process's last known copy answers.
+The read runs through run_blocking on the availability pool with its own budget, so a slow Vault
+cannot hold every request on the worker. On expiry the process's last known copy answers.
 """
 
 import pytest
@@ -86,7 +85,7 @@ def test_nothing_known_is_503_not_an_empty_list(monkeypatch):
     tc, _ = _app(RegistryRead(cluster_ids=[], source=None, readable=False), monkeypatch)
     r = tc.get("/nodes/names")
     assert r.status_code == 503
-    # One body for every route that cannot read the registry (issue #15), so the dashboard can
+    # One body for every route that cannot read the registry, so the dashboard can
     # say "Vault is sealed or unavailable" rather than a generic failure.
     assert r.json()["detail"]["error"] == "vault_unavailable"
     assert "vault" in r.json()["detail"]["message"].lower()
@@ -96,7 +95,7 @@ def test_nothing_known_is_503_not_an_empty_list(monkeypatch):
 
 
 def test_a_readable_empty_registry_is_a_plain_empty_list(monkeypatch):
-    """A fresh install has no clusters. That is an answer, not a fault."""
+    """A fresh install has no clusters, and a readable empty registry is a valid answer."""
     tc, _ = _app(RegistryRead(cluster_ids=[], source="vault", readable=True), monkeypatch)
     r = tc.get("/nodes/names")
     assert r.status_code == 200 and r.json() == []
@@ -140,8 +139,8 @@ def test_a_full_pool_with_nothing_known_is_503(monkeypatch):
 
 
 def test_the_answer_is_filtered_on_the_loop_not_in_the_thread(monkeypatch):
-    """The org-scope filter reads a ContextVar that does not travel into the executor thread,
-    so an unfiltered read must be narrowed after it returns, on the loop."""
+    """The registry read is unfiltered; the org-scope filter narrows it after it returns, on
+    the loop."""
     from app.routers import nodes as nodes_module
 
     monkeypatch.setattr(nodes_module, "apply_cluster_filter", lambda ids: [i for i in ids if i == "i48"])

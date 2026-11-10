@@ -1,15 +1,12 @@
-"""Ratchet: a metadata-store call must name a method the store actually has.
+"""Ratchet: a metadata-store call must name a method the store has.
 
-lxd_server.py called `metadata_store.get_node(node_name)` in two handlers. NodeMetadataStore
-never defined it. Every call raised AttributeError straight into a bare `except Exception`
-logged at debug level, so the Incus/MicroCloud override those blocks existed to apply had
-never run once, and nothing in the logs said so above debug.
-
-A behavioural test cannot catch this: the handler returns a correct-looking response either
-way, because the fallback it silently took was the live detection. Only the structure shows it.
+A call to a method NodeMetadataStore does not define raises AttributeError, and a handler's
+bare `except Exception` logged at debug level swallows it. The response still looks correct
+because the fallback is the live detection, so a behavioural test cannot catch it; only the
+structure shows it.
 
 The rule: any attribute called on a name ending in `metadata_store` must exist on
-NodeMetadataStore. Public surface only - a private helper is the class's own business.
+NodeMetadataStore. Public surface only; a private helper is the class's own business.
 """
 
 import ast

@@ -1,9 +1,9 @@
 """`wait_for_operation` must report a failed LXD operation as failed, not as still running.
 
-LXD answers `/1.0/operations/<id>/wait` for a FAILED or cancelled operation with an error-typed
-body, and pylxd raises it as LXDAPIException. Every caller (`_settle` for snapshot create, delete,
-restore and the safety copy, the settle-time cache clearance, the schedule runner) took that raise
-as "could not wait", so a write the daemon failed was answered as accepted and in progress.
+LXD answers `/1.0/operations/<id>/wait` for a failed or cancelled operation with an error-typed
+body, and pylxd raises it as LXDAPIException. Callers (`_settle` for snapshot create, delete,
+restore and the safety copy, the settle-time cache clearance, the schedule runner) would take that
+raise as "could not wait" and answer a failed write as accepted, so the operation is read back.
 """
 
 import pytest

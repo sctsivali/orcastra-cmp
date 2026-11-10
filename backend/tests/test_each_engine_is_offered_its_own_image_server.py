@@ -1,13 +1,12 @@
-"""The remote image catalogue offers each engine the servers it can actually pull from.
+"""The remote image catalogue offers each engine the servers it can pull from.
 
-The catalogue held LXD's two remotes only. Incus cannot use either:
+Incus cannot use LXD's two remotes:
 - images.lxd.canonical.com is Canonical's LXD image server;
 - cloud-images.ubuntu.com ships `lxd.tar.xz` metadata only, and Incus's simplestreams reader
   (shared/simplestreams/products.go at v7.6.0 and v6.0.7) accepts `incus.tar.xz` and
   `incus_combined.tar.gz` and nothing else, so it finds no image there.
-Incus's own remote, images.linuxcontainers.org, ships `incus.tar.xz` and was neither offered nor
-allowed: an Incus create from the picker could not succeed, and a hand-written image_server for it
-was refused as SSRF.
+Incus's own remote, images.linuxcontainers.org, ships `incus.tar.xz`, so it is offered to Incus and
+allowed past the SSRF check.
 """
 
 import io

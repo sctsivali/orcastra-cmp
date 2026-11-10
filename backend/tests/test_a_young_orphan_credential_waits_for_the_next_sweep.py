@@ -1,10 +1,10 @@
 """A credential no installation claims is revoked only once it is older than ORPHAN_MIN_AGE.
 
-An install or a rotation writes its new key to Vault before its row commits. The orphan pass read the
-rows, then listed Vault, so a key minted in between was missing from the rows and revoked as an orphan,
-breaking an installation that had just been made or rotated. The cutoff is taken before the rows are
-read, so a key old enough to be revoked had its row visible to that read. A real orphan is refused at
-authentication meanwhile, so waiting a tick or two costs nothing.
+An install or a rotation writes its new key to Vault before its row commits, and the orphan pass
+reads the rows before it lists Vault, so a key minted in between is missing from the rows. The
+cutoff is taken before the rows are read, so a key old enough to be revoked had its row visible to
+that read. A real orphan is refused at authentication meanwhile, so waiting a tick or two costs
+nothing.
 """
 
 import inspect
@@ -22,8 +22,8 @@ def minted(minutes_ago: float) -> Dict[str, Any]:
     return {"created_at": utc_isoformat(now_utc() - timedelta(minutes=minutes_ago))}
 
 
-# note: ages, not timestamps: a time computed when the cases are collected is minutes older by the
-# time a long run reaches them
+# Ages, not timestamps: a time computed when the cases are collected is minutes older by the time a
+# long run reaches them.
 @pytest.mark.parametrize("age, revoked", [
     (1, []), (9, []), (11, ["orphan"]), ("not-a-time", ["orphan"]), (None, ["orphan"]),
 ], ids=["a-minute-old", "nine-minutes-old", "eleven-minutes-old", "unreadable-time", "no-time"])
@@ -81,7 +81,7 @@ def test_the_vault_listing_runs_off_the_event_loop(monkeypatch: pytest.MonkeyPat
 
 
 def test_a_key_store_vault_cannot_list_skips_the_pass(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A sealed Vault lists as 503 now; the pass revokes nothing and waits, as the empty list did."""
+    """A sealed Vault lists as 503; the pass revokes nothing and waits for the next sweep."""
     import asyncio
 
     from fastapi import HTTPException

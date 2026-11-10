@@ -1,19 +1,15 @@
 """Scope enforcement on the API-key-facing external router.
 
-Two ways a valid integration key could reach a cluster or project it was never granted. Both
-were live in 1.0.0-RC6 and both are authorization defects, not availability ones.
+Two ways a valid integration key could reach a cluster or project it was never granted:
 
-  1. `provision-tenant-access` never consulted `cluster_permissions` at all, so any key could
-     bind another partner's cluster to its own org and grant its tenants operate/console on it.
-     Its own sibling `revoke-tenant-access` did check, which is what made the omission obvious.
+  1. `provision-tenant-access` checks `cluster_permissions`, as `revoke-tenant-access` does.
+     Without it any key could bind another partner's cluster to its own org and grant its
+     tenants operate/console on it.
 
-  2. `raw-proxy` validated `request.project` and then pasted every query key parsed out of
-     `request.path` into the outgoing URL. Declaring project="default" passed the check and
-     also skipped the override (which only fires for a non-default project), so a
-     `?project=<other>` carried in the path reached LXD verbatim. The cluster certificates are
-     registered unrestricted, so LXD honours it.
-
-Both tests fail against the code as it shipped in RC6.
+  2. `raw-proxy` validates `request.project` and drops a `?project=<other>` carried in
+     `request.path`. Declaring project="default" passes the check and skips the override (which
+     only fires for a non-default project), and the cluster certificates are registered
+     unrestricted, so LXD would honour a project smuggled in the path.
 """
 
 import asyncio
@@ -82,12 +78,11 @@ def test_provision_refuses_a_project_outside_the_key_scope() -> None:
 
 
 def test_provision_reaches_its_body_when_the_scope_matches(monkeypatch) -> None:
-    """The guard must not be so blunt that the legitimate call is refused too.
+    """A call inside the key's scope passes the scope check.
 
-    A db of None means the handler raises as soon as it touches the session. Anything other
-    than a 403 proves the scope check let it through, which is all this asserts. The registry
-    gate that follows the scope check is answered for the granted cluster so the call gets
-    past it too.
+    A db of None makes the handler raise as soon as it touches the session, so anything other
+    than a 403 proves the scope check let it through. The registry gate after the scope check is
+    answered for the granted cluster so the call gets past it too.
     """
     from app.services.lxd import registry as cluster_registry
 
@@ -187,5 +182,5 @@ def test_raw_proxy_keeps_the_authorised_project() -> None:
     _run_raw_proxy("/1.0/instances?project=victim", "default", session)
 
     assert session.url is not None
-    # project="default" is the LXD default, so the override deliberately omits it entirely.
+    # project="default" is the LXD default, so the override omits it.
     assert "project=" not in session.url

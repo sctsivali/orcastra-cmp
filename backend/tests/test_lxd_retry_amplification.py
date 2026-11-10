@@ -1,16 +1,13 @@
-"""
-Encodes the retry-amplification measurement that drives the timeout design.
+"""Retry amplification behind the LXD timeout design.
 
 `LXDConnectionManager._configure_client_session` mounts an HTTPAdapter carrying
-`Retry(total=3, connect=0, backoff_factor=0.5)` onto every pylxd session. `read` is left
-unset, so it inherits `total`, and a read timeout is therefore retried three more times.
+`Retry(total=3, connect=0, backoff_factor=0.5)` onto every pylxd session. With `read` unset
+it inherits `total`, so a read timeout is retried three more times and a socket timeout of T
+does not bound wall clock: against a socket that accepts and never answers, T=5s took 23.0s
+and T=8s 35.0s, four TCP connections each. The session sets `read=0` unless
+ORCASTRA_LXD_RETRY_READ is on, and callers still need a wall-clock cap.
 
-The consequence that matters: a socket timeout of T does NOT bound wall clock. Measured on
-the dev VM against a real accept-and-never-answer socket, T=5s produced 23.0s and T=8s
-produced 35.0s, four TCP connections each. That is why the fix needs both a socket timeout
-and a wall-clock cap, and why `read=0` is worth setting.
-
-These tests assert the attempt COUNT rather than wall clock, so they are deterministic.
+These tests assert the attempt count rather than wall clock, so they are deterministic.
 """
 
 import socket
@@ -21,8 +18,9 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# Mirrors the idempotent-method retry policy in backend/app/services/lxd/connection.py.
-# Mutating methods are deliberately absent: a timeout after submission is an unknown outcome.
+# The idempotent-method retry policy in backend/app/services/lxd/connection.py, with
+# `read` unset as ORCASTRA_LXD_RETRY_READ=true leaves it. Mutating methods are absent: a
+# timeout after submission is an unknown outcome.
 PRODUCTION_RETRY = dict(
     total=3,
     connect=0,
@@ -34,10 +32,9 @@ PRODUCTION_RETRY = dict(
 
 
 class _SilentServer:
-    """Accepts connections and never writes a byte. This is the production failure mode.
+    """Accepts connections and never writes a byte, the failure mode that parks a thread.
 
-    A peer that sends RST does not reproduce the bug: requests fails fast and the caller
-    survives. Silence is what parks the thread.
+    A peer that sends RST does not reproduce it: requests fails fast.
     """
 
     def __init__(self) -> None:
@@ -89,7 +86,7 @@ class RetryAmplificationTests(unittest.TestCase):
         )
 
     def test_read_disabled_collapses_to_a_single_attempt(self) -> None:
-        """The contract the fix relies on: read=0 re-raises instead of retrying."""
+        """read=0 re-raises a read timeout instead of retrying it."""
         server = _SilentServer()
         self.addCleanup(server.close)
         session = _session_with({**PRODUCTION_RETRY, "read": 0})

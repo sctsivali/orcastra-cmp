@@ -42,8 +42,8 @@ def world(monkeypatch: pytest.MonkeyPatch):
         Organization, OrganizationMember, OrganizationCluster,
         TenantAccessPolicy, TenantPolicyAssignment,
     )
-    # note: only this copied SQLite DDL substitutes JSON for PostgreSQL JSONB. ORM queries
-    # and production model metadata retain their original columns and authorization predicates.
+    # Only this copied SQLite DDL substitutes JSON for PostgreSQL JSONB. ORM queries and the
+    # model metadata keep their original columns and authorization predicates.
     metadata = MetaData()
     Organization.__table__.to_metadata(metadata)
     TenantAccessPolicy.__table__.to_metadata(metadata)

@@ -1,5 +1,6 @@
 """The exec that carries a password: nothing leaves before the pin is proved, and an unanswered send
-is reported as unknown, never as a failure that would make someone trust the old password."""
+is reported as unknown, never as a failure that would make someone rely on the password it may have
+replaced."""
 
 import asyncio
 from types import SimpleNamespace

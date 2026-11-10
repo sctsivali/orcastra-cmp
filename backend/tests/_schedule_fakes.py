@@ -1,9 +1,8 @@
 """Doubles for the snapshot scheduler.
 
-Dataclasses rather than mocks, for the reason _snapshot_fakes.py states about itself: an assertion
-about what reached the daemon has to be an assertion about a recorded call, and a mock that answers
-anything makes that impossible. The FakeDB here discriminates on the statement, unlike the one the
-webhook dispatcher's tests use, because fire-time authorization asks Postgres more than one thing.
+Dataclasses rather than mocks, so an assertion about what reached the daemon is about a recorded
+call. The FakeDB discriminates on the statement because fire-time authorization asks Postgres more
+than one thing.
 """
 
 from dataclasses import dataclass, field
@@ -73,8 +72,8 @@ class _Rows:
 class FakeDB:
     """Answers the org-binding query and records that it was asked.
 
-    `bound` False is how a revoked organization is modelled: the row still names the cluster and
-    the join no longer finds it, which is exactly the state a schedule outlives its grant into.
+    `bound=False` models a revoked organization: the join finds no binding for the cluster, the
+    state a schedule is in once its grant is revoked.
     """
 
     def __init__(self, *, bound: bool = True):

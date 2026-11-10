@@ -1,10 +1,10 @@
 """An LXD client key is minted inside the caller's bound.
 
-A My Keys record is an LXD client certificate with its private key. Minting checked the cluster
-only, so a partner held to a project bound could mint an operator key for another organization's
-project, or a server key on a cluster another party holds. The party is read from real rows on
-SQLite; certificate generation and the LXD client are recorders, so a refusal is proven to land
-before a certificate exists. Owner checks on download and delete live in
+A My Keys record is an LXD client certificate with its private key. A cluster check alone would let
+a partner held to a project bound mint an operator key for another organization's project, or a
+server key on a cluster another party holds. The party is read from real rows on SQLite;
+certificate generation and the LXD client are recorders, so a refusal is proven to land before a
+certificate exists. Owner checks on download and delete live in
 test_a_partner_cannot_download_or_delete_another_owners_key.py.
 """
 

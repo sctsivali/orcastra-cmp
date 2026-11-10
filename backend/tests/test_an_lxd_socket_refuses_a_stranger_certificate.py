@@ -111,8 +111,8 @@ def test_a_stranger_certificate_receives_not_one_byte(tmp_path):
 
 
 def test_the_recorder_does_see_the_request_when_the_pin_matches(tmp_path):
-    # The control for the test above: the same silent server, the right pin. Without it, "no bytes"
-    # could mean the recorder never saw anything at all.
+    # Control for the test above: the same silent server with the right pin, so "no bytes" there
+    # cannot mean the recorder never saw anything.
     server_context, pin = _certificate(tmp_path, "enrolled")
 
     received, failure = asyncio.run(_record(server_context, pin))

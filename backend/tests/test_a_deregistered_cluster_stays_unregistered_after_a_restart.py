@@ -1,10 +1,9 @@
 """A cluster that left the registry reads `unregistered`, across restarts and on any worker.
 
-On dev 15 of 22 follower rows read `disconnected` for clusters deregistered long ago (RC5
-acceptance FU-8, 2026-11-06). Two paths put them there: every election reset each row that was
-not `disconnected` (so `unregistered` too) back to `disconnected`, and the registry loop only
-unfollowed ids it was following in memory, which is nothing after a restart. The task panel
-counts a `disconnected` row as a degraded cluster; `unregistered` is the end state it skips.
+An election resets only `connected` rows, so it never turns `unregistered` back into
+`disconnected`. The registry pass marks every row whose id is not registered, including ids this
+worker does not follow in memory, which is all of them after a restart. The task panel counts a
+`disconnected` row as a degraded cluster; `unregistered` is the end state it skips.
 """
 
 import os
@@ -84,6 +83,6 @@ async def test_an_excluded_cluster_is_not_named_and_reads_as_unfollowed(monkeypa
     )
     await follower.sync_registry()
     [(_sql, params)] = [(sql, p) for s in maker.sessions for sql, p in s.calls if "SET state = 'unregistered'" in sql]
-    # An excluded cluster leaves no trace in the journal, and the follower no longer answers for a row
-    # it kept from before the exclusion, so that row reads `unregistered` too.
+    # An excluded cluster leaves no trace in the journal, and the follower does not answer for a row
+    # kept from before the exclusion, so that row reads `unregistered` too.
     assert params == {"registered": ["nuc1"]}

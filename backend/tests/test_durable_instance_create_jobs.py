@@ -2227,7 +2227,7 @@ async def test_recovery_ends_a_job_whose_cluster_is_no_longer_registered(
 
     await manager._recover_create_job(row.job_id)
 
-    # A terminal verdict reads the registry as it is now, not the cached LIST.
+    # A terminal verdict reads the registry fresh, bypassing the cached LIST.
     assert registry_reads == [True]
     if expected == "failure":
         assert unknown == []

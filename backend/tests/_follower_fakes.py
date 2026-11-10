@@ -1,8 +1,7 @@
 """Hand-rolled fakes for the journal follower tests: a lock store two followers race on, an
 events hub that records subscriptions, and a sleep that a test scripts by duration.
 
-No database, no daemon, no network. What a test asserts is a recorded call, not a mock's memory
-of one.
+No database, daemon or network; tests assert on the calls these fakes record.
 """
 
 from __future__ import annotations

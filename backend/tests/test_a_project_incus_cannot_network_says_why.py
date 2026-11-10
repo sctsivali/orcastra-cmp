@@ -1,10 +1,9 @@
 """A project Incus refuses for want of OVN is explained, not passed through raw.
 
-Found on the Incus lab (Incus 7.6, no OVN): every project the create form sent with Networks ticked
-(its default) answered 400 "Could not create project: OVN is required for projects with
-"features.networks" enabled". Incus gives a project its own networks only through OVN; LXD
-accepts the same project without it. The refusal now says what to do: untick Networks to use the
-default project's networks, or set up OVN on the cluster.
+Incus gives a project its own networks only through OVN, so without it a create with Networks
+ticked (the form's default) answers 400 "Could not create project: OVN is required for projects
+with "features.networks" enabled". LXD accepts the same project. The refusal says what to do:
+untick Networks to use the default project's networks, or set up OVN on the cluster.
 """
 
 from app.routers.projects import project_create_refusal
@@ -29,7 +28,7 @@ def test_any_other_refusal_keeps_its_message():
 
 
 def test_a_project_with_no_config_gets_networks_only_where_the_engine_allows_it():
-    """An API caller sending no config got features.networks=true, which Incus without OVN refuses."""
+    """Without a config, features.networks=true is a default only when `own_networks` is set."""
     from app.services.lxd.projects import _create_config
 
     lxd = _create_config(None, None, None, None)

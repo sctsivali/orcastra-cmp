@@ -1,9 +1,8 @@
 """Storage pools are read with one recursion=1 request, never a lazy sync per pool.
 
-pylxd's manager listed pools at recursion 0 and then synced each pool on first attribute
-access, one request per pool, every one of them another chance for a transport error that the
-helper then swallowed as "no pools". A pool is a cluster-wide object: one listing carries
-name, driver, status and config for all of them.
+pylxd's manager lists pools at recursion 0 and then syncs each pool on first attribute access,
+one request per pool, each another chance for a transport error to read as "no pools". A pool
+is a cluster-wide object: one listing carries name, driver, status and config for all of them.
 """
 
 from typing import Any
@@ -40,7 +39,7 @@ class _APINode:
 
 
 class _Client:
-    """Deliberately without a `storage_pools` manager: a lazy pylxd path raises."""
+    """Has no `storage_pools` manager, so a lazy pylxd path raises."""
 
     project = None
 

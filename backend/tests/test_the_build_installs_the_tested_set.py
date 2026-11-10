@@ -1,11 +1,9 @@
 """
 A rebuild of this release line installs the exact set it was tested with.
 
-requirements.txt only carries lower bounds, and the base image was a floating tag, so every rebuild
-used to resolve whatever the index and the registry published that day. The shipped build then
-differed from the tested one in ways no test of ours would see. constraints.txt pins the set the
-RC5 image resolved, requirements.txt keeps the readable ranges and their ceilings, and the Dockerfile
-pins the base image by digest.
+Without pins, a rebuild resolves whatever the package index and the registry publish that day.
+constraints.txt pins the tested dependency set, requirements.txt keeps the readable ranges and
+their ceilings, and the Dockerfile pins the base image by digest.
 """
 
 import re

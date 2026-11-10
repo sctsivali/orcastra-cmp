@@ -1,9 +1,8 @@
-"""The fleet snapshot read crosses clusters, so the things that were request constants are not.
+"""The fleet snapshot read crosses clusters, so host and project vary from row to row.
 
-Every test here is paired with an ablation that turns it red, named in its docstring. The four
-that matter most are the ACL memo key, the blank-host guard, the params trap and the blank-project
-guard: each is a way the widened read hands one tenant another tenant's snapshots, or hands an
-operator a fleet sweep they did not ask for.
+Each docstring names the code change that turns its test red. The ACL memo key, the blank-host
+guard, the params trap and the blank-project guard matter most: each one, broken, hands one tenant
+another tenant's snapshots or hands an operator a fleet sweep they did not ask for.
 """
 
 import pytest
@@ -20,8 +19,8 @@ from tests._snapshot_fakes import (
     service,
 )
 
-# What LXD's bulk listing really answers: -1, which _normalize nulls. The per-instance read is
-# the only one that carries a size, and _cluster seeds it with a real one.
+# LXD's bulk listing answers -1, which _normalize nulls. Only the per-instance read carries a
+# size, and _cluster seeds it with a real one.
 SNAP = {"name": "ops-probe-20260908T000000Z", "size": -1}
 MEASURED_SIZE = 10
 OTHER_PROJECT = "cust-qa-other-02"
@@ -30,9 +29,8 @@ OTHER_PROJECT = "cust-qa-other-02"
 def _cluster(sources, *, supports_all_projects=True):
     """A fake cluster holding the given (project, instance) pairs, each with one snapshot.
 
-    note: the listings live on `api.instances`, not on the node. The node carries the data a
-    single-instance call reads; the listing attributes are the API surface's own, which is what
-    _Instances.get actually consults.
+    The listings live on `api.instances`, where _Instances.get reads them; the node carries the
+    data a single-instance call reads.
     """
     node = FakeInstanceNode()
     node.projects = sorted({project for project, _ in sources})
@@ -75,7 +73,7 @@ def _client(svc, *, acl=None, allowed=None, flag_on=False) -> TestClient:
     acl_token = org_scope._tenant_acl_var.set(acl)
     allowed_token = org_scope._allowed_clusters_var.set(allowed)
     get_cache_manager().invalidate_resource_cache("snapshots_fleet")
-    # The size map lives outside the list sweep on purpose, so a test starts it empty by hand.
+    # The size map is not cleared by the list invalidation, so each test empties it here.
     get_cache_manager().delete_pattern("api_responses", "snapshot_sizes:*")
 
     client = TestClient(app, raise_server_exceptions=False)
@@ -91,8 +89,8 @@ def _client(svc, *, acl=None, allowed=None, flag_on=False) -> TestClient:
 def two_clusters():
     """Two clusters that each hold an instance of the SAME name in a different project.
 
-    That shape is the whole point: it is what a memo keyed on the instance name alone collides
-    on, and it exists on real shared hosts because tenants pick the same obvious names.
+    A memo keyed on the instance name alone collides on this shape, and shared hosts have it
+    because tenants pick the same obvious names.
     """
     mine = _cluster([(PROJECT, INSTANCE)])
     theirs = _cluster([(OTHER_PROJECT, INSTANCE)])
@@ -157,10 +155,10 @@ def test_a_daemon_without_the_extension_is_still_read(two_clusters):
 
 
 def test_a_daemon_that_omits_the_project_is_not_trusted(two_clusters):
-    """A cluster that claims the extension and returns unlabelled rows falls back, never guesses.
+    """A cluster that claims the extension but returns unlabelled rows falls back, never guesses.
 
     Ablation: label the row `default` instead of raising, and a tenant granted on `default` is
-    handed another project's snapshots. This is a security test, not a robustness one.
+    handed another project's snapshots.
     """
     svc, mine, _theirs = two_clusters
     for entry in mine.api.instances.all_projects_listing:
@@ -215,12 +213,11 @@ def test_a_blank_host_is_refused_rather_than_widened():
 
 
 def test_a_blank_project_is_refused_rather_than_read_as_default():
-    """The twin of the blank-host guard, and it was missing while this file claimed to have it.
+    """The twin of the blank-host guard.
 
-    A blank project used to reach `_project_params`, which substitutes `default`, so LXD was asked
-    about ONE project while every row was labelled with the empty string. The label is what the
-    tenant ACL is asked about, so the row builder then raised, the per-cluster handler caught it,
-    and a completely healthy fleet answered 200 with every cluster reported unreachable.
+    A blank project reaching `_project_params` would be read as `default` while every row is
+    labelled with the empty string; the ACL check on that label raises, and a healthy fleet
+    answers 200 with every cluster reported unreachable.
 
     Ablation: drop the pattern from the `project` parameter and this answers 200 with an outage.
     """
@@ -237,11 +234,11 @@ def test_a_blank_project_is_refused_rather_than_read_as_default():
 
 
 def test_a_read_that_raises_is_not_quietly_relabelled_as_an_outage():
-    """A cluster whose read blew up is still reported, but the log says what really happened.
+    """A cluster whose read raised is reported unreachable, and the error is logged in full.
 
     The fan-out turns any per-cluster exception into "unreachable", which is right for the caller
-    and wrong for whoever has to debug it. Ablation: drop the exc_info branch and a defect in the
-    read path spends its life looking like a flaky cluster.
+    but hides a defect. Ablation: drop the exc_info branch and a bug in the read path looks like a
+    flaky cluster.
     """
     import logging
     from unittest import mock
@@ -286,7 +283,7 @@ def test_a_cluster_that_cannot_be_read_is_named_not_dropped():
 
 
 def test_nothing_is_cached_when_no_cluster_answered():
-    """Ablation: drop the `if answered:` guard and emptiness is pinned for the whole TTL."""
+    """Ablation: drop the `if answered:` guard and an empty answer is cached for the whole TTL."""
     from app.core.cache import get_cache_manager
 
     svc = service(_cluster([(PROJECT, INSTANCE)]), hosts=(HOST,), clients={})

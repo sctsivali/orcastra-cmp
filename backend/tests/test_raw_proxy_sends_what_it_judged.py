@@ -8,8 +8,8 @@ query decoded once). For every integrator path, every smuggling spelling and eve
 parsed target must equal `canonical_proxy_path`'s judgement, with the authorised project as the only
 `project`, or the request must never arrive.
 
-note: the deployed image runs requests 2.34.2 and urllib3 2.8.0 (backend/constraints.txt). Run this
-file with those on PYTHONPATH as well as with the host venv; both must pass.
+The image pins requests and urllib3 in backend/constraints.txt. Run this file with those versions
+on PYTHONPATH as well as with the host venv; both must pass.
 """
 
 import json

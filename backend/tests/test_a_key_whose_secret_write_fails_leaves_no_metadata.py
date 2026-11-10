@@ -1,8 +1,8 @@
 """A key mint whose secret write fails takes its metadata back out of Vault.
 
-The mint writes two Vault documents, the metadata and then the secret hash. When the second write
-failed the caller got 500 but the metadata stayed, so the key listed as Active and could never
-authenticate. Nothing could use it, but an operator would read it as a live credential.
+The mint writes two Vault documents, the metadata and then the secret hash. Metadata left behind
+by a failed second write would list as an Active key that can never authenticate, which an
+operator would read as a live credential.
 """
 
 from __future__ import annotations

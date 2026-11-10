@@ -1,9 +1,9 @@
 """A rebind that fails partway leaves no move behind, so no move is ever committed without its record.
 
-reconcile_personal_clusters flushes each moved row and commits once at the end. When the share
-audit refused a later cluster, the exception skipped that commit and the records, and the member
-sync only logged it. The earlier moves were still flushed in the session, and the offboarding
-reconcile's per-row commit then wrote them: a cluster bound to an org with no rebind record.
+reconcile_personal_clusters flushes each moved row and commits once at the end. If the share audit
+refuses a later cluster, the exception skips that commit and the records, while the earlier moves
+stay flushed in the session; the offboarding reconcile's per-row commit would then write them: a
+cluster bound to an org with no rebind record. So the failure is rolled back before it is raised.
 """
 
 from typing import Any, Dict

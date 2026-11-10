@@ -1,7 +1,7 @@
 """The console's own start/stop path audits `vm.*`; the daemon's frame maps to `instance.*`.
 
 The key the audit claims with and the key the frame writes must be one key, or every console
-start lists twice (the review's finding, confirmed twice). The alias table gives the task key
+start lists twice. The alias table gives the task key
 its canonical name; the stdout record and the cluster log line keep the name the router
 emitted, so nothing downstream of Fluent Bit changes.
 """

@@ -1,10 +1,9 @@
 """A Redis that stops answering costs one short timeout, then is left alone for a while.
 
-During a two-minute `docker pause` of the dev Redis (2026-11-04) every request on every worker
-waited until it came back: each command held its caller for 10 s (a 5 s socket timeout, retried
-once) and most callers run on the event loop, so `/networks` took 123 s and `/tasks` 86 s. The
-client now times out after 1 s without a retry, and core/redis_guard.py skips Redis for 15 s
-after a failure: commands raise RedisSkipped at once and callers take their existing fallbacks.
+Most callers run on the event loop, so a command waiting on a silent Redis holds up every
+request on the worker. The client times out after 1 s without a retry, and core/redis_guard.py
+skips Redis for 15 s after a failure: commands raise RedisSkipped at once and callers take their
+existing fallbacks.
 """
 
 from __future__ import annotations
@@ -304,7 +303,7 @@ def test_a_paused_redis_costs_one_second_then_nothing(silent_server):
         with pytest.raises(RedisSkipped):
             guard.get("orcastra:any")
     rest = time.monotonic() - started
-    # Before: 10 s for the first command and 10 s for each of the twenty after it.
+    # A 5 s socket timeout retried once would cost 10 s for every one of these commands.
     assert first < 2.5
     assert rest < 0.1
 
@@ -336,11 +335,11 @@ def test_the_cache_serves_memory_while_redis_is_skipped_and_says_so_once(manager
 
 
 def test_writes_and_invalidations_are_sent_while_reads_are_skipped(manager):
-    """Security review 2026-11-04: an invalidation is how other workers learn an entry is stale.
+    """An invalidation is how other workers learn an entry is stale.
 
     Revoking an API key writes Vault, deletes the shared `vault` copy of its metadata and publishes
-    a tombstone. Skipped while this worker's guard was open, both were lost silently and every
-    other worker went on reading the pre-revoke metadata from Redis for its whole TTL.
+    a tombstone. Skipping both while this worker's guard is open would leave every other worker
+    reading the pre-revoke metadata from Redis for its whole TTL.
     """
     cache, client, _clock = manager
     client.fail = RedisTimeoutError("t")

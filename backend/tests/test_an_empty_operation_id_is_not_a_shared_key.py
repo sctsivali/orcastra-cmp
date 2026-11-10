@@ -1,16 +1,11 @@
 """An unusable operation id must never become a key other sessions share.
 
-Session ids used to be whatever LXD put in metadata.id, read with a default of "".
-While each worker had its own dict that was merely useless - one bucket, one short-lived
-broken session. As a field in a hash shared by four workers it is corrupting: every
-session that got an empty id collapses onto the same entry, and the first one to end
-deletes the others' snapshots out from under them.
-
-The console's old fallback was worse and also dead. `f"console-{name}-{id(self)}"` keys
-on a CPython address, which is process-local and reused after garbage collection, so it
-can collide across workers and with a disconnected session still awaiting cleanup. It
-never ran either, because operation_id is always PRESENT - just sometimes empty - so a
-.get() default could not fire. The guard has to be on falsiness.
+LXD's metadata.id can be empty, and session state is a hash shared by every worker, so
+sessions with an empty id would collapse onto one entry and the first to end would delete
+the others' snapshots. operation_id is always PRESENT, sometimes empty, so a .get() default
+never fires: the guard has to test falsiness. Keying on `id(self)` is no fallback either: a
+CPython address is process-local and reused after garbage collection, so it can collide
+across workers and with a disconnected session still awaiting cleanup.
 """
 
 import ast
@@ -36,10 +31,9 @@ def test_an_empty_or_blank_id_becomes_a_unique_one():
 
 
 def test_neither_proxy_keys_a_session_on_a_memory_address():
-    # id(self) is not an identity: it is reused after collection and means nothing in
-    # another process. Structural, because the failure is invisible at runtime until two
-    # sessions happen to land on the same address. Matched on the AST rather than the
-    # text, so the comment explaining this defect does not trip its own guard.
+    # id(self) is reused after collection and means nothing in another process, and a
+    # collision stays invisible until two sessions land on one address. Matched on the AST
+    # rather than the text, so a comment that mentions id(self) does not trip the guard.
     for path in PROXIES:
         tree = ast.parse(path.read_text())
         name = path.name
@@ -53,8 +47,8 @@ def test_neither_proxy_keys_a_session_on_a_memory_address():
 
 
 def test_both_proxies_derive_the_session_id_through_the_guard():
-    # the guard only helps where it is actually used, and this is the kind of call that
-    # gets quietly inlined again during a later edit.
+    # The guard only helps where it is used, and a later edit could inline the derivation
+    # again.
     for path in PROXIES:
         tree = ast.parse(path.read_text())
         name = path.name

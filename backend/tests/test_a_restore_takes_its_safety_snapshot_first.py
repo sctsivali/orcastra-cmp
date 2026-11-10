@@ -1,10 +1,8 @@
 """The pre-restore safety snapshot is taken BEFORE the restore, and a failure aborts the restore.
 
-Order is the whole point. Taken afterwards, the safety copy captures the already-rolled-back
-state and protects nothing, while still costing pool space and looking like protection in the UI.
-
-A restore discards every write since the snapshot, so this is the one control standing between a
-mistaken click and unrecoverable data loss.
+Taken afterwards, the safety copy would capture the already rolled-back state and protect nothing,
+while still costing pool space and looking like protection in the UI. A restore discards every write
+since the snapshot, so this is the control between a mistaken click and unrecoverable data loss.
 """
 
 import pytest
@@ -84,15 +82,14 @@ def test_an_operator_may_decline_the_safety_snapshot():
     assert [c for c in node.recorded if c[0] == "put_instance"]
 
 
-# ── the three cases the old shape could not reach ───────────────────────────────────────────────
+# ── operation outcomes, the snapshot cap and the lock ───────────────────────────────────────────
 
 def test_a_safety_snapshot_the_daemon_accepts_then_fails_aborts_the_restore():
-    """The defect this file existed to prevent and did not.
+    """A safety copy the daemon accepts and then fails must stop the restore.
 
     `test_a_failed_safety_snapshot_aborts_the_restore` above sets `create_error`, which is a
-    SYNCHRONOUS raise. The operation id was discarded, so an accepted-then-failed create was never
-    observed at all and the restore proceeded on top of a safety copy that did not exist. Reachable
-    now only because the operations fake answers per operation id.
+    SYNCHRONOUS raise. Here the failure arrives on the operation, which the fake answers per
+    operation id, so the restore has to wait for the operation's outcome.
     """
     node = FakeInstanceNode(snapshots=[{"name": TARGET}])
     node.operation_status = {"op-create-1": "Failure", "*": "Success"}
@@ -121,8 +118,8 @@ def test_a_safety_snapshot_still_being_written_defers_the_restore():
 
 
 def test_the_safety_snapshot_is_counted_against_the_cap():
-    """`assert_capacity` was called only on the create path, so restoring twice silently filled two
-    of five slots and the operator's next manual snapshot was refused about their own."""
+    """The safety copy takes a slot. Unchecked, two restores would fill two slots and the operator's
+    next manual snapshot would be refused because of copies they never took."""
     from app.services.lxd.snapshots import MAX_OPS_SNAPSHOTS_PER_INSTANCE
 
     # TARGET is itself an ops- name and therefore counts, so hold one fewer to reach exactly the cap.
@@ -144,7 +141,7 @@ def test_the_safety_snapshot_is_counted_against_the_cap():
 
 
 def test_declining_the_safety_snapshot_gets_past_a_full_instance():
-    """The affordance the refusal names has to actually work, or naming it is worse than silence."""
+    """The way out that the capacity refusal names must work."""
     from app.services.lxd.snapshots import MAX_OPS_SNAPSHOTS_PER_INSTANCE
 
     held = [
@@ -171,17 +168,13 @@ def test_the_restore_leaves_no_lock_behind():
     """`rebuild_lock` registers a waiter; only `release_lock` drops the entry.
 
     The registry is process-wide and module-level, so a gate that takes the lock without the
-    matching release grows one dict entry per (host, project, instance) for the life of the worker.
-    That is the accumulation `core/single_flight.py:45-47` states does not happen, and it was found
-    by an unrelated test in another file failing on the residue rather than here, which is exactly
-    the ordering dependence that makes such a leak hard to attribute.
+    matching release grows one dict entry per (host, project, instance) for the life of the worker,
+    the accumulation `single_flight.rebuild_lock` promises does not happen.
 
-    important: asserted on the KEY, and on `_waiters` as well as `_locks`. Comparing the whole dict
-    against a snapshot taken at the top of this test passes either way, because every restore in
-    this file uses one host, project and instance, so the leaked entry is already there before the
-    first assertion runs. That version of this test was green against the unfixed gate.
-
-    All three exits, because the acquire is what leaks and every refusal raises past it.
+    Assert on the KEY, in `_waiters` as well as `_locks`. Every restore in this file uses
+    one host, project and instance, so comparing the whole dict with a snapshot taken at the top
+    would pass with the leaked entry already present. All three exits are covered, because the
+    acquire is what leaks and every refusal raises past it.
     """
     from app.core import single_flight as sf
     from app.services.lxd.snapshots import MAX_OPS_SNAPSHOTS_PER_INSTANCE

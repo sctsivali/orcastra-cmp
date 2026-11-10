@@ -1,9 +1,8 @@
 """The node-picker endpoint's whole contract, driven through the real handler.
 
-A picker that hides a dead cluster is worse than one with no status at all: an operator who
-cannot find a cluster in the list concludes it was deregistered and goes looking for a
-registration bug. Every registered cluster must be present, and a cluster that is merely down
-must read `offline`, not `error` and not `not_authorized`.
+An operator who cannot find a cluster in the picker concludes it was deregistered. Every
+registered cluster must be present, and a cluster that is merely down must read `offline`, not
+`error` and not `not_authorized`.
 
 Hermetic. No Vault, no pylxd, no Redis, no database.
 """
@@ -21,8 +20,8 @@ ALL = sorted(ALIVE + DEAD)
 
 
 class _ConnectionManager:
-    """Alive clusters hand back a pooled client; dead ones return None, exactly as the real
-    manager does once health.is_tripped() is true."""
+    """Alive clusters hand back a pooled client; dead ones return None, as the real manager
+    does once health.is_tripped() is true."""
 
     def get_client(self, host, *args, **kwargs):
         return object() if host in ALIVE else None
@@ -88,8 +87,8 @@ def client(monkeypatch):
     from app.core.org_scope import org_scope_dependency
 
     cache = _Cache()
-    # note: patched on the service, not the router. resolve_availability owns the cache read
-    # for both /nodes/availability and /integrations/available-clusters.
+    # Patched on the service: resolve_availability owns the cache read for both
+    # /nodes/availability and /integrations/available-clusters.
     monkeypatch.setattr(lxd_status, "get_cache_manager", lambda: cache)
     for name in DEAD:
         health.record_failure(name, "connection refused")
@@ -125,7 +124,7 @@ def test_a_down_cluster_reads_offline_not_error(client):
     by_name = {row["name"]: row for row in body["clusters"]}
     for name in DEAD:
         assert by_name[name]["status"] == ClusterStatus.OFFLINE.value, by_name[name]
-    # ERROR means a fault in us. A cluster being down is not one.
+    # ERROR means a fault in this server. A cluster being down is not one.
     assert not [r for r in body["clusters"] if r["status"] == ClusterStatus.ERROR.value]
 
 
@@ -140,7 +139,7 @@ def test_a_reachable_cluster_reads_online_and_available(client):
 
 
 def test_it_never_answers_503_for_a_dead_fleet(client):
-    """"That cluster is down" is this endpoint's payload, not its failure."""
+    """A down cluster is reported in the payload; the endpoint itself still answers 200."""
     tc, _ = client
     response = tc.get("/nodes/availability")
     assert response.status_code == 200, response.text
@@ -157,9 +156,8 @@ def test_offline_rows_carry_a_machine_safe_reason_code(client):
 
 
 def test_the_name_is_the_id_a_create_request_sends(client):
-    """The join key. If this endpoint keyed on anything other than the string
-    /nodes/names returns, the picker's left-join yields all Unknown and the feature
-    looks like it works while carrying no information."""
+    """The join key. The picker left-joins on the names /nodes/names returns, so any
+    other key would read every cluster as Unknown."""
     tc, _ = client
     body = tc.get("/nodes/availability").json()
     assert {row["name"] for row in body["clusters"]} == set(_Service().get_node_names())
@@ -181,7 +179,7 @@ def test_the_probe_result_is_cached_with_the_endpoints_ttl(client):
 
 
 def test_an_all_offline_result_is_still_cached(client):
-    """Unlike the list fan-outs, an empty-of-reachable-clusters answer IS the answer."""
+    """Unlike the list fan-outs, an answer with no reachable cluster is a complete answer."""
     from app.core.cache import NODES_AVAILABILITY_CACHE_KEY
 
     tc, cache = client

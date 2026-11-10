@@ -1,11 +1,9 @@
 """
-The IP column shows the addresses an operator can reach, never the loopback.
+The IP column shows the addresses an operator can reach and hides loopback addresses.
 
-The instance list's collector walked every interface in the state, including `lo`, and kept
-every inet address, so `127.0.0.1` sat beside the real address of every running instance.
-The two other extractors skipped `lo` by name but would still keep a loopback address on
-another interface. One predicate now decides for all three: an address is shown when it is
-a global (or host-routable) address, not loopback, not link-local, not scope local.
+Skipping `lo` by name is not enough: a loopback address can sit on another interface. One
+predicate decides for all three extractors: an address is shown when it is a global (or
+host-routable) address, not loopback, not link-local, not scope local.
 """
 
 from types import SimpleNamespace
@@ -25,7 +23,7 @@ STATE: Dict[str, Any] = {
             {"family": "inet6", "address": "fe80::216:3eff:fe00:1", "netmask": "64", "scope": "link"},
             {"family": "inet6", "address": "2001:db8::5", "netmask": "64", "scope": "global"},
         ]},
-        # a loopback address that is not on lo: the name skip alone would keep it
+        # A loopback address that is not on lo: skipping by name alone would keep it.
         "dummy0": {"addresses": [
             {"family": "inet", "address": "127.0.0.2", "netmask": "8", "scope": "local"},
         ]},
@@ -44,7 +42,7 @@ def test_is_display_address_keeps_reachable_addresses_only() -> None:
     assert not keep({"family": "inet6", "address": "fe80::1", "scope": "link"})
     assert not keep({"family": "inet", "address": "", "scope": "global"})
     assert not keep({"family": "packet", "address": "00:16:3e:00:00:01"})
-    # a state without a scope field (older daemons) still hides loopback and link-local
+    # A state without a scope field (older daemons) still hides loopback and link-local.
     assert keep({"family": "inet", "address": "10.0.0.5"})
     assert not keep({"family": "inet", "address": "127.0.0.1"})
     assert not keep({"family": "inet6", "address": "fe80::1"})

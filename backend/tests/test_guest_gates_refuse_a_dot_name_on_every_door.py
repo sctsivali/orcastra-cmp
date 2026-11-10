@@ -1,18 +1,12 @@
-"""
-A name that is empty, `.` or `..` is refused with 400 before any cluster call, on every key door.
+"""A name that is empty, `.` or `..` is refused with 400 before any cluster call, on every key door.
 
 requests folds a `.` or `..` segment out of the path it sends, so such a name addresses the object's
-parent: `..` as an instance name reads or deletes the collection, or the server root. Round 1d holds
-every caller-supplied name in a key-reachable module to lxd_segment. Each case sends one request
+parent: `..` as an instance name reads or deletes the collection, or the server root. Every
+caller-supplied name in a key-reachable module goes through lxd_segment. Each case sends one request
 through the real route (tests/_guest_gate_doors.py) and asserts a 400 naming the field, no client
-built, nothing sent and no failure record (a dot-name 400 is not audited, like the raw proxy's
-traversal 400). Covered: every /proxy operation that puts a name into a path, the MCP tools that
-call them, GET /integrations/operations/{id}, and every read a project-limited key's write plan
-makes (profiles, a copy source and its snapshot, an image fingerprint or alias, a restore) on the
-raw proxy, /proxy and MCP.
-
-A case marked xfail(strict=True) is a known defect. It asserts what the rule requires and turns red
-once the product is fixed, so the marker comes off with the fix.
+built, nothing sent and no failure record (like the raw proxy's traversal 400). Covered: every /proxy
+operation that puts a name into a path, the MCP tools that call them, GET /integrations/operations/{id},
+and every read a project-limited key's write plan makes on the raw proxy, /proxy and MCP.
 """
 
 from typing import Any, Dict, List, Tuple
@@ -36,7 +30,7 @@ from tests._raw_proxy_fakes import CLUSTER_ID, ENDPOINT, _clean_breaker, fence_c
 
 DOTS = ["", ".", ".."]
 OP_ID = "5b1e0a4c-0000-4000-8000-000000000001"
-# note: every other param each operation needs, so only the named field is wrong.
+# Every other param each operation needs, so only the named field is wrong.
 BASE_PARAMS: Dict[str, Dict[str, Any]] = {
     "create_instance": {"name": "c1", "source": {"type": "none"}},
     "update_instance": {"name": "web", "config": {"limits.cpu": "2"}},
@@ -52,7 +46,7 @@ BASE_PARAMS: Dict[str, Dict[str, Any]] = {
     "get_operation": {"operation_id": OP_ID},
     "create_storage_pool": {"definition": {"name": "p1", "driver": "dir"}},
 }
-# note: every /proxy operation that puts a caller's name into an LXD path (services/lxd/proxy_operations.py),
+# Every /proxy operation that puts a caller's name into an LXD path (services/lxd/proxy_operations.py),
 # written out here rather than read from the gate's own table, so a name dropped from the table fails a case.
 NAMED = {
     **{operation: ("name",) for operation in (
@@ -148,7 +142,7 @@ def test_the_operations_route_refuses_a_dot_id(door: Any, spelled: str) -> None:
     assert seen.status == 400 and "cannot name an LXD object" in seen.text and seen.cluster.untouched
 
 
-# note: a project-limited key's write plan
+# A project-limited key's write plan.
 
 PLAN_CASES = [
     ("POST", "/1.0/instances", "tenant-a", {"name": "c1", "source": {"type": "none"}, "profiles": ["@"]}),
@@ -213,7 +207,7 @@ async def test_a_limited_mcp_plan_refuses_a_dot_name_before_any_client(door: Any
                                 cluster_id=CLUSTER_ID, project="tenant-a", **extra))
 
 
-# note: the one-instance read, which MCP's orcastra_get_instance calls
+# The one-instance read, which MCP's orcastra_get_instance calls.
 
 
 class _LxdRoot(ConfigSession):
@@ -267,7 +261,7 @@ def test_the_instance_read_still_answers_a_real_name(door: Any, monkeypatch: pyt
 
 
 class _Projects:
-    """A pylxd client's project list and instance node, recording every request either makes."""
+    """A pylxd client's project list, recording each call."""
 
     def __init__(self, calls: List[str]) -> None:
         self.calls = calls

@@ -1,23 +1,12 @@
-"""
-No API-key surface hands out the secrets an LXD operation carries.
+"""No API-key surface hands out the secrets an LXD operation carries.
 
 An exec or console operation holds `fds`, whose values open the operation websocket with no further
-authentication. A token operation holds `secret`, and a migration source holds `control`, `fs` and
-`criu`. The dashboard's /operations routes answer through an allowlist, but four surfaces a key
-reaches returned LXD's metadata verbatim:
-
-- the `get_operation` proxy operation (POST /integrations/proxy), which costs `read`
-- GET /integrations/operations/{id}, which costs `inventory.read`
-- MCP `orcastra_get_operation`, which runs that same handler
-- the raw proxy's GET /1.0/operations, /1.0/operations/<id> and its /wait
-
-So a read key could collect the websocket secrets of every live console and exec in its projects.
-The first three now serialize through the dashboard's allowlist, one function and not a copy. The
-raw proxy passes LXD's own JSON through, so it removes the secret fields and leaves the rest as LXD
-wrote it, which is what the integrator's operation polls read.
-
-Each surface is driven through its real handler down to a fake cluster that records the lookup the
-real client makes.
+authentication; a token operation holds `secret`; a migration source holds `control`, `fs` and
+`criu`. A key reads operations through the `get_operation` proxy operation, GET
+/integrations/operations/{id}, MCP `orcastra_get_operation` and `lxd_get_operation` (which run
+those two handlers), and the raw proxy's /1.0/operations routes. All but the raw proxy serialize
+through the dashboard's /operations allowlist; the raw proxy passes LXD's JSON through with only
+the secret fields removed, which is what an integrator's operation polls read.
 """
 
 import json
@@ -58,7 +47,7 @@ READ_KEY: Dict[str, Any] = {
     ],
 }
 
-# note: `all-projects` costs a grant on every project, so the listing forms read with this one.
+# `all-projects` costs a grant on every project, so the listing forms read with this one.
 READ_EVERY_PROJECT: Dict[str, Any] = {
     **READ_KEY,
     "cluster_permissions": [{"cluster_id": CLUSTER_ID, "permissions": ["read"], "projects": ["*"]}],
@@ -289,8 +278,8 @@ async def test_the_allowlisted_progress_is_returned_as_is(monkeypatch: pytest.Mo
 
 # ── ownership: an operation id is cluster-wide ─────────────────────────────────────────────────
 #
-# LXD answers GET /1.0/operations/{id} whatever ?project= says. Observed on nuc2 on 2026-10-14: a
-# key granted only `default` read the create, start, snapshot and delete operations of another
+# LXD answers GET /1.0/operations/{id} whatever ?project= says, so without an ownership check a key
+# granted only `default` reads the create, start, snapshot and delete operations of another
 # project, with resource URLs naming that project's instances.
 
 
@@ -349,7 +338,7 @@ async def test_a_wildcard_key_sees_any_owned_operation_but_not_an_ownerless_one(
 
 
 async def test_a_snapshot_operation_is_owned_as_lxd_names_it(monkeypatch) -> None:
-    """LXD 5.21 writes `instances_snapshots`; the table only knew `instance-snapshots`."""
+    """LXD 5.21 writes `instances_snapshots`, beside the documented `instance-snapshots`."""
     snapshot = {**OPERATIONS["exec"], "description": "Snapshotting instance", "resources": {
         "instances": ["/1.0/instances/web-1"],
         "instances_snapshots": ["/1.0/instances/web-1/snapshots/s1"],
@@ -381,7 +370,7 @@ def test_every_surface_reads_one_ownership_function() -> None:
 
 
 def test_every_serializing_surface_reads_the_dashboards_allowlist() -> None:
-    """One function, not a copy: the dashboard route and the key surfaces cannot drift apart."""
+    """The dashboard route and the key surfaces share one allowlist function, so they cannot drift."""
     assert lxd_operations._sanitize_operation_metadata is sanitize_operation_metadata
     assert proxy_operations.sanitize_operation_metadata is sanitize_operation_metadata
     assert operation_metadata.SAFE_OPERATION_METADATA_KEYS.isdisjoint(OPERATION_SECRET_KEYS)
@@ -425,7 +414,7 @@ def _without_secrets(operation: Dict[str, Any]) -> Dict[str, Any]:
 async def _raw_get(path: str, body: Dict[str, Any], api_key: Dict[str, Any] = READ_KEY) -> Any:
     session = _AnsweringSession(body)
     outcome, _ = await call_raw_proxy(api_key, "GET", path, session=session)
-    # note: a project-limited key's call to one operation is preceded by the ownership read
+    # A project-limited key's call to one operation is preceded by the ownership read
     # (test_a_raw_operation_read_is_bounded_by_its_owner.py). Everything else is one call.
     limited = all("*" not in grant["projects"] for grant in api_key["cluster_permissions"])
     one_operation = addressed_operation_id(canonical_proxy_path(path)) is not None

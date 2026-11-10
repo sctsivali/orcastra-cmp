@@ -1,17 +1,11 @@
 """The API key picker must say which clusters are answering, and must never hide one.
 
-Two defects met in one handler. It read three Vault metadata keys that
-`save_cluster_metadata` has never written, so `metadata.get("name")` always fell back to the
-raw cluster id, `metadata.get("server_type")` always fell back to "lxd", and
-`metadata.get("status")` was always "" and made the pending/not_authorized/error filter
-unreachable while the endpoint's own description promised it.
+`list_api_keys` never filters a key's own permission array, so a grant naming a cluster this
+endpoint omits still counts toward the edit form's selection while being invisible in it, and
+an invisible grant cannot be revoked.
 
-And it carried no state at all, which is why `check-node-picker-status.mjs` registered the
-component in front of it as the one deferred picker in the app.
-
-Hiding is the more serious half. `list_api_keys` never filters a key's own permission array,
-so a grant naming a cluster this endpoint omits still counts toward the edit form's selection
-while being invisible in it. An invisible grant is one nobody can revoke.
+Names and types come from the metadata `save_cluster_metadata` writes (`display_name`, `type`);
+it writes no `name`, `server_type` or `status` key.
 """
 
 import asyncio
@@ -23,8 +17,7 @@ from app.models.schemas import ClusterAvailability, ClusterAvailabilityResponse
 from app.routers.integrations import list_available_clusters
 from datetime import datetime, timezone
 
-# What Vault actually stores. There is no `name`, no `server_type` and no `status` key here,
-# which is the whole point: asking for those was the bug.
+# What Vault stores for a cluster: no `name`, `server_type` or `status` key.
 VAULT = {
     "nuc2": {"display_name": "NUC 2", "endpoint": "https://nuc2:8443", "type": "microcloud"},
     "blitz01": {"display_name": "VDC", "endpoint": "https://blitz01:8443", "type": "incus"},
@@ -98,7 +91,7 @@ THREE_STATES = [
 
 @pytest.mark.parametrize("label,cluster_id,status", THREE_STATES, ids=[s[0] for s in THREE_STATES])
 def test_a_cluster_is_listed_whatever_its_state(label, cluster_id, status, monkeypatch):
-    """The defect in one sentence: a grant on a cluster that is not listed cannot be revoked."""
+    """A grant on a cluster that is not listed cannot be revoked."""
     service = _Service()
     body = _call(service, [_row(c, status if c == cluster_id else ClusterStatus.ONLINE) for c in VAULT], monkeypatch=monkeypatch)
 
@@ -117,7 +110,7 @@ def test_every_status_is_a_member_of_the_enum_or_null(monkeypatch):
 
 
 def test_the_name_is_the_display_name_and_the_type_is_the_registered_one(monkeypatch):
-    """`name` and `server_type` are not Vault keys. Asking for them printed ids and lied LXD."""
+    """`name` and `server_type` are not Vault keys; they come from `display_name` and `type`."""
     body = _call(_Service(), [_row(c, ClusterStatus.ONLINE) for c in VAULT], monkeypatch=monkeypatch)
     listed = {c.id: c for c in body.clusters}
 
@@ -129,10 +122,10 @@ def test_the_name_is_the_display_name_and_the_type_is_the_registered_one(monkeyp
 
 
 def test_reachability_failing_does_not_empty_the_picker(monkeypatch):
-    """Degrade to "we could not tell", never to an empty list or a 503.
+    """Without reachability every cluster is still listed, with an unknown status.
 
     An empty picker on the create form is an outage; on the edit form it silently drops every
-    visible grant. Status is an enrichment here, not the payload.
+    visible grant. Status only enriches the rows.
     """
     service = _Service()
     body = _call(service, monkeypatch=monkeypatch, explode=RuntimeError("probe pool full"))
@@ -161,7 +154,7 @@ def test_a_registered_cluster_absent_from_the_sweep_is_still_listed(monkeypatch)
 
 
 def test_the_literal_unknown_endpoint_is_not_printed_as_one(monkeypatch):
-    """"unknown" reads as a fact about the cluster rather than a gap in what we know."""
+    """The placeholder "unknown" would read as a fact about the cluster, so it becomes null."""
     rows = [_row("nuc2", ClusterStatus.OFFLINE, endpoint="unknown")]
     body = _call(_Service(names=["nuc2"]), rows, monkeypatch=monkeypatch)
     assert body.clusters[0].endpoint is None
@@ -187,10 +180,7 @@ def test_an_empty_scope_answers_an_empty_list_without_probing(monkeypatch):
 
 
 def test_the_ordinary_path_costs_no_vault_read_per_cluster(monkeypatch):
-    """An availability row already carries the name, the endpoint and the type.
-
-    The handler used to pay one Vault round trip per cluster on every picker open.
-    """
+    """An availability row already carries the name, the endpoint and the type."""
     service = _Service()
     _call(service, [_row(c, ClusterStatus.ONLINE) for c in VAULT], monkeypatch=monkeypatch)
     assert service.cert_manager.reads == []

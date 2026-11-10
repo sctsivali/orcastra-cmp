@@ -1,26 +1,13 @@
-"""Regression guard: an authorization refusal must not surface as a 500.
+"""An authorization refusal must not surface as a 500.
 
-`verify_cluster_access` and `verify_tenant_permission` raise `HTTPException(403)`. Several HTTP
-handlers called them inside a broad `try` whose only handler was `except Exception`, which
-caught that 403 and re-raised it as `HTTPException(500, detail=str(e))`. The client got a 500
-whose body read `"403: Access denied: cluster 'x' is not in your organization"`, and the
-refusal was logged at ERROR.
+`verify_cluster_access` and `verify_tenant_permission` raise `HTTPException(403)`. Called inside a
+broad `try` whose only handler is `except Exception`, that 403 is caught and re-raised as
+`HTTPException(500, detail=str(e))`: the client sees a server fault, monitoring pages someone and
+the refusal is logged at ERROR, for a permission check that worked. Every HTTP handler must either
+re-raise HTTPException first or call the check ahead of the try.
 
-Measured on 1.0.0-RC9 before the fix, as a tenant against a cluster outside their scope:
-
-    GET /api/v1/networks?host=nuc2        403   (correct)
-    GET /api/v1/storage/pools?host=nuc2   403   (correct)
-    GET /api/v1/network-acls?host=nuc2    500   <- same denial, wrong status
-    GET /api/v1/operations?host=nuc2      500
-    GET /api/v1/warnings?host=nuc2        500
-
-That is worse than cosmetic. A 500 tells a client the server broke and tells monitoring to
-page someone, for a permission check that worked exactly as designed. The same defect was
-fixed in instances.py and vms.py earlier in this release by moving the check ahead of the try,
-so this guard exists to stop it reappearing in the handlers that were missed.
-
-WebSocket handlers are excluded: they cannot answer with a status code and correctly close with
-1008 instead, which is what `events.py` does.
+WebSocket handlers are excluded: they cannot answer with a status code and close with 1008
+instead, as `events.py` does.
 """
 
 import ast

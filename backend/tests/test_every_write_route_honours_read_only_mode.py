@@ -1,12 +1,9 @@
 """Every write route refuses in read-only mode, unless it is listed here with the reason it may not.
 
 `READ_ONLY_MODE` is documented as "disable all create, update, delete operations"
-(app/core/config.py), but the check is a per-route dependency, so it held only where someone
-remembered it. Organization and member changes, user-group role assignment (which writes to the
-identity provider) and the external image and ISO uploads (which import into LXD) ran in read-only
-mode (security review of v1.0.0-RC4..c5199ea1, finding 5). Owner decision 2026-11-05: every
-dashboard-user write is closed; OrcaHub sync, provisioning and owner-key enrolment keep running,
-as do migration planning and its discard and the Vault unseal.
+(app/core/config.py), but the check is a per-route dependency, so it holds only where a route
+declares it. Every dashboard-user write is closed; OrcaHub sync, provisioning and owner-key
+enrolment keep running, as do migration planning and its discard and the Vault unseal.
 """
 
 import ast
@@ -43,7 +40,7 @@ OPEN_IN_READ_ONLY: dict[tuple[str, str], str] = {
     ("nodes.py", "invalidate_node_cache"): "cache only",
     ("nodes.py", "invalidate_all_nodes_cache"): "cache only",
     ("system.py", "clear_cache"): "cache only",
-    # Owner decisions.
+    # Open by product policy.
     ("host_health.py", "unseal_vault"): "a sealed Vault must be unsealable in any mode",
     ("migrations.py", "create_plan"): "planning is allowed read-only (owner 2026-11-04); execution is not",
     ("migrations.py", "patch_plan"): "planning, as above",

@@ -2,9 +2,8 @@
 
 FastAPI answers the other spelling with a 307 to the declared one. A browser replays a POST body on
 that redirect, but the frontend's /api/v1 proxy streams the body upstream and undici cannot replay a
-stream, so POST /organizations through the app answered 502 "Backend unavailable" while the backend
-itself was fine (RC5 acceptance F-03, 2026-11-05). Every client calls the bare form, so the bare
-form is the one declared.
+stream, so a POST through the app answers 502 "Backend unavailable" while the backend itself is
+fine. Every client calls the bare form, so the bare form is the one declared.
 """
 
 import ast

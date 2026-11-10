@@ -1,8 +1,8 @@
 """A name an API key supplies reaches LXD as one path segment, in the project the key was granted.
 
-pylxd and the upload routers put a name into the URL as it is. `x?project=tenant-z&` then moved the
-request to a project the key was never granted (LXD reads the first `project`), and `..` was folded
-out of the path by requests. The recording session keeps what the real session puts on the wire,
+pylxd and the upload routers put a name into the URL as it is, so `x?project=tenant-z&` would move
+the request to a project the key was never granted (LXD reads the first `project`), and requests
+folds `..` out of the path. The recording session keeps what the real session puts on the wire,
 and `lxd_reads` parses it the way LXD does: the path decoded once per segment, the first `project`.
 The client is pylxd's own path builder (`_APINode`) over that session, so the URL is the real one.
 """

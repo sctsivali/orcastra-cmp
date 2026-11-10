@@ -1,8 +1,8 @@
 """A location change must say in the audit trail what it replaced.
 
-The location PATCH recorded only the new location in its `cluster.location.update` event, so
-an operator reading the trail could see where a cluster was moved to but not where it had been.
-The region backfill records both for the same action, and the two must read alike.
+The location PATCH records the location before and after in its `cluster.location.update`
+event, so an operator reading the trail sees where a cluster was moved from as well as to. The
+region backfill records both for the same action, and the two must read alike.
 """
 
 import pytest

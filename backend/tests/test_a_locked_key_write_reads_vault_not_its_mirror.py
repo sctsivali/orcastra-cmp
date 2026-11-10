@@ -46,7 +46,7 @@ class _Mirrored:
         return self.vault.vault_read(path)
 
     def vault_kv_put(self, path: str, data: Dict[str, Any]) -> None:
-        # like the real client: a write drops the mirror entry for its path
+        # Like the real client, a write drops the mirror entry for its path.
         self.mirror.pop(path, None)
         self.vault.vault_kv_put(path, data)
 
@@ -104,7 +104,7 @@ async def test_a_rotation_is_judged_on_vault_not_the_mirror(mirrored: Dict[str, 
     assert live(mirrored)["is_revoked"] is True
 
 
-# note: by shape, so a new read under the lock cannot quietly go through the mirror
+# Checked by shape, so a new read under the lock cannot go through the mirror unnoticed.
 
 def _is_lock(item: ast.withitem) -> bool:
     call = item.context_expr

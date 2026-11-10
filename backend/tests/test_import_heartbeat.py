@@ -1,14 +1,10 @@
 """The import heartbeat has to survive a transient database error.
 
 While an import runs, `_heartbeat` bumps `updated_at` so the recovery sweep can tell a live
-import from one whose worker was killed. The loop used to sit inside a single `try`, so the
-first `except Exception` ended the coroutine outright.
-
-The consequence is not a missing log line. With the heartbeat dead, `updated_at` goes stale
-while the import is still running, the sweep judges it abandoned and re-drives it, and the two
-runs race: the winner's `finally: _cleanup_file(...)` pulls the staging file out from under
-the loser, which then writes `status='failed'` over a row the winner already set to `'ready'`.
-One blip on the database connection is enough.
+import from one whose worker was killed. If one database error ended the loop, `updated_at`
+would go stale, the sweep would re-drive the running import, and the two runs would race: the
+winner's `finally: _cleanup_file(...)` pulls the staging file out from under the loser, which
+then writes `status='failed'` over a row the winner already set to `'ready'`.
 
 Both upload routers carry the same loop, so both are asserted here.
 """

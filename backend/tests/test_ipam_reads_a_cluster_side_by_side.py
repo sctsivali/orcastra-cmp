@@ -1,8 +1,7 @@
 """IPAM reads one cluster's projects, networks and instances side by side.
 
-They were read one after the other, so on central-1 the join cost networks (5.3 s at p50 on dev)
-plus instances (1.3 s) plus projects. They now overlap on their own pool, and the join still
-returns exactly what the serial read did, losses named on the NodeRead.
+The three reads overlap on their own pool, so the join costs the slowest read rather than their
+sum, and it returns exactly what a serial read would, with losses named on the NodeRead.
 """
 
 from __future__ import annotations

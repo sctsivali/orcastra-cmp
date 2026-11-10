@@ -1,20 +1,11 @@
 """Raw-proxy paths that reach inside a guest cost the capability for what they reach, on Incus too.
 
-The guard listed LXD's guest-reaching paths only (exec, console, files, backups, exec logs).
-Incus serves more under /1.0/instances/<name>/ (doc/rest-api.yaml at v7.6.0), and two shared
-paths were missed on both engines, so a key with nothing but `read`/`write` and `lxd.proxy` could:
-
-- `nbd`            open an NBD connection to the instance's root and dependent disks
-- `nvram`          read and rewrite its UEFI variables (Incus; LXD calls it `uefi-vars`)
-- `port-forward`   connect to any TCP port inside the instance, past every network rule
-- `debug/memory`   dump the VM's memory, which holds whatever secrets the guest has
-- `debug/repair`   run an internal repair action on it
-- `bitmaps`        create the dirty bitmaps an incremental disk export reads
-- `sftp`           (LXD and Incus) speak SFTP to the guest filesystem
-
-A disk, memory or boot-variable reach is root in the guest by another road, so it costs
-`instance.exec`; SFTP and bitmaps are file disclosure and cost `instance.files`, the same as
-`/files` and `/backups`.
+Besides exec, console, files, backups and exec logs, more paths under /1.0/instances/<name>/ reach
+the guest (Incus doc/rest-api.yaml at v7.6.0). `nbd` (the root and dependent disks), `nvram` (UEFI
+variables; LXD's `uefi-vars`), `port-forward` (any TCP port inside, past every network rule),
+`debug/memory` (the VM's memory and its secrets) and `debug/repair` are root in the guest by another
+road, so they cost `instance.exec`. `bitmaps` (read by an incremental disk export) and `sftp` (both
+engines) are file disclosure and cost `instance.files`, the same as `/files` and `/backups`.
 """
 
 import pytest
@@ -37,7 +28,7 @@ from app.core.api_key_capabilities import guest_access_capability_for
         ("/1.0/instances/web-01/sftp", "instance.files"),
         ("/1.0/%2569nstances/web-01/sftp", "instance.files"),
         # Templates in the metadata area are rendered into the guest as root on create, copy and
-        # start, so writing one is writing a guest file (owner decision 2026-11-08: instance.files).
+        # start, so writing one is writing a guest file.
         ("/1.0/instances/web-01/metadata", "instance.files"),
         ("/1.0/instances/web-01/metadata/templates?path=hostname.tpl", "instance.files"),
     ],

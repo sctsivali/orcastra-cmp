@@ -1,11 +1,11 @@
 """The monitoring history store: one sorted-set member per point, scored by its timestamp.
 
-The previous store kept each scope as one JSON string that every append read and rewrote whole
-(3 to 7 MB for the admin scope) and every chart read parsed on the event loop. These tests pin the
-replacement's rules: a write never duplicates a timestamp, retention is 24 hours and a point cap,
-a window selects by time, an unchanged selection is served without fetching a member, Redis
-trouble falls back to a bounded per-process buffer, and the old string key and Postgres merge in
-without overwriting anything.
+One JSON string per scope would be read and rewritten whole on every append (megabytes for the
+admin scope) and parsed on the event loop on every chart read. These tests pin the store's rules:
+a write never duplicates a timestamp, retention is 24 hours and a point cap, a window selects by
+time, an unchanged selection is served without fetching a member, Redis trouble falls back to a
+bounded per-process buffer, and the previous string key and Postgres merge in without overwriting
+anything.
 """
 
 import asyncio
@@ -143,7 +143,7 @@ def test_an_unchanged_selection_is_served_without_fetching_a_member():
 
 
 def test_a_saturated_store_that_rotates_still_serves_the_new_point(monkeypatch):
-    """The freeze that once versioned the memo on the point count, at the cap, in this store."""
+    """At the point cap the count stays fixed; the memo must still change when points rotate."""
     monkeypatch.setattr(store, "HISTORY_MAX_POINTS", 3)
     cache = _cache(FakeRedis())
     _record(cache, _point(90), _point(60), _point(30))

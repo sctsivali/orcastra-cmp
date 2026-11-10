@@ -1,11 +1,11 @@
 """A cluster that is up but slow must not be reported as a broken dashboard.
 
-The member resource endpoint answered 500 for every transport failure, and main.py replaces a
-500's body with an opaque reference id, so the operator got no reason at all. Worse, the
-obvious fix does not work: `requests.exceptions.ReadTimeout` never reaches this handler.
-connection.py mounts `Retry(read=0)`, urllib3 treats that 0 as a counter rather than as False
-and raises MaxRetryError, and requests maps that to a plain ConnectionError. The fakes below
-raise the real production shapes rather than the ones the type names suggest.
+main.py replaces a 500's body with an opaque reference id, so a transport failure answered as
+500 gives the operator no reason at all. `requests.exceptions.ReadTimeout` never reaches this
+handler on the pooled path: connection.py mounts `Retry(read=0)`, urllib3 treats that 0 as a
+counter rather than as False and raises MaxRetryError, and requests maps that to a plain
+ConnectionError. The fakes below raise the real production shapes rather than the ones the
+type names suggest.
 
 Hermetic in the same way as test_unreachable_cluster_is_503.py: LXDService.__new__ skips
 __init__, so there is no Vault, no pylxd and no network.
@@ -27,7 +27,7 @@ HOST = "central2-qa"
 
 
 def _pooled_read_timeout() -> Exception:
-    """What a read timeout actually looks like after Retry(read=0) and requests' mapping."""
+    """A read timeout as it arrives after Retry(read=0) and requests' mapping."""
     return requests_exc.ConnectionError(
         MaxRetryError(
             None,
@@ -134,7 +134,7 @@ def test_a_bare_read_timeout_is_also_a_504():
 
 
 def test_a_tripped_breaker_still_answers_503():
-    """require_client must keep working now that get_client runs off the loop."""
+    """require_client still answers 503 with get_client running off the loop."""
     r = _read(None)
     assert r.status_code == 503, (
         f"a None client is the steady state for a tripped breaker, got {r.status_code}: "
@@ -165,8 +165,7 @@ def test_a_404_from_target_is_still_a_404():
 def test_no_transport_failure_reaches_the_blanket_handler(exc, expected):
     """The `except Exception` below the mapper must never be what answers a transport error.
 
-    500 is the status this whole file exists to remove, and main.py strips a 500's body, so a
-    regression here is silent from the outside.
+    main.py strips a 500's body, so a 500 here would be silent from the outside.
     """
     r = _read(_Client(exc))
     assert r.status_code == expected

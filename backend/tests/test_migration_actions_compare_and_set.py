@@ -1,9 +1,8 @@
 """Two operator actions on one revision: exactly one is applied.
 
-Found live (N6, 2026-11-04): an admin Rollback and a partner Finalize sent together on the
-same revision were both accepted. The router loads the job before the action, so the locked
-re-read returned that stale object from the session's identity map, both revision checks
-passed, and the update had no revision predicate to stop the second.
+An admin Rollback and a partner Finalize sent together on the same revision must not both land.
+The router loads the job before the action, so the locked re-read must bypass the session's
+identity map, and the update must carry a revision predicate.
 """
 
 from __future__ import annotations

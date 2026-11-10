@@ -1,9 +1,9 @@
 """A rule that names one instance goes when that instance goes, by every path that removes it.
 
-Nothing removed `(cluster, project, "web-01")` when web-01 was deleted, renamed or moved, so the
-next instance created as web-01 in that project, by anyone, was visible and operable by the old
-tenant at once. Only an exact match is removed, only the rules captured before the write, and only
-once LXD reports success.
+If `(cluster, project, "web-01")` outlived a delete, rename or move of web-01, the next instance
+created as web-01 in that project, by anyone, would be visible and operable by the rule's tenant at
+once. Only an exact match is removed, only the rules captured before the write, and only once LXD
+reports success.
 """
 
 from __future__ import annotations

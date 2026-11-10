@@ -1,13 +1,10 @@
-"""The 16 KB manifest cap was documented, promised, and enforced only in the browser.
+"""The 16 KB manifest limit is enforced by the API as well as the dialog.
 
-`MANIFEST_MAX_BYTES` had exactly one reference in the backend: its own definition. The dialog
-refused an oversized manifest and the API accepted it, so publishing the same document through the
-two supported paths gave two different answers, and the public documentation stated the browser's
-answer as a server rule.
+Publishing the same manifest through either supported path gives the same answer, and the public
+documentation states the limit as a server rule.
 
-note: this is a contract bound, not a memory bound, and the code says so. Nothing in the middleware
-stack limits a request body, so the bytes have already been read by the time this refuses. The
-comment that used to sit above the constant claimed the opposite.
+This is a contract bound. Nothing in the middleware stack limits a request body, so the bytes have
+already been read by the time the guard refuses them.
 """
 
 import asyncio
@@ -55,11 +52,10 @@ def test_one_byte_over_is_refused() -> None:
 
 
 def test_both_manifest_routes_carry_the_guard() -> None:
-    """A cap on one of the two ways to publish is not a cap.
+    """Both publish routes depend on the size guard.
 
     `POST /extensions` and `POST /extensions/{slug}/versions` both take a whole manifest. Checking
-    the dependency in isolation cannot see whether either route actually depends on it, and a route
-    added later would inherit nothing.
+    the dependency in isolation cannot show whether either route depends on it.
     """
     import inspect
 

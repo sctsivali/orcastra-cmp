@@ -1,12 +1,12 @@
 """Every action this feature emits is registered, and the destructive ones are alertable.
 
-`log_activity` falls through to `EventCategory.LXD_INFRA` and `MEDIUM` for an action it does not
-know, silently. So an unregistered action is not an error: it is a record filed under a category
-nobody chose, at a severity nobody set, which is worse than a missing record because it looks fine.
+`log_activity` files an action it does not know under `EventCategory.LXD_INFRA` at `MEDIUM` with no
+warning, so an unregistered action produces a record that looks fine, under a category and severity
+no one chose.
 
 The actor matters as much as the action. A background task has no RequestContext, and the fallback
-writes an all-null actor with no warning. For the product's only unattended write path that is
-total loss of attribution.
+writes an all-null actor with no warning, which loses all attribution on the product's only
+unattended write path.
 """
 
 import ast
@@ -31,7 +31,7 @@ DESTRUCTIVE = {
 
 
 def _emitted_actions():
-    """Every schedule action literal this feature actually passes to an audit call."""
+    """Every schedule action literal that appears in this feature's sources."""
     found = set()
     for path in SOURCES:
         tree = ast.parse(path.read_text())
@@ -59,8 +59,7 @@ def test_the_destructive_actions_are_high_severity():
 
 
 def test_no_registered_schedule_action_is_emitted_by_nothing():
-    """The other direction. A registered action with no call site is a control wired to nothing,
-    which is a defect this codebase has shipped before."""
+    """The reverse check: a registered action that nothing emits is a control wired to nothing."""
     registered = {a for a in ACTION_CATEGORIES if a.startswith("instance.snapshot.schedule.")}
     emitted = _emitted_actions()
     orphans = sorted(registered - emitted)
@@ -68,7 +67,7 @@ def test_no_registered_schedule_action_is_emitted_by_nothing():
 
 
 def test_the_actor_is_the_operator_who_authorized_the_schedule():
-    """Not a synthetic system identity, which looks correct and is therefore worse than blank."""
+    """The schedule's owner, never a synthetic system identity that hides who authorized it."""
     from app.services.snapshots.schedule_runner import adopt_schedule_context
 
     schedule = FakeSchedule(owner_email="partner@example.test", id=7)

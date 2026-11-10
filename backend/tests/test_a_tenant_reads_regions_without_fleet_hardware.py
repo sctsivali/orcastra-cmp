@@ -1,10 +1,9 @@
 """A Tenant reads Regions as places and its own instances, never as fleet hardware.
 
 Hardware inventory is Partner and above: GET /nodes requires cluster:read, and the
-availability projection strips the hypervisor type from a Tenant's rows. GET /regions
-answered every role with each cluster's hardware threads, memory, storage, GPU models and
-hypervisor type, plus fleet totals, so a Tenant read through Regions exactly what
-Technologies keeps from it.
+availability projection strips the hypervisor type from a Tenant's rows. GET /regions follows
+the same rule: a Tenant's answer carries no hardware threads, memory, storage, GPU models,
+hypervisor type or fleet totals.
 
 The body is cached unprojected, because the prewarm writes it with no caller. The projection
 therefore runs on every answer, cached or fresh, and builds new models rather than editing the
@@ -138,7 +137,7 @@ def test_partner_and_admin_read_the_body_unchanged(monkeypatch):
 
 
 def test_a_caller_without_a_mapped_role_is_treated_as_a_tenant(monkeypatch):
-    # note: the session layer refuses such a caller first; this is the second line.
+    # The session layer refuses such a caller first; this is the second line of defence.
     _serve(monkeypatch, _overview())
     seen = asyncio.run(regions.get_regions_overview(lxd_service=None, fresh=False, user=NO_ROLE))
     assert seen.total_cpu is None
@@ -286,8 +285,8 @@ def test_a_clean_read_is_counted_and_cached(monkeypatch):
     assert len(cached) == 1
 
 
-# --- Hardware the build could not read is null for every role, never a profile of zeros. An
-# offline cluster used to show "0 hardware threads, 0 B" to an operator, which states a size.
+# --- Hardware the build could not read is null for every role, never a profile of zeros:
+# "0 hardware threads, 0 B" on an offline cluster would state a size.
 
 
 def test_an_offline_cluster_has_no_hardware_rather_than_zeros(monkeypatch):

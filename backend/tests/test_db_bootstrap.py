@@ -1,7 +1,7 @@
 """Unit tests for the legacy-database reconciliation in app/core/db_bootstrap.py.
 
-`_plan` decides whether a database gets stamped, left alone, or refused, and getting
-that wrong either corrupts a partner's data or bricks their upgrade. It is a pure
+`_plan` decides whether a database gets stamped, left alone, or refused; a wrong answer
+either corrupts an existing installation's data or blocks its upgrade. It is a pure
 function over a set of table names, so it is tested directly with no database.
 """
 
@@ -61,7 +61,8 @@ class PlanTests(unittest.TestCase):
         self.assertIn("iso_upload_sessions", found)
 
     def test_post_rc2_evidence_outranks_an_incomplete_core_set(self) -> None:
-        # Refusing as "unknown" is the safer message here: the schema is clearly past RC2.
+        # "unknown" is the safer refusal: a post-RC2 table means the schema is past
+        # the RC2 baseline.
         kind, found = _plan({"organizations", "rebuild_jobs"}, stamped=False)
         self.assertEqual(kind, "unknown")
         self.assertEqual(found, ["rebuild_jobs"])

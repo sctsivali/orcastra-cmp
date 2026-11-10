@@ -1,9 +1,8 @@
 """The warnings feed's connectivity probe is held to the cluster's certificate pin.
 
-It sent our client certificate with a bare requests.get(verify=False), the one connection to a
-cluster that skipped the fingerprint every other connection is held to, so whatever answered the
-endpoint received it. A pinned cluster is now probed through FingerprintHTTPAdapter; a cluster
-with no pin yet is probed as before, since a probe must not be what mints one.
+A bare requests.get(verify=False) would present the client certificate to whatever answers the
+endpoint. A pinned cluster is probed through FingerprintHTTPAdapter, like every other connection
+to it; a cluster with no pin yet is probed unpinned, since a probe must not be what mints one.
 """
 
 from __future__ import annotations

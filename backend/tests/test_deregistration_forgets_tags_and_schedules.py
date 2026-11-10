@@ -1,10 +1,7 @@
 """Deleting a cluster registration also forgets the tags and snapshot schedules of its instances.
 
-Deregistration removed the Vault entry, the organization bindings, the dashboard's trust and the
-key grants, but left every tag assignment and snapshot schedule naming the cluster. Found when the
-migration lab was torn down on 2026-11-04: rows from a lab deleted on 2026-10-29 were still there,
-and the scheduler kept trying a schedule whose cluster was gone. A cluster registered again under
-the same id would have shown the old tags on new instances with the same names.
+Left behind, the scheduler keeps trying a schedule whose cluster is gone, and a cluster registered
+again under the same id shows the old tags on new instances with the same names.
 """
 
 from __future__ import annotations
@@ -84,8 +81,8 @@ def test_the_delete_route_forgets_them_with_the_binding() -> None:
 
 
 def test_the_delete_route_leaves_a_registration_made_meanwhile_alone() -> None:
-    # Security review 2026-11-05: someone may register the same id between the Vault deletes and the
-    # binding step; that new registration's binding, tags and schedules are not this delete's.
+    # Someone may register the same id between the Vault deletes and the binding step; that new
+    # registration's binding, tags and schedules are not this delete's.
     import inspect
 
     from app.routers import cluster_registration

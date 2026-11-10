@@ -1,9 +1,8 @@
-"""A Partner refused a project create is told which organizations count, not that they are no member.
+"""A Partner refused a project create is told which organizations count.
 
-Found in the RC5 acceptance (2026-11-05): qa-partner, a member of the organization that holds
-console-lab, was told "Your account is not a member of an organization bound to cluster
-'console-lab'". It is a member. The rule (org_to_hold_project_grant) counts only an organization
-the user created or holds as Partner, so the message said the opposite of the account's state.
+The rule (org_to_hold_project_grant) counts only an organization the user created or holds as
+Partner, so a plain member of the organization bound to the cluster is refused too. Telling that
+account it is "not a member" would contradict its state.
 """
 
 import contextvars

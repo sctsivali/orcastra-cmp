@@ -1,8 +1,8 @@
 """Read-only mode keeps planning available but writes nothing, the certificate store included.
 
-Planning recorded a missing certificate pin (trust on first use) or a renewal as a side effect,
-including in read-only mode, so a partner could choose the moment a cluster's identity was first
-trusted while the deployment was frozen. PATCH also skipped the Migration Center switch.
+Normal planning records a missing certificate pin (trust on first use) or a renewal as a side
+effect. In read-only mode that would let a partner choose when a cluster's identity is first
+trusted while the deployment is frozen. PATCH honours the Migration Center switch as well.
 """
 
 from __future__ import annotations

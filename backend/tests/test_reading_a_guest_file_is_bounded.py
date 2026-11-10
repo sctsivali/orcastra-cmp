@@ -1,14 +1,9 @@
-"""`instance.files` was a capability with nothing behind it, and the obvious implementation leaks.
+"""Guest file reads and writes behind `instance.files` are bounded.
 
-The vocabulary has described `instance.files` as "Read and write files inside an instance" since
-capabilities existed, the create dialog marks it elevated and never-inherited, and until now
-nothing served it. `guest_exec` even refuses an oversized stdin with "use instance.files instead",
-pointing callers at a door that was not there.
-
-The reason it needs its own module rather than a call to pylxd: `FilesManager.get` is
-`return response.content`, which buffers the whole body with no bound. `get_file` on /dev/zero, a
-sparse image or a multi-gigabyte log would grow a worker's memory until it died. That is the same
-defect `_BoundedStream` was written for on the exec path, and these tests pin the same answer.
+pylxd's `FilesManager.get` is `return response.content`, which buffers the whole body with no
+bound, so `get_file` on /dev/zero, a sparse image or a multi-gigabyte log would grow a worker's
+memory until it died. `guest_files` streams the body under a cap instead, as `_BoundedStream` does
+on the exec path.
 """
 
 import base64
@@ -64,7 +59,7 @@ def _read(body: bytes, headers: Optional[Dict[str, str]] = None, path: str = "/e
     return inst, get_file(inst, {"path": path})
 
 
-# ── the bound, which is the reason this module exists ──────────────────────────────────────────
+# ── the bound ──────────────────────────────────────────────────────────────────────────────────
 
 def test_a_file_larger_than_the_cap_is_truncated_rather_than_buffered() -> None:
     inst, result = _read(b"A" * (FILE_READ_LIMIT + 4096))
@@ -74,8 +69,8 @@ def test_a_file_larger_than_the_cap_is_truncated_rather_than_buffered() -> None:
 
 
 def test_the_cap_applies_as_chunks_arrive_not_to_the_finished_body() -> None:
-    """The whole point. Truncating a fully-read body bounds the RESPONSE while the worker has
-    already held the entire file, plus a copy, in memory."""
+    """Truncating a fully read body bounds the response while the worker has already held the
+    whole file, plus a copy, in memory."""
     inst = _Instance(_Response(b"B" * (FILE_READ_LIMIT * 3)))
     get_file(inst, {"path": "/dev/zero"})
     response = inst.api.files._response
@@ -128,8 +123,8 @@ def test_the_owner_and_mode_come_back_from_the_headers() -> None:
 
 
 def test_a_directory_lists_its_entries_rather_than_failing() -> None:
-    """Asking what is in a directory is how you find the file you wanted. Refusing it would push
-    callers into exec_instance with `ls`, which costs a strictly larger capability."""
+    """Listing a directory is how a caller finds a file. Refusing it would push callers to `ls`
+    through exec_instance, which costs a strictly larger capability."""
     body = json.dumps({"metadata": ["passwd", "shadow"]}).encode("utf-8")
     _, result = _read(body, {"X-LXD-type": "directory"}, path="/etc")
     assert result["type"] == "directory"
@@ -221,8 +216,7 @@ def test_the_cap_is_measured_after_decoding_not_on_the_encoded_string() -> None:
         ("0644", "0644"),
         ("644", "0644"),
         (0o755, "0755"),
-        # note: accepted deliberately. int(s, 8) takes Python's own "0o" prefix, and a caller who
-        # writes it means exactly this mode, so refusing it would be pedantry rather than safety.
+        # int(s, 8) accepts Python's own "0o" prefix, and a caller who writes it means this mode.
         ("0o644", "0644"),
     ],
 )
@@ -251,7 +245,7 @@ def test_ownership_is_sent_only_when_asked_for() -> None:
     assert headers["X-LXD-uid"] == "1000" and headers["X-LXD-gid"] == "1000"
 
 
-# ── the contract this joins ────────────────────────────────────────────────────────────────────
+# ── the capability contract ────────────────────────────────────────────────────────────────────
 
 def test_both_file_operations_cost_the_files_capability_and_nothing_less() -> None:
     from app.services.lxd.proxy_operations import (
@@ -261,14 +255,14 @@ def test_both_file_operations_cost_the_files_capability_and_nothing_less() -> No
 
     assert GUEST_ACCESS_OPERATIONS["get_file"] == "instance.files"
     assert GUEST_ACCESS_OPERATIONS["put_file"] == "instance.files"
-    # Separate from instance.exec on purpose: holding one does not imply the other.
+    # A separate capability from instance.exec: holding one does not imply the other.
     assert GUEST_ACCESS_OPERATIONS["exec_instance"] == "instance.exec"
     assert PROXY_OPERATION_LEVELS["get_file"] == "read"
     assert PROXY_OPERATION_LEVELS["put_file"] == "write"
 
 
 def test_the_capability_now_has_something_behind_it() -> None:
-    """It was in the vocabulary, marked elevated, tickable, and served by no endpoint."""
+    """`instance.files` is in the vocabulary and served by at least one operation."""
     from app.core.api_key_capabilities import CAPABILITIES, GUEST_ACCESS_CAPABILITIES
     from app.services.lxd.proxy_operations import GUEST_ACCESS_OPERATIONS
 

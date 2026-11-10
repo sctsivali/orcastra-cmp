@@ -1,11 +1,9 @@
 """A key write reads the key under the key's lock, so it never writes back over a revoke.
 
 Revoke, the capability and permission edits and a secret rotation each read the key's stored
-record, change it and write it back. Revoke and the capability edit used to read it before taking
-the key's ownership lock, and the permission edit and rotation took no lock at all, so a revoke
-that landed between one of those reads and its write was written over and the key worked again.
-Each now reads the record inside the lock, where a write that held the lock first is already
-in Vault.
+record, change it and write it back. Each reads the record inside the key's ownership lock, where
+a write that held the lock first is already in Vault. A read taken before the lock would let a
+revoke that landed between the read and the write be written over, and the key would work again.
 
 The seam below lands another write at the moment a handler is granted the lock, which is the
 latest point a read made before the lock would have missed.

@@ -1,10 +1,9 @@
 """Every field the wire models declare is set by the presenter, for every tier.
 
-The images Flags facet shipped over two fields the backend never sent, because a response
-model's default hides a field nobody set. `present.task_row` and `present.log_row` build the
-dict the models validate, so the key set is asserted equal to the declared field set, and the
-dict is validated for real. A column the models gain and the presenter does not know fails
-here, not in the panel.
+A response model's default hides a field the presenter never set. `present.task_row` and
+`present.log_row` build the dict the models validate, so the key set is asserted equal to
+the declared field set and the dict is validated for real. A column the models gain and
+the presenter does not know fails here instead of in the panel.
 """
 
 import ast

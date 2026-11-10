@@ -1,9 +1,9 @@
 """Whose branding an account sees when it belongs to several organizations (services/branding/subject.py).
 
-The old rule took the earliest membership, compared case-sensitively, so a partner who had once been
-added to a customer's organization saw that customer's look, and an address Authentik spelled with
-capitals matched nothing at all. An Administrator without the partner role sees the deployment
-default rather than whichever organization it joined first.
+An organization the account runs wins over an earlier membership, so a partner once added to a
+customer's organization does not see that customer's look, and addresses compare case-insensitively
+because Authentik may spell one with capitals. An Administrator without the partner role sees the
+deployment default rather than whichever organization it joined first.
 """
 
 from __future__ import annotations

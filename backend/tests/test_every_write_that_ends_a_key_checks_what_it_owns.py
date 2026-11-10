@@ -2,9 +2,9 @@
 
 A key that owns an OrcaHub organization is the only key that may sync it, so ending that key
 freezes the organization. The routes an operator uses refuse it (services/integration_key_ownership.py
-and test_a_key_that_owns_an_organization_is_not_revoked_or_deleted). This finds every other place
-by shape, so a new way to end a key cannot ship without a reviewed line here saying why it is safe
-or what it does about the organizations.
+and test_a_key_that_owns_an_organization_is_not_revoked_or_deleted). This scan finds every other
+place by shape, so a new way to end a key needs a line here saying why it is safe or what it does
+about the organizations.
 
 The shapes: a stored key marked `["is_revoked"] = True` or `["is_active"] = False`, and a call to
 one of the functions that remove or revoke a key's documents.
@@ -98,7 +98,7 @@ def test_the_checked_ones_refuse_before_they_write() -> None:
 
 
 def test_withdrawing_a_sync_capability_is_checked_too() -> None:
-    """Not a key's end by shape, but the same freeze: the owner can no longer sync."""
+    """Withdrawing a sync capability freezes the organization the same way ending the key does."""
     tree = ast.parse((APP / "routers" / "integrations.py").read_text())
     (fn,) = [n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "update_api_key_capabilities"]
     assert REFUSAL in _calls(fn)

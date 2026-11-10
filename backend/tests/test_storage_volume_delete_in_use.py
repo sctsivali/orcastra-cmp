@@ -1,9 +1,7 @@
 """A volume that is still attached must answer 409, and must not reach the daemon.
 
-The handler caught a bare Exception and answered 500 for every failure, so "this volume is
-attached to web-01" arrived as Internal Server Error. That is the operator's own mistake
-described to them as a server fault, and the action it calls for, detaching first, was never
-stated, so the operator retries instead.
+A 500 would describe the operator's own mistake as a server fault and hide the action it
+calls for, detaching first. The 409 names the instances that hold the volume.
 
 Unlike an image, there is no force here. LXD cannot remove an attached volume, so offering an
 override would only move the same refusal one step later.
@@ -100,7 +98,7 @@ def _service(volume) -> LXDService:
 
 @pytest.fixture(autouse=True)
 def _no_webhook(monkeypatch):
-    """The OrcaHub webhook needs a session factory. It is not what this file is about."""
+    """Stub the OrcaHub webhook, event emitter and configuration lock (they need a DB)."""
     from app.routers import storage_volumes
     from app.services.webhooks import emitter
 
@@ -159,8 +157,7 @@ def test_an_attached_volume_is_409_not_500():
 
 
 def test_the_409_names_the_instance_not_the_api_path():
-    """used_by holds API paths. Showing an operator /1.0/instances/web-01?project=acme is
-    showing them the wire; they need the name they know the instance by."""
+    """used_by holds API paths; the operator needs the name they know the instance by."""
     volume = _FakeVolume(
         used_by=[
             "/1.0/instances/web-01?project=acme",
@@ -174,7 +171,7 @@ def test_the_409_names_the_instance_not_the_api_path():
 
 def test_a_daemon_refusal_after_the_precheck_is_still_409():
     """The pre-check reads used_by from a list the daemon built a moment earlier, so the
-    daemon still owns the race. Losing it must not reintroduce the 500."""
+    daemon still owns the race. Losing it still answers 409."""
 
     def _boom():
         raise Exception("Failed to delete storage volume: volume is in use")

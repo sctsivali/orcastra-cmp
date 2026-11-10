@@ -1,9 +1,9 @@
 """The Vault LIST gets a wider budget than a point read, and every success writes the memo.
 
-A KV-v2 metadata LIST walks the storage backend; on the customer's VM the per-cluster reads
-(GET, 2 s connect, 3 s read) kept answering while the LIST did not. Point reads stay at (2, 3):
-they run on the request path and a slow one is the timeout the caller wants. The LIST is
-served off the event loop after this cut, so its cost is a worker thread, not the API.
+A KV-v2 metadata LIST walks the storage backend, so it can time out where per-cluster point
+reads (GET, 2 s connect, 3 s read) still answer. Point reads stay at (2, 3): they run on the
+request path and a slow one is the timeout the caller wants. The LIST is served off the event
+loop, so a slow one holds a worker thread and leaves the API responsive.
 """
 
 import json

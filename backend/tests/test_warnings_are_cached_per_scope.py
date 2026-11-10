@@ -1,8 +1,8 @@
-"""Both warning feeds are cached per scope, dropped by a dismissal, and never pin "no warnings"
-that nobody answered.
+"""Both warning feeds are cached per scope, dropped by a dismissal, and never cache "no warnings"
+when no cluster answered.
 
-They used to read every cluster on every call; the dashboard polls both every 60 s, and a miss
-cost 0.8 s (/warnings) to 10 s (/warnings/system/all) on dev.
+The dashboard polls both every 60 s, and an uncached read of every cluster can take seconds
+(/warnings/system/all most of all).
 """
 
 import asyncio

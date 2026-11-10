@@ -1,9 +1,8 @@
 """Adding a member or binding a cluster to an organization that does not exist answers 404.
 
-An Admin runs every organization (user_runs_org answers True without reading the row), so nothing
-stopped a write into one that had been deleted: the insert hit the organization foreign key and the
-caller got a bare 500. Found on the RC5 acceptance run, when the migration lab setup reused the id
-of the lab organization the previous round had torn down (2026-11-05, org 493).
+An Admin runs every organization (user_runs_org answers True without reading the row), so without
+an existence check a write into a deleted one would hit the organization foreign key and answer a
+bare 500.
 """
 
 from __future__ import annotations

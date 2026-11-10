@@ -1,15 +1,11 @@
-"""No asset identifier reaches a client, and no future field can quietly add one.
+"""No asset identifier reaches a client, and no new field can add one unnoticed.
 
-The Technologies page has no role gate and is reachable by Tenant, and the hardware profile
-rides GET /nodes, so this payload is the most broadly visible in the product. The sibling
-product solved the same problem in React, with a `hideSerials` prop on the component: the
-serials, the system UUID and the MAC addresses all still crossed the wire and anyone with
-devtools could read them, and the MAC was not even covered by the prop. Stripping happens in
-the backend or it does not happen.
+The Technologies page has no role gate and the hardware profile rides GET /nodes, so this payload
+reaches every role, Tenant included. Stripping happens in the backend: a frontend prop that hides
+serials still sends them over the wire.
 
-Two layers are asserted here. The value layer catches a stripper that stopped working. The
-schema layer catches a model that gained a field, which is the failure that would otherwise
-ship silently, because no fixture exists yet for a field nobody added on purpose.
+Two layers are asserted. The value layer catches a stripper that stopped working. The schema layer
+catches a model that gained a field, before any fixture exists for it.
 """
 
 import json
@@ -75,10 +71,9 @@ def test_the_facts_worth_showing_did_survive():
 
 
 def test_no_hardware_model_declares_an_identifier_field():
-    """The ratchet.
+    """The ratchet: a serialized model that declares an identifier field fails here.
 
-    This fails the day someone adds `serial: Optional[str]` to StorageDeviceInfo, which is
-    before any fixture exists to catch it and therefore before the value assertion above can.
+    This catches the field before any fixture exists for it, so before the value assertion can.
     """
     offenders = []
     for model in HARDWARE_MODELS:
@@ -89,11 +84,7 @@ def test_no_hardware_model_declares_an_identifier_field():
 
 
 def test_every_hardware_model_forbids_extra_keys():
-    """Without this the allowlist is a suggestion.
-
-    extra="forbid" is what makes a new LXD identifier unconstructible rather than merely
-    unmentioned, so a normalizer that grows a passthrough cannot leak by accident.
-    """
+    """extra="forbid" makes a new LXD identifier unconstructible; a passthrough cannot leak it."""
     permissive = [m.__name__ for m in HARDWARE_MODELS if m.model_config.get("extra") != "forbid"]
     assert permissive == [], f"models accepting unknown keys: {permissive}"
 
@@ -113,10 +104,9 @@ def test_a_partition_table_is_reduced_to_a_count():
 
 
 def test_a_gpu_uuid_is_readable_internally_and_absent_from_the_response():
-    """A GPU UUID is a per-device serial, and this model rides the same GET /nodes body.
+    """A GPU UUID is a per-device serial on the same GET /nodes body.
 
-    It stays on the object because gpu_model.py matches cards by it. It leaves the model on
-    the way out, because a Tenant has no use for it.
+    It stays on the object because gpu_model.py matches cards by it, and is never serialized.
     """
     nvidia = GPUNvidiaInfo(uuid="GPU-4b2a-LEAK", model="A100", cuda_version="12.2")
 
@@ -148,7 +138,7 @@ def test_the_environment_block_drops_the_cluster_certificate():
 
 
 def test_the_environment_allowlist_names_no_identifier():
-    """Allowlist, so the failure mode is omission rather than disclosure. Keep it that way."""
+    """An allowlist fails by omission rather than disclosure."""
     offenders = sorted(PUBLIC_ENVIRONMENT_KEYS & IDENTIFIER_FIELDS)
     assert offenders == [], f"identifier keys allowed onto the wire: {offenders}"
 

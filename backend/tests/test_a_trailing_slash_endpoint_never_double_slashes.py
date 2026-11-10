@@ -1,19 +1,11 @@
 """An endpoint stored with a trailing slash must still reach the hypervisor.
 
-A cluster registered as "https://host:8443/" was probed at "https://host:8443//1.0/instances".
-LXD's router does not collapse the double slash: it answers 404, which is neither the 200 that
-means trusted nor the 403 that means "add the certificate", so probe_connection fell through to
-its catch-all and reported `Unexpected response: HTTP 404`. The operator saw "Not Authenticated"
-on a cluster whose certificate was correctly trusted, while the clusters list showed the same
-cluster Online, because that path connects through pylxd, which rebuilds the URL from its parts.
-
-Measured against the live cluster that reported it:
-    200  https://host/1.0
-    403  https://host/1.0/instances
-    404  https://host//1.0/instances
-
-These pin the join, not the transport: every URL built onto a stored endpoint is asserted to
-carry exactly one slash before `1.0`.
+A raw join onto "https://host:8443/" probes "https://host:8443//1.0/instances". LXD's router
+does not collapse the double slash: it answers 404, which is neither the 200 that means trusted
+nor the 403 that means "add the certificate", so probe_connection would report
+`Unexpected response: HTTP 404` and a trusted cluster would read "Not Authenticated" while the
+clusters list, which goes through pylxd, shows it Online. These pin the join: every URL built
+onto a stored endpoint is asserted to carry exactly one slash before `1.0`.
 """
 
 import unittest
@@ -88,7 +80,7 @@ class ProbeUrlTests(unittest.TestCase):
             self.assertEqual(url, "https://host:8443/1.0/instances", f"from {spelling!r}")
 
     def test_a_trailing_slash_reads_as_pending_trust_not_a_protocol_error(self):
-        """403 is the honest answer for an untrusted certificate, and it must survive."""
+        """A 403 means an untrusted certificate; a trailing slash must not make it a 404."""
         manager = LXDCertificateManager.__new__(LXDCertificateManager)
         manager.vault = _Vault("https://host:8443/")
         manager.clusters_path = "secret/data/clusters"

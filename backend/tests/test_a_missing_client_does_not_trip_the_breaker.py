@@ -1,21 +1,14 @@
 """A cluster this worker has never connected to must not be marked failed.
 
-`connection.py`'s `_auto_reconnect` already refuses to record a failure when it has no stored
-connection info, and its comment says exactly why: an empty in-process cache is the normal
-state for a cluster registered after the worker booted, and tripping the breaker there "seals
-the only doors that could reopen it", because the Vault repair path is gated by the same
-breaker.
+`connection.py`'s `_auto_reconnect` refuses to record a failure when it has no stored
+connection info: an empty in-process cache is the normal state for a cluster registered after
+the worker booted, and tripping the breaker there would also block the Vault repair path,
+which the same breaker gates.
 
-Two callers defeated that one level up. Both ran `if health.get_kind(node) is None:
-health.record_failure(...)` when `get_client` returned None. The guard reads as "preserve a
-more specific diagnosis", but every path that actually reached the peer records its own kind
-before returning None, so the guard fired only in the cases that must never trip: a cluster
-this worker has not connected to yet, and one the caller's organization scope excluded. An
-authorization decision and a cold worker both became a sixty second outage, across every
-reader, with no log line anywhere.
-
-Found through a browser suite that registered a cluster, proved it answering, and then watched
-the same cluster read as unreachable seconds later while nothing in the log said why.
+A caller must not undo that one level up by recording a failure whenever `get_client` returns
+None. Every path that reached the peer records its own kind before returning None, so such a
+call fires only for a cluster this worker has not connected to yet or one the caller's
+organization scope excluded, and turns either into a sixty second outage for every reader.
 """
 
 import ast
@@ -24,10 +17,10 @@ from pathlib import Path
 
 APP = Path(__file__).resolve().parents[1] / "app"
 
-# Where a breaker trip is legitimate: the paths that actually tried to reach the peer.
+# Where a breaker trip is legitimate: the paths that tried to reach the peer.
 ALLOWED = {
     "app/services/lxd/connection.py",
-    "app/services/lxd/lxd_service.py",  # the auth-failure branch, checked by name below
+    "app/services/lxd/lxd_service.py",  # the auth-failure branch
 }
 
 
@@ -41,7 +34,7 @@ def _record_failure_lines(tree: ast.AST):
 
 
 def test_no_caller_trips_the_breaker_merely_because_the_client_was_absent():
-    """The literal that marked a cold worker as an outage must not come back."""
+    """No caller records "Client not connected": that marks a cold worker as an outage."""
     offenders = []
     for path in sorted(APP.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

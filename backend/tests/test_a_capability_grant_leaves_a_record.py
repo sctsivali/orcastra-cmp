@@ -2,9 +2,8 @@
 
 A Partner may issue org.sync and tenant.provision. Their effect is capped where it lands (an
 integration grants a role, never demotes one), and the grant itself has to be answerable: who
-handed an unattended caller which power, and when. Creation was already recorded. Editing a key's
-capability set, which can widen a read key into one that writes organizations, left nothing but an
-application log line.
+handed an unattended caller which power, and when. That covers creation and every edit of a key's
+capability set, which can widen a read key into one that writes organizations.
 
 The record is built from capability names only, so a secret, its hash or app_url in the key's
 metadata never reaches it.
@@ -62,7 +61,7 @@ def test_narrowing_a_legacy_key_withdraws_what_it_could_use() -> None:
 
 
 def test_guest_access_on_a_legacy_key_is_a_grant() -> None:
-    """A legacy key never inherited instance.exec, so adding it is a grant, not a no-op."""
+    """A legacy key never inherited instance.exec, so adding it counts as a grant."""
     fields = capability_audit_fields({"capabilities": ["instance.exec"]}, {})
     assert fields["capabilities_granted"] == ["instance.exec"]
     assert fields["elevated_capabilities_granted"] == ["instance.exec"]
@@ -172,8 +171,8 @@ async def test_widening_a_key_to_org_sync_is_recorded(surface: Dict[str, Any]) -
 
 async def test_narrowing_a_key_is_recorded_too(surface: Dict[str, Any]) -> None:
     surface["use"](_key(capabilities=["inventory.read", "tenant.provision"]))
-    # note: a database, because withdrawing tenant.provision first reads which organizations the key
-    # owns, to ask before provisioning for them stops. It owns none.
+    # A database, because withdrawing tenant.provision first reads which organizations the key owns,
+    # to ask before provisioning for them stops. It owns none.
     await integrations.update_api_key_capabilities(
         "oak_edit",
         integrations.APIKeyCapabilitiesRequest(capabilities=["inventory.read"]),
@@ -195,8 +194,8 @@ async def test_a_failed_audit_write_does_not_fail_the_edit(
 
     monkeypatch.setattr(integrations, "activity_logger", _Exploding())
     vault = surface["use"](_key(capabilities=["inventory.read"]))
-    # note: a database, because the edit withdraws inventory.read and so first reads which
-    # organizations the key owns. It owns none.
+    # A database, because the edit withdraws inventory.read and so first reads which organizations
+    # the key owns. It owns none.
     info = await integrations.update_api_key_capabilities(
         "oak_edit",
         integrations.APIKeyCapabilitiesRequest(capabilities=["org.sync"]),

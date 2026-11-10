@@ -1,12 +1,11 @@
 """A usage percentage is None when nothing reported the total it is a share of.
 
-GET /monitoring/dashboard answered 0.0 for memory and storage whenever the total was zero, which
-is what it is with every cluster offline. The Monitoring gauges then drew "0.0%" over
-"0 B / 0 B", the reading of an idle fleet, for a fleet nobody could see. The same 0/0 sat on
-every offline cluster row and on an online cluster with no storage pool.
+With every cluster offline the totals are zero, and a 0.0 share would draw "0.0%" over
+"0 B / 0 B", the reading of an idle fleet, for a fleet that cannot be seen. The same applies to
+each offline cluster row and to an online cluster with no storage pool.
 
-The dashboard also carried no count of the clusters behind its totals, so the page could not
-say that a figure came from four of six clusters.
+The dashboard also counts the clusters behind its totals, so the page can say that a figure
+came from four of six clusters.
 """
 
 from datetime import datetime, timezone

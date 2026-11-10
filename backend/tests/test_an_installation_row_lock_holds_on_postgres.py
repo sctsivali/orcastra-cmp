@@ -105,7 +105,7 @@ async def test_a_second_request_waits_for_the_first_and_reads_its_new_key() -> N
 
 
 async def test_the_lock_leaves_a_foreign_key_check_free() -> None:
-    # note: an organization delete's RESTRICT check takes FOR KEY SHARE on the installation rows; a
+    # An organization delete's RESTRICT check takes FOR KEY SHARE on the installation rows; a
     # rotation holding FOR NO KEY UPDATE across its Vault calls must not hold it up.
     async with installation() as world:
         maker = world["maker"]
@@ -120,9 +120,9 @@ async def test_the_lock_leaves_a_foreign_key_check_free() -> None:
 
 
 async def test_one_failed_row_does_not_end_the_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
-    # note: a rollback expires every object in the session; the sweep used to read the next
-    # installation's attributes after one, which raises on an AsyncSession, so one failed row ended the
-    # pass for every other installation and the orphan pass too.
+    # A rollback expires every object in the session, and reading an expired attribute raises on an
+    # AsyncSession. The sweep must not read the next installation's attributes after one, or one
+    # failed row ends the pass for every other installation and the orphan pass too.
     from app.models.db_models import OrganizationCluster
     from app.services import extension_reconcile as sweep
 

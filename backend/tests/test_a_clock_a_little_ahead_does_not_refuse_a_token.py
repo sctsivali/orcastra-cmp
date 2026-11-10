@@ -1,8 +1,8 @@
 """A backend clock a few seconds off Authentik's does not refuse a token the dashboard was just handed.
 
-jwt.decode ran with no leeway, so a host running ahead refused a fresh token as expired (or as
-issued in the future), and the socket ticket minted with it came back 401 "Token has expired".
-AUTH_JWT_LEEWAY_SECONDS (default 30, at most 120) now covers exp, iat and a ticket's session end.
+Without leeway a host running ahead refuses a fresh token as expired (or as issued in the future),
+and the socket ticket minted with it comes back 401 "Token has expired".
+AUTH_JWT_LEEWAY_SECONDS (default 30, at most 120) covers exp, iat and a ticket's session end.
 """
 
 import asyncio
@@ -66,7 +66,7 @@ def test_a_token_issued_twenty_seconds_in_our_future_is_accepted():
 
 
 def test_without_leeway_the_same_token_is_refused():
-    """The setting is what does it: at 0 the check is to the second, as it was."""
+    """At a leeway of 0 the check is exact to the second."""
     with pytest.raises(HTTPException):
         auth_module.validate_jwt(_token(exp=int(time.time()) - 20), _settings(leeway=0))
 

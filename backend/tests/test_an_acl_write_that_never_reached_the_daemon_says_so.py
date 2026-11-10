@@ -1,10 +1,9 @@
 """An ACL write that never reached the daemon, or timed out waiting for it, is 503 or 504.
 
-The write handlers keep the daemon's own 4xx (a bad rule is 400, a stale ETag is 412) and used
-to answer every other failure with a bare 500, which main.py replaces with an opaque reference.
-A host that is down and a host that is merely slow both landed there, so the operator lost the
-one line that says which it was. The mapping every read path already uses answers 503 for a
-connection that never came up and 504 for a read that ran past its budget.
+The write handlers keep the daemon's own 4xx (a bad rule is 400, a stale ETag is 412). Any
+other failure as a bare 500 would be replaced by main.py with an opaque reference, and a host
+that is down would look the same as one that is merely slow. The mapping every read path uses
+answers 503 for a connection that never came up and 504 for a read that ran past its budget.
 """
 
 import requests.exceptions as requests_exc

@@ -1,18 +1,15 @@
 """Three routers share the /extensions prefix, and one of them owns /extensions/{slug}.
 
 That path matches any single segment, so every literal route on the same prefix has to be
-registered ahead of it. Registered the other way round the failures are quiet and misleading
-rather than loud:
+registered ahead of it. In the wrong order the failures are quiet and misleading:
 
   * `GET /extensions/self` is how an add-on reconciles. Matched by the slug route, it meets a
-    partner JWT dependency it has no way to satisfy and answers 401, which reads to the author as
-    a broken credential rather than as a routing mistake on our side.
+    partner JWT dependency it cannot satisfy and answers 401, which reads as a broken credential.
   * `GET /extensions/installations` would be read as an add-on whose slug is "installations" and
     answer 404, which reads as an empty list.
 
-Ordering in `main.py` is the fix, the reserved-slug list is a second guard so no author can claim
-one of those names, and this file is the third, because ordering is invisible at review time and
-an `include_router` line is easy to move while tidying.
+The router order in `main.py` prevents this, the reserved-slug list stops an author claiming one
+of those names, and this file checks both, because an `include_router` line is easy to move.
 """
 
 import os
@@ -39,11 +36,11 @@ def app():
 def _resolve(app, method: str, path: str) -> str:
     """The name of the route the application would dispatch `method path` to.
 
-    important: matched on the SERVED path from `_walk_route_paths`, not on `route.matches`.
+    important: match on the SERVED path from `_walk_route_paths`, not on `route.matches`.
     From FastAPI 0.141 `include_router` stores a nested router whose routes carry only their
-    own prefix, so `route.matches` on `/api/v1/extensions/self` found nothing on the deployed
-    image while passing in a venv on 0.128. requirements.txt allows both shapes. Declaration
-    order is kept by the walk, which is what lets the literal route win over the slug.
+    own prefix, so `route.matches` finds nothing for `/api/v1/extensions/self`, while 0.128
+    matches. requirements.txt allows both shapes. The walk keeps declaration order, which is
+    what lets the literal route win over the slug.
     """
     for served, route in _walk_route_paths(app):
         if method not in (route.methods or set()):
@@ -76,7 +73,7 @@ def test_a_literal_route_wins_over_the_slug_route(app, method, path, expected) -
 
 
 def test_every_literal_first_segment_is_a_reserved_slug(app) -> None:
-    """The second guard, checked against the routes rather than against a memory of them.
+    """The reserved-slug guard, checked against the served routes.
 
     An author who could register the slug `installations` would be publishing an add-on whose
     detail page is a route the platform already answers on.
@@ -89,8 +86,8 @@ def test_every_literal_first_segment_is_a_reserved_slug(app) -> None:
         if segment and not segment.startswith("{"):
             literals.add(segment)
 
-    # important: the positive twin. On FastAPI 0.141 the old walk reported no path under
-    # `/api/v1/extensions/` at all, and this guard passed on an empty set while guarding nothing.
+    # important: the positive twin. A walk that misses the nested routers (FastAPI 0.141) finds
+    # no path under `/api/v1/extensions/`, and the check below would pass on an empty set.
     assert {"self", "vocabulary", "installations"} <= literals, (
         f"the walk found {sorted(literals)}: it is not seeing the served extension routes"
     )

@@ -1,13 +1,9 @@
-"""A snapshot taken by hand is the operator's own, and the console stopped pretending otherwise.
+"""A snapshot taken by hand on the host is the operator's own.
 
-The surface recognised two classes, `ops-` and everything else, so a snapshot an operator took
-over SSH was refused with "managed elsewhere" alongside the ones the upstream product genuinely
-owns. `udesk-semanan` carries three of them, and the feature doc names those as the PROBLEM this
-feature exists to solve rather than as anyone else's property.
-
-Three classes now, three gates: straight through for ours, a typed confirmation for one taken on
-the host, an acknowledgement and a reason for one upstream owns. Every test here names the
-ablation that turns it red.
+Snapshots fall into three classes with three gates: straight through for one this console made
+(`ops-`), a typed confirmation for one taken by hand on the host, and an acknowledgement plus a
+reason for one the upstream snapshot product owns. Every test names the ablation that turns it
+red.
 """
 
 from urllib.parse import quote
@@ -26,9 +22,8 @@ from tests._snapshot_fakes import (
 )
 
 OURS = "ops-target-20260908T000000Z"
-# The real names off this fleet, from documentation/instances/operator-snapshots-and-mobility.md.
-# Inventing a plausible one would have hidden that `pre-atlas-...` starts with `pre-` and is still
-# not `pre-restore-`, which is the exact distinction being drawn.
+# Realistic hand-taken names. `pre-atlas-...` starts with `pre-` yet is not `pre-restore-`, which
+# is the distinction under test.
 MANUAL = "pre-atlas-guacamole-20260901T134000Z"
 OTHER_MANUAL = "c35-cia-pre-20260906T050115Z"
 UPSTREAM = "snap-20260908-0130"
@@ -99,7 +94,7 @@ def test_the_row_says_where_the_snapshot_came_from():
     assert _normalize({"name": UPSTREAM}, INSTANCE)["origin"] == "upstream"
     assert _normalize({"name": "pre-restore-x"}, INSTANCE)["origin"] == "upstream"
 
-    # The boolean stays, and stays the narrower question: did THIS CONSOLE make it.
+    # `operator_managed` answers the narrower question: did this console make it.
     for name in (MANUAL, UPSTREAM):
         row = _normalize({"name": name}, INSTANCE)
         assert row["operator_managed"] is False
@@ -109,9 +104,7 @@ def test_the_row_says_where_the_snapshot_came_from():
 def test_the_snapshot_row_model_carries_every_field_the_service_stamps():
     """Ablation: add a field to _normalize and forget SnapshotInfo.
 
-    A typed response model is an allowlist and drops what it does not declare, silently. That is
-    exactly how `size_measured` was lost from the per-instance route, so this replaces a comment
-    about it with a check.
+    A typed response model silently drops every field it does not declare.
     """
     from app.models.schemas import SnapshotInfo
     from app.services.lxd.snapshots import _normalize
@@ -123,11 +116,10 @@ def test_the_snapshot_row_model_carries_every_field_the_service_stamps():
 
 
 def test_a_hand_taken_snapshot_does_not_consume_the_operator_cap():
-    """Ablation: widen count_operator_snapshots to the new classification.
+    """Ablation: widen count_operator_snapshots to the hand-taken or upstream classes.
 
-    The cap exists so a snapshot taken outside this console cannot make the count wrong in
-    either direction. Reclassifying must not quietly spend an operator's budget of five on
-    someone's manual restore points.
+    The cap counts only snapshots this console made, so manual restore points never spend an
+    operator's budget of five.
     """
     from app.services.lxd.snapshots import count_operator_snapshots
 
@@ -141,7 +133,7 @@ def test_a_hand_taken_snapshot_does_not_consume_the_operator_cap():
 
 
 def test_a_hand_taken_snapshot_is_deletable_once_its_name_is_typed():
-    """Ablation: restore the catch-all `must start with ops-` refusal."""
+    """Ablation: refuse every name that does not start with `ops-`."""
     node = FakeInstanceNode(snapshots=[{"name": MANUAL}])
     response = _delete(node, MANUAL, confirm_snapshot=MANUAL)
     assert response.status_code == 200, response.text
@@ -151,8 +143,7 @@ def test_a_hand_taken_snapshot_is_deletable_once_its_name_is_typed():
 def test_a_hand_taken_snapshot_is_not_deleted_without_the_typed_name():
     """Ablation: let MANUAL fall through the gate.
 
-    The recorded-calls assertion is the load-bearing half: it is what catches a 403 that arrives
-    AFTER the daemon was already asked.
+    The recorded-calls assertion catches a 403 that arrives after the daemon was already asked.
     """
     node = FakeInstanceNode(snapshots=[{"name": MANUAL}])
     response = _delete(node, MANUAL)
@@ -173,17 +164,15 @@ def test_a_confirmation_naming_a_different_snapshot_is_not_a_confirmation():
 
 
 def test_a_hand_taken_restore_is_confirmed_by_the_instance_name_it_already_asks_for():
-    """Restore does not ask for a second typed string, and that is deliberate.
+    """Restore asks for no second typed string: two typed fields in one dialog invite copy-paste.
 
-    Ablation: make the gate demand `confirm_snapshot` on restore too. Two typed fields in one
-    dialog is what produces copy-paste without reading, which the confirm dialog's own docblock
-    argues at length.
+    Ablation: make the gate demand `confirm_snapshot` on restore too.
     """
     node = FakeInstanceNode(snapshots=[{"name": MANUAL}])
     response = _restore(node, MANUAL)
     assert response.status_code == 200, response.text
 
-    # And the instance name is still genuinely required.
+    # The instance name is still required.
     mismatch = _restore(FakeInstanceNode(snapshots=[{"name": MANUAL}]), MANUAL, confirm_name="wrong")
     assert mismatch.status_code == 422
 
@@ -215,11 +204,10 @@ def test_an_upstream_snapshot_needs_both_an_acknowledgement_and_a_reason():
 
 
 def test_acknowledging_the_bill_does_not_acknowledge_the_owner():
-    """The two gates read different fields, and this is why.
+    """The ownership gate reads its own field; the billing acknowledgement does not open it.
 
-    A live QA spec posts an upstream restore carrying `acknowledge_billing_impact` and a reason,
-    and asserts 403. Had the ownership gate read that field, that spec would have stopped proving
-    a refusal and started performing a real restore on a real instance while staying green.
+    A caller who accepted the billing impact has not accepted that another product owns the
+    snapshot, so one tick must not open both gates.
 
     Ablation: point the ownership gate at `acknowledge_billing_impact`.
     """
@@ -250,10 +238,9 @@ def test_acknowledging_the_bill_does_not_acknowledge_the_owner():
 def test_a_hostile_name_never_reaches_a_request_path_in_any_class(prefix, shape):
     """Ablation: delete the _NAME_RE check from assert_snapshot_name.
 
-    important: the confirmation and the acknowledgement are BOTH supplied, so the refusal cannot
-    come from the ownership gate. Without that, the manual and upstream rows would pass off the
-    ownership decision and the injection guard would be untested in two classes out of three,
-    which is precisely what fusing the two functions used to hide.
+    The confirmation and the acknowledgement are both supplied, so the refusal cannot come from
+    the ownership gate. Without them the manual and upstream cases would pass on the ownership
+    refusal and leave the injection guard untested in two of the three classes.
     """
     name = prefix + shape
     node = FakeInstanceNode(snapshots=[{"name": name}])
@@ -264,19 +251,19 @@ def test_a_hostile_name_never_reaches_a_request_path_in_any_class(prefix, shape)
         acknowledge_upstream_snapshot=True,
         reason="probing the guard",
     )
-    # 422 belongs here: `confirm_snapshot` is a bounded query parameter, so an over-long name
-    # supplied as its own confirmation is refused by FastAPI before the handler runs. All three
-    # are the same claim, which is the only one that matters: it never became a request path.
+    # 422 too: `confirm_snapshot` is a bounded query parameter, so FastAPI refuses an over-long
+    # name supplied as its own confirmation before the handler runs. Each status means the name
+    # never became a request path.
     assert response.status_code in (403, 404, 422), response.text
     assert not _touched(node, "delete_snapshot")
 
 
 def test_the_ownership_gate_refuses_a_name_it_was_handed_unvalidated():
-    """The classifier is total and falls back to the MOST permissive class.
+    """The classifier is total: a name it does not recognise, a blank one included, is `manual`.
 
-    Ablation: drop the assert_snapshot_name call from enforce_snapshot_ownership. A blank name
-    then classifies as `manual`, and a blank confirmation equals it, so the weakest gate opens on
-    a name nothing validated.
+    Ablation: drop the assert_snapshot_name call from enforce_snapshot_ownership. A blank
+    confirmation then equals the blank name, so the typed-confirmation gate opens on a name
+    nothing validated.
     """
     from fastapi import HTTPException
 
@@ -300,8 +287,8 @@ def test_the_ownership_gate_refuses_a_name_it_was_handed_unvalidated():
 def test_an_ownership_refusal_is_recorded(audited, name, code):
     """Ablation: raise from the gate without the auditing wrapper.
 
-    The billing denial has been audited since it shipped and the ownership one was invisible, so
-    the most alert-worthy refusal on this surface left no trace at all.
+    An ownership refusal is the most alert-worthy refusal on this surface, so it is audited like
+    the billing denial.
     """
     node = FakeInstanceNode(snapshots=[{"name": name}])
     assert _delete(node, name).status_code == 403
@@ -316,11 +303,11 @@ def test_an_ownership_refusal_is_recorded(audited, name, code):
 
 
 def test_a_confirmed_hand_taken_delete_writes_no_override_record(audited):
-    """A speed bump is not an override.
+    """A confirmed delete of a hand-taken snapshot is not an override.
 
-    Ablation: emit an ownership_override row for the manual class. Alerting on an operator
-    confirming their own snapshot would bury the rows that mean someone acted on another
-    product's property.
+    Ablation: emit an ownership_override row for the manual class. Alerting on operators
+    confirming their own snapshots would bury the rows where someone acted on a snapshot another
+    product owns.
     """
     node = FakeInstanceNode(snapshots=[{"name": MANUAL}])
     assert _delete(node, MANUAL, confirm_snapshot=MANUAL).status_code == 200

@@ -1,9 +1,8 @@
 """The request ID is minted by the server; a caller's X-Request-ID is only kept for correlation.
 
-The request ID is the access log's OpenSearch `_id`, written as an upsert. When the caller's
-header was used as the ID, sending a request with the ID of an earlier one overwrote that
-earlier access record, so a client could erase its own trail, and quotes or long values went
-straight into the bulk metadata line.
+The request ID is the access log's OpenSearch `_id`, written as an upsert. If the caller's header
+were the ID, a request reusing an earlier one's ID would overwrite that access record, so a client
+could erase its own trail, and quotes or long values would go straight into the bulk metadata line.
 """
 
 import logging

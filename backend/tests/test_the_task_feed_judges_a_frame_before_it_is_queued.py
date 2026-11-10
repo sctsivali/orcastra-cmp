@@ -1,16 +1,14 @@
 """A frame a subscriber may not see never enters its queue, and the socket judges it twice.
 
-The tailer fans one frame out to every subscriber on the worker. Each subscriber's predicate
-runs under the context captured at subscribe (or at the last rescope), so an Admin, a Partner
-and a tenant sharing one worker each receive exactly their own view of the same row. A
-predicate that raises fails closed and is logged once. The WebSocket handler's source is
-pinned in the order the events stream is pinned: the predicate is handed to subscribe before
-the sender exists, and after a scope refresh the rescope precedes the re-judgement, which
-precedes the send.
+The tailer fans one frame out to every subscriber on the worker. Each predicate runs under the
+context captured at subscribe (or at the last rescope), so an Admin, a Partner and a tenant on one
+worker each receive their own view of the same row. A predicate that raises fails closed and is
+logged once. The WebSocket handler's source is pinned like the events stream: the predicate goes
+to subscribe before the sender exists, and after a scope refresh the rescope precedes the
+re-judgement, which precedes the send.
 
-The tick itself is driven against a fake session: the first tick only sets the watermark,
-the next emits each change once, a full page asks the client to resync, and a follower
-change is announced once.
+The tick runs against a fake session: the first tick only sets the watermark, the next emits each
+change once, a full page asks the client to resync, and a follower change is announced once.
 """
 
 import asyncio
@@ -87,7 +85,7 @@ async def test_three_subscribers_on_one_worker_each_get_their_own_view() -> None
     tailer._fanout({"type": "resync", "reason": "lag"})
     assert (admin.qsize(), foreign.qsize(), tenant.qsize()) == (5, 3, 4)
 
-    # The predicate ran under the captured context, not the process default (which is Admin).
+    # Each predicate ran under its captured context; the process default (Admin) is untouched.
     assert org_scope.get_current_allowed_clusters() is None
     for queue in (admin, foreign, tenant):
         await tailer.unsubscribe(queue)
@@ -214,8 +212,8 @@ async def test_a_full_page_asks_the_client_to_resync() -> None:
     await tailer.tick()
     frames = _drain(queue)
     assert frames[-1] == {"type": "resync", "reason": "lag"}
-    # The page filled the queue to its brim and the resync frame displaced the oldest task
-    # frame: the client is told to refetch rather than trust a stream with a hole in it.
+    # The page filled the queue and the resync frame displaced the oldest task frame, so the
+    # client refetches instead of trusting a stream with a gap.
     assert len(frames) == tailer_module.QUEUE_MAXSIZE
     assert sum(f["type"] == "task" for f in frames) == PAGE - 1
 

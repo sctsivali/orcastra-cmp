@@ -1,12 +1,11 @@
 """An image import is refused on an unpatched build when the uploader does not hold the cluster.
 
 The daemon unpacks an imported image's metadata area as root on the host. On a build without the
-fixes, a crafted image turns that into host file access: symlinks in image data (Canonical's
-2026-07-31 advisory; LXD 5.21.6, 5.0.8, 4.0.12, 6.9) and, on Incus, special files and hard links
-in the metadata area (GHSA-5pgx-q9xx-j3qv, fixed in 7.6.0 and the LTS releases after 7.0.2 and
-6.0.7). On a cluster one party holds alone that is the party's own host; where another party
+fixes, a crafted image turns that into host file access: symlinks in image data (fixed in LXD
+5.21.6, 5.0.8, 4.0.12 and 6.9) and, on Incus, special files and hard links in the metadata area
+(GHSA-5pgx-q9xx-j3qv, fixed in 7.6.0 and the LTS releases after 7.0.2 and 6.0.7). On a cluster one
+party holds alone that is the party's own host, so the upload stays allowed; where another party
 holds the cluster, or the uploader is an integration key, it is a way out of the tenancy.
-Owner decision 2026-11-08: refuse those, keep the single-holder upload.
 """
 
 from __future__ import annotations

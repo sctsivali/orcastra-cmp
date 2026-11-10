@@ -1,15 +1,13 @@
 """A member push writes only into an organization the calling key has claimed.
 
-The member path read `if org.api_key_id and ...`, so an organization no key owned was an open
-door: any org.sync key could add itself to it as a partner member, or delete its members, without
-ever claiming it. The policy sync was already strict for an unclaimed organization. The member
-path now is too.
+Without the check, any org.sync key could add itself to an organization no key owns as a partner
+member, or delete its members, without ever claiming it. The policy sync is strict for an
+unclaimed organization in the same way.
 
 A normal first sync is unaffected, because sync_data runs the organization upsert first and that
 claims an unclaimed OrcaHub organization before a member is written. That order also means an
 unclaimed organization is claimed and then pruned by the same sync when the reconcile is on. The
-first key to push an organization owns it by design, and the test below pins that order so a
-change to it is a deliberate one.
+first key to push an organization owns it, and the last test pins that order.
 """
 
 from typing import Any, Dict, List, Optional
@@ -164,7 +162,7 @@ async def test_a_first_sync_does_not_claim_another_keys_org(
 async def test_an_unclaimed_org_is_claimed_then_pruned_by_the_same_sync(
     authentik: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Pinned on purpose: the first key to push an unclaimed org owns it, roster included."""
+    """The first key to push an unclaimed org owns it, roster included."""
     _settings(monkeypatch, reconcile=True)
     db = await _legacy_org(None, {"old1@example.test": "tenant", "old2@example.test": "tenant"})
     result = await _sync(db, [_member("keep@example.test")], orgs=[LEGACY])

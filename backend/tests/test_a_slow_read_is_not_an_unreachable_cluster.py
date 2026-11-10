@@ -1,10 +1,10 @@
 """A slow read through the raw proxy is not an unreachable cluster.
 
-On a MicroCloud host with about a hundred network interfaces, `GET /1.0/networks?recursion=1`
-outlived the pooled client's 8 s read timeout. The timeout tripped the per-cluster breaker for 60 s,
-so every raw-proxy call to that cluster, buyers' provisioning included, answered 503 "recently
-unreachable" because an integrator had opened a form. A read timeout now answers 504 and leaves the
-breaker alone, and so does a GET that outlives the wall-clock cap; a connect failure still trips it.
+On a host with about a hundred network interfaces, `GET /1.0/networks?recursion=1` can outlive the
+pooled client's 8 s read timeout. Tripping the per-cluster breaker for that would answer every
+raw-proxy call to the cluster, buyers' provisioning included, with 503 "recently unreachable" for
+60 s. A read timeout answers 504 and leaves the breaker alone, and so does a GET that outlives the
+wall-clock cap; a connect failure still trips it.
 The pooled session never retries a connect (`Retry(connect=0)`), so a dead host still fails fast as
 a connect error and is still recorded.
 """
@@ -103,7 +103,7 @@ async def test_a_read_past_the_wall_clock_cap_answers_504_and_leaves_the_cluster
 async def test_a_write_past_the_wall_clock_cap_still_rests_the_cluster(
     fence_calls, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Unchanged on purpose: a write that outlived the cap has an unknown outcome, so callers back off."""
+    """A write that outlived the cap has an unknown outcome, so it still trips the breaker."""
     monkeypatch.setattr(integrations, "RAW_PROXY_TIMEOUT", 0.2)
     response, _ = await call_raw_proxy(WILDCARD, "POST", "/1.0/networks", session=SlowSession(1.0))
     assert response.status_code == 504
@@ -141,7 +141,7 @@ def silent_server() -> Iterator[int]:
 async def test_a_real_pooled_session_read_timeout_does_not_trip_the_breaker(
     silent_server: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The effect through the session configuration the app really mounts, not a fake raise."""
+    """Through the session configuration the app mounts and a real socket, without a fake raise."""
     client = SimpleNamespace(
         api=SimpleNamespace(
             _api_endpoint=f"http://127.0.0.1:{silent_server}/1.0", _timeout=(1, 1), session=requests.Session()

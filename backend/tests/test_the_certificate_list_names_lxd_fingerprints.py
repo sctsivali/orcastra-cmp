@@ -47,8 +47,8 @@ async def test_a_row_names_a_lowercase_registry_type_in_its_display_form():
 
 
 async def test_a_cluster_waiting_for_trust_has_no_row_and_an_unreadable_one_is_unknown():
-    """Same as before this change: an empty certificate is a registration still pending trust,
-    while a Vault read that fails is shown as unknown rather than hidden."""
+    """An empty certificate is a registration still pending trust; a Vault read that fails or an
+    unparseable certificate is shown as unknown rather than hidden."""
     db = SessionMaker().db
     manager = _ScopedManager()
     manager.vault.data[manager.path("certs")]["client.crt"] = ""

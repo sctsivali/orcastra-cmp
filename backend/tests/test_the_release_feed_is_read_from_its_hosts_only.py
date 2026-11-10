@@ -174,8 +174,8 @@ def test_an_oversized_feed_is_abandoned_while_streaming(public_dns) -> None:
 
 
 def test_an_unexpected_failure_is_recorded_so_the_backoff_still_applies(store, settings, feed) -> None:
-    """Security review 2026-10-27: a malformed manifest could raise something the parser did not
-    wrap, and the attempt was then never recorded, so the loop retried every tick."""
+    """A failure the parser does not wrap is still recorded as an attempt; otherwise the loop
+    would retry every tick."""
     settings(release_check_enabled=True, release_feed_url="")
     _calls, answers = feed
     answers[service.PRIMARY_URL] = ValueError("Port out of range 0-65535")

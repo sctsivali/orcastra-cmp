@@ -1,8 +1,8 @@
 """The window rules that turn cumulative counters into rates.
 
-Each rule here was a way the old per-worker baseline produced a wrong figure: a first sample
-shown as a confident 0.0, a millisecond window between two tabs read as a spike, a baseline
-hours old averaged into "now", a restart's reset counter subtracted as a negative rate.
+Each rule prevents a wrong figure: a first sample shown as a confident 0.0, a millisecond
+window between two tabs read as a spike, a baseline hours old averaged into "now", a
+restart's reset counter subtracted as a negative rate.
 """
 
 from app.core.rate_sampler import Sample, StoredWindow, advance

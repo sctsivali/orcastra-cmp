@@ -2,12 +2,11 @@
 Deleting a profile that instances still use is refused with their names, and `default` with
 the reason LXD gives.
 
-A delete used to go straight to the daemon, whose "Profile is currently in use" came back
-as a 500 with no instance named. The route now refuses `default` before asking anything
-(the daemon keeps one in every project, and every project's default is in use, so the
-in-use preflight would otherwise answer first), reads any other profile and refuses with a
-409 naming the instances; the daemon's own refusals (a race after the preflight, and the
-403 it answers for `default`) keep a clear sentence too.
+The route refuses `default` before asking anything: the daemon keeps one in every project,
+and every project's default is in use, so the in-use preflight would otherwise answer first.
+Any other profile is read and refused with a 409 naming the instances. The daemon's own
+refusals (a race after the preflight, and the 403 it answers for `default`) keep a clear
+sentence too.
 """
 
 from pylxd import exceptions as pylxd_exceptions
@@ -49,8 +48,8 @@ def test_the_default_profile_cannot_be_deleted(monkeypatch) -> None:
 
 
 def test_a_default_profile_in_use_is_refused_as_default_not_as_in_use(monkeypatch) -> None:
-    # every real project's default is used by something, so the in-use preflight used to win
-    # and the API said 409 "used by 13 instances" while the row menu said the daemon keeps it
+    # Every real project's default is in use, so the `default` refusal must answer before the
+    # in-use preflight.
     used = dict(PROFILE, name="default", used_by=["/1.0/instances/web1", "/1.0/instances/web2"])
     daemon = Daemon(profile=used)
     tc, _ = app(monkeypatch, daemon)
@@ -80,7 +79,7 @@ def test_a_partner_is_not_shown_instances_outside_its_project_bound(monkeypatch)
     tc, _ = app(monkeypatch, daemon)
     from app.core import tenant_visibility
     from app.routers import profiles as profiles_module
-    # The bound lives in the shared used_by filter now; the fixture stubs that filter to an
+    # The bound lives in the shared used_by filter; the fixture stubs that filter to an
     # identity, so put the real one back and bound the project check it consults.
     monkeypatch.setattr(profiles_module, "filter_visible_lxd_references", tenant_visibility.filter_visible_lxd_references)
     monkeypatch.setattr(tenant_visibility, "project_is_visible", lambda host, project: project in ("default",))
@@ -94,7 +93,7 @@ def test_a_partner_is_not_shown_instances_outside_its_project_bound(monkeypatch)
 
 
 def test_the_list_rows_are_held_to_the_same_bound(monkeypatch) -> None:
-    """The delete confirm and the row's "in use by N" read the list row, not the single read."""
+    """The delete confirm and the row's "in use by N" read the list row, so it is bound too."""
     from types import SimpleNamespace
     from app.routers import profiles as profiles_module
 

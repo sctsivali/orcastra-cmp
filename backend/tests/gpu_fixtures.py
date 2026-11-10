@@ -1,9 +1,8 @@
 """Hardware payloads for the GPU tests.
 
-JETSON_ORIN_NX_RESOURCES is the verbatim /1.0/resources body from the registered host
-`pandora` (standalone LXD 5.21.6). It is the reason the GPU model exists: the Orin NX
-enumerates two DRM cards for one physical GPU, reports no vendor, no product and no PCI
-address on either, and carries no `nvidia` block at all.
+JETSON_ORIN_NX_RESOURCES is a verbatim /1.0/resources body from a Jetson Orin NX host
+(standalone LXD 5.21.6). The Orin NX enumerates two DRM cards for one physical GPU, reports
+no vendor, no product and no PCI address on either, and carries no `nvidia` block at all.
 """
 
 from typing import Any, Dict, List, Optional

@@ -1,7 +1,7 @@
 """Memory and disk I/O from /1.0/metrics, folded into the dialog's one sample.
 
-LXD's state endpoint counts page cache as used: a VM whose programs hold 1 GiB of 4 GiB read
-79% because the rest of the RAM was cache. /1.0/metrics carries MemAvailable, so used becomes
+LXD's state endpoint counts page cache as used: a VM whose programs hold 1 GiB of 4 GiB reads
+79% when the rest of the RAM is cache. /1.0/metrics carries MemAvailable, so used becomes
 what the guest's programs hold, with the cache shown beside it.
 """
 
@@ -103,7 +103,7 @@ def test_no_deadline_never_scrapes(monkeypatch):
 
 
 def test_an_unreachable_agent_never_takes_qemu_memory(monkeypatch, scrapes):
-    """Without lxd-agent LXD's metrics memory is QEMU's host RSS, not the guest's."""
+    """Without lxd-agent, LXD's metrics memory is QEMU's host RSS rather than the guest's."""
     scrapes.append(ProjectScrape(collected_at=100.0, series={"vm": _series()}))
 
     metrics = _read(monkeypatch, _instance(processes=-1))

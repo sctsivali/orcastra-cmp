@@ -1,9 +1,9 @@
 """A source whose stop never took effect ends the migration cleanly instead of parking it.
 
-Found live on the lab: a VM whose guest ignored ACPI shutdown outlasted the stop timeout. The
-source stayed running, nothing was transferred, and yet the job sat in `unknown` until it would
-have escalated to `manual_recovery`. Reconciliation now recognises "the source is exactly the
-approved running workload and no transfer was submitted" and routes the job to the abort runner.
+A VM whose guest ignores ACPI shutdown can outlast the stop timeout: the source stays running
+and nothing is transferred. Reconciliation recognises "the source is exactly the approved
+running workload and no transfer was submitted" and routes the job to the abort runner instead
+of leaving it in `unknown` until it escalates to `manual_recovery`.
 """
 
 from __future__ import annotations
@@ -138,8 +138,8 @@ async def test_a_changed_source_is_not_treated_as_untouched(
 
 
 async def test_an_abort_records_its_real_reason_not_the_generic_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Found live: a VM stop timeout ended as "Transfer failed." because the abort runner read
-    the reason from the pre-abort copy of the job."""
+    """A VM stop timeout records its own reason instead of "Transfer failed.": the runner must
+    receive a job that already carries the abort reason."""
     from app.services.migrations import rollback
     from app.services.migrations.contracts import TransferFailed
 

@@ -1,13 +1,13 @@
 """The User Groups routes reach only the organizations their caller runs.
 
-Three defects found on 2026-11-03, each reproduced here against the real handlers and SQLite rows:
+Run against the real handlers and SQLite rows:
 
-- A removal told OrcaHub to drop the email from every keyed OrcaHub organization, so a partner
-  removing a tenant from its own organization also removed that person from another partner's
-  organization on the next sync, and from the synced organization whose partner row was kept.
-- A partner's list carried the whole roster of any organization it merely bought from.
-- Emails were compared as typed, while Authentik matches them case-insensitively, so one account
-  could be listed twice and a removal could miss the row.
+- A removal tells OrcaHub only about the keyed organizations it removed the row from, so a partner
+  removing a tenant never removes that person from another partner's organization on the next
+  sync, nor from a synced organization whose partner row was kept.
+- A partner's list leaves out the roster of an organization it only buys from.
+- Emails match case-insensitively, as Authentik matches them, so one account is listed once and a
+  removal finds its row.
 """
 
 from typing import Any, Dict, List, Tuple
@@ -183,7 +183,7 @@ async def test_an_assigned_email_matches_its_existing_row_whatever_its_case(auth
 async def test_a_new_address_keeps_the_case_it_was_typed_with(authentik, orcahub) -> None:
     """The authorization paths compare the token's email exactly, so a row is stored as typed.
 
-    important: lowercasing it would lock out an account whose identity provider email has capitals.
+    Lowercasing it would lock out an account whose identity provider email has capitals.
     """
     db = await _db()
     for spelled in ("New.Person@Example.com", "new.person@EXAMPLE.com"):

@@ -166,7 +166,7 @@ def test_a_clustered_card_reads_member_versions_from_the_host_facts_cache_only(s
 
     mixed = by_name["microcloud"]
     assert (mixed.status, mixed.mixed_versions) == ("update_available", True)
-    # the offline member's stale answer is not counted
+    # The offline member's stale answer is not counted.
     assert [(m.member, m.version) for m in mixed.members] == [("mc2", "5.21.5"), ("mc1", "5.21.9")]
-    # nothing cached: the endpoint's own version, as before
+    # Nothing cached: the endpoint's own version.
     assert (by_name["other"].status, by_name["other"].mixed_versions, by_name["other"].members) == ("latest", False, None)

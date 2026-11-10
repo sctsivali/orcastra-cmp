@@ -1,9 +1,9 @@
 """A synced organization is owned by a set of keys, and its primary is always in it.
 
 Every key in the set syncs the organization, writes its members and provisions for it; a key outside
-the set stays refused exactly as before. A co-owner's push never moves the primary, which is the key
-OrcaHub callbacks use. The migration that introduces the set gives every claimed organization its
-current owner as the one row, so nothing behaves differently until a second key joins.
+the set is refused. A co-owner's push never moves the primary, which is the key OrcaHub callbacks
+use. The migration that introduces the set gives every claimed organization its current owner as
+the one row, so a single-owner organization behaves the same until a second key joins.
 """
 
 import importlib.util
@@ -162,7 +162,7 @@ async def test_member_writes_judge_the_organization_as_it_stands_now(hub: Dict[s
     writes no member there, though the session still holds that key as the primary."""
     db = world_db()
     await sync(db, (SELLER,), [(F, SELLER, "PARTNER")])
-    # note: held, as the member loop holds the organization it wrote the previous member into
+    # Held, as the member loop holds the organization it wrote the previous member into.
     held = moved_meanwhile(db, K_ATTACKER)
     pushed = [integrations.SyncMember(email=MATE, name=None, organization_id=SELLER, role="TENANT")]
     assert await integrations._upsert_synced_members(db, pushed, K_PARTNER) == (0, 0)
@@ -177,7 +177,7 @@ async def test_reconcile_judges_the_organization_as_it_stands_now(hub: Dict[str,
     await sync(db, (SELLER,), [(F, SELLER, "PARTNER")])
     moved_meanwhile(db, K_ATTACKER)
     pushed = [integrations.SyncOrganization(id=SELLER, name="Acme Cloud", slug="acme-cloud")]
-    # note: a roster without F, so only the ownership check stands between F and its removal
+    # A roster without F, so only the ownership check stands between F and its removal.
     roster = [integrations.SyncMember(email=MATE, name=None, organization_id=SELLER, role="TENANT")]
     assert await integrations._reconcile_synced_members(db, pushed, roster, K_PARTNER, dry_run=False) == 0
     assert await members_of(db, "acme-cloud") == [F]
@@ -287,7 +287,7 @@ def test_the_migration_backfills_every_claimed_org_and_comes_back_out() -> None:
 
 
 def _load_migration() -> Any:
-    # note: 015a, the hotfix line's revision, creates the set; 038 only merges it into this chain
+    # Revision 015a creates the set; 038 only merges it into this chain.
     path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "20261009_130000_015a_organization_owner_keys.py"
     spec = importlib.util.spec_from_file_location("migration_015a", path)
     module = importlib.util.module_from_spec(spec)

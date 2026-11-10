@@ -1,8 +1,8 @@
 """A user's own row holds the theme they chose and nothing else (routers/user_preferences.py).
 
-It used to hold a full copy of the branding the editor showed, and the organization fallback then
-handed that copy to everyone in the owner's organization. Branding now lives per organization and
-per deployment; the personal row says light, dark or system, or nothing.
+Branding lives per organization and per deployment. A personal copy of it would reach everyone in
+the owner's organization through the organization fallback, so the personal row says light, dark
+or system, or nothing.
 """
 
 from __future__ import annotations

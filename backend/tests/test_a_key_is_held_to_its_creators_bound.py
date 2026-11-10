@@ -1,11 +1,11 @@
 """A key a Partner created is held to its creator's projects on a cluster another party holds.
 
-A key minted before services/api_key_grant_bound.py refused `*` on a shared cluster kept reading
-`*` as every project there: another party's projects, the delete of their project, their pools and
-networks (security review of the RC5 follow-up round, 2026-11-06). Each request now narrows the
-key's grants, in a copy, to the projects the creator's own policies name (the browser's bound),
-and every door applies the project-limited rules it already has. Inside the bound the key still
-creates, changes and deletes projects, as the browser lets a Partner do (owner decision).
+services/api_key_grant_bound.py refuses `*` on a shared cluster at write time, but a stored grant
+can still hold it, and read as every project there it would reach another party's projects, the
+delete of their project, their pools and networks. Each request narrows the key's grants, in a
+copy, to the projects the creator's own policies name (the browser's bound), and every door applies
+the project-limited rules it already has. Inside the bound the key still creates, changes and
+deletes projects, as the browser lets a Partner do.
 """
 
 import ast
@@ -213,7 +213,7 @@ async def test_default_is_never_deleted_through_the_carve_out(held) -> None:
     assert refusal is not None and refusal.status_code == 404
 
 
-# ── the browser's project policy holds for a key too (security review of this round) ────────────
+# ── the browser's project policy holds for a key too ────────────────────────────────────────────
 
 ISOLATED = {"restricted": "true", "features.images": "true", "features.profiles": "true",
             "features.storage.volumes": "true", "features.networks": "true"}
@@ -311,7 +311,7 @@ async def test_a_failed_record_says_so_instead_of_failing(monkeypatch) -> None:
     assert note == kpb.NOT_RECORDED
 
 
-# ── second review of this round: named projects, rebuild, every worker's cache ─────────────────
+# ── named projects, rebuild, every worker's cache ──────────────────────────────────────────────
 
 def _isolated_except(monkeypatch, *unisolated: str) -> List[str]:
     from app.routers import integrations
@@ -430,7 +430,7 @@ async def test_a_browser_rebuild_in_an_unisolated_shared_project_is_refused(monk
     await instance_rebuild._refuse_a_rebuild_in_an_unisolated_project(service, None, CLUSTER_ID, "legacy", None)
 
 
-# ── third review: default is judged too, and every delete or create path publishes ─────────────
+# ── default is judged too, and every delete or create path publishes ───────────────────────────
 
 async def test_a_teammates_key_writing_an_instance_in_default_is_judged_by_its_isolation(held, monkeypatch) -> None:
     # The view-only rule counts a teammate's member row as its own side (the conftest seam says

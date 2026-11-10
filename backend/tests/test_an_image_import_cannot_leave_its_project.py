@@ -1,17 +1,13 @@
 """An image upload must land in a project the key was granted, and nowhere else.
 
-`image_uploads.py` checked the cluster and stopped. `assert_cluster_permission` returns the
-matched grant so a caller can read its `projects` list, and its docstring says exactly that, but
-this router discarded the return value. So a key granted `projects: ["tenant-a"]` with
-`storage.upload` could open a session for `tenant-b` on the same cluster and import an image
-into it. Every other key-authenticated surface enforces that boundary: the proxy, the raw proxy,
-the operation reads and the instance reads all do. `iso_uploads.py` refuses a non-default project
-outright. This router was the hole.
+`assert_cluster_permission` checks the cluster and returns the matched grant; the caller bounds
+the project from its `projects` list, as every other key-authenticated surface does. Without that,
+a key granted `projects: ["tenant-a"]` with `storage.upload` could import an image into `tenant-b`
+on the same cluster.
 
-A second defect sat behind the same field. `project` reached the LXD query string through an
-f-string with no encoding, so the value did not merely name a project, it could reshape the
-request. The name is now charset-checked on the way in and percent-encoded on the way out, the
-same two-sided treatment `iso_uploads.py` gives its volume and pool names.
+`project` also reaches the LXD query string, where an unencoded value could reshape the request.
+The name is charset-checked on the way in and percent-encoded on the way out, as `iso_uploads.py`
+does for its volume and pool names.
 """
 
 import ast
@@ -55,7 +51,7 @@ def test_the_wildcard_grant_reaches_every_project():
 
 
 def test_an_absent_projects_field_means_default_only():
-    """Same reading as every other enforcement site: absent is narrow, not unrestricted."""
+    """Absent means `default` only, as at every other enforcement site."""
     _assert_project_permission(_key(None), CLUSTER, "default", "write")
     with pytest.raises(HTTPException) as caught:
         _assert_project_permission(_key(None), CLUSTER, "tenant-a", "write")
@@ -103,10 +99,7 @@ def test_the_permission_level_is_still_enforced():
 
 
 def test_every_handler_that_authorises_checks_the_project_too():
-    """Structural, because the defect was a call site that checked one half and moved on.
-
-    A new handler that reaches for the cluster-only check would reopen it silently.
-    """
+    """Structural: a handler that calls the cluster-only check leaves the project unbounded."""
     tree = ast.parse(SOURCE.read_text())
     offenders = []
     for node in ast.walk(tree):

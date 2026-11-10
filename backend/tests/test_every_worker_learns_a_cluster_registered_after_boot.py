@@ -1,12 +1,9 @@
 """Every worker learns a cluster registered after boot, and a slow cluster is not "unreachable".
 
-Seen in production with WEB_CONCURRENCY=2 and reproduced on the development VM with 4: sixteen
-identical reads of a list endpoint answered "C2 answered" ten times and "Could not reach C2"
-six times within seconds, while the cluster answered every direct probe in 0.2 s. The whitelist
-behind `get_node_names()` was synced at boot and in the one worker that served the
-registration; the others omitted the cluster forever, even after the background healer had
-connected it. Separately, one validation probe timing out on the read evicted the pooled
-client and the reconnect's own probe timing out tripped the breaker for 60 s.
+With several workers, only the one that served a registration hears of it directly. The healer
+tick resyncs the whitelist behind `get_node_names()` from Vault, so every other worker lists the
+cluster once it holds a client. One read timeout on the validation probe keeps the pooled client
+and leaves the breaker alone; a burst of them on one slow moment counts once.
 """
 
 import types
@@ -109,7 +106,7 @@ def _sweep_with_registry(manager, monkeypatch, answer, *, readable: bool):
 
 
 def test_a_lost_vault_list_does_not_blank_the_whitelist(manager, monkeypatch):
-    """A blip must not hide the fleet: the sweep only syncs what Vault actually answered."""
+    """A Vault outage must not hide the fleet: the sweep syncs only a list Vault answered."""
     manager._registered_clusters = {"blitz01", CLUSTER}
     manager._clients[CLUSTER] = object()
 
@@ -118,9 +115,8 @@ def test_a_lost_vault_list_does_not_blank_the_whitelist(manager, monkeypatch):
 
 
 def test_a_readable_empty_registry_does_clear_the_whitelist(manager, monkeypatch):
-    """The other half of the same rule. When Vault answered and said zero, every cluster has
-    been deregistered, and a worker that kept serving its old whitelist would keep naming
-    clusters that no longer exist. Guarding on "non-empty" got this case wrong."""
+    """An empty list that Vault did answer means every cluster is deregistered, so the
+    whitelist is cleared rather than left naming clusters that do not exist."""
     manager._registered_clusters = {"blitz01", CLUSTER}
     manager._clients[CLUSTER] = object()
 

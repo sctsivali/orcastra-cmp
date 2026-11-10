@@ -1,12 +1,10 @@
 """The key doors (the raw proxy, /proxy and MCP) driven through their real routes, for the guest-gate tests.
 
-A bare FastAPI app mounts the real external router. Only the key lookup (validate_api_key, which
-require_capability wraps) and the cluster connection (get_lxd_service) are replaced, so request
-validation, the capability dependency and every gate in the handlers run as deployed. AuditTrail
-stands in for the activity logger and keeps each record the real _audit_key_action writes. A Cluster
-records every client it builds and every request its session receives, which is what the real
-session turns into a request on the wire. MCP tools run as their real functions, through
-dispatch.call_proxy into the same handlers.
+A bare FastAPI app mounts the real external router with only the key lookup (validate_api_key, which
+require_capability wraps) and the cluster connection (get_lxd_service) replaced, so request
+validation, the capability dependency and every handler gate run as deployed. AuditTrail keeps each
+record _audit_key_action writes; Cluster records each client it builds and each request its session
+receives. MCP tools run as their real functions, through dispatch.call_proxy into the same handlers.
 """
 
 import re

@@ -1,14 +1,9 @@
-"""`default` on a cluster another party holds is view only for a Partner (owner decision 2026-11-05).
+"""`default` on a cluster another party holds is view only for a Partner.
 
-A Partner bound to its projects on a cluster another party also holds always keeps `default`
-visible (org_scope.get_visible_projects), and a Partner carries no tenant ACL, so every
-instance-level gate (`verify_instance_access`, `verify_file_access`, `verify_guest_access`, the
-power and snapshot checks) passed for that party's instances in `default`: a root shell, the guest's
-filesystem and its passwords. Security review of v1.0.0-RC4..c5199ea1, finding 1.
-
-Now, like a cluster past its paid term, `default` there answers reads and refuses every change, an
-interactive session, and any instance grant above view. The Partner's own projects, a cluster its
-party holds whole, Tenants (who act only on instances a policy names) and Admins are unchanged.
+A Partner always sees `default` there (org_scope.get_visible_projects) and has no tenant ACL, so
+without this rule every instance gate would pass for the other party's instances: console, files,
+guest credentials. Reads stay open; changes, interactive sessions and grants above view are refused.
+The Partner's own projects, clusters its party holds alone, Tenants and Admins are unaffected.
 """
 
 import asyncio
@@ -131,7 +126,7 @@ def test_the_view_only_set_is_the_partners_held_clusters_only(monkeypatch) -> No
     user = type("U", (), {"email": "p@example.com"})()
     monkeypatch.setattr(rbac, "resolve_roles", lambda _u: [rbac.Role.PARTNER])
     assert asyncio.run(org_scope._default_view_only(user, object(), {HELD, WHOLE})) == frozenset({HELD})
-    # A teammate's member row in its own organization counts as that partner's side (owner 2026-11-05).
+    # A teammate's member row in its own organization counts as the partner's side.
     assert seen["also_runs"] == {480}
     monkeypatch.setattr(rbac, "resolve_roles", lambda _u: [rbac.Role.TENANT])
     assert asyncio.run(org_scope._default_view_only(user, object(), {HELD, WHOLE})) == frozenset()
@@ -139,7 +134,7 @@ def test_the_view_only_set_is_the_partners_held_clusters_only(monkeypatch) -> No
 
 
 def test_reads_stay_open_in_a_view_only_default() -> None:
-    # Owner decision 2026-11-05: lists and reads stay; only a change or a session is refused.
+    # Lists and reads stay open; only changes and interactive sessions are refused.
     with _partner("GET", "/api/v1/instances/their-vm/snapshots"):
         assert org_scope.check_tenant_permission(HELD, "default", "their-vm", "snapshot")
     with _partner("POST", "/api/v1/instance-files/list"):
@@ -184,9 +179,7 @@ def test_a_member_row_puts_its_organization_on_the_callers_side() -> None:
     del SimpleNamespace
 
 
-# Every write to a project-scoped resource reaches the `default` gate (security review of the fix
-# diff, 2026-11-05: volume delete, image delete, profile writes and PATCH /projects/{host}/default
-# went around verify_project_access).
+# Every write to a project-scoped resource must reach one of these `default` gates.
 _GATES = {"verify_project_access", "refuse_default_operation", "_profile_write_target",
           "verify_default_project_write", "verify_whole_cluster_access"}
 _WRITE_GATE_EXEMPT = {

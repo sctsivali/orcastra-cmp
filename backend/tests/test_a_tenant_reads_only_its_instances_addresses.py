@@ -1,7 +1,7 @@
-"""A Tenant's IPAM list keeps its own instances' addresses only (backlog A6, owner 2026-11-05).
+"""A Tenant's IPAM list keeps its own instances' addresses only.
 
-Network, forward and load-balancer rows name no instance. They passed on any rule in their
-project, so a Tenant granted one instance in a project it shares read the other party's forward
+Network, forward and load-balancer rows name no instance. Passed on any rule in their project,
+they would show a Tenant granted one instance in a shared project the other party's forward
 listen addresses (often public IPs) and its OVN networks and subnets.
 """
 

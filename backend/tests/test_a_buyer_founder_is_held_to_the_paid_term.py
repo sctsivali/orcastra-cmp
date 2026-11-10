@@ -1,9 +1,9 @@
 """A buyer founder OrcaHub promoted to role_partner is held to the purchase's paid term too.
 
-A Partner has no tenant ACL, so the clamp on the purchase's own policies never reached it: during
-retention the founder kept operate, console and delete on what it bought (security review
-2026-10-27). On a cluster it reaches only through purchases past their term it may now read and
-not change anything, a console or terminal socket included (core/sale_term.py, core/org_scope.py).
+A Partner has no tenant ACL, so the clamp on the purchase's own policies does not reach it, and
+during retention the founder would keep operate, console and delete on what it bought. On a cluster
+it reaches only through purchases past their term it may read and not change anything, a console or
+terminal socket included (core/sale_term.py, core/org_scope.py).
 """
 
 from __future__ import annotations
@@ -99,7 +99,7 @@ def scope():
     ("PATCH", "/api/v1/instances/vm", True),
     ("POST", "/api/v1/ws-tickets", False),
     ("POST", "/api/v1/operations/abc-123/wait", False),
-    # Re-review 2026-10-27: the exemption is the exact route, never a suffix or another method.
+    # The exemption is the exact route, never a suffix or another method.
     ("DELETE", "/api/v1/ws-tickets", True),
     ("DELETE", "/api/v1/profiles/ws-tickets", True),
     ("POST", "/api/v1/instances/ws-tickets", True),
@@ -135,8 +135,8 @@ def test_the_console_and_terminal_sockets_declare_themselves_interactive() -> No
 
 
 async def test_a_founder_cannot_bind_a_cluster_it_reaches_only_by_purchase() -> None:
-    """Re-review 2026-10-27: bound to a new organization, the row would carry the founder as
-    registrant and outlive the purchase."""
+    """Bound to a new organization, the row would carry the founder as registrant and outlive the
+    purchase."""
     from app.core.sale_term import reaches_only_by_purchase
 
     assert await reaches_only_by_purchase(await _world(term_ended_at=None, access_ends_at=None), FOUNDER, "sold") is True
@@ -166,7 +166,7 @@ async def test_the_bind_route_refuses_it(monkeypatch) -> None:
         return True
 
     monkeypatch.setattr(organizations, "OrganizationService", _Svc)
-    # note: the founder runs the organization it binds into; this pins the purchase refusal after that.
+    # The founder runs the organization it binds into, so the refusal must come from the purchase rule.
     monkeypatch.setattr(organizations, "user_runs_org", runs)
     monkeypatch.setattr(organizations, "get_owned_clusters_ignoring_admin", owned)
     founder = AuthenticatedUser(user_id="f", email=FOUNDER, groups=["role_partner"])
@@ -176,7 +176,7 @@ async def test_the_bind_route_refuses_it(monkeypatch) -> None:
 
 
 async def test_every_cluster_reached_only_by_purchase_is_recorded_whatever_the_phase() -> None:
-    """Third look, 2026-10-27: grants are refused on these in every phase, not only in retention."""
+    """Grants are refused on these in every phase, so they are recorded whatever the phase."""
     from app.core.sale_term import partner_purchase_reach
 
     purchase_only, read_only = await partner_purchase_reach(await _world(term_ended_at=None, access_ends_at=None), FOUNDER)
@@ -222,7 +222,7 @@ def test_a_sale_binding_is_not_ownership_for_registration(row, owns) -> None:
 
 
 def test_a_key_with_a_purchased_grant_gains_no_capability() -> None:
-    """Fourth look, 2026-10-27: a key minted before the refusal must not be given tenant.provision."""
+    """A key that already holds a purchased grant cannot be given a capability such as tenant.provision."""
     import inspect
 
     from app.routers import integrations

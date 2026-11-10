@@ -147,8 +147,8 @@ def _expire_only_the_initial_write(
 
         await asyncio.sleep(0.01)
         observed["expired_while_running"] = True
-        # Model the production drain: a wall timeout stops waiting for the result, not the
-        # thread. The ownership lock may proceed only after that worker has really finished.
+        # A wall timeout stops waiting for the result but leaves the thread running. The
+        # ownership lock may proceed only after that worker has finished.
         try:
             await asyncio.sleep(0.04)
             function(*args)

@@ -6,10 +6,9 @@ project such a key can use would carry it past its bound, so the profiles are re
 resolves them and judged before the write is sent. A create that names no profile gets LXD's
 `default`, so that one is read.
 
-Ported from the RC4-hotfix2 line (18db202) and adapted to this line: the plan is typed steps
-rather than tuples, an instance name is read off the canonical path (fully decoded, as the sent URL
-is built), and the dashboard's two create routes are not here. On this line the dashboard keeps its
-own allowlist (services/instance_security_policy), which judges the effective payload.
+An instance name is read off the canonical path, fully decoded, as the sent URL is built. The
+dashboard's own create routes are not covered here: they judge the effective payload with their own
+allowlist (services/instance_security_policy).
 """
 
 from typing import Any, Dict
@@ -38,7 +37,7 @@ from tests._limited_write_fakes import (  # noqa: F401 - fixtures are registered
 )
 from tests._raw_proxy_fakes import _clean_breaker, key  # noqa: F401
 
-# note: the capabilities are granted so the limited-key rule is what refuses, not the price of the
+# The capabilities are granted so that the limited-key rule refuses, rather than the price of the
 # guest capability a host-reaching config also carries on /proxy.
 TWO_WITH_GUEST = key(["tenant-a", "tenant-b"], capabilities=["lxd.proxy", "instance.exec", "instance.files"])
 
@@ -126,8 +125,8 @@ async def test_a_narrow_key_cannot_apply_a_reaching_profile_through_the_raw_prox
 
 
 async def test_a_narrow_key_cannot_apply_a_reaching_profile_through_a_move() -> None:
-    # note: a move sends migration: true, which costs instance.files (core/guest_data_export.py), so
-    # the key holds it here and the limited-key rule is what refuses.
+    # A move sends migration: true, which costs instance.files (core/guest_data_export.py), so the
+    # key holds it here and the limited-key rule is what refuses.
     narrow_with_files = key(["tenant-a"], capabilities=["lxd.proxy", "instance.files"])
     move = {"migration": True, "pool": "p2", "profiles": ["priv"]}
 

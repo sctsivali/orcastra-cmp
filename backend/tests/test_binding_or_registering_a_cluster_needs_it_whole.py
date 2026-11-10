@@ -1,11 +1,11 @@
 """Binding a cluster into an organization, or registering one that exists, needs the whole cluster.
 
-POST /organizations/{id}/clusters and cluster registration judged ownership from any membership, a
-tenant row included. A partner who only buys from another partner reached that partner's cluster
-through its member row, so it could bind the cluster into an organization it created, be stamped as
-its registrant and turn the cluster into its own. Any member of a holding organization could also
-register the cluster again, which rewrites its endpoint and certificate for every holder. The party
-is read from real rows on SQLite; the share audit and the binding write are recorders.
+POST /organizations/{id}/clusters and cluster registration must not judge ownership from any
+membership, a tenant row included. A partner that only buys from another partner reaches that
+partner's cluster through its member row; binding it into an organization of its own would stamp it
+as the registrant and make the cluster its own. Registering a cluster again rewrites its endpoint and
+certificate for every holder, so a mere member of a holding organization may not do it either. The
+party is read from real rows on SQLite; the share audit and the binding write are recorders.
 """
 
 from contextlib import asynccontextmanager

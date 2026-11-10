@@ -1,10 +1,8 @@
-"""The stage-2 findings, grouped because each is small and none is worth its own file.
+"""Controls that must cover what they appear to cover, grouped because each check is small.
 
-What ties them together is that every one of them was a control that existed and did not cover
-what it appeared to. An audience check that switched itself off when unconfigured. A redaction
-list that matched exact names while the parameters people actually send are compound. A budget
-keyed on a claim the attacker writes. A concurrency cap that was global where it read as
-per-caller. An ownership column that was recorded and never compared.
+An audience check that holds when unconfigured, a redaction list that matches compound parameter
+names, a rate-limit budget not keyed on a claim the caller writes, a per-key upload concurrency
+cap, and an upload owner column that is compared.
 """
 
 import ast
@@ -24,18 +22,18 @@ ROUTERS = Path(__file__).resolve().parents[1] / "app" / "routers"
 
 
 def _code_only(src: str) -> str:
-    """Comments explain the old behaviour in prose; matching those would pass wrongly."""
+    """Drop comment lines, which may quote the refused pattern in prose."""
     return "\n".join(line for line in src.split("\n") if not line.strip().startswith("#"))
 
 
 
-# ── the audience check that switched itself off ────────────────────────────────────────────────
+# ── the audience check with no audience configured ─────────────────────────────────────────────
 
 def test_an_unset_audience_refuses_rather_than_accepting_any_token() -> None:
-    """`verify_aud=bool(audience)` meant an unset AUTHENTIK_AUDIENCE turned the check off.
+    """An unset AUTHENTIK_AUDIENCE must not turn the audience check off.
 
     An issuer typically hosts several applications. Without the check, any RS256 token that
-    issuer minted for any of them is accepted here, and its `groups` claim drives RBAC.
+    issuer minted for any of them would be accepted here, and its `groups` claim drives RBAC.
     """
     source = inspect.getsource(auth_module.validate_jwt)
     assert '"verify_aud": bool(audience)' not in source
@@ -70,7 +68,7 @@ def test_the_negative_cache_is_bounded() -> None:
     assert len(client._absent_kids) <= client._ABSENT_KID_MAX
 
 
-# ── the rate-limit bucket keyed on an attacker-supplied claim ──────────────────────────────────
+# ── the rate-limit bucket and the caller-written claim ─────────────────────────────────────────
 
 class _Req:
     def __init__(self, headers: dict) -> None:
@@ -78,10 +76,10 @@ class _Req:
 
 
 def test_the_bypass_budget_cannot_be_spent_against_a_named_victim() -> None:
-    """It was keyed on the unverified `sub` claim, and spent before authentication.
+    """The bucket is not keyed on the unverified `sub` claim.
 
-    Anyone who knew an operator's email could therefore exhaust that operator's forced-refresh
-    budget from unauthenticated requests.
+    The budget is spent before authentication, so a bucket named by `sub` would let anyone who
+    knows an operator's email exhaust that operator's forced-refresh budget.
     """
     import base64
     import json as _json
@@ -97,7 +95,7 @@ def test_the_bypass_budget_cannot_be_spent_against_a_named_victim() -> None:
 
 
 def test_the_same_token_maps_to_the_same_bucket() -> None:
-    """Per-operator fairness is the reason this is not simply IP-keyed."""
+    """Keyed per token rather than per address, for per-operator fairness."""
     header = {"authorization": "Bearer aaa.bbb.ccc"}
     assert _rate_limit_subject(_Req(header), "1.1.1.1") == _rate_limit_subject(_Req(header), "2.2.2.2")
 
@@ -162,12 +160,11 @@ def test_only_server_faults_are_rewritten() -> None:
 
 
 def test_an_availability_status_keeps_its_diagnosis() -> None:
-    """Found by driving the live proxy: replacing every 5xx swallowed the useful ones.
+    """A 502, 503 or 504 keeps its diagnosis; only a 500 is replaced outright.
 
-    "Cluster X recently unreachable: certificate not trusted" became "Internal server error",
-    which is exactly the sentence an operator needed. 502/503/504 are answers this application
-    writes on purpose, so they keep their message with URLs and paths stripped; 500 is an
-    unexpected fault whose text is a driver exception and is replaced outright.
+    The application writes 502/503/504 itself ("Cluster X recently unreachable: certificate not
+    trusted"), so they keep their message with URLs and paths stripped. A 500 is an unexpected
+    fault whose text is a driver exception.
     """
     source = (ROUTERS.parent / "main.py").read_text()
     assert "public_server_detail(exc.status_code, exc.detail, reference)" in source
@@ -189,7 +186,7 @@ def test_an_availability_status_keeps_its_diagnosis() -> None:
      "apikey", "api-key", "API_KEY", "signature", "code", "password"],
 )
 def test_every_credential_shaped_parameter_is_redacted(name: str) -> None:
-    """The exact-match list covered `token` and missed every compound spelling of it."""
+    """Compound spellings such as `access_token` are redacted as well as exact names."""
     assert _is_sensitive_param(name)
 
 
@@ -220,7 +217,7 @@ def test_a_caller_supplied_list_has_a_ceiling(model, field: str) -> None:
 
 @pytest.mark.parametrize("module_name", ["image_uploads", "iso_uploads"])
 def test_an_upload_session_is_owned_not_merely_cluster_scoped(module_name: str) -> None:
-    """The row records api_key_id and nothing compared it, so a peer key could corrupt an upload."""
+    """The row's api_key_id is compared, so a peer key on the same cluster cannot touch an upload."""
     source = (ROUTERS / f"{module_name}.py").read_text()
     assert "_assert_session_owner" in source
     assert source.count("_assert_session_owner(api_key, row)") >= 4, (
@@ -230,7 +227,7 @@ def test_an_upload_session_is_owned_not_merely_cluster_scoped(module_name: str) 
 
 @pytest.mark.parametrize("module_name", ["image_uploads", "iso_uploads"])
 def test_the_concurrency_cap_is_per_key(module_name: str) -> None:
-    """A global cap of two let any key deny uploads to every other tenant."""
+    """A global cap would let any key deny uploads to every other tenant."""
     source = (ROUTERS / f"{module_name}.py").read_text()
     assert "api_key_id == x_api_key_id" in source
 
@@ -244,7 +241,7 @@ def test_a_key_record_without_a_node_is_not_shown_to_everyone() -> None:
 
 
 def test_the_private_key_download_fails_closed_without_a_node() -> None:
-    """`if node: verify_cluster_access(node)` skipped the check for an unscopeable record."""
+    """A record without a node is refused instead of skipping the cluster access check."""
     source = inspect.getsource(my_keys._authorize_key)
     assert "if not node:" in source
     assert "raise HTTPException" in source
@@ -264,7 +261,7 @@ def test_a_new_key_records_who_owns_it() -> None:
 
 @pytest.mark.parametrize("func", ["list_policies", "list_assignments"])
 def test_a_tenant_sees_only_their_own_access(func: str) -> None:
-    """Scoping stopped at the organisation, which handed a tenant the whole access matrix."""
+    """Scoping by organisation alone would hand a tenant the whole access matrix."""
     source = inspect.getsource(getattr(tenant_access, func))
     assert "if highest == Role.TENANT:" in source, f"{func} does not narrow for a tenant"
     narrowing = source.split("if highest == Role.TENANT:")[1]
@@ -278,13 +275,13 @@ def test_a_tenant_sees_only_their_own_access(func: str) -> None:
     ["my_keys", "lxd_server", "lxd_warnings", "lxd_operations", "cluster_members"],
 )
 def test_a_partner_only_surface_is_not_backed_by_a_tenant_router(module_name: str) -> None:
-    """Every page consuming these declares useRequireRole(Role.PARTNER); the API accepted a tenant.
+    """Pages using these declare useRequireRole(Role.PARTNER); the API refuses a tenant as well.
 
-    Deliberately not extended to `nodes.py` or `cluster_registration.py`: those plausibly serve
-    tenant dashboards, and raising them without checking would trade a disclosure for an outage.
+    `nodes.py` and `cluster_registration.py` are left out: they may serve tenant dashboards, and
+    raising them unchecked could trade a disclosure for an outage.
     """
     source = (ROUTERS / f"{module_name}.py").read_text()
-    # split on the closing paren at column zero: splitting on the first ")" lands inside
+    # Split on the closing paren at column zero: splitting on the first ")" lands inside
     # `require_partner(` and truncates the block before the dependency list.
     router_block = source.split("router = APIRouter(")[1].split("\n)")[0]
     assert "require_partner()" in router_block, f"{module_name} still admits a tenant"
@@ -294,11 +291,11 @@ def test_a_partner_only_surface_is_not_backed_by_a_tenant_router(module_name: st
 # ── legacy key narrowing ───────────────────────────────────────────────────────────────────────
 
 def test_a_legacy_key_can_be_narrowed_without_reissuing_it() -> None:
-    """Without a path, the only way to narrow an unrestricted key was to revoke it."""
+    """An unrestricted key can be narrowed in place instead of being revoked."""
     assert hasattr(integrations, "update_api_key_capabilities")
     source = inspect.getsource(integrations.update_api_key_capabilities)
     assert "get_api_key_from_vault" in source, "must read-modify-write, not compose a fresh dict"
-    # note: the write goes through _write_key_then_commit, which evicts as soon as Vault may hold it
+    # The write goes through _write_key_then_commit, which evicts as soon as Vault may hold it.
     assert "_write_key_then_commit" in source, "the old set would keep authorising until its TTL"
     assert "evict_api_key_cache" in inspect.getsource(integrations._write_key_then_commit)
 
@@ -316,7 +313,7 @@ def test_narrowing_refuses_an_empty_set() -> None:
 # ── the unauthenticated validate oracle ────────────────────────────────────────────────────────
 
 def test_validate_does_not_distinguish_an_unknown_key_from_a_wrong_secret() -> None:
-    """It takes no authentication, so the distinction was a free key-id oracle."""
+    """The endpoint takes no authentication, so the distinction would be a free key-id oracle."""
     source = inspect.getsource(integrations.validate_api_key_endpoint)
     assert 'error="Invalid secret"' not in source
     assert 'error="API key not found"' not in source

@@ -1,13 +1,12 @@
 """A refusal over MCP names what went wrong, and the record of a tool call says how it ended.
 
-Both dispatchers rendered every HTTPException a handler raised as `[forbidden]`. A tripped breaker
-(503), a malformed name (400), an instance that does not exist (404) and an ambiguous one (409)
-all told a model "this key may not do that", which sends it to ask an operator for a grant it
-already holds rather than wait, fix its arguments or give up. The code now follows the status the
-REST route would have answered, in one vocabulary: PROXY_ERROR_CODES plus `forbidden`.
+The error code follows the status the REST route would answer, in one vocabulary:
+PROXY_ERROR_CODES plus `forbidden`. A tripped breaker (503), a malformed name (400), a missing
+instance (404) or an ambiguous one (409) reported as `[forbidden]` would send a model to ask an
+operator for a grant it already holds instead of waiting, fixing its arguments or giving up.
 
-The audit row for a tool call was written before the call with the logger's default result, so a
-refused delete was recorded as a successful one.
+The audit row for a tool call carries the call's real outcome, so a refused delete is never
+recorded as a success.
 """
 
 import asyncio
@@ -179,7 +178,7 @@ def test_whoami_answers_a_key_without_inventory_read_in_json(monkeypatch) -> Non
     assert result.structured_content["capabilities"] == ["lxd.proxy"]
 
 
-# ── the two read fixes ─────────────────────────────────────────────────────────────────────────
+# ── reads that name a granted project ──────────────────────────────────────────────────────────
 
 def _capture_proxy(monkeypatch) -> List[Any]:
     seen: List[Any] = []
@@ -193,7 +192,7 @@ def _capture_proxy(monkeypatch) -> List[Any]:
 
 
 def test_list_projects_names_a_project_the_key_was_granted(monkeypatch) -> None:
-    """`default` was sent whatever the grant, so a key limited to other projects was refused."""
+    """Sending `default` whatever the grant would refuse a key limited to other projects."""
     seen = _capture_proxy(monkeypatch)
     result = asyncio.run(mcp_call(
         tools_read, "lxd_list_projects", FakeClient(ProjectSession()),
@@ -227,8 +226,8 @@ def test_lxd_get_operation_polls_through_the_proxy(monkeypatch) -> None:
     (["tenant-b", "tenant-a"], "tenant-a"), (["*"], "default"), (["default", "tenant-a"], "default"),
 ])
 def test_lxd_get_operation_without_a_project_names_one_the_key_holds(monkeypatch, projects, expected) -> None:
-    """`default` was sent whatever the grant, so a key limited to other projects could not poll
-    the operations it started without passing `project`. Seen live on nuc2, 2026-10-14."""
+    """Sending `default` whatever the grant would stop a key limited to other projects from
+    polling the operations it started without passing `project`."""
     seen = _capture_proxy(monkeypatch)
     result = asyncio.run(mcp_call(
         tools_read, "lxd_get_operation", FakeClient(ProjectSession()), key(projects, ["lxd.proxy"]),
@@ -358,7 +357,7 @@ class _NoSession:
 
 
 def test_a_desktop_wait_is_served_without_the_pool(monkeypatch) -> None:
-    """Four agents waiting the maximum used to refuse every other desktop action for its length."""
+    """A wait runs on the event loop, so agents waiting the maximum hold no pool worker."""
     from app.core import database
     from app.routers.integrations import ProxyRequest, proxy_operation
     from app.services.desktop import entry
@@ -403,8 +402,8 @@ def test_a_desktop_wait_is_served_without_the_pool(monkeypatch) -> None:
 
 
 def test_waits_beyond_a_workers_share_are_overloaded(monkeypatch) -> None:
-    """The pool used to bound waits; on the event loop the per-worker share does, so a caller
-    cannot hold an HTTP slot per made-up instance name."""
+    """The per-worker share bounds waits on the event loop, so a caller cannot hold an HTTP slot
+    per made-up instance name."""
     from app.services.desktop import entry
 
     monkeypatch.setattr(entry, "_WAIT_SLOTS", asyncio.Semaphore(2))
@@ -444,7 +443,7 @@ _VAULT_TEXT = "Failed to read https://vault.internal:8200/v1/secret/data/lxd/clu
 
 @pytest.mark.parametrize("status", [502, 503, 504])
 def test_a_server_refusal_reaches_the_model_without_its_url(status: int) -> None:
-    """A breaker reason is raw exception text. REST strips it; MCP sent it verbatim."""
+    """A breaker reason is raw exception text, so MCP strips it as REST does."""
     text = _text(refusal_result(HTTPException(status_code=status, detail=f"Cluster c1 down: {_VAULT_TEXT}")))
     assert "Cluster c1 down" in text
     assert "vault.internal" not in text and "/v1/secret" not in text

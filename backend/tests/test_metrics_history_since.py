@@ -1,8 +1,8 @@
 """load_metrics_history(since=...) reads only the rows collected inside the window.
 
 The history store refills the admin chart from Postgres with the last 24 hours. Without a lower
-bound the query returned the newest N rows whatever their age, so a collector that had been down
-for a day would have refilled the chart with points the store's own retention drops again.
+bound the newest N rows come back whatever their age, so after a collector outage the chart
+would refill with points the store's own retention drops again.
 """
 
 import asyncio

@@ -1,9 +1,9 @@
 """An organization's roster is changed only by whoever runs it, and an OrcaHub roster keeps its partners.
 
-The member routes checked "may this user see the organization", which is true for a tenant row,
-so a partner who only bought from another partner could add, change and remove that partner's
-members. A partner could also remove a co-partner from an OrcaHub-synced organization, which the
-next sync quietly undid. These run the real handlers against SQLite rows.
+"May this user see the organization" is true for a tenant row, so it cannot gate the member
+routes: a partner who only bought from another partner could change that partner's members. A
+co-partner in an OrcaHub-synced organization stays, since the next sync would restore them; only an
+Admin removes one. These run the real handlers against SQLite rows.
 """
 
 from contextlib import asynccontextmanager

@@ -1,14 +1,14 @@
 """A project whose only leftovers are cached images is deleted, on Incus as on LXD.
 
-Found on the Incus lab: a project emptied of its instances still could not be deleted, "Only
-empty projects can be removed". The image the daemon cached for the instance's create stayed in
-the project's store. LXD 5.21 skips cached image URLs when it judges a project empty and removes
-them with it (lxd/api_project.go, projectIsEmpty's skipURLs); Incus 7.6 counts them
-(cmd/incusd/api_project.go projectIsEmpty ignores only the default profile).
+A project emptied of its instances still holds the image the daemon cached for an instance's
+create. LXD 5.21 skips cached image URLs when it judges a project empty and removes them with
+it (lxd/api_project.go, projectIsEmpty's skipURLs); Incus 7.6 counts them
+(cmd/incusd/api_project.go projectIsEmpty ignores only the default profile) and refuses the
+delete with "Only empty projects can be removed".
 
-So after the daemon refuses, the project is read: when everything left is the default profile
-and images the daemon itself cached, those images go and the delete is sent once more. An image
-someone uploaded or named is never removed, and the refusal stands.
+After that refusal the project is read: when everything left is the default profile and images
+the daemon itself cached, those images go and the delete is sent once more. An image someone
+uploaded or named is never removed, and the refusal stands.
 """
 
 from __future__ import annotations

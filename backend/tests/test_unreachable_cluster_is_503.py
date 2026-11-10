@@ -1,34 +1,13 @@
-"""An unreachable cluster must answer 503. Never 500, never 400, never 404.
+"""An unreachable cluster answers 503: never 500, 400 or 404.
 
-Observed on the live fleet with one dead cluster (blitz01), before this was fixed:
+500 says the server is broken and pages an engineer for a cluster that is only offline, 400 says
+the request was bad, and 404 says the operator's instance was deleted. Monitoring, alerting, retry
+policy and SLO accounting read the status, so it is part of the contract.
 
-    GET  /api/v1/projects/blitz01                 500 x14
-         "LXD operation error: Failed to list projects: No connection to host: blitz01.
-          Client returned None."
-    POST /api/v1/vms/blitz01/web01/start          400
-    GET  /api/v1/vms/blitz01/web01/metrics        404  "Instance 'web01' not found on blitz01"
-    GET  /api/v1/server/blitz01                   500
-
-500 says the server is broken and pages an engineer for a cluster that is merely offline.
-404 says the operator's instance was deleted. Monitoring, alerting, retry policy and SLO
-accounting all read the status, so it is the contract, not a detail.
-
-These drive the real handlers through a real app with a real service object, so the assertion
-covers the whole path: the route, its dependencies, the guard ordering AND the except-clause
-ordering. That last one is what makes this worth writing. Three separate defects in this sweep
-were invisible to a structural check because the code raised the right thing and a broad
-handler two lines later converted it:
-
-  * projects.py raised inside a try whose `except Exception` re-wrapped it, so changing the
-    exception type alone accomplished nothing.
-  * eleven router guards raised HTTPException(503) into a try with no `except HTTPException:
-    raise`, so the 503 became a 500.
-  * changing instance.py's raise type without editing vms.py would have moved six endpoints
-    from 400 to 500, which is worse than the bug being fixed.
-
-Hermetic. `LXDService.__new__` skips `__init__`, so there is no Vault client, no pylxd and no
-cluster sync. The connection manager is a stub whose `get_client` returns None, which is
-exactly what the real breaker does for a tripped cluster. No database, no Redis, no network.
+These drive the real handlers through a real app and service object, so they also cover
+except-clause ordering: a broad `except Exception` converts the right exception unless an
+`except HTTPException: raise` comes first. Hermetic: `LXDService.__new__` skips `__init__`, and
+`get_client` returns None, as the real breaker does for a tripped cluster.
 """
 
 import pytest
@@ -48,9 +27,8 @@ HOST = "blitz01"
 class _BreakerTrippedConnectionManager:
     """Stands in for a connection manager whose breaker has tripped.
 
-    The real one returns None from get_client without making any network call once
-    health.is_tripped(cluster) is true. Returning None is therefore not a simulation of an
-    edge case, it is the ordinary steady state for any cluster that is down.
+    The real one returns None from get_client without a network call once
+    health.is_tripped(cluster) is true, the steady state for any cluster that is down.
     """
 
     def get_client(self, host, *args, **kwargs):
@@ -92,17 +70,15 @@ def _service() -> LXDService:
 def _app(module) -> TestClient:
     """A minimal app carrying one real router and the real service object.
 
-    Only three dependencies are stubbed, and each for a reason that keeps the test hermetic
-    without weakening what it asserts:
+    Three dependencies are stubbed to keep the test hermetic:
 
       get_current_user      -> None, which makes require_roles hand back a dev admin
-                               (rbac.py). Authorization is not what this file is about, and a
-                               real token would need Authentik.
+                               (rbac.py); a real token would need Authentik.
       org_scope_dependency  -> a no-op. It queries Postgres for the caller's clusters.
       get_lxd_service       -> the real service with a breaker-tripped connection manager.
 
-    Everything downstream of those is the production code path, which is the point: the defect
-    lives in the ordering of except clauses, and only a real request exercises that.
+    Everything downstream is the production code path, so a real request exercises the
+    ordering of except clauses.
     """
     from app.services.lxd_service import get_lxd_service
     from app.core.rbac import get_current_user
@@ -128,10 +104,10 @@ def _assert_unreachable(response, label: str):
     )
 
 
-# --- Tier A: the service layer raised the wrong exception type -----------------------------
+# --- Tier A: the service layer raises an unreachable error ---------------------------------
 
 def test_projects_read_is_503_not_500():
-    """The observed defect: 14 x HTTP 500 on a read against a dead cluster."""
+    """A project read against a dead cluster answers 503."""
     from app.routers import projects
 
     r = _app(projects).get(f"/projects/{HOST}")
@@ -177,12 +153,11 @@ def test_vm_stop_is_503_not_400():
 
 
 def test_vm_metrics_does_not_claim_the_instance_is_missing():
-    """The worst status in the sweep.
+    """A dead cluster must not read as a missing instance.
 
-    A None client reaches find_instance_in_projects, which swallows the AttributeError in both
-    of its loops and returns (None, None). The caller then reports "Instance 'web01' not found
-    on blitz01" and the router message-sniffs "not found" into a 404. That is a false statement
-    about the operator's data, not merely a wrong severity.
+    A None client reaching find_instance_in_projects comes back as (None, None); the caller would
+    then report "Instance 'web01' not found" and the router turns "not found" into a 404, a false
+    statement about the operator's data.
     """
     from app.routers import vms
 
@@ -204,12 +179,11 @@ def test_server_info_is_503_not_500():
 
 
 def test_server_resources_is_503_not_500():
-    """The sibling of the route above, and it was missing both halves of the guard.
+    """Both halves of the guard are needed on this route.
 
-    lxd_service.get_node_resources called get_client without require_client, so an unreachable
-    cluster arrived as a None dereference, and the route had no `except HTTPException: raise`
-    to let a 503 past its broad handler. Fixing only one half accomplishes nothing, which is
-    why this asserts through the real route rather than at the service.
+    lxd_service.get_node_resources goes through require_client, so an unreachable cluster is a
+    503 instead of a None dereference, and the route's `except HTTPException: raise` lets that
+    503 past its broad handler. Asserting through the real route covers both.
     """
     from app.routers import lxd_server
 
@@ -248,11 +222,10 @@ def test_cluster_member_detail_does_not_claim_the_member_is_missing():
 
 
 def test_cluster_member_list_does_not_claim_the_node_is_standalone():
-    """The list endpoint used to return 200 with is_clustered=False for a dead cluster.
+    """The list endpoint must not answer 200 with is_clustered=False for a dead cluster.
 
-    The members page renders that as "Not a Clustered Node", so an outage read as a
-    configuration fact: the operator is told their cluster is not a cluster. Its sibling
-    detail handler has always answered 503 through require_client.
+    The members page renders that as "Standalone server", so an outage would read as a
+    configuration fact. The detail handler answers 503 through require_client.
     """
     from app.routers import cluster_members
 
@@ -264,22 +237,17 @@ def test_cluster_member_list_does_not_claim_the_node_is_standalone():
 
 
 def test_an_unreachable_cluster_is_not_logged_at_error():
-    """Severity is a contract too, for the same reason the status code is.
+    """No failed connect to a cluster is logged at ERROR, in a router or the service layer.
 
-    An offline cluster is expected operational noise, so anything alerting on ERROR pages
-    for a host the operator already knows is down. The routers were moved to WARNING in an
-    earlier commit, which left the volume untouched: the service layer logged every failed
-    connect at ERROR, and on the dev fleet that one line produced most of 2383 ERROR
-    records in 90 minutes.
+    An offline cluster is expected operational noise, so an ERROR line pages anyone alerting
+    on ERROR for a host the operator already knows is down.
     """
     import ast
     import pathlib
 
     app_dir = pathlib.Path(__file__).resolve().parents[1] / "app"
-    # note: the first version of this list held only the two phrases the fix had already
-    # touched, so it passed while two more sites kept logging the same thing in slightly
-    # different words. The live run found them by counting, not by reading. Match on the
-    # shape of the statement rather than on one spelling of it.
+    # Several phrasings of the same message: one spelling would miss sites that word it
+    # differently.
     phrases = (
         "Failed to connect to cluster",
         "Failed to connect cluster",

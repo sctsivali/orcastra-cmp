@@ -1,10 +1,10 @@
 """
 An image reference that looks like a fingerprint prefix is sent as one.
 
-The create paths sent `fingerprint` only for a 64-character string and `alias` for anything
-else, so the 12-character prefix `lxc image list` prints (and an operator pastes) was looked
-up as an alias and refused as "Image not found". LXD resolves a fingerprint prefix itself, so
-a lowercase-hex reference of 12 to 64 characters is sent as `fingerprint`.
+`lxc image list` prints a 12-character fingerprint prefix, which an operator pastes.
+Looked up as an alias it is refused as "Image not found". LXD resolves a fingerprint
+prefix itself, so a lowercase-hex reference of 12 to 64 characters is sent as
+`fingerprint` and anything else as `alias`.
 """
 
 from app.services.lxd.utils import image_source_key

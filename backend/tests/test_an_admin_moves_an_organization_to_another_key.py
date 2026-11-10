@@ -1,10 +1,10 @@
 """An Administrator moves a synced organization to another owner key.
 
 organizations.api_key_id names the key that owns a synced organization, and only the owner may
-sync it, write its members and policies, and provision for it. Nothing moved an owner, so a
-revoked, deleted or lapsed owner key froze its organizations until someone ran SQL against
-production. PUT /integrations/organizations/{id}/owner-key is that move, for an Admin only, with
-the new key judged inside the per-key ownership lock and the move audited.
+sync it, write its members and policies, and provision for it, so a revoked, deleted or lapsed
+owner key would freeze its organizations. PUT /integrations/organizations/{id}/owner-key moves the
+owner, for an Admin only, with the new key judged inside the per-key ownership lock and the move
+audited.
 
 These send the real route through its real RBAC and read-only gates against a SQLite database,
 an in-memory Vault and a recording audit log, then prove the move through the external sync,
@@ -189,7 +189,7 @@ def untouched(world: Dict[str, Any], expected_owner: Optional[str] = K_OLD) -> N
     assert world["evicted"] == [] and world["cache"].cleared == []
 
 
-# note: the move
+# The move
 
 async def test_an_admin_moves_an_organization_off_a_revoked_owner(world: Dict[str, Any]) -> None:
     response = await put(world, move())
@@ -236,7 +236,7 @@ async def test_an_alias_admin_may_move_it(world: Dict[str, Any]) -> None:
     assert owner(world) == K_NEW
 
 
-# note: what the move does to the external routes
+# What the move does to the external routes
 
 def push(key_id: str, members: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     return {"include_clusters": False, "include_projects": False,
@@ -280,7 +280,7 @@ async def test_provisioning_follows_the_owner(world: Dict[str, Any]) -> None:
     assert new.json()["organization_id"] == world["org"] and new.json()["org_created"] is False
 
 
-# note: nothing to move
+# Nothing to move
 
 async def test_moving_to_the_current_owner_changes_nothing(world: Dict[str, Any]) -> None:
     response = await put(world, move(K_OLD))
@@ -292,7 +292,7 @@ async def test_moving_to_the_current_owner_changes_nothing(world: Dict[str, Any]
 
 
 async def test_an_unowned_organization_is_assigned(world: Dict[str, Any]) -> None:
-    # note: an unclaimed organization has no owner rows either (the owner set's invariant)
+    # An unclaimed organization has no owner rows either (the owner set's invariant).
     world["db"].sync.execute(OrganizationOwnerKey.__table__.delete())
     world["db"].sync.execute(Organization.__table__.update().values(api_key_id=None))
     world["db"].sync.commit()
@@ -331,7 +331,7 @@ async def test_the_reason_is_recorded_trimmed(world: Dict[str, Any]) -> None:
     assert transfers(world)[0]["details"]["reason"] == "moved after the leak"
 
 
-# note: a key that cannot own it
+# A key that cannot own it
 
 TARGETS = [
     ("missing", None, 409, "target_key_missing"),
@@ -340,7 +340,7 @@ TARGETS = [
     ("unreadable_expiry", {"expires_at": "not-a-date"}, 409, "target_key_expired"),
     ("inactive", {"is_active": False}, 409, "target_key_inactive"),
     ("cannot_sync", {"capabilities": ["inventory.read", "tenant.provision"]}, 409, "target_key_cannot_sync"),
-    # note: /sync admits a key holding inventory.read, so an owner without it cannot sync either
+    # /sync requires inventory.read, so an owner without it cannot sync either.
     ("cannot_read", {"capabilities": ["org.sync", "tenant.provision"]}, 409, "target_key_cannot_sync"),
     ("not_orcahub", {"app_type": "mcp"}, 409, "target_key_not_orcahub"),
     ("add_on", {"extension_install_id": 7, "app_type": "automation"}, 409, "target_key_is_add_on"),
@@ -402,7 +402,7 @@ async def test_a_legacy_key_without_capabilities_or_type_may_own_it(world: Dict[
     assert owner(world) == K_NEW
 
 
-# note: the organization
+# The organization
 
 async def test_an_unknown_organization_is_404(world: Dict[str, Any]) -> None:
     response = await put(world, move(), org_id=9999)
@@ -414,7 +414,7 @@ async def test_an_unknown_organization_is_404(world: Dict[str, Any]) -> None:
 async def test_a_dashboard_organization_has_no_owner_key(world: Dict[str, Any]) -> None:
     world["db"].sync.execute(Organization.__table__.update().values(source="local", api_key_id=None))
     world["db"].sync.commit()
-    # note: a raw UPDATE bypasses the session, which may still hold the organization it loaded
+    # A raw UPDATE bypasses the session, which may still hold the organization it loaded.
     world["db"].sync.expire_all()
     response = await put(world, move())
     assert response.status_code == 409 and response.json()["detail"]["error"] == "organization_not_synced"
@@ -437,7 +437,7 @@ async def test_the_count_says_when_the_new_owner_claims_more_than_one(world: Dic
     assert (await put(world, move())).json()["claimed_organization_count"] == 2
 
 
-# note: who may call
+# Who may call
 
 @pytest.mark.parametrize("user", [PARTNER, TENANT], ids=["partner", "tenant"])
 async def test_a_partner_or_a_tenant_is_refused(world: Dict[str, Any], user: AuthenticatedUser) -> None:

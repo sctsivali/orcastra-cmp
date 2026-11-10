@@ -1,10 +1,10 @@
 """A key grant names only clusters that are registered, and a stale id is quiet and honest.
 
-On dev the owner key of organization 6 still held `nuc-2` and `blitz01`, ids of clusters
-registered again as `nuc2` and `blitz001`. Its integration polled them: every poll logged a
-Vault 404 at ERROR, and raw-proxy answered 503 "Could not connect", which reads as an outage
-and invites a retry loop. Grant writes never checked the registry, and deregistration never
-removed the id from key grants.
+A key can still hold the id of a cluster that was deregistered or registered again under
+another id. Polling it must not log a Vault 404 at ERROR every time, and raw-proxy answers 404
+`cluster_not_registered` rather than 503 "Could not connect", which reads as an outage and
+invites a retry loop. Grant writes check the registry, and deregistration removes the id from
+key grants.
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ async def test_the_proxies_answer_404_cluster_not_registered_not_an_outage(regis
 
 @pytest.mark.asyncio
 async def test_a_fan_out_reports_a_stale_id_as_not_registered_without_looking_it_up(registry, monkeypatch) -> None:
-    # The /sync poll fanned out to nuc-2 and blitz01 and logged a Vault 404 for each, every poll.
+    # A stale id is never looked up, so a /sync poll logs no Vault 404 for it.
     monkeypatch.setattr(integrations.health, "is_tripped", lambda cluster_id: False)
     fetched: List[str] = []
 
@@ -303,8 +303,8 @@ def test_what_validate_reports_is_never_written_back_into_a_grant() -> None:
 async def test_a_grant_edit_reads_what_the_key_holds_under_its_lock_and_lets_go_before_the_mappings(
     monkeypatch,
 ) -> None:
-    # A cleanup removing an id between an unlocked read of the held ids and the locked write let the
-    # write put that id back, because it still counted as held.
+    # The held ids are read under the lock: a cleanup removing an id between an unlocked read and
+    # the locked write would let the write put that id back, because it still counted as held.
     events: List[Any] = []
     stored = {
         "id": "oak_x", "name": "QA", "app_name": "QA", "created_at": "2026-10-24T00:00:00+00:00",

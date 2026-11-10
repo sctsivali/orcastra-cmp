@@ -1,9 +1,9 @@
-"""The clusters endpoints must report what the host says now, not what registration guessed.
+"""The clusters endpoints report what the host says now, not what registration guessed.
 
-`/clusters` read the type string stored at registration time and normalised it. That string was
-produced by an unauthenticated probe that cannot see `environment`, so it was "LXD" for every
-LXD-family cluster, forever, unless an operator clicked Check Authentication. A three-node
-MicroCloud sat in the list badged LXD while its own /1.0 reported server_clustered=true.
+The type string stored at registration comes from an unauthenticated probe that cannot see
+`environment`, so it reads "LXD" for every LXD-family cluster until an operator runs Check
+Authentication. Read alone, it would badge a clustered MicroCloud as LXD while its own /1.0
+reports server_clustered=true.
 
 These drive the two read endpoints through a fake connection pool whose client carries a real
 host_info body, and assert the response follows the host: the live payload outranks the stored
@@ -156,11 +156,10 @@ def test_a_standalone_host_is_reported_lxd_and_not_clustered(client):
 def test_a_stored_clustering_state_unlocks_the_stored_type(client, monkeypatch):
     """An offline host that proved both facts keeps reporting both.
 
-    The two are gated differently and the marker is the reason. A stored `type` on its own can
-    still be the registration-time guess this fixture carries, so an unauthenticated cluster
-    must not report it. A stored `clustered` can only have been written by check-auth, which
-    writes the family in the same statement, so its presence is the evidence that the stored
-    type came off a host rather than out of a default.
+    A stored `type` on its own can still be the registration-time guess this fixture
+    carries, so an unauthenticated cluster must not report it. A stored `clustered` is
+    written only by check-auth, together with the family, so its presence shows the stored
+    type came from a host.
     """
     original = _CertManager.get_cluster_info
 
@@ -192,13 +191,12 @@ def test_the_single_cluster_endpoint_agrees_with_the_list(client):
 
 
 def test_a_cluster_without_a_location_does_not_500(client):
-    """An empty location dict is "no location", not an invalid GeoLocation.
+    """An empty location dict means "no location" and must not fail GeoLocation validation.
 
-    save_cluster_metadata stores {} when a caller registers without one. GeoLocation requires
-    all nine of its fields, so building ClusterInfo straight from that raised nine validation
-    errors: a 500 on the single-cluster read, and on the list a row silently degraded to
-    endpoint="unknown" by the handler's own except branch. Only API callers hit it, because
-    the register form always sends a region.
+    save_cluster_metadata stores {} when an API caller registers without a region (the
+    register form always sends one). GeoLocation requires all nine of its fields, so building
+    ClusterInfo straight from {} would fail the single-cluster read with 500 and degrade the
+    list row to endpoint="unknown" through the handler's own except branch.
     """
     single = client.get(f"/clusters/{NO_LOCATION}")
     assert single.status_code == 200, single.text

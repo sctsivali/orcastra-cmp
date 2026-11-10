@@ -1,11 +1,10 @@
 """A project quota is a cap, not a reservation, so an over-committed cluster still takes one.
 
-The create pre-flight compared max_cpu against cpu_available, which is threads minus the
-running instances' allocation. On the partner's MicroCloud that number was -227 (307 vCPUs
-allocated on 80 threads), so every project create was refused with "exceeds available CPU
-(-227)". LXD itself allows any limit and any over-commit; the only figure that makes a limit
-nonsensical is the hardware total. The pre-flight now refuses a cap above the hardware and
-names both numbers, and the same rule holds for memory and storage, and for the update path.
+cpu_available is threads minus the running instances' allocation, so it goes negative on an
+over-committed cluster (307 vCPUs allocated on 80 threads gives -227) and cannot bound a cap.
+LXD itself allows any limit and any over-commit; the only figure that makes a limit nonsensical
+is the hardware total. The pre-flight refuses a cap above the hardware and names both numbers,
+for CPU, memory and storage, on create and on update.
 """
 
 from fastapi import FastAPI

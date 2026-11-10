@@ -1,11 +1,10 @@
 """The hub carries every lifecycle action and the full operation record for the journal, and
-exactly what it carried before for a browser.
+only the fixed browser key set for a browser.
 
 A browser subscriber's frame is a projection restricted to `BROWSER_FRAME_KEYS`, the key set the
-instance list has always received, and it never sees a lifecycle action outside `instance-*`.
-A firehose subscriber (the journal follower) gets the whole payload plus the hub's own
-connect/disconnect frames. Nothing in either shape ever carries an exec file descriptor or a
-command line.
+instance list reads, and it never sees a lifecycle action outside `instance-*`. A firehose
+subscriber (the journal follower) gets the whole payload plus the hub's own connect/disconnect
+frames. Nothing in either shape ever carries an exec file descriptor or a command line.
 """
 
 import asyncio
@@ -23,7 +22,7 @@ TODAYS_BROWSER_KEYS = {
     "type", "host", "action", "instance", "project", "source", "operation_id", "instances",
     "description", "status", "status_code", "progress", "err",
 }
-# What each frame type carried before the firehose, key for key.
+# The browser keys per frame type, key for key.
 TODAYS_OPERATION_KEYS = {
     "type", "host", "operation_id", "instances", "instance", "project", "description",
     "status", "status_code", "progress", "err",
@@ -187,8 +186,8 @@ def test_run_node_emits_state_frames_and_honours_the_breaker():
     assert tripped < dial, "the breaker is consulted before dialing"
     assert "_TRIPPED_SLEEP_S" in source[tripped:dial]
     assert events_hub._TRIPPED_SLEEP_S == 60
-    # Live: blitz001 and central1-argon had tripped before the follower subscribed and were
-    # never marked disconnected, because the tripped branch slept without saying so.
+    # A host tripped before the follower subscribed must still be marked disconnected, so the
+    # tripped branch reports it before sleeping.
     tripped_frame = source.index('"state": "disconnected"', tripped)
     assert tripped < tripped_frame < source.index("_TRIPPED_SLEEP_S", tripped), (
         "a tripped host is reported disconnected before the sleep"
@@ -210,9 +209,9 @@ async def test_subscribe_keeps_its_positional_shape(hub):
 
 
 async def test_a_firehose_subscriber_joining_an_open_node_is_told_connected_at_once(hub):
-    """A browser held nuc2 open before the follower was elected on this worker: the upstream
-    loop emitted its `connected` frame long ago, so without this the follower never seeds.
-    A browser subscriber gets nothing: the frame is not in BROWSER_FRAME_KEYS territory."""
+    """A browser may hold the node open before the follower is elected on this worker; the
+    upstream loop's `connected` frame is then long gone, so without this the follower never
+    seeds. A browser subscriber gets nothing: hub frames are firehose-only."""
     browser = await hub.subscribe("nuc2")
     node = hub._nodes["nuc2"]
     node.connected = True

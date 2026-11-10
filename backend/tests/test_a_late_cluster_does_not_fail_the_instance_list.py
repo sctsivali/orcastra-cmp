@@ -1,10 +1,8 @@
 """One cluster past the inventory wall must not turn the whole instance list into a 503.
 
-Measured on dev 2026-10-29: central-1's instance list arrived past the 30 s wall again and again,
-`list_all_vms_with_failures` raised for the fleet, and `GET /instances` answered 503, so the
-Overview showed "This is taking longer than usual" to every operator. The list now answers with
-the clusters that did answer, names the late one in `unreachable_nodes`, says why in
-`node_errors` (Admin and Partner only), and keeps that partial answer for 10 s, not 30.
+When one cluster's instance list arrives past the 30 s wall, `GET /instances` answers with the
+clusters that did answer, names the late one in `unreachable_nodes`, says why in `node_errors`
+(Admin and Partner only), and caches that partial answer for 10 s instead of 30.
 
 The complete-inventory contract stays for the callers that need it
 (test_instance_reads_are_bounded.py).

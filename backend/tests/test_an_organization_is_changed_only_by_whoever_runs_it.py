@@ -1,11 +1,11 @@
 """An organization is renamed, rebranded, bound to or unbound from only by whoever runs it.
 
-PATCH /organizations/{id}, the branding writes, and binding or unbinding a cluster checked whether
-the caller could see the organization, which any member row gives. A partner who only bought from
-another partner, or a dashboard-added teammate, could rename that partner's organization, rewrite
-its branding and unbind its clusters. They now ask the roster rule
-(services.organization_roster.user_runs_org): an admin, the creator, or a partner row. The rows are
-real on SQLite; the writes themselves are recorders.
+PATCH /organizations/{id}, the branding writes, and binding or unbinding a cluster ask the roster
+rule (services.organization_roster.user_runs_org): an admin, the creator, or a partner row. Seeing
+the organization is not enough, since any member row gives that: a partner who only bought from
+another partner, or a dashboard-added teammate, could otherwise rename that partner's organization,
+rewrite its branding and unbind its clusters. The rows are real on SQLite; the writes themselves
+are recorders.
 """
 
 from contextlib import asynccontextmanager

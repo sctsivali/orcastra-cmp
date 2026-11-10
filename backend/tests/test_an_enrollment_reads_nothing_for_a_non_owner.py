@@ -1,14 +1,14 @@
 """Enrollment decides that the calling key owns the organization before it reads anything of the new key.
 
-Checking the new key's secret first made the route an oracle for any key holding org.sync: a wrong
-secret and a non-owner answered differently, a stranger's failures locked a victim key out of
-enrollment, and spent the organization's budget. Now a non-owner, a missing organization and an
+Checking the new key's secret first would make the route an oracle for any key holding org.sync: a
+wrong secret and a non-owner would answer differently, and a stranger's failures would lock a victim
+key out of enrollment and spend the organization's budget. A non-owner, a missing organization and an
 unclaimed one get one 403 with no Vault read of the new key, failures count per (vouching key, new key),
 the organization's budget is spent only by an owner, an unreadable store is 503 and counts nothing, and
 ownership is decided under the organization lock.
 
-Also: with INTEGRATION_MULTI_OWNER_ENABLED off the routes answer 404 before the key is authenticated or
-the body read, and a 422 never carries the secret.
+With INTEGRATION_MULTI_OWNER_ENABLED off the routes answer 404 before the key is authenticated or the
+body read, and a 422 never carries the secret.
 """
 
 from contextlib import asynccontextmanager

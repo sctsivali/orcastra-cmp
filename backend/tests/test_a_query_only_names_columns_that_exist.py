@@ -1,13 +1,10 @@
-"""A query that names a column the model does not have is a 500 no unit test here can see.
+"""A query that names a column the model does not have is a 500 that faked-session tests miss.
 
-`build_install_preview` selected `OrganizationCluster.cluster_name`, which does not exist. The
-service tests fake the session, so the statement was never constructed against the real model and
-every one of them passed. It surfaced as HTTP 500 on the one organization in the deployment that
-had a cluster bound to it, during the first live run.
-
+Service tests fake the session, so a statement naming a missing attribute (ex; a nonexistent
+`OrganizationCluster.cluster_name`) is never built against the real model and every test passes.
 SQLAlchemy raises at statement-construction time, not at execution, so the attribute reference is
-enough to catch it without a database. This walks the extension modules for `Model.attribute` and
-asserts each one resolves, which is cheap and covers the whole class rather than the one instance.
+enough to catch it without a database. This walks the listed modules for `Model.attribute` and
+asserts each one resolves.
 """
 
 import ast
@@ -30,9 +27,9 @@ MODULES = [
     "app.services.extension_scope",
     "app.services.extension_teardown",
     "app.services.extension_reconcile",
-    # These two work against Vault rather than the ORM today. Listed anyway, because the
-    # coverage check below is what makes a new one impossible to forget and an exemption
-    # here would be a hole rather than a saving.
+    # extension_credentials and extension_settings work against Vault, not the ORM. They are
+    # listed anyway: the coverage check below requires every extension_* service here, so an
+    # exemption would leave a gap.
     "app.services.extension_credential_guard",
     "app.services.extension_credentials",
     "app.services.extension_settings",
@@ -40,7 +37,7 @@ MODULES = [
     "app.routers.extension_installs",
     "app.routers.extension_webhooks",
     "app.routers.extensions_external",
-    # The task journal: its reads are ORM selects over three new tables and the schedules.
+    # The task journal: ORM selects over its own tables and the schedules.
     "app.services.task_journal.reads",
     "app.services.task_journal.repository",
     "app.services.task_journal.repository_sql",

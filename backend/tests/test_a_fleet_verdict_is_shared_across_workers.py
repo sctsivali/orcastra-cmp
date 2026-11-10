@@ -1,12 +1,11 @@
 """One worker probes a dead cluster; the others take its word instead of dialing.
 
-Every worker's healer redialed each dead cluster once its own 60 s trip lapsed: 2765 dials in a
-day on the dev fleet, each about 8 s against a silent host, and a fleet read that reached such a
-cluster first paid one on a request. Now only the collector's leader probes the clusters it holds
-down, every 30 s (owner decision 2026-11-04), past its own trip, and publishes a "down at" marker
-with the time and the kind only. A follower's healer adopts a fresh marker instead of dialing. A
-proof always outranks an older down verdict, a malformed marker is ignored, and without a fresh
-marker (no leader probing, no Redis) every worker redials as before.
+A dial against a silent host takes seconds, so every worker redialing each dead cluster whenever
+its own trip lapses adds up, and a request can end up paying for one. Only the collector's leader
+probes the clusters it holds down, on its own interval and past its own trip, and publishes a
+"down at" marker with the time and the kind only. A follower's healer adopts a fresh marker instead
+of dialing. A proof always outranks an older down verdict, a malformed marker is ignored, and
+without a fresh marker (no leader probing, no Redis) every worker redials on its own trip.
 """
 
 from __future__ import annotations
@@ -132,7 +131,7 @@ def test_without_shared_mode_nothing_is_adopted(monkeypatch):
 
 
 def test_shared_mode_needs_redis_and_can_be_switched_off(monkeypatch):
-    # conftest's cache has no Redis: every worker keeps its own breaker, as before.
+    # conftest's cache has no Redis, so every worker keeps its own breaker.
     assert breaker_sync.shared_mode() is False
     manager = cache_module.get_cache_manager()
     monkeypatch.setattr(manager, "redis_client", object(), raising=False)

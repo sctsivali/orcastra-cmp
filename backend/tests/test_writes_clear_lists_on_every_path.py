@@ -1,18 +1,16 @@
-"""A write clears the lists it changed on every path, not only the happy one.
+"""A write clears the lists it changed on every path, failures and timeouts included.
 
-Reported from production: an instance deleted in the dashboard stayed listed until a reload.
-The browser half of that lives in the frontend checks; these pin the server half, which kept
-stale lists alive on the paths nobody looked at:
+The browser half lives in the frontend checks; these pin the server half:
 
-- proxy writes (OrcaHub, MCP) advanced the wrong generation token, cleared nothing on success
-  for most operations, and cleared at 202 acceptance before LXD had changed anything;
-- a delete or power action that failed, timed out or found the instance already gone left the
-  list as it was;
-- a write abandoned by its caller's timeout kept running on its thread and landed unseen;
-- a snapshot still copying on a `dir` pool, a finished move or copy, an ambiguous job verdict;
+- proxy writes (OrcaHub, MCP) advance the generation the instance lists fence on, clear on
+  success, and clear again when LXD settles a 202;
+- a delete or power action that fails, times out or finds the instance already gone clears the
+  list;
+- a write abandoned by its caller's timeout clears when its thread finishes;
+- a finished move or copy and an ambiguous job verdict clear the lists;
 - related lists (IPAM rows for networks, pool rows for volumes, profiles for projects, images
-  for clusters) were never cleared at all;
-- the collector's prewarm wrote a list read before an invalidation back over it.
+  for clusters) are cleared with them;
+- the collector's prewarm never writes a list read before an invalidation back over it.
 """
 
 from __future__ import annotations
@@ -350,9 +348,9 @@ def test_a_cluster_answering_again_clears_its_images() -> None:
 
 
 def test_a_migration_step_delivers_its_outbox_at_once() -> None:
-    """The cache clearance a move or copy commits is an outbox row; it used to wait for the 15 s
-    recovery sweep. Every path (activation, retention, project relocation, rollback) ends in
-    run_migration_job, which now drains right after the step."""
+    """The cache clearance a move or copy commits is an outbox row, delivered right after the step
+    instead of at the 15 s recovery sweep. Every path (activation, retention, project relocation,
+    rollback) ends in run_migration_job."""
     worker = Path(__file__).resolve().parents[1] / "app" / "services" / "migrations" / "worker.py"
     fn = _function(ast.parse(worker.read_text(encoding="utf-8")), "run_migration_job")
     body = list(fn.body)
@@ -451,8 +449,8 @@ def test_failures_clear_at_most_once_per_interval_and_a_fence_refusal_never(monk
 
 
 def test_a_successful_action_clears_right_after_lxd_answers() -> None:
-    """Before the route's own follow-up work (tags, webhooks), so an event-triggered read that
-    lands meanwhile does not get the pre-delete list."""
+    """The clearance runs before the route's follow-up work (tags, webhooks), so an
+    event-triggered read that lands meanwhile does not get the pre-delete list."""
     for module, name, call in (
         ("vms.py", "delete_vm", "delete_vm"),
         ("instances.py", "delete_instance", "delete_vm"),

@@ -2,9 +2,9 @@
 
 On a cluster shared by two organizations a Partner is held to the default project plus what
 their organizations' policies name, and they may not write such a rule for a project they
-cannot see. So a project a Partner had just created was one they could neither read nor
-create in. The create now records the project in the organization's managed policy, for the
-one name this request brought into existence.
+cannot see. Without a grant they could neither read nor create in a project they had just
+created, so the create records the project in the organization's managed policy, for the one
+name this request brought into existence.
 """
 
 import contextvars
@@ -97,7 +97,7 @@ def test_a_bounded_partner_with_no_bound_organization_is_refused_before_lxd(monk
 
 
 def test_an_unbounded_partner_with_no_bound_organization_still_creates(monkeypatch):
-    # No bound engages on this cluster today, so nothing is withheld and nothing is recorded.
+    # No bound applies on this cluster, so nothing is withheld and nothing is recorded.
     _grant_org(monkeypatch, None)
     service = _Service()
     session = GrantSession()

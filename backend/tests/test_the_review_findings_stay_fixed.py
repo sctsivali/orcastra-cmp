@@ -1,10 +1,10 @@
-"""Findings of the 2026-11-04 security review of the cold-miss round, pinned.
+"""Fan-out slots, late reads and the connectivity probe.
 
-F1: run_blocking's max_in_flight refuses at once, so a gather over more clusters than the cap
-dropped every cluster past it (OrcaHub totals past 4 clusters, regions past 10). Slots are now
-waited for. F2: a late read whose memo entry was evicted must not schedule a rebuild. F3: a TLS
-failure in the connectivity probe, a pin mismatch included, is a certificate problem, not an
-offline host. And a forced refresh never answers a cluster from a late read's stand-in.
+run_blocking's max_in_flight refuses at once, so a gather over more clusters than the cap waits
+for a slot instead of dropping every cluster past it. A late read whose memo entry was evicted
+must not schedule a rebuild. A TLS failure in the connectivity probe, a pin mismatch included, is
+reported as a certificate problem rather than an offline host. A forced refresh never answers a
+cluster from a late read's stand-in.
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ def test_an_evicted_late_read_schedules_no_rebuild(monkeypatch):
 
     async def scenario():
         await gather_clusters(["slow"], slow, executor=POOL, label="t", memo_key="t", wall=0.05)
-        fanout._late.clear()  # evicted before it finished
+        fanout._late.clear()  # Evicted before it finished.
         await asyncio.sleep(0.35)
 
     asyncio.run(scenario())

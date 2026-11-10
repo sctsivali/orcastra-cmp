@@ -1,17 +1,13 @@
 """A Partner is scoped by cluster, so widening a list to every project can leak sideways.
 
 `get_tenant_acl_rules` returns None for Partner as well as Admin, so the `used_by` filter that
-protects the network, ACL and profile lists never runs for a Partner. That was harmless only
-while those lists could not see past the `default` project. The moment they can, a cluster
-carrying two organizations hands one partner the other's network config, ACL rule bodies,
-profile devices and, through `used_by`, their instance inventory by name.
+protects the network, ACL and profile lists never runs for a Partner. Once those lists see past
+the `default` project, a cluster carrying two organizations would hand one partner the other's
+network config, ACL rule bodies, profile devices and, through `used_by`, their instance names.
 
-`nuc2` on this deployment is bound to two organizations today, so this is not hypothetical.
-
-The rule these tests pin: on a cluster bound to more than one organization a Partner keeps the
-behaviour they have now, the `default` project, widened only by projects their own policies
-name. Everywhere else nothing is restricted, because a Tenant is already filtered by their ACL
-and an Admin is gated by break-glass at the cluster level.
+On a cluster bound to more than one organization a Partner sees the `default` project, widened
+only by projects their own policies name. Elsewhere nothing is restricted: a Tenant is already
+filtered by their ACL and an Admin is gated by break-glass at the cluster level.
 """
 
 import asyncio
@@ -53,7 +49,7 @@ class _Result:
 
 
 class FakeSession:
-    """Answers by which table the statement reads, not by call order."""
+    """Answers each query by the table it reads, so call order does not matter."""
 
     def __init__(self, shared_clusters=(), org_ids=(), rules_by_cluster=None):
         self.shared_clusters = list(shared_clusters)
@@ -65,7 +61,7 @@ class FakeSession:
         sql = str(stmt)
         self.queries.append(sql)
         if "tenant_policy_rules" in sql:
-            # the cluster is bound into the statement, so recover it from the parameters
+            # The cluster is a bound parameter, so recover it from the compiled params.
             params = stmt.compile().params
             cluster = next(
                 (v for k, v in params.items() if str(v) in self.rules_by_cluster), None
@@ -85,7 +81,7 @@ def _the_partner_runs_its_organizations(monkeypatch):
     async def run_orgs(db, email):
         if hasattr(db, "org_ids"):
             return {org_id: frozenset() for org_id in db.org_ids}
-        # note: the raw-table SQLite test below has no role column; its partner created its org.
+        # The raw-table SQLite test below has no role column: use the orgs its partner is in.
         from app.core.org_scope import _query_user_org_ids
 
         return {org_id: frozenset() for org_id in await _query_user_org_ids(email, db)}
@@ -195,7 +191,7 @@ def test_removed_org_binding_semantically_revokes_its_partner_project():
                 "cluster_id TEXT NOT NULL, project_name TEXT NOT NULL)"
             )
         )
-        # note: no rows. The bound also widens by policies assigned to the caller's own member rows.
+        # Left empty. It must exist: the bound also widens by policies assigned to member rows.
         connection.execute(
             text(
                 "CREATE TABLE tenant_policy_assignments "
@@ -218,7 +214,7 @@ def test_removed_org_binding_semantically_revokes_its_partner_project():
                 {"id": 12, "org": 2, "email": "partner@example.test"},
             ],
         )
-        # Org A no longer binds shared-c. B and unrelated D keep it shared.
+        # Org A has a policy on shared-c but no binding. B and unrelated D share it.
         connection.execute(
             text("INSERT INTO organization_clusters VALUES (:id, :org, :cluster)"),
             [
@@ -279,20 +275,17 @@ def test_revoking_a_partner_project_changes_the_response_cache_scope():
 
 
 def test_a_partner_with_no_policies_on_a_shared_cluster_sees_only_default():
-    """Exactly the behaviour they have today, which is the point: no regression, no leak."""
     session = FakeSession(shared_clusters=["nuc2"], org_ids=[6], rules_by_cluster={})
     assert _run(get_visible_projects(_as("partner"), session)) == {"nuc2": {"default"}}
 
 
 def test_a_wildcard_rule_does_not_lift_the_bound():
-    """This test asserted the opposite until a security review pointed out that it was
-    encoding the vulnerability rather than the rule.
+    """A `"*"` rule names no project of the organization's own.
 
-    `TenantPolicyRule.project_name` defaults to `"*"` on the model AND on the create schema,
-    so treating a wildcard as "this organization administers everything" switched the control
-    off for any organization that had ever written a single policy. A wildcard also cannot
-    answer the question being asked, which is WHICH projects belong to this organization; on a
-    shared cluster it names the other organization's projects too.
+    `TenantPolicyRule.project_name` defaults to `"*"` on the model and on the create schema, so
+    reading a wildcard as "this organization administers everything" would switch the control off
+    for any organization that ever wrote a policy. On a shared cluster a wildcard also names the
+    other organization's projects.
     """
     session = FakeSession(
         shared_clusters=["nuc2"], org_ids=[6], rules_by_cluster={"nuc2": ["*"]}
@@ -351,19 +344,14 @@ def test_an_unset_context_restricts_nothing():
     assert contextvars.copy_context().run(check) is None
 
 
-# ── every list that spans projects must apply the bound ────────────────────────────────────────
+# ── Every list that spans projects must apply the bound ────────────────────────────────────────
 
 def test_every_project_spanning_list_applies_the_bound():
-    """A ratchet, because the instance list is how this was missed.
+    """Each named handler that lists across projects calls `project_is_visible`.
 
-    The networks, profile and ACL lists were given `project_is_visible` when they widened. The
-    instance list already spanned every project before that work, so it was never part of the
-    change and never got the gate: on a cluster carrying two organizations a Partner saw the
-    other organization's instances by name. Found by driving a shared cluster, not by reading.
-
-    `check_tenant_permission` does not cover this. `get_tenant_acl_rules` returns None for both
-    Admin and Partner, so it passes everything for them, and a Partner is scoped by cluster
-    rather than by project.
+    Without the gate a Partner on a cluster carrying two organizations sees the other
+    organization's rows by name. `check_tenant_permission` does not cover this:
+    `get_tenant_acl_rules` returns None for Admin and Partner, so it passes everything for them.
     """
     import ast
     import pathlib
@@ -374,14 +362,12 @@ def test_every_project_spanning_list_applies_the_bound():
         "profiles.py": "list_profiles",
         "network_acls.py": "list_network_acls",
         "instances.py": "list_instances",
-        # /vms is a SECOND live instance list. Naming the four above by hand is what let it
-        # ship unbounded after the other four were fixed, which is why the discovery check
-        # below exists as well.
+        # /vms is a second instance list. The discovery test below also catches per-row filters.
         "vms.py": "list_vms",
-        # volumes and warnings span every project since the hotfix1 re-cut
+        # Volumes and warnings span every project.
         "storage_volumes.py": "list_storage_volumes",
         "lxd_warnings.py": "list_warnings",
-        # the events hub subscribes with all-projects, so the browser stream is a list too
+        # The events hub subscribes with all-projects, so the browser stream is a list too.
         "events.py": "frame_is_visible",
     }
     missing = []
@@ -398,32 +384,30 @@ def test_every_project_spanning_list_applies_the_bound():
     assert missing == [], f"these span projects without applying the bound: {missing}"
 
 
-# Handlers that filter with the tenant ACL alone and are NOT a bound violation, each with the
-# reason it is exempt. Read before adding to this: the bar is that the handler emits no
-# per-row identity, only a total. A handler that names an instance, a network or a project
-# does not belong here.
+# Handlers that filter with the tenant ACL alone but emit no per-row identity, only totals.
+# A handler that names an instance, a network or a project does not belong here.
 AGGREGATE_ONLY = {
-    # Returns None for anyone without a tenant ACL, so it never narrows a Partner in the first
-    # place, and it answers with image fingerprints, which are a cluster-level artifact.
+    # Returns None without a tenant ACL, so it never narrows a Partner, and it answers with image
+    # fingerprints, which are a cluster-level artifact.
     "_allowed_image_fingerprints_by_host",
-    # These two emit host-level figures. A Partner on a shared cluster sees totals that include
-    # another organization's load, which is a property of the host being shared, not a
-    # disclosure of what runs on it. The dashboard's per-instance consumers come only from rows
-    # check_tenant_permission kept, and that check applies project_is_visible first.
+    # Host-level figures. On a shared cluster the totals include another organization's load,
+    # which shows that the host is shared but not what runs on it. Per-instance dashboard rows
+    # come only from rows check_tenant_permission kept, and that check applies
+    # project_is_visible first.
     "get_monitoring_dashboard",
-    # get_monitoring_dashboard's body, moved into the builder it hands to swr.serve().
+    # The builder get_monitoring_dashboard hands to swr.serve().
     "build_dashboard",
     "get_node_metrics",
 }
 
 
 def test_the_tenant_acl_is_never_the_only_project_filter():
-    """Discovery, not a list, because a hand-kept list is how /vms was missed.
+    """No handler in app/ filters rows with the tenant ACL alone.
 
-    `check_tenant_permission` returns True whenever the tenant ACL is None, and it is always
-    None for an Admin and for a Partner (`org_scope.get_tenant_acl_rules`). So a handler that
-    filters rows with it ALONE applies no project bound to a Partner at all. Any such handler
-    must pair it with `project_is_visible`.
+    `check_tenant_permission` returns True whenever the tenant ACL is None, which it always is
+    for an Admin and a Partner (`org_scope.get_tenant_acl_rules`), so a handler that filters rows
+    with it alone applies no project bound to a Partner. Each such handler must also call
+    `project_is_visible`. Handlers are found by scanning the source.
     """
     import ast
     import pathlib
@@ -441,7 +425,7 @@ def test_the_tenant_acl_is_never_the_only_project_filter():
             body = ast.unparse(node)
             if "check_tenant_permission(" not in body:
                 continue
-            # a per-row filter, not a single-resource authorization check
+            # Only per-row filters; single-resource authorization checks are out of scope.
             if not any(k in body for k in ("for vm in", "for instance in", "for row in")):
                 continue
             if "project_is_visible" not in body:

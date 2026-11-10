@@ -1,9 +1,8 @@
 """A storage pool the daemon refuses to change reads as the refusal it is.
 
-Deleting a pool that still holds volumes answered 500 with an opaque reference, because the broad
-handler turned LXD's "currently in use" into a server fault and main.py then hides a 500's body.
-The operator had nothing to act on. `lxd_http_error` is the house answer; network and image
-deletes already use it.
+A refusal such as LXD's "currently in use" must not become a 500: main.py hides a 500's body,
+which leaves the operator nothing to act on. The routes answer through `lxd_http_error`, as
+network and image deletes do.
 """
 
 from contextlib import asynccontextmanager

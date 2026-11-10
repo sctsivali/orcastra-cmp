@@ -16,7 +16,7 @@ _TRACKS = {"generic", "aws", "azure", "gcp", "gke", "kvm", "oracle", "ibm", "nvi
 
 @pytest.mark.parametrize("advisory", ADVISORIES, ids=lambda a: a.id)
 def test_an_advisory_entry_is_well_formed(advisory):
-    # the id is also the path the background check reads from Ubuntu (services/kernel_cve_feed/)
+    # The id is also the path the background check reads from Ubuntu (services/kernel_cve_feed/).
     assert CVE_ID.match(advisory.id) and advisory.summary
     assert advisory.reference_url.startswith("https://")
     assert date(2026, 1, 1) <= advisory.data_as_of <= date.today()

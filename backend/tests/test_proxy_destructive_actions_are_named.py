@@ -1,14 +1,11 @@
-"""A destructive raw-proxy call must be audited for the act, not for the transport.
+"""A destructive raw-proxy call is audited under the name of what it destroys.
 
 An API key with `lxd.proxy` and a project grant can delete an image, an instance, a volume or a
-network through `/integrations/raw-proxy`. That is authority the operator issued, so it is not a
-bypass. But every one of those landed in the audit index as `integration.proxy.request`, which
-is not in HIGH_SEVERITY_ACTIONS, while the dashboard's own `image.delete` is. The same
-destructive act had two audit identities and only one of them was alertable, so anything
-watching for `image.delete` could not see the key-authenticated route at all.
-
-These name the act. The dashboard and the proxy stay distinguishable, because the proxy keeps
-its own `integration.` namespace and the record already carries the key as the actor.
+network through `/integrations/raw-proxy`. Audited as `integration.proxy.request`, which is not
+in HIGH_SEVERITY_ACTIONS, such a delete would be invisible to anything watching for
+`image.delete`. Each one is named for the act and is high severity. The dashboard and the
+proxy stay distinguishable: the proxy keeps its own `integration.` namespace and the record
+carries the key as the actor.
 """
 
 import pytest
@@ -64,9 +61,8 @@ def test_an_unknown_resource_stays_generic():
 
 
 def test_a_percent_encoded_path_gives_the_same_answer():
-    """important: the traversal guard beside this decodes twice, so this must too. A classifier
-    that decodes once lets an encoded spelling be audited under a different name than the plain
-    one, which is a way to delete something without the alert firing."""
+    """The path is decoded twice, as the traversal guard beside this does. Decoding once
+    would let an encoded spelling be audited under a different name and escape the alert."""
     plain = proxy_destructive_action_for("DELETE", "/1.0/images/" + "a" * 64)
     once = proxy_destructive_action_for("DELETE", "/1.0/%69mages/" + "a" * 64)
     twice = proxy_destructive_action_for("DELETE", "/1.0/%2569mages/" + "a" * 64)
@@ -81,8 +77,8 @@ def test_a_query_string_does_not_change_the_answer():
 
 
 def test_the_shared_parser_still_serves_the_guest_classifier():
-    """Both classifiers read one parser. If they drift, an encoded exec path is caught by one
-    and missed by the other, which is the defect this refactor exists to prevent."""
+    """Both classifiers read one parser, so an encoded exec path cannot be caught by one and
+    missed by the other."""
     assert proxy_path_segments("/1.0/instances/web-01/exec") == ["instances", "web-01", "exec"]
     assert guest_access_capability_for("/1.0/instances/web-01/exec") == "instance.exec"
     assert guest_access_capability_for("/1.0/%2569nstances/web-01/exec") == "instance.exec"
@@ -108,8 +104,7 @@ def test_a_guest_reaching_delete_is_still_named_for_the_guest():
     ],
 )
 def test_every_new_action_is_categorised_and_high_severity(action):
-    """An action name that is not registered is not alertable, which would leave this change
-    doing nothing at all."""
+    """An action name that is not registered is not alertable."""
     assert action in ACTION_CATEGORIES, f"{action} has no event category"
     assert action in HIGH_SEVERITY_ACTIONS, f"{action} is not high severity"
 

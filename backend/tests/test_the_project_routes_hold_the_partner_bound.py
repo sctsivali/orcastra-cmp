@@ -1,10 +1,9 @@
 """Every project route answers inside the Partner bound.
 
-The bound used to apply to the usage route only, so a Partner on a shared cluster saw every
-organization's project names in the list and the pickers and could rename or delete a
-project no policy of theirs named. A project outside the bound is now absent from both lists
-and not found on PATCH and DELETE; inside the bound everything works as before, and with no
-bound nothing changes.
+A Partner on a shared cluster must not see other organizations' project names in the list or
+the pickers, nor rename or delete a project no policy of theirs names. A project outside the
+bound is absent from both lists and not found on PATCH and DELETE; inside the bound, or with no
+bound, every route behaves normally.
 """
 
 import contextvars

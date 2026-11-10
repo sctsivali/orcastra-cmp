@@ -141,8 +141,8 @@ def _client(monkeypatch, user=None, allowed=None):
     async def nobody_else_holds(*_args, **_kwargs):
         return set()
 
-    # note: moving a cluster needs the whole cluster; who holds it is pinned on real rows in
-    # test_whole_cluster_state_needs_the_whole_cluster.py
+    # Moving a cluster needs the whole cluster; who holds it is pinned on real rows in
+    # test_whole_cluster_state_needs_the_whole_cluster.py.
     monkeypatch.setattr("app.services.cluster_parties.clusters_held_by_another_party", nobody_else_holds)
 
     async def no_generation(*_args, **_kwargs):

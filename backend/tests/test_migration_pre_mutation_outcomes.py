@@ -1,9 +1,9 @@
 """Outcomes that happen before a migration changed anything must not strand it.
 
-A cluster that does not answer, an unreadable certificate store, or a consent that no longer
-holds at claim time used to reach the worker's catch-all and park the job in manual recovery
-with its locks and concurrency slot held. Operator actions that change no daemon (Release,
-Cancel, Recheck) also needed both clusters reachable, so such a job could not be released.
+A cluster that does not answer, an unreadable certificate store, or a consent that lapsed by
+claim time must not park the job in manual recovery with its locks and concurrency slot held.
+Operator actions that change no daemon (Release, Cancel, Recheck) work without both clusters
+reachable, so such a job can still be released.
 """
 
 from __future__ import annotations
@@ -406,7 +406,7 @@ async def test_recheck_and_cancel_do_not_need_the_clusters_to_answer(
 async def test_a_queued_job_waiting_out_a_retry_delay_can_be_cancelled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # A retry delay is written as a lease with nobody holding it.
+    # A retry delay is written as a lease with no holder.
     row = _job(phase="queued", status="pending", locked_by=None,
                lease_expires_at=repository.utcnow() + timedelta(seconds=50))
     world = _actions_world(monkeypatch, row, role="partner", clusters_answer=True)

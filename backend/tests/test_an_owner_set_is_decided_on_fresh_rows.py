@@ -1,12 +1,11 @@
 """An owner-set change is decided on the organization as it stands once its lock is held.
 
 Sessions do not expire on commit, so an organization a handler loaded before taking the organization
-lock kept the primary it had then. Two concurrent revokes of a set's primary and of another owner made
-the second one skip the promotion the first had made necessary; its commit then failed on the
-primary-in-set foreign key after Vault had been written, with the database's text in a 500 and the
-key still cached.
+lock keeps the primary it had then. With two concurrent revokes, of a set's primary and of another
+owner, the second would skip the promotion the first made necessary and fail on the primary-in-set
+foreign key after Vault had been written.
 
-Now the lock reads its organizations again, the owner sets are checked before the Vault write, the
+So the lock reads its organizations again, the owner sets are checked before the Vault write, the
 key's cached copies are dropped whenever the Vault write may have landed, and the answers are fixed
 sentences.
 """
@@ -89,7 +88,7 @@ async def test_a_second_end_decides_on_the_primary_the_first_one_moved(
     @asynccontextmanager
     async def first_revoke_lands_while_waiting(session: Any, org_ids: Any) -> AsyncIterator[None]:
         if session is other and not first:
-            # note: the second request holds these organizations as it loaded them, with PLAIN as primary
+            # The second request holds these organizations as it loaded them, with PLAIN as primary.
             held.extend(other.sync.get(Organization, org_id) for org_id in org_ids)
             assert {org.api_key_id for org in held} == {PLAIN}
             first.append(await send(ADMIN, db, "POST", f"{KEYS}/{PLAIN}/revoke"))

@@ -1,8 +1,8 @@
 """The activation barriers refuse a target that drifted from its approved contract.
 
-Live QA could not inject this deterministically: LXD locks the target while a transfer runs and
-the gap before validation is under a second. So the barrier itself is pinned here: a target that
-gained a setting, lost the job marker, or changed state is never activated.
+LXD locks the target while a transfer runs and the gap before validation is under a second, so
+the drift cannot be injected against a real daemon. The barrier itself is pinned here: a target
+that gained a setting, lost the job marker, or changed state is never activated.
 """
 
 from __future__ import annotations

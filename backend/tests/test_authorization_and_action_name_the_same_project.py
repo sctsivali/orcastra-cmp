@@ -1,16 +1,12 @@
 """A route must act on the project it authorized, not on whichever one holds the name.
 
-An instance name is unique per project, not per host. Three power routes checked the tenant ACL
-against `request.project or "default"` and then handed `request.project` to the service, which
-searches EVERY project when it is None and returns the first hit. A tenant holding `operate` on
-`default` was therefore authorized there while the action ran against whichever project LXD
-listed first, which on a cluster hosting several tenants is somebody else's instance.
+An instance name is unique per project, not per host, and the service searches EVERY project and
+returns the first hit when it is given None. A power route that checked the tenant ACL against
+`request.project or "default"` and then handed `request.project` to the service would authorize
+`default` while acting on whichever project LXD listed first, which on a cluster hosting several
+tenants is somebody else's instance.
 
-The metrics route was worse: no tenant check at all, and the reader behind it took a `project`
-argument and never passed it to the resolver.
-
-Both are the shape of the `VMInfo.project` defect fixed alongside them: a value is resolved
-correctly in one place and the thing that acts on it trusts a different one.
+The metrics route needs the tenant check too, and its reader must pass `project` to the resolver.
 """
 
 import pytest
@@ -149,7 +145,7 @@ def test_a_power_action_on_a_project_the_tenant_does_not_hold_is_refused(action,
 
 
 def test_metrics_are_refused_for_an_instance_the_tenant_does_not_hold(recorder):
-    """This route had no tenant check at all, so any instance on a reachable cluster was readable."""
+    """Without a tenant check, any instance on a reachable cluster would be readable."""
     client = _app(TENANT_ACL, True, recorder)
     try:
         response = client.get(f"/instances/{NAME}/metrics?host={HOST}&project=acme")
@@ -161,7 +157,7 @@ def test_metrics_are_refused_for_an_instance_the_tenant_does_not_hold(recorder):
 
 
 def test_metrics_read_the_project_they_were_given(recorder):
-    """The reader took a `project` argument and never passed it to the resolver."""
+    """The reader must pass its `project` argument on to the resolver."""
     client = _app(None, False, recorder)
     try:
         response = client.get(f"/instances/{NAME}/metrics?host={HOST}&project=acme")
@@ -272,19 +268,16 @@ def test_partner_delete_is_project_bound_before_the_service(module_name, recorde
 def _guarded_routes():
     """Every route that names an instance and is reachable by a tenant, with its guard state.
 
-    A structural check rather than a live one: this is about a rule holding across a dozen
-    handlers in four files, which is the kind of coverage an LLM audit is bad at and a parse is
-    good at. Each of these leaked something concrete before the guard was added: another tenant's
-    live metrics, their console capabilities, their attached ISO, their tags, their snapshot
-    names.
+    A parse rather than a live check, because the rule must hold across a dozen handlers in five
+    files. Without the guard these routes expose another tenant's live metrics, console
+    capabilities, attached ISO, tags or snapshot names.
     """
     import ast
     import pathlib
 
     findings = {}
-    # important: vms.py is in this list because it is the router the console actually drives, and
-    # it is exactly the twin that slipped through the reading pass. Any router that addresses an
-    # instance belongs here; leaving one out is how the next one slips.
+    # important: every router that addresses an instance belongs in this list, vms.py included,
+    # since it is the router the console drives. A router left out goes unchecked.
     for name in ("console.py", "tags.py", "instance_rebuild.py", "instances.py", "vms.py"):
         path = pathlib.Path("app/routers") / name
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -296,11 +289,9 @@ def _guarded_routes():
                 continue
             # Partner-only routes carry no tenant ACL, so a per-instance check there is inert.
             partner_only = "require_partner" in body or "require_admin" in body
-            # important: only a REQUIRED instance argument means the route addresses one
-            # instance. An optional one is a filter on a listing, and those are authorized by
-            # narrowing the cluster set instead, which console.py's session listing documents
-            # at length. Counting them here would demand a per-instance check that is the wrong
-            # shape for a listing, and the rule would get relaxed to make the noise stop.
+            # Only a REQUIRED instance argument means the route addresses one instance. An
+            # optional one filters a listing, which is authorized by narrowing the cluster set
+            # instead (see console.py's session listing).
             required = node.args.args[: len(node.args.args) - len(node.args.defaults)]
             optional_names = {
                 a.arg
@@ -337,17 +328,16 @@ def test_every_tenant_reachable_instance_route_checks_the_instance():
     )
 
 
-# ── the router the console actually drives ─────────────────────────────────────────────────
+# ── the router the console drives ──────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize("action", ["start", "stop", "restart"])
 def test_the_vms_power_routes_address_the_project_they_authorized(action, recorder):
-    """`/vms` is the router the console calls, and it carried the same split.
+    """`/vms` is the router the console calls, so it must hold the same rule.
 
     The frontend reaches start, stop, restart and metrics through `vmAPI` (frontend/src/lib/api.ts),
     which posts to `/vms/...`. The identical handlers under `/instances` are not called by the
-    console at all, so fixing only those would have left the live path open while every test went
-    green. That is this codebase's most expensive recurring defect, committed while fixing it.
+    console, so guarding only those would leave the live path open.
     """
     client = _app(TENANT_ACL, True, recorder, module_name="vms")
     try:
@@ -389,9 +379,8 @@ def test_vms_metrics_are_refused_for_an_instance_the_tenant_does_not_hold(record
 def test_an_empty_project_does_not_authorize_one_thing_and_resolve_another(recorder):
     """`?project=` is falsy, and the service reads a falsy project as "search every project".
 
-    A helper that normalised with `or "default"` behind the caller's back therefore authorized
-    `default` while the action searched everywhere, which is the split these fixes exist to close,
-    reintroduced by the fix itself.
+    A helper that normalised with `or "default"` behind the caller's back would authorize
+    `default` while the action searched everywhere.
     """
     client = _app(TENANT_ACL, True, recorder, module_name="instance_rebuild")
     try:

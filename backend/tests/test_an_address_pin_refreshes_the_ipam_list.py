@@ -2,12 +2,10 @@
 The IPAM list carries the pin state, the network type and the subnet, and a NIC write
 refreshes it.
 
-Pinning an address through the Devices tab cleared the instance caches and left `ipam:list`
-untouched, so the IPAM page showed the old picture for up to two minutes. The list also
-cached a partial read and knew nothing about the instances behind its rows. Now every
-instance lifecycle invalidation clears `ipam:*`, the rows are joined with the instances and
-networks of their node, a node whose instances could not be read answers "unknown" and is
-flagged partial (and not cached), and the Partner project bound applies.
+Every instance lifecycle invalidation clears `ipam:*`, so an address pinned in the Devices tab
+shows at once rather than after the two-minute TTL. Rows are joined with the instances and
+networks of their node; a node whose instances could not be read answers "unknown" and is
+flagged partial (and not cached); and the Partner project bound applies.
 """
 
 from types import SimpleNamespace
@@ -282,13 +280,13 @@ def test_a_lease_listed_under_a_borrowing_project_belongs_to_the_instances_proje
     assert mine[0].allocation == "static"
     theirs = [r for r in rows if r.used_by == "theirs"]
     assert len(theirs) == 1 and theirs[0].project == "other" and theirs[0].allocation == "dhcp"
-    # the gateway of a borrowed network is listed for each project that borrows it
+    # The gateway of a borrowed network is listed for each project that borrows it.
     assert sorted(r.project for r in rows if r.type == "network") == ["borrower", "default"]
 
 
 def test_a_daemon_with_the_extension_is_read_once_for_every_project(monkeypatch) -> None:
-    """One all-projects read instead of one per project: measured on a 19-project MicroCloud,
-    54 s and 815 duplicated rows became 4 s and 59. The rows name their owner in used_by."""
+    """One all-projects read instead of one per project, which also avoids a duplicate row per
+    borrowing project on a cluster with many projects. The rows name their owner in used_by."""
     tc, _ = _app(monkeypatch)
     from app.routers import ipam as ipam_module
     calls: List[str] = []

@@ -1,5 +1,5 @@
 """A seed reads every bucket of `/1.0/operations` across projects, off the loop, with both
-timeouts, and marks what the daemon no longer reports as lost.
+timeouts, and marks open rows the daemon does not report as lost.
 
 The hub only carries what happens while it is connected. The seed on every connect (and the
 reconcile every two minutes) is what closes the gap: `running`, `pending`, `success`, `failure`

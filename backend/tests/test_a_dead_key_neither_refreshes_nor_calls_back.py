@@ -1,11 +1,10 @@
 """A revoked, inactive or expired key is neither refreshed nor called back.
 
-refresh-organizations checked only the key's scope and its app_url, so a dead key's stored
-credential hash was still sent to the key's callback URL and the answer was written as
-organizations under the dead key's ownership. The OrcaHub callbacks (the member push, the
-removal push and the lifecycle webhook) read the same key and sent its raw secret out for it.
-Both now stop at the key's state: the refresh answers 409 before any outbound call, and the
-callback credentials are None before the secret is read.
+A dead key's stored credential must not reach its callback URL, and no organization may be written
+under its ownership. The same holds for the OrcaHub callbacks (the member push, the removal push
+and the lifecycle webhook), which would send the key's raw secret. Both stop at the key's state:
+refresh-organizations answers 409 before any outbound call, and the callback credentials are None
+before the secret is read.
 """
 
 from typing import Any, AsyncIterator, Dict, List
@@ -47,7 +46,7 @@ def metadata(**state: Any) -> Dict[str, Any]:
         "created_by": PARTNER.email, "created_at": "2026-09-01T00:00:00+00:00",
         "is_active": True, "is_revoked": False, "expires_at": None,
         "app_url": "https://hub.example.test",
-        # note: stored by a sync with the secret below, as services/integration_callback_url.py requires
+        # Stored by a sync with the secret below, as services/integration_callback_url.py requires.
         APP_URL_SECRET_TAG: callback_url_tag("hash-do-not-send"),
         "cluster_permissions": [{"cluster_id": CLUSTER, "permissions": ["admin"], "projects": ["*"]}],
         **state,
@@ -119,7 +118,7 @@ async def test_a_dead_key_is_not_refreshed(monkeypatch, outbound: List[str], sta
     assert response.status_code == 409, response.text
     assert response.json()["detail"] == "This API key is revoked, inactive or expired, so it cannot be refreshed"
     assert outbound == [], "a dead key's callback URL must never be called"
-    # note: the scope check reads the key through get_api_key_from_vault, which loads the secret
+    # The scope check reads the key through get_api_key_from_vault, which loads the secret
     # document's hash with it. The refresh's own read, the one that feeds the callback, must not run.
     assert vault.reads.count(f"{BASE}/secret") <= 1, "the refresh read the credential it would have sent"
     assert await orgs(db) == [], "nothing may be written under a dead key's ownership"

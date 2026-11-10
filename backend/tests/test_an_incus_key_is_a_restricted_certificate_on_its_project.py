@@ -1,10 +1,9 @@
 """A My Keys key on Incus is a trust-store certificate held to its project.
 
-Incus has no /1.0/auth (doc/rest-api.yaml at v6.0.7 and v7.6.0 list no such path), so every key
-on an Incus cluster failed: the router posted to /1.0/auth/identities/tls. Now a Standard key is a
-certificate restricted to the key's project and an Admin key an unrestricted one, read back from
-the trust store before the key is handed out. Revocation deletes exactly that entry, and a
-certificate the client renewed itself is still found by its description marker.
+Incus has no /1.0/auth (doc/rest-api.yaml at v6.0.7 and v7.6.0 list no such path), so a Standard
+key is a certificate restricted to the key's project and an Admin key an unrestricted one, read
+back from the trust store before the key is handed out. Revocation deletes exactly that entry, and
+a certificate the client renewed itself is still found by its trust name.
 
 The client is a recorder in pylxd's shape: non-2xx answers raise pylxd's exceptions, as pylxd's
 _APINode does.
@@ -139,9 +138,9 @@ def test_a_standard_key_is_a_certificate_restricted_to_its_project():
     issued, _ = _issue(store)
     [body] = store.posts
     assert body["type"] == "client" and body["restricted"] is True and body["projects"] == ["tenant-web"]
-    # a restricted client can list descriptions, so the key's id and name are not in it
+    # A restricted client can list descriptions, so the key's id and name stay out of it.
     assert "key_1" not in body["description"] and "ci" not in body["description"].lower().split()
-    # base64 DER, not PEM, is what POST /1.0/certificates takes
+    # POST /1.0/certificates takes base64 DER without PEM armour.
     assert "BEGIN" not in body["certificate"]
     entry = store.entries[issued.fingerprint]
     assert entry["restricted"] is True and entry["projects"] == ["tenant-web"]
@@ -180,9 +179,9 @@ def test_a_refused_certificate_raises_with_nothing_created():
     ],
 )
 def test_an_error_answer_after_the_entry_was_written_leaves_nothing(failure):
-    """Shown on the Incus lab (2026-11-08, L6): the daemon wrote the trust entry cluster-wide, then
-    answered 500 because a peer refused it; the create gave up and left a trusted certificate that
-    no key record knew about. A timed-out POST leaves the same doubt."""
+    """The daemon can write the trust entry cluster-wide and then answer 500 because a peer refused
+    it, and a timed-out POST leaves the same doubt. Either way no trusted certificate may outlive
+    the failed create."""
     store = _Store(fail_after_write=failure)
     with pytest.raises(ci.IssueFailed):
         _issue(store)
@@ -248,9 +247,9 @@ def test_revocation_deletes_exactly_the_stored_fingerprint():
 
 
 def test_the_trust_entry_is_named_after_the_key_not_its_holder():
-    """A holder can replace its certificate and description (Incus certificate_self_renewal, shown on
-    the lab 2026-11-08) but never the name, so the name is what ties the entry to the key. It is
-    opaque: a restricted client can list the trust store, so it must not carry the key's name."""
+    """A holder can replace its certificate and description (Incus certificate_self_renewal) but
+    never the name, so the name ties the entry to the key. It is opaque: a restricted client can
+    list the trust store, so it must not carry the key's name."""
     store = _Store()
     issued, _ = _issue(store)
     entry = store.entries[issued.fingerprint]
@@ -283,11 +282,11 @@ def test_two_entries_answering_to_one_name_are_not_guessed_between():
     assert len(store.entries) == 2
 
 
-def test_a_holder_who_swaps_two_keys_certificates_cannot_keep_either(  # security review 2026-11-08
+def test_a_holder_who_swaps_two_keys_certificates_cannot_keep_either(
 ):
     """K1 renews to C, then K2 renews to K1's original certificate F1 (its holder has F1's key).
-    Revoking K1 by its stored fingerprint found F1, now K2's entry, deleted that, and left K1
-    trusted on C, marked revoked and never retried. The name, which a holder cannot change, decides."""
+    Revoking K1 by its stored fingerprint would delete F1, now K2's entry, and leave K1 trusted on
+    C. The name, which a holder cannot change, decides."""
     store = _Store()
     issued, _ = _issue(store)
     f1, c = issued.fingerprint, "c" * 64
@@ -301,8 +300,8 @@ def test_a_holder_who_swaps_two_keys_certificates_cannot_keep_either(  # securit
 
 
 def test_an_entry_named_for_the_key_is_removed_even_if_its_project_list_changed():
-    """A project renamed under a renewed key changes the entry's project list, not whose it is; it
-    read as gone, so the key was marked revoked while still trusted."""
+    """A project renamed under a renewed key changes the entry's project list but not whose entry
+    it is. Treating it as gone would mark the key revoked while it is still trusted."""
     store = _Store()
     issued, _ = _issue(store)
     entry = store.entries.pop(issued.fingerprint)
@@ -331,7 +330,7 @@ def test_revoking_a_key_already_gone_is_not_an_error():
 
 
 def test_a_record_without_an_engine_is_lxd():
-    """Records written before Incus keys existed can only be LXD's."""
+    """A record with no engine field predates Incus keys and can only be LXD's."""
     calls: List[str] = []
 
     class _Node:
@@ -363,9 +362,9 @@ def test_the_engine_is_read_from_the_trusted_client_only():
 
 
 def test_a_new_key_is_valid_on_a_member_whose_clock_is_a_little_behind():
-    """Found on the Incus lab: the member that received the key forwarded it to its peers, and one
-    refused it, "failed to notify peer 10.1.1.243:8443: The provided certificate isn't valid yet",
-    because NotBefore was this second and the peer's clock was under a second behind."""
+    """NotBefore sits minutes in the past: the member that receives the key forwards it to its peers,
+    and a peer whose clock is under a second behind refuses a certificate valid from this second
+    ("The provided certificate isn't valid yet")."""
     from datetime import datetime, timedelta
 
     from cryptography import x509
@@ -376,8 +375,8 @@ def test_a_new_key_is_valid_on_a_member_whose_clock_is_a_little_behind():
 
 
 async def test_a_key_the_cluster_did_not_revoke_keeps_its_record(monkeypatch):
-    """Before this, delete_key removed the Vault record whatever the cluster answered, so a renewed
-    certificate nobody could find stayed trusted with nothing left to retry from (lab, 2026-11-08)."""
+    """delete_key keeps the Vault record when the cluster did not confirm the revocation; otherwise
+    a renewed certificate that cannot be found would stay trusted with nothing left to retry from."""
     from types import SimpleNamespace
 
     from fastapi import HTTPException
@@ -389,7 +388,7 @@ async def test_a_key_the_cluster_did_not_revoke_keeps_its_record(monkeypatch):
     store = _Store()
     issued, _ = _issue(store)
     entry = store.entries.pop(issued.fingerprint)
-    for fp in ("c" * 64, "d" * 64):  # two entries answering to one name: never guessed between
+    for fp in ("c" * 64, "d" * 64):  # two entries answer to one name, so neither is picked
         store.entries[fp] = {**entry, "fingerprint": fp}
     record = {"id": "key_1", "node": "incus-lab", "engine": "incus", "fingerprint": issued.fingerprint,
               "trust_name": issued.trust_name, "project": "tenant-web", "auth_level": "standard",
@@ -460,8 +459,8 @@ def _service(*, pooled=None, connects_to=None, registered=("incus-lab",)):
 
 
 async def test_a_worker_with_no_pooled_client_still_revokes_on_delete(monkeypatch):
-    """Security review 2026-11-08: delete used the memory-only get_client, so on a worker that had
-    never connected to the cluster it skipped the revoke, deleted the record and answered success."""
+    """get_client is memory-only, so delete connects first. Skipping the revoke on a worker that
+    never connected would delete the record and answer success with the key still trusted."""
     store = _Store()
     _issue(store)
     outcome, deleted = await _delete(monkeypatch, store, _service(connects_to=_Incus(store)))
@@ -497,8 +496,8 @@ async def test_a_revoke_that_raises_keeps_the_key(monkeypatch):
 
 
 def test_two_keys_made_in_one_second_with_one_name_get_different_ids():
-    """Security review 2026-11-08: the id was the second and the name, so the second create
-    overwrote the first's Vault record and, on Incus, shared its trust name."""
+    """An id built from the second and the name alone would let the second create overwrite the
+    first's Vault record and, on Incus, share its trust name."""
     from app.routers.my_keys import _new_key_id
 
     first, second = _new_key_id("CI deploy"), _new_key_id("CI deploy")
@@ -541,10 +540,9 @@ class _LxdAuth:
 
 
 def test_an_lxd_identity_that_replaced_its_own_certificate_is_revoked_through_its_group():
-    """Shown on console-lab (LXD 5.21.9, 2026-11-08): a My Keys identity PATCHed its own
-    tls_certificate (200), which changes its id; the revoke deleted the old id (gone), then the
-    group, and left a trusted identity with no groups. The group is the key's own, so its members
-    are the key's identities."""
+    """A My Keys identity can PATCH its own tls_certificate (LXD 5.21.9 answers 200), which changes
+    its id. Deleting the stored id and the group would leave a trusted identity with no groups. The
+    group is the key's own, so its members are the key's identities and are revoked too."""
     old, renewed = "a" * 64, "e" * 64
     auth = _LxdAuth({renewed: {"name": "ci@orcastra"}}, {"key_1_group": [renewed]})
     record = {"id": "key_1", "engine": "lxd", "identity_id": old, "group_name": "key_1_group"}

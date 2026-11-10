@@ -1,21 +1,14 @@
 """An installation must never be able to mint a credential that grants everything.
 
 `granted_capabilities` returns None for a key whose `capabilities` field is absent, and
-`has_capability` reads None as unrestricted. That is not a bug; it is how the keys issued before
-capabilities existed keep working, and 17 of the 22 in this deployment are in that state. It does
-mean that a single code path which forgets to write the field mints a credential with no ceiling
-at all, and nothing about the resulting key looks wrong.
+`has_capability` reads None as unrestricted, which keeps keys issued before capabilities existed
+working. A code path that forgets to write the field therefore mints a credential with no ceiling,
+and nothing about the key looks wrong. `build_install_metadata` is the only writer and spells the
+key literally; this file pins that structurally and checks the result through
+`granted_capabilities` itself.
 
-Four layers stand between an installation and that outcome. Pydantic requires a non-empty list,
-the table constraint refuses the row, `build_install_metadata` is the only writer and spells the
-key literally, and this file asserts the last two directly: the structural half so a second writer
-cannot appear, and the behavioural half against the very function whose None return is what
-"legacy means unrestricted" is made of.
-
-The credential is also hash-only, and that claim is only true because the plaintext backfill in
-`_validate_api_key_blocking` is guarded on `app_url`. An installation never has one, so nothing
-writes a recoverable copy. Asserted here rather than assumed, because the add-on's first request
-is what would have undone it.
+The credential is also hash-only: the plaintext backfill in `_validate_api_key_blocking` is guarded
+on `app_url`, and an installation never has one, so nothing writes a recoverable copy.
 """
 
 import ast
@@ -74,7 +67,7 @@ def issued(monkeypatch):
 # ── the behavioural half ───────────────────────────────────────────────────────────────────────
 
 def test_an_issued_credential_is_not_unrestricted(issued) -> None:
-    """Asserted against the function whose None return is the hole itself."""
+    """Checked through `granted_capabilities`, whose None return means unrestricted."""
     _vault, _key_id, _secret, _signing, metadata = issued
 
     granted = granted_capabilities(metadata)
@@ -92,11 +85,8 @@ def test_an_issued_credential_leaves_no_recoverable_secret(issued) -> None:
 
 
 def test_the_signing_secret_is_not_the_credential(issued) -> None:
-    """Signing with the API secret means anyone who can verify a delivery holds a live key.
-
-    With one partner that is one receiver. With an open platform it is every author, so the two
-    are split and stored on different paths.
-    """
+    """Signing with the API secret would hand a live key to anyone who can verify a delivery, so
+    the two secrets are split and stored on different paths."""
     vault, key_id, secret, signing, _metadata = issued
     assert signing != secret
     assert signing.startswith("whsec_")
@@ -128,12 +118,8 @@ def test_rotation_keeps_the_ceiling(issued, monkeypatch) -> None:
 
 
 def test_rotation_retires_the_old_key_through_its_expiry(issued, monkeypatch) -> None:
-    """The reuse that makes the grace window cost nothing.
-
-    `validate_api_key` already refuses an expired key with 401, so shortening the expiry is the
-    whole mechanism. A separate "retiring" flag would be a second thing to enforce and a second
-    thing to get wrong.
-    """
+    """`validate_api_key` already refuses an expired key with 401, so shortening the expiry is the
+    whole mechanism; there is no separate "retiring" flag to enforce."""
     vault, old_key_id, _secret, _signing, _metadata = issued
     ec.rotate_install_credential(
         vault,
@@ -194,11 +180,10 @@ def test_issuing_without_a_capability_is_refused(issued) -> None:
 # ── the structural half ────────────────────────────────────────────────────────────────────────
 
 def test_only_one_function_builds_installation_key_metadata() -> None:
-    """A second builder is how the field goes missing on one path and nobody notices.
+    """A second builder could leave the field out on its path unnoticed.
 
-    The signal is a dict literal carrying `app_type` and `cluster_permissions`, which is what an
-    API key's metadata blob looks like. If one appears outside `build_install_metadata`, it is a
-    second writer and it has to be reviewed rather than discovered later.
+    A dict literal carrying `app_type` and `cluster_permissions` is an API key metadata blob, so
+    one outside `build_install_metadata` is a second writer.
     """
     source = inspect.getsource(ec)
     tree = ast.parse(source)

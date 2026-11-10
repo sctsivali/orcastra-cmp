@@ -1,15 +1,15 @@
 """Ratchet: nothing outside the Authentik service reaches its two role-rewriting calls.
 
 `sync_user_role` removes the user from every role group but the target one, and
-`remove_user_from_all_roles` strips all three, role_admin included. The integration member sync
-called the first and its orphan revoke the second, so any key could demote an Admin. An
-integration now goes through services/integration_roles, which only grants.
+`remove_user_from_all_roles` strips all three, role_admin included. Reached from the integration
+member sync or its orphan revoke, either would let any key demote an Admin, so an integration
+goes through services/integration_roles, which only grants.
 
-Two rules, because either alone passes while the class returns:
+Two rules, because either alone can pass while the hazard returns:
   1. no module under app/ names either call, except the allowlisted dashboard handlers;
   2. each allowlisted handler still carries the guard that makes it safe to name the call.
 
-No baseline count: every other caller was converted, so the rule is absolute.
+No baseline count: the rule is absolute.
 """
 
 import ast

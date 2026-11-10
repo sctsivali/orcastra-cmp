@@ -114,7 +114,7 @@ def test_the_sweep_names_no_context_scoped_helper():
 
 def test_the_sweep_never_reaches_for_the_pooled_client():
     """Proving trust through get_client proves the certificate a worker holds, which after a
-    rotation is the old one; removing on that basis can lock the dashboard out."""
+    rotation can be the superseded one; removing on that basis can lock the dashboard out."""
     for path in (CLEANUP, HTTP):
         names = {name for name, _ in _names(ast.parse(path.read_text()))}
         assert not names & {"get_client", "materialize", "ensure_connection"}, path.name

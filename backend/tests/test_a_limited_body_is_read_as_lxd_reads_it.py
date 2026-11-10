@@ -8,9 +8,7 @@ policy-key observer, the guest-capability price of a /proxy create) reads the pl
 spelling, so a body that spells a field another way would carry past all of them. Map keys (config
 keys, device names) match exactly and are left alone.
 
-Ported from the RC4-hotfix2 line, where the rule held a project-limited key only. On this line it
-holds every key (owner decision 3, 2026-09-25), so the `*` case is inverted: a `*` key is refused
-too, and its lowercase body still goes through.
+The rule holds every key, a `*` key included; a lowercase body still goes through.
 """
 
 from typing import Any, List
@@ -85,7 +83,7 @@ async def test_a_star_key_lowercase_body_still_goes_through() -> None:
 
 
 async def test_a_twin_action_can_no_longer_take_the_fence_stop_exemption(fence_calls) -> None:
-    """{"action": "stop", "Action": "restart"} was judged a stop and reached LXD as a restart."""
+    """{"action": "stop", "Action": "restart"} would be judged a stop and reach LXD as a restart."""
     outcome, session = await raw_write("PUT", "/1.0/instances/web/state", "tenant-a",
                                        {"action": "stop", "Action": "restart"}, api_key=WILDCARD)
     assert isinstance(outcome, HTTPException) and outcome.status_code == 400
@@ -160,7 +158,7 @@ async def test_proxy_create_refuses_an_odd_field_spelling(api_key) -> None:
 
 
 async def test_proxy_create_no_longer_prices_a_config_it_cannot_read() -> None:
-    """create_instance forwards params whole, so `Config` reached LXD as config without instance.exec."""
+    """create_instance forwards params whole, so `Config` would reach LXD as config without instance.exec."""
     star_without_exec = key(["*"], capabilities=["lxd.proxy"])
     outcome, client = await proxy_call("create_instance", "default",
                                        {"name": "vm", "Config": {"raw.lxc": "lxc.hook.pre-start=/bin/sh"}},

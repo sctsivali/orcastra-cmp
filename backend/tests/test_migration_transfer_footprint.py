@@ -2,12 +2,9 @@
 
 LXD reports a root disk usage of 0 for an instance that was created and never started: on zfs the
 volume is a clone of its image with no bytes of its own, yet a transfer still writes the whole
-root. Found live on the migration lab with a stopped VM that had never booted, which preflight
-refused with "restore authoritative size reporting", a remedy for a different problem.
-
-A reported 0 is now kept as a measurement by `instance_footprint`, but a transfer sized from it
-alone could fill a target pool, so without an explicit root size the source stays unmeasured and
-the blocker names the instance and the fix (start it once, or give the root an explicit size).
+root. `instance_footprint` keeps a reported 0 as a measurement, but a transfer sized from it alone
+could fill a target pool, so without an explicit root size the source stays unmeasured and the
+blocker names the instance and the fix (start it once, or give the root an explicit size).
 """
 
 from __future__ import annotations
@@ -109,9 +106,8 @@ def test_the_blocker_names_the_unstarted_instance_and_the_fix(monkeypatch: pytes
 
 
 # A dir pool reports a usage of 0 for every instance, data or not: without project quotas LXD has
-# no per-volume figure for it. Found live on the rebuilt lab (2026-10-29) with a stopped container
-# holding an 8 MiB payload, and Pandora's pool is dir, so every instance there was refused with
-# "never started". The owner chose to bound such an instance by everything its pool holds.
+# no per-volume figure for it. Such an instance is bounded by everything its pool holds instead of
+# being refused as "never started".
 
 
 def _dir_client(*, usage: int = 0, location: str = "none", names=("workload",)) -> _Client:
@@ -154,8 +150,8 @@ def test_a_dir_instance_is_bounded_by_its_pool_and_can_move(monkeypatch: pytest.
 def test_a_dir_instance_the_target_cannot_bound_asks_for_consent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pandora's pool holds 105 GB of a 124 GB disk, so a copy within it never fits the bound.
-    The owner chose (2026-10-29) to let an operator accept the unmeasured size instead."""
+    """A pool fuller than the target's free space never fits the bound, so an operator may accept
+    the unmeasured size instead."""
     result = _capacity(monkeypatch, _dir_client(), source_used=60 * GiB, target_free=50 * GiB)
     assert result.blockers == []
     consent = next(w for w in result.warnings if w["code"] == "source_size_unmeasured")
@@ -233,8 +229,8 @@ def test_a_never_started_instance_on_zfs_is_still_refused_with_its_fix(
 def test_a_dir_container_with_an_explicit_size_is_still_bounded_by_its_pool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A dir pool does not enforce a container's root size, so 10GiB says nothing about the 40GB
-    it may hold: the size used to stand in as a measurement, skipping the bound and the consent."""
+    """A dir pool does not enforce a container's root size, so 10GiB says nothing about what it
+    holds. The size must not stand in as a measurement and skip the bound and the consent."""
     client = _dir_client()
     client.api.instances["workload"].metadata["expanded_devices"]["root"]["size"] = "10GiB"
 

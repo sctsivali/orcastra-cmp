@@ -1,12 +1,12 @@
 """
 Ratchet: no raw-proxy guard reads the path except through canonical_proxy_path.
 
-The raw-proxy bypasses (`/1.0/./certificates`, `/1.0/certificates#x`, `./exec`, a double-encoded
-`project`, a fragment that skipped the migration fence) all came from a guard or the URL build
-parsing the raw string its own way. This holds the one-parser rule structurally:
+A guard or URL build that parses the raw string its own way opens bypasses such as
+`/1.0/./certificates`, `/1.0/certificates#x`, `./exec`, a double-encoded `project` or a fragment
+that skips the migration fence. This holds the one-parser rule structurally:
 
-- a guard's `path` parameter is only ever handed to the canonical parser or to another guard that
-  hands it on, never split, stripped, decoded, compared or aliased;
+- a guard's `path` parameter goes only to the canonical parser or to another guard that hands it
+  on, never split, stripped, decoded, compared or aliased;
 - in the router, `request.path` reaches only those guards and the record (log text, audit target);
 - the URL raw_proxy sends is built from `canonical_proxy_path(request.path).request_target(...)`;
 - none of these functions calls a URL parser of its own.

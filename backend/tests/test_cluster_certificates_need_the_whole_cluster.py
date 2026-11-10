@@ -1,10 +1,9 @@
 """A cluster's client certificate is read, renewed, verified or cancelled only by its whole holder.
 
-A cluster's client certificate and its renewal act for every project on the cluster, while the
-/certificates routes checked the cluster scope only. On a cluster another party holds, a partner
-could read, renew, verify or cancel that certificate, and the list, the warnings and the stale
-pending cleanup covered it too. The party is read from real rows on SQLite; the certificate store,
-rotation and trust cleanup are recorders, so a refusal is proven to land before any of them.
+The certificate and its renewal act for every project on the cluster, so the cluster scope alone is
+not enough: on a cluster another party holds, a partner is refused, and the list leaves that cluster
+out. The party is read from real rows on SQLite; the certificate store, rotation and trust cleanup
+are recorders, so a refusal is proven to land before any of them.
 """
 
 from typing import Any, Dict, List

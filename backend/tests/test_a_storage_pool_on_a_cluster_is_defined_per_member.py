@@ -1,9 +1,9 @@
 """Creating a storage pool on a cluster is two-phase, like a bridge network.
 
-One cluster-wide POST answered 'Pool not pending on any node (use --target <node> first)' on a
-3-member MicroCloud, so no pool could be created from the console there. LXD wants the pool
-defined on every member first (POST ?target=<member>, carrying only the member-specific keys)
-and then created cluster-wide with the rest. A standalone host keeps the single create.
+On a cluster a single cluster-wide POST answers 'Pool not pending on any node (use --target
+<node> first)'. LXD wants the pool defined on every member first (POST ?target=<member>,
+carrying only the member-specific keys) and then created cluster-wide with the rest. A
+standalone host keeps the single create.
 """
 
 from types import SimpleNamespace

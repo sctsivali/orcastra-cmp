@@ -2,9 +2,9 @@
 
 Who manages a key (read, revoke, delete, capabilities, rotate-secret) is decided by party
 (services/cluster_parties.py), and the party of an organization is the integration key it carries.
-Counting every owner key there let the seller who provisioned a buyer manage, and rotate to receive
+Counting every owner key would let the seller who provisioned a buyer manage, and rotate to receive
 the secret of, a key the buyer's founder enrolled into that buyer. Only an owner row that came from a
-claim, provisioning, a transfer or a carry of one of those lends a party, as before co-ownership.
+claim, provisioning, a transfer or a carry of one of those lends a party.
 """
 
 from typing import Any, Dict
@@ -52,7 +52,7 @@ def world() -> Dict[str, Any]:
         OrganizationCluster(organization_id=own.id, cluster_id=f"{CLUSTER}-own", registered_by=FOUNDER),
     ])
     db.sync.commit()
-    # note: the founder's org shares the cluster through a second binding row of its own
+    # The founder's org shares the cluster through a second binding row of its own.
     db.add(OrganizationCluster(organization_id=own.id, cluster_id=CLUSTER, registered_by=FOUNDER))
     db.sync.commit()
     return {"db": db, "home": home, "buyer": buyer, "own": own}
@@ -137,10 +137,11 @@ async def test_a_carried_enrolled_key_still_lends_no_party(world: Dict[str, Any]
 
 
 async def test_a_promoted_enrolled_key_still_lends_no_party(world: Dict[str, Any]) -> None:
-    """Pinned on purpose: when the claiming key leaves, the enrolled key becomes primary as it came in.
+    """When the claiming key leaves, the enrolled key becomes primary as it came in.
 
-    The organization then lends no party, so its partners no longer manage keys on a shared cluster
-    through it, until an Administrator's transfer restamps the row. Fail-closed: it only narrows access.
+    The organization then lends no party, so its partners do not manage keys on a shared cluster
+    through it until an Administrator's transfer restamps the row. This fails closed: it only narrows
+    access.
     """
     db = world["db"]
     buyer = world["buyer"]

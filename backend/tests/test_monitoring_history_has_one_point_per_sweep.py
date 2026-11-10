@@ -1,8 +1,8 @@
 """One history point per dashboard sweep and scope, whichever worker built it.
 
-Each worker kept its own "last stored" time, so when several built the same dashboard within a
-few seconds every one of them appended it. Over a day about 70% of the points were copies, and
-the read-modify-write of the history value let concurrent appends overwrite each other.
+A per-worker "last stored" time would let several workers that built the same dashboard within
+a few seconds each append it, and a read-modify-write of the history value would let concurrent
+appends overwrite each other.
 """
 
 import asyncio
@@ -102,8 +102,8 @@ def test_a_sweep_no_cluster_answered_writes_no_point(monkeypatch):
 
 def test_a_tenant_sweep_writes_no_host_point(monkeypatch):
     # A point carries each cluster's memory, storage and GPU (monitoring_history.build_point).
-    # A tenant may not read host figures and GET /history refuses it, so its sweep stores none:
-    # data at rest that would come back if that gate were ever loosened.
+    # A tenant may not read host figures and GET /history refuses it, so its sweep stores none;
+    # stored figures would leak if that gate were ever loosened.
     monkeypatch.setattr(monitoring, "_last_history_store_times", {})
     cache = _GenerationCache()
     monkeypatch.setattr(monitoring, "get_cache_manager", lambda: cache)

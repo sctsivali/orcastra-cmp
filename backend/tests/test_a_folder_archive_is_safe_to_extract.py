@@ -158,7 +158,7 @@ async def test_a_link_chosen_as_the_root_means_its_target():
 
 
 async def test_two_links_that_each_pass_cannot_chain_out(tmp_path):
-    """Found by the security review with GNU tar: `esc` walked through `up` and left the tree."""
+    """GNU tar would extract `esc` through `up` and leave the tree."""
     guest = FakeGuest()
     guest.add_dir(b"/top")
     guest.add_dir(b"/top/a")

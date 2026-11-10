@@ -1,20 +1,15 @@
-"""A control that exists, is tested, and is never called is not a control.
+"""A control that exists and is tested but is never called is not a control.
 
-This exists because four of them shipped that way. `desktop_policy.get_consent`,
-`break_glass_service.get_active_key_grant`, the two desktop rate buckets and the dedicated desktop
-thread pool were all written, unit-tested against stubs, and named in comments and documentation as
-gates standing between an agent and a customer's screen. None had a call site. The suite was green
-throughout, because every test called the function directly and none asked whether a request ever
-reached it.
-
-The pool one had teeth: `services/desktop/runtime.py` argues that desktop must never borrow
-`exec_executor` because a screenshot loop would starve every other integration's exec, and then
-built a pool that nothing used, so that starvation was reachable.
+A gate (a consent check, a key grant, a rate bucket, a dedicated thread pool) can be written,
+unit-tested against stubs and named in documentation with no call site, and the suite stays green
+because every test calls the function directly. A desktop pool nothing uses, for example, lets a
+screenshot loop borrow `exec_executor` and starve every other integration's exec, which
+`services/desktop/runtime.py` exists to prevent.
 
 So this walks the packages where those controls live and requires each public callable to be
-referenced from somewhere other than its own module and the tests. It is deliberately structural
-and deliberately noisy: a new helper has to be wired or listed, and the list is where a deliberate
-exception has to justify itself in writing.
+referenced from somewhere other than its own module and the tests. It is structural and noisy: a
+new helper has to be wired or listed, and the list is where an exception justifies itself in
+writing.
 """
 
 import ast
@@ -25,12 +20,8 @@ APP = Path(__file__).resolve().parents[1] / "app"
 
 # The packages whose contents are gates, transports or budgets rather than incidental helpers.
 #
-# important: the extensions and webhooks packages were added after this ratchet caught its first
-# five dead symbols, and adding them caught a sixth that had been live for a day: `enqueue_event`,
-# the function every extension event was supposed to travel through, had no caller at all. Nine
-# events were catalogued, served to add-on authors and documented publicly with a "when it fires"
-# column, and none of them ever fired. That is the exact shape this file exists to refuse, and it
-# was invisible only because the walker was not pointed at that directory.
+# important: a package missing from this list is not checked at all. An event dispatcher with no
+# caller in an unwatched package means every catalogued add-on event silently never fires.
 WATCHED = (
     APP / "services" / "desktop",
     APP / "services" / "desktop_policy.py",
@@ -42,14 +33,13 @@ WATCHED = (
     APP / "services" / "task_journal",
 )
 
-# Deliberate exceptions, each with the reason it is not a defect.
+# Exceptions, each with the reason it is not a defect.
 #
-# important: an entry here is a claim that the symbol is reached by something this walker cannot
-# see, or that it is intentionally an interface rather than a call. "It will be used later" is not
-# one of the reasons, because that is exactly what the four dead controls looked like.
+# important: an entry here claims the symbol is reached by something this walker cannot see, or
+# that it is an interface rather than a call. "It will be used later" is not a reason.
 EXEMPT: Dict[str, str] = {
-    # Protocols are annotations, not calls. `DesktopProvider` is the seam a second provider
-    # arrives through and is used in `_provider`'s return type.
+    # A Protocol is referenced as an annotation. `DesktopProvider` is the seam a second provider
+    # arrives through and appears in `_provider`'s return type.
     "DesktopProvider": "a typing Protocol, referenced as an annotation",
     # Dataclasses and enums are constructed by name in their own module and consumed as values.
     "Action": "a dataclass, constructed in actions.py and passed onward",
@@ -65,10 +55,9 @@ EXEMPT: Dict[str, str] = {
     "register": "each tool module's registrar, called from server.build_mcp_server",
     "build_mcp_server": "called by build_mcp_route",
     "build_mcp_route": "called from main.create_app",
-    # The receiver's half of the signature recipe, published for add-on authors and deliberately
-    # not called by the sender. What stops it drifting from `sign` is
-    # `test_a_delivery_arrives_signed_over_its_raw_bytes`, which signs with one and verifies with
-    # the other, so this is exercised rather than merely present.
+    # The receiver's half of the signature recipe, published for add-on authors; the sender never
+    # calls it. `test_a_delivery_arrives_signed_over_its_raw_bytes` signs with `sign` and verifies
+    # with this, so the two cannot drift.
     "verify": "the receiver-side reference implementation, round-tripped against sign in tests",
     # The per-worker follower singleton is read by name in the election test to assert that a
     # step-down cleared it; the application reaches the follower through start/stop.
@@ -96,10 +85,10 @@ def _public_callables(path: Path) -> Dict[str, Set[str]]:
 
 
 def _referenced(name: str, *, owner: str, include_owner: bool) -> bool:
-    """Whether `name` is CALLED or read as an attribute under app/.
+    """Whether `name` is called or read as an attribute under app/.
 
-    note: a re-export in a package `__init__` does not count. Being exported and never called is
-    precisely the shape of the four controls this file exists for.
+    A re-export in a package `__init__` does not count: exported and never called is the shape
+    this file refuses.
     """
     for file in sorted(APP.rglob("*.py")):
         if file.name == "__init__.py":
@@ -131,9 +120,9 @@ def test_no_gate_is_declared_without_being_reached() -> None:
     for path in WATCHED:
         for owner, names in _public_callables(path).items():
             # A module whose entry point is reached may reach its own helpers internally, and
-            # those are not dead. A module NOTHING reaches gets no such credit, so a whole
+            # those are not dead. A module nothing reaches gets no such credit, so a whole
             # package that is never imported is still caught, and so is a function with no
-            # reference anywhere at all - which is what `enqueue_event` was.
+            # reference anywhere at all.
             used = _module_is_used(owner, names)
             for name in sorted(names):
                 if name in EXEMPT:
@@ -148,8 +137,8 @@ def test_no_gate_is_declared_without_being_reached() -> None:
 
 
 def test_the_exempt_list_names_only_symbols_that_exist() -> None:
-    """An exemption for a symbol that has been renamed or deleted silences a check nobody asked
-    to silence."""
+    """An exemption for a renamed or deleted symbol would silently exempt whatever reuses the
+    name."""
     defined: Set[str] = set()
     for path in WATCHED:
         for names in _public_callables(path).values():

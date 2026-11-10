@@ -1,10 +1,9 @@
 """Disk I/O is shown only where its counters follow real I/O, and says why where they do not.
 
 A container's disk counters come from its cgroup, and a storage driver that writes from its own
-kernel threads never charges them: a ZFS-backed container writing 40 MB a second read 0. A VM's
-counters are its guest's block devices and need the guest agent. The dialog used to leave disk
-I/O blank in both cases without a word; it now names the reason, and the container gate opens per
-driver only once a live probe has proven that driver.
+kernel threads never charges them: a ZFS-backed container writing 40 MB a second reads 0. A VM's
+counters are its guest's block devices and need the guest agent. The dialog names the reason in
+both cases, and the container gate opens per driver only once a live probe has proven that driver.
 """
 
 from types import SimpleNamespace

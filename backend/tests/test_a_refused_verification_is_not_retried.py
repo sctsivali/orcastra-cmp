@@ -1,14 +1,10 @@
 """Verifying a webhook endpoint is one shot, and a refusal must not become queued traffic.
 
 `verify_subscription` sends its ping through `dispatcher.deliver`, which on failure leaves the
-delivery `pending` with a `next_attempt_at` so the queue picks it up. That is right for an ordinary
-event and wrong for a verification: the queue then retried the ping four more times over roughly
-half an hour, at an endpoint that had just declined it.
-
-Two reasons that matters more than ordinary retry noise. The point of verification is to establish
-that the endpoint wants this traffic at all, so retrying a refusal inverts the mechanism. And the
-dispatcher's own auto-suspend comment names this behaviour, "us behaving like a reflector rather
-than a sender", as the thing to avoid.
+delivery `pending` with a `next_attempt_at` so the queue retries it. That suits an ordinary event,
+but a refused ping would be posted again and again at an endpoint that had just declined it.
+Verification establishes whether the endpoint wants this traffic at all, so retrying a refusal
+defeats its purpose.
 
 A refusal also must not spend the consecutive-failure budget of a subscription that has never been
 active, or a few verification attempts against a host that is not deployed yet would suspend it.
@@ -47,10 +43,9 @@ def test_a_failed_verification_does_not_spend_the_failure_budget() -> None:
 
 
 def test_the_queue_only_claims_pending_rows() -> None:
-    """The fix rests on this. If the claim widened, marking the row dead would stop working and
-    the two assertions above would be green while the behaviour returned."""
-    # note: a TextClause, not a string. `in` on it is not a substring test and quietly answers
-    # False, which failed this against correct code until it was read rather than assumed.
+    """Marking a row dead keeps it out of the queue only while the claim selects pending rows.
+    If the claim widened, the assertions above would pass while refusals were retried again."""
+    # CLAIM_SQL is a TextClause, and `in` on it is not a substring test: compare its string form.
     claim = str(dispatcher.CLAIM_SQL)
     assert "state = 'pending'" in claim, (
         "the claim no longer selects on pending, so a terminal state may not exclude a row"
@@ -58,8 +53,8 @@ def test_the_queue_only_claims_pending_rows() -> None:
 
 
 def test_the_success_path_still_activates() -> None:
-    """The positive twin. A verify handler that only ever marked things dead would pass every
-    assertion above while making verification impossible."""
+    """A verify handler that only ever marked rows dead would pass every assertion above while
+    making verification impossible."""
     source = _verify_source()
     tree = ast.parse(inspect.cleandoc(source))
     assigned = {

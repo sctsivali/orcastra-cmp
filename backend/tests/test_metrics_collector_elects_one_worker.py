@@ -1,13 +1,9 @@
 """Only one worker may run the expensive collection sweep, and it keeps the job while alive.
 
-The collector is started from the FastAPI lifespan, which runs once per worker. With
-WEB_CONCURRENCY=4 that is four collectors. A lease taken per cycle with a 30 s expiry elected
-nobody for the rest of a cycle that lasted the sweep plus 30 s, so another worker took it
-mid-cycle and swept again: over a day the dashboard was built three to four times per cycle.
-
-These tests pin the held lease: one leader, kept by a heartbeat, replaced within one lease once
-it stops beating, handed back on shutdown, and a deployment without Redis keeps collecting rather
-than going silent, because a collector that elects nobody is worse than one that over-collects.
+The collector starts from the FastAPI lifespan, once per worker. A lease taken per cycle can
+lapse mid-sweep and let another worker sweep again, so the lease is held by a heartbeat: one
+leader, replaced within one lease once it stops beating, handed back on shutdown. Without Redis
+every worker collects: collecting twice is better than collecting nothing.
 """
 
 import asyncio
@@ -132,7 +128,7 @@ def test_a_follower_that_takes_over_sweeps_at_once(monkeypatch):
     collector.RELAY_POLL_SECONDS = 0.01
 
     async def _relay():
-        collector._leading = True  # the heartbeat took over the lapsed lease meanwhile
+        collector._leading = True  # The heartbeat took over the lapsed lease meanwhile.
 
     monkeypatch.setattr(collector._dashboards, "relay", _relay)
     started = time.monotonic()
@@ -173,7 +169,7 @@ def test_no_redis_means_collect_locally(monkeypatch):
 
 
 def test_a_failing_redis_means_collect_locally(monkeypatch):
-    """A lease we cannot take is not a reason to skip the work."""
+    """A lease that cannot be taken is no reason to skip the work."""
 
     class _Broken:
         def register_script(self, *args, **kwargs):

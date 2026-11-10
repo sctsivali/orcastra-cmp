@@ -1,14 +1,12 @@
 """An empty allowed-cluster set must deny everything, never fall open to everything.
 
-`apply_cluster_filter` reads `None` as "no filter", which is how an admin gets the whole fleet.
-An empty set has to mean the opposite. The two are one keystroke apart, and the difference
-between them is the entire tenant boundary, so it is asserted here rather than left to the
-reading of seventeen call sites.
+`apply_cluster_filter` reads `None` as "no filter", which is how an admin gets the whole fleet;
+an empty set means the opposite. That difference is the tenant boundary, so it is asserted here
+rather than left to each call site.
 
-This is the consumer half of `test_a_tenant_without_a_policy_sees_no_clusters.py`. That file
-proves the dependency now produces an empty set for a tenant with no policy; this one proves an
-empty set is honoured once it exists. Both are needed: either half passing alone still permits
-the leak.
+This is the consumer half of `test_a_tenant_without_a_policy_sees_no_clusters.py`, which
+proves the dependency produces an empty set for a tenant with no policy; this one proves an
+empty set is honoured. Either half alone still permits the leak.
 """
 
 from typing import List, Optional

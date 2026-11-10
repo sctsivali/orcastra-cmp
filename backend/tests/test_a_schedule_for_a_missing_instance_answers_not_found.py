@@ -1,8 +1,7 @@
 """A schedule asked for an instance the cluster does not have answers 404, not 500.
 
-Live on 2026-11-05 a partner creating a schedule for a name that does not exist got a 500: the
-instance read raised LXD's not-found and nothing mapped it. The instance snapshot routes already map
-the same read through lxd_http_error; the schedule create now does too.
+The instance read raises LXD's not-found, and the schedule create maps it through lxd_http_error
+as the instance snapshot routes do.
 """
 
 import asyncio

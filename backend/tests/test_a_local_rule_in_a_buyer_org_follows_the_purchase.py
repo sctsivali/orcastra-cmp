@@ -1,8 +1,8 @@
 """A rule written in a buyer organization on a cluster it reached by purchase ends with the purchase.
 
 Only OrcaHub's own policies carry the paid term, so a local rule a founder wrote while the term ran
-went on granting after it ended (security review 2026-10-27). Such a rule now follows the phase of
-the purchase on that cluster, and a new one may be written only by the seller or an Administrator.
+would go on granting after it ended. Such a rule follows the phase of the purchase on that cluster,
+and a new one may be written only by the seller or an Administrator.
 """
 
 from __future__ import annotations

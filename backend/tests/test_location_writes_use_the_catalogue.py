@@ -1,10 +1,9 @@
 """A catalogue region is stored as the catalogue has it, whatever the request carried.
 
-The client used to send the coordinates, names and time zone of the region it picked, and the
-server stored them verbatim. A stale browser bundle, a script, or a hand-written request could
-therefore save "id-3174" (Jakarta Selatan) at a point in the sea, and nothing downstream could
-tell. Now a known region id is resolved on the server, a retired id is rewritten to the one that
-replaced it, and only an id the catalogue does not know (an API client's own) passes through.
+A request carries the coordinates, names and time zone of the region it picked, and a stale
+browser bundle, a script or a hand-written request could put "id-3174" (Jakarta Selatan) at a point
+in the sea. So a known region id is resolved on the server, a retired id is rewritten to the one
+that replaced it, and only an id the catalogue does not know (an API client's own) passes through.
 """
 
 import pytest
@@ -55,7 +54,7 @@ def test_a_country_entry_carries_no_province():
 
 
 def test_a_country_saved_with_its_capital_is_stored_as_the_whole_country():
-    # what a browser bundle built before the change still sends for Japan
+    # What an older browser bundle sends for Japan: the capital as the country.
     capital_era = {**STALE_JAKARTA_SELATAN, "region_id": "c-jp", "region_name": "Japan", "country_code": "JP",
                    "country_name": "Japan", "city": "Tokyo", "latitude": 35.6895, "longitude": 139.6917,
                    "timezone": "Asia/Tokyo"}
@@ -90,7 +89,7 @@ def test_bad_input_is_refused_at_the_boundary(field, value):
 
 
 def test_stored_locations_still_read_back_without_the_input_constraints():
-    # a location saved before the constraints existed must not turn a read into a 500
+    # A stored location that predates the input constraints must not turn a read into a 500.
     GeoLocation(**{**STALE_JAKARTA_SELATAN, "region_id": "legacy id with spaces", "continent": "Asia"})
 
 

@@ -1,4 +1,4 @@
-"""The release manifest as published on 2026-10-27, for the release notice tests."""
+"""A published release manifest, for the release notice tests."""
 
 import json
 

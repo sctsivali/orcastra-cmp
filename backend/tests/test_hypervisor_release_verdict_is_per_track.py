@@ -1,9 +1,8 @@
 """What a Cluster card is told about its hypervisor version (services/hypervisor_releases/verdict.py).
 
-The owner's screenshot of 2026-11-07 showed LXD 5.21.5 marked "Latest" while 5.21/stable was at
-5.21.9: the console compared against a table typed in a year earlier. The verdict now compares
-against the newest release on the Cluster's own track, names a newer track separately, and says
-"not checked" rather than guess when it cannot place a version or the feed is missing or old.
+The verdict compares against the newest release on the Cluster's own track, so LXD 5.21.5 is not
+"Latest" while 5.21/stable is at 5.21.9. It names a newer track separately, and says "not checked"
+rather than guess when it cannot place a version or the feed is missing or old.
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ def verdict(engine, version, lts=None, *, tracks=None, state=FRESH):
 
 
 @pytest.mark.parametrize("version, lts, status, latest, channel", [
-    # The screenshot: Hetzner on 5.21.5 and Console Lab on 5.21.9.
+    # An LTS cluster behind its track, and one at its head.
     ("5.21.5", True, "update_available", "5.21.9", "5.21/stable"),
     ("5.21.9", True, "latest", "5.21.9", "5.21/stable"),
     ("5.21.10", True, "ahead", "5.21.9", "5.21/stable"),
@@ -162,7 +161,7 @@ def test_members_on_one_version_are_not_listed_and_unreadable_ones_are_ignored()
 
 
 @pytest.mark.parametrize("version, lts, security, fixed_in", [
-    # The 2026-10-29 Incus advisories are fixed in 7.6.0; the LTS backports land after the newest
+    # The Incus advisories in the baseline are fixed in 7.6.0; the LTS backports land after the newest
     # LTS tags, so 7.0.2 and 6.0.7 still read as needing a security update (core/engine_baseline.py).
     ("7.6", False, False, None),
     ("7.5", None, True, "7.6.0"),
@@ -176,7 +175,7 @@ def test_an_incus_build_below_the_security_baseline_is_flagged(version, lts, sec
 
 
 def test_the_security_flag_does_not_wait_for_the_feed() -> None:
-    """The baseline is a fact about the build, not about the feed: an unreachable feed still flags it."""
+    """The baseline describes the build, so an unreachable feed still flags it."""
     out = verdict(INCUS, "7.0.2", True, tracks={})
     assert out["status"] == "not_checked"
     assert (out["security_update"], out["security_fixed_in"]) == (True, "7.0.3")

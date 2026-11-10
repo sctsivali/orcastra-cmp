@@ -1,10 +1,9 @@
 """The sync status reads Authentik and never writes to it.
 
-User Groups polls GET /user-groups/sync-status every 30 seconds, as a partner too. It answered by
-way of _ensure_role_groups_exist, so a missing role group was created on the spot (role_admin as a
-superuser), a refused token still read as "connected" because a 401 on the search fell through to
-a create that also failed quietly, and the raw exception text, host and port included, went back
-to the caller. These run the real service against Authentik's HTTP answers (httpx MockTransport).
+User Groups polls GET /user-groups/sync-status every 30 seconds, as a partner too. A status read
+must not create a missing role group (role_admin would be created as a superuser), a refused token
+reads as not connected, and no raw exception text (host and port) reaches the caller. These run
+the real service against Authentik's HTTP answers (httpx MockTransport).
 """
 
 from typing import Any, List
@@ -78,9 +77,8 @@ async def test_the_status_route_names_no_raw_exception(monkeypatch: pytest.Monke
 
 
 # ── an admin removal of an email Authentik has never seen ─────────────────────────────────────
-# An invited address that never signed in has no Authentik account. The removal treated "no such
-# account" as "not confirmed" and answered 502 after the membership rows were already deleted, so
-# the dialog reported a failure for a removal that had happened.
+# An invited address that never signed in has no Authentik account. "No such account" confirms the
+# removal: the membership rows are already deleted, so reporting a failure would be wrong.
 
 
 def _directory(users_status: int, users: List[dict], count: int = -1):
@@ -125,7 +123,7 @@ async def test_two_accounts_with_one_email_are_not_confirmed(monkeypatch: pytest
 
 @pytest.mark.parametrize("blank", ["", " ", "\t"])
 async def test_a_blank_email_matches_no_account(monkeypatch: pytest.MonkeyPatch, blank: str) -> None:
-    """An empty search lists every account, and a service account with no email would have matched it."""
+    """An empty search lists every account, so a blank email could match a service account with no email."""
     seen = _authentik_http(monkeypatch, _directory(200, [{"email": None, "pk": 3}, {"email": "", "pk": 4}]))
     assert await _service().remove_user_from_all_roles(blank) is False
     assert seen.count("GET") <= 3 and "POST" not in seen

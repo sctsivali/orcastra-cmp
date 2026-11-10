@@ -1,10 +1,10 @@
 """An integration key may grant a role, never demote one or touch role_admin.
 
-The member sync called sync_user_role, which removes the user from every other role group
-including role_admin, and a membership removal stripped every role group once the user had no
-membership left. Any Partner could mint a key, sync a fresh organization, push an Admin into it
-as TENANT and demote them. The reconcile also resolved each pushed org by external id alone, so
-a key could purge another integration's roster.
+sync_user_role removes the user from every other role group, role_admin included, so the member
+sync never calls it; otherwise any Partner could mint a key, sync a fresh organization, push an
+Admin into it as TENANT and demote them. A membership removal leaves role groups alone, and the
+reconcile prunes only organizations this key owns, so one key cannot purge another integration's
+roster.
 """
 
 from itertools import combinations
@@ -121,7 +121,7 @@ class _Recorder:
                 return httpx.Response(200, json={"results": [{"name": name, "pk": f"pk-{name}"}]})
             if path.endswith("/core/users/"):
                 email = request.url.params.get("search", "")
-                # the shape Authentik's pagination class answers, count included
+                # The shape Authentik's pagination class answers, count included.
                 return httpx.Response(200, json={"pagination": {"count": 1}, "results": [{"email": email, "pk": 42}]})
             if path.endswith("/core/users/42/"):
                 return httpx.Response(200, json={"groups_obj": [{"name": g} for g in sorted(self.held)]})
@@ -261,8 +261,9 @@ async def test_admin_removal_route_reports_unconfirmed_authentik_revoke(
 class FakeAuthentik:
     """Holds one user's role groups and applies each call to them, as Authentik would.
 
-    The integration writer refuses role_admin before acting, like the real service, and the
-    legacy writers are recorded and applied too, so a regression shows in the groups held.
+    The integration writer refuses role_admin before acting, like the real service. The all-role
+    writers are recorded in `legacy_calls` and applied too, so any call to them shows in the
+    groups held.
     """
 
     def __init__(self, groups: Optional[set]) -> None:
@@ -408,7 +409,7 @@ async def test_membership_owners_reads_memberships_and_created_orgs() -> None:
     db.add(Organization(name="L", slug="l", source="local", created_by="someone@example.test"))
     await db.commit()
     owners = await membership_owners(db, "someone@example.test")
-    # note: each organization's owner set; the dashboard organization has none
+    # One owner set per organization; the dashboard organization has none.
     assert sorted(owners, key=sorted) == [frozenset(), frozenset({KEY})]
 
 

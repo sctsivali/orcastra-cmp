@@ -1,9 +1,8 @@
 """'Create & Start' answers before the instance exists and starts it in the background.
 
-The list cache is cleared when the create is accepted, and the console re-reads the list while
-the instance is still Stopped; nothing cleared it again when the background start finished, so
-the row read Stopped for a full cache TTL after the cluster had the instance Running (38 s
-measured on a MicroCloud). The background task now clears the list caches itself.
+The list cache is cleared when the create is accepted, while the instance is still Stopped. The
+background task clears the list caches again once the start lands, so the row does not read
+Stopped for a full cache TTL after the cluster has the instance Running.
 """
 
 import asyncio
@@ -29,8 +28,8 @@ def _client(started: list, fail_start: bool = False):
         if fail_start:
             raise RuntimeError("no root device")
         started.append(wait)
-    # note: `name` and `sync` are not decoration. The start path rebinds the instance onto a
-    # client whose read timeout outlives the start, which reads `.name`, and syncs afterwards.
+    # The start path reads `.name` to rebind the instance onto a client whose read timeout
+    # outlives the start, and calls `sync` afterwards.
     instance = SimpleNamespace(name="web01", start=start, sync=lambda: None)
     return SimpleNamespace(
         operations=SimpleNamespace(wait_for_operation=lambda op: None),

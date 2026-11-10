@@ -1,18 +1,11 @@
 """What a client may put in an API key's project allow-list.
 
-The list used to accept anything. A name is compared literally against the project LXD reports
-at every enforcement site, so `prodd` for `prod` produced a key that authenticated, showed the
-right badge on its card, and was refused by every project-bounded call for the rest of its life.
-Nothing anywhere said so. The console now picks these from the cluster's real project list, and
-this is the same guarantee for anything that posts to the API directly.
-
-Two of these tests exist because the obvious "cleanups" are privilege changes:
-
-  NFKC folding maps U+FF0A FULLWIDTH ASTERISK onto `*`, and `*` is the cluster-wide wildcard, so
-  a tidy-up pass would manufacture a full grant out of one character.
-
-  Case folding looks harmless and is the defect itself: `Tenant-A` folded to `tenant-a` names
-  nothing on a cluster that spells it the first way. Both spellings exist on this fleet today.
+A name is compared literally against the project LXD reports at every enforcement site, so
+`prodd` for `prod` gives a key that authenticates and is refused by every project-bounded call.
+The console picks names from the cluster's list; this holds direct API clients to the same. Two
+tests guard normalisations that would change privileges: NFKC maps U+FF0A FULLWIDTH ASTERISK onto
+`*`, the cluster-wide wildcard, and case folding breaks exact matching (`Tenant-A` and `tenant-a`
+can both exist, on different clusters).
 """
 
 import pytest
@@ -54,13 +47,13 @@ def test_a_project_name_is_refused(label, projects):
 
 
 def test_a_fullwidth_asterisk_is_refused_rather_than_folded_into_a_wildcard():
-    """The highest-value test here. Folding it would widen the grant to the whole cluster."""
+    """Folding it into `*` would widen the grant to the whole cluster."""
     with pytest.raises(ValidationError):
         _grant(["＊"])
 
 
 def test_case_is_preserved_because_enforcement_compares_exactly():
-    """This fleet really does carry `Ryo-Labs` on one cluster and `ryo-labs` on another."""
+    """Two clusters can hold `Ryo-Labs` and `ryo-labs`; each is granted as spelled."""
     assert _grant(["Ryo-Labs"]).projects == ["Ryo-Labs"]
     assert _grant(["Ryo-Labs", "ryo-labs"]).projects == ["Ryo-Labs", "ryo-labs"]
 
@@ -88,11 +81,10 @@ def test_length_is_measured_before_trimming():
 
 
 def test_an_empty_project_list_is_refused_at_the_boundary():
-    """Refused, never quietly widened to ["default"].
+    """Refused, never widened to ["default"].
 
     An empty list denies every project at runtime, so turning it into the default project would
-    grant more than the caller asked for. The console used to do exactly that with an empty
-    text box, which is half of the defect this change removes.
+    grant more than the caller asked for.
     """
     with pytest.raises(ValidationError):
         _grant([])
@@ -134,7 +126,7 @@ def test_a_non_string_entry_is_refused():
 
 
 def test_the_stored_shape_is_unchanged_by_validation():
-    """The subclass adds validators and no fields, so Vault sees exactly what it saw before."""
+    """The subclass adds validators and no fields, so the shape stored in Vault is the same."""
     dumped = _grant(["default"]).model_dump()
     assert dumped == ClusterPermission(**dumped).model_dump()
     assert set(dumped) == {"cluster_id", "cluster_name", "permissions", "projects"}
@@ -221,7 +213,7 @@ def test_a_project_on_only_one_of_the_selected_clusters_is_accepted(monkeypatch)
     """The union model. The console fans one list out to every cluster and warns about the gap.
 
     Refusing here would make a legitimate multi-cluster grant impossible whenever the clusters
-    do not hold identical project sets, which on a real fleet is always.
+    do not hold identical project sets.
     """
     permissions = [
         ClusterPermissionRequest(cluster_id="nuc2", projects=["SCT-OPS"]),
@@ -235,10 +227,10 @@ def test_a_project_on_only_one_of_the_selected_clusters_is_accepted(monkeypatch)
 
 
 def test_an_unknown_name_is_accepted_when_a_selected_cluster_stayed_silent(monkeypatch):
-    """Inconclusive is not guilty.
+    """A silent cluster cannot prove a name absent, so the grant is accepted.
 
-    Narrowing an over-broad key is exactly what an operator does during an outage, so a cluster
-    being down must never be the reason a grant is refused.
+    Operators narrow over-broad keys during outages, so a cluster being down must never be the
+    reason a grant is refused.
     """
     permissions = [
         ClusterPermissionRequest(cluster_id="nuc2", projects=["only-on-the-dead-one"]),

@@ -1,18 +1,14 @@
-"""Seeing and typing into a customer's screen, with the bounds that make it shippable.
+"""Seeing and typing into a guest's screen, within its bounds.
 
-Three properties this file exists to hold, each of which failed somewhere while it was written.
-
-The image never gets decoded inside the control plane. The bytes come from a guest that may be
-compromised, and an image parser fed by one would be the first place a guest could reach into this
-process. Geometry comes from the container header, which is two integers at a fixed offset.
+The image is never decoded inside the control plane. The bytes come from a guest that may be
+compromised, so geometry comes from the container header: two integers at a fixed offset.
 
 A screenshot the model cannot accept is refused rather than returned. A computer-use tool result
-over the limits is REJECTED with a validation error rather than downscaled, and that error surfaces
+over the limits is rejected with a validation error rather than downscaled, and that error surfaces
 far from the operator who could fix it.
 
-An action costs the capability its FAMILY costs, and cannot be smuggled through an operation priced
-for a cheaper one. The operation-to-capability map is static, so a single operation whose real cost
-varied with its arguments would be gated at whatever that map named.
+An action costs the capability its family costs. The operation-to-capability map is static, so an
+action must not go through an operation priced for a cheaper family.
 """
 
 import base64
@@ -73,7 +69,7 @@ def test_geometry_comes_from_the_header(make) -> None:
 
 
 def test_bytes_that_are_not_an_image_are_not_guessed_at() -> None:
-    """None means "not something I can vouch for", and a caller must refuse rather than pass it on."""
+    """None means the bytes are not a recognised image, and a caller must refuse them."""
     assert read_geometry(b"") is None
     assert read_geometry(b"totally not an image") is None
     assert read_geometry(b"\x89PNG\r\n\x1a\n" + b"\x00" * 4) is None
@@ -84,8 +80,7 @@ def test_a_truncated_png_is_refused_rather_than_half_read() -> None:
 
 
 def test_the_token_formula_is_the_published_one() -> None:
-    """ceil(w/28) * ceil(h/28). Stated rather than approximated, because the refusal it feeds has
-    to be right at the boundary rather than merely close."""
+    """ceil(w/28) * ceil(h/28), exact so the refusal it feeds is right at the boundary."""
     assert read_geometry(_png(1280, 800)).visual_tokens == 46 * 29 == 1334
     assert read_geometry(_png(1920, 1080)).visual_tokens == 69 * 39 == 2691
 
@@ -160,10 +155,10 @@ def test_the_families_do_not_overlap() -> None:
     ],
 )
 def test_an_action_cannot_be_smuggled_through_a_cheaper_operation(operation, action) -> None:
-    """The whole reason there are four operations rather than one.
+    """An action must belong to its operation's family.
 
-    GUEST_ACCESS_OPERATIONS maps an operation to exactly ONE capability, and that map is what the
-    router enforces. A single operation whose cost varied with an `action` field would be gated at
+    GUEST_ACCESS_OPERATIONS maps an operation to exactly one capability, and the router enforces
+    that map. A single operation whose cost varied with an `action` field would be gated at
     whatever the map named, so a key granted only desktop.view could ask it to type.
     """
     from app.services.desktop.entry import _assert_action_matches
@@ -205,7 +200,7 @@ def test_a_bad_coordinate_is_refused_rather_than_coerced(params) -> None:
 
 
 def test_a_scroll_amount_is_clamped_because_the_intent_survives() -> None:
-    """A model asking to scroll 20 means "a lot", and refusing teaches it nothing."""
+    """A model asking to scroll 20 means "a lot", so the amount is clamped to the maximum."""
     assert build_action("scroll", {"scroll_direction": "down", "scroll_amount": 20}).amount == 10
 
 
@@ -257,7 +252,7 @@ def test_a_click_never_interpolates_a_coordinate_into_a_shell_string() -> None:
 
 
 def test_a_held_key_is_always_released() -> None:
-    """A modifier left down silently breaks every later action and is maddening to diagnose."""
+    """A modifier left down silently breaks every later action."""
     script = chains.hold_key_chain("x11", "xdotool", "a", ["shift"], 2.0)[2]
     assert script.startswith("trap ")
     assert "keyup" in script
@@ -271,14 +266,14 @@ def test_a_drag_is_one_call_so_a_dropped_connection_cannot_leave_a_button_down()
 
 
 def test_the_capture_pipeline_writes_nothing_to_the_guest() -> None:
-    """The cleanup argument. A temp file left behind when the connection drops is a screenshot of
-    the user's desktop sitting in their filesystem, exactly when it matters most."""
+    """A temp file left behind when the connection drops would leave a screenshot of the desktop
+    in the guest's filesystem."""
     script = chains.capture_chain("x11", "import", width=1280, height=800, jpeg_threshold=100)[2]
     assert "png:-" in script and "base64" in script
     assert "mktemp" not in script
 
 
-# ── what a guest can actually do ───────────────────────────────────────────────────────────────
+# ── what a guest can do ────────────────────────────────────────────────────────────────────────
 
 def test_a_guest_with_no_agent_is_refused_before_anything_is_attempted() -> None:
     """state.processes == -1 means exec and files are both impossible, so a doomed command would
@@ -289,8 +284,8 @@ def test_a_guest_with_no_agent_is_refused_before_anything_is_attempted() -> None
 
 
 def test_a_headless_container_is_found_without_logind() -> None:
-    """The reference test target. Xvfb started from a systemd unit has no graphical logind
-    session at all, so the socket scan is the only thing that finds it."""
+    """Xvfb started from a systemd unit has no graphical logind session, so only the socket scan
+    finds it."""
     report = build_report(
         "ORCA_BEGIN\nos=ubuntu\nxsocket=:99\ntool=xdotool\ntool=import\nORCA_END", agent=True
     )
@@ -301,7 +296,7 @@ def test_a_headless_container_is_found_without_logind() -> None:
 
 def test_gnome_on_wayland_is_refused_with_a_remedy_rather_than_failing_obscurely() -> None:
     """Mutter implements neither wlr-screencopy nor the virtual keyboard protocol, and the portal
-    needs a human to approve each capture. That is a security control working as designed."""
+    needs a human to approve each capture by design."""
     report = build_report(
         "ORCA_BEGIN\nos=ubuntu\ncompositor=gnome-shell pid=900 user=alice\ntool=ydotool\nORCA_END",
         agent=True,
@@ -311,8 +306,8 @@ def test_gnome_on_wayland_is_refused_with_a_remedy_rather_than_failing_obscurely
 
 
 def test_a_missing_tool_is_named_with_the_command_that_installs_it() -> None:
-    """Printed, never run. The audit record stores argv, so an install would record the intent and
-    not the fourteen packages that actually landed."""
+    """Printed, never run: the audit record stores argv, so it would show the install command and
+    not the packages it pulled in."""
     report = build_report("ORCA_BEGIN\nos=ubuntu\nxsocket=:0\nORCA_END", agent=True)
     assert not report.ready
     assert set(report.missing) == {"import", "xdotool"}
@@ -345,12 +340,11 @@ def test_a_session_id_is_derived_so_it_grants_nothing() -> None:
 
 
 def test_a_guest_coordinate_comes_back_in_screenshot_pixels() -> None:
-    """The inverse has to exist, and only differs when the display is downscaled, which is why a
-    missing one survives every test on a guest that happens to match the target.
+    """The inverse conversion exists, and differs from the identity only on a downscaled display.
 
-    Measured live on a 1920x1080 guest: a pointer moved to screenshot (400,300) landed correctly
-    at guest (600,450) and was then reported back as (600,450), which a model reads as the pointer
-    having moved somewhere it did not ask for.
+    On a 1920x1080 guest a pointer moved to screenshot (400,300) lands at guest (600,450).
+    Reported back unconverted, the model reads it as the pointer having moved somewhere it did
+    not ask for.
     """
     display = Display(width=1280, height=720, scale=2 / 3)
     guest = display.to_guest(400, 300)
@@ -367,12 +361,11 @@ def test_a_downscaled_capture_still_clicks_the_right_pixel() -> None:
 
 
 def test_the_subcommand_tests_run_with_a_display() -> None:
-    """Found live: a guest where both subcommands work reported neither.
+    """xdotool cannot connect without DISPLAY, so its subcommands are tested after it is set.
 
-    xdotool cannot connect without DISPLAY, so testing `getdisplaygeometry` and `type --file`
-    before the display is discovered makes every guest look like an old xdotool build. The second
-    one matters: without `--file`, typed text falls back to argv, where the guest's process table
-    exposes it to every other user on that machine.
+    Tested earlier, `getdisplaygeometry` and `type --file` both fail and every guest looks like an
+    old xdotool build. Without `--file`, typed text falls back to argv, where the guest's process
+    table exposes it to every other user on that machine.
     """
     from app.services.desktop.guest.probe import PROBE_SCRIPT
 
@@ -387,13 +380,11 @@ def test_the_subcommand_tests_run_with_a_display() -> None:
     "operation", ["desktop_probe", "desktop_view", "desktop_input", "desktop_clipboard"]
 )
 def test_every_desktop_operation_has_an_audit_name(operation: str) -> None:
-    """`_PROXY_AUDIT_ACTIONS` was subscripted bare with the operation's capability, and held only
-    the exec pair, so every desktop operation raised KeyError on two live paths.
+    """Every desktop operation has an audit name; a missing one raises KeyError.
 
-    The timeout site is reachable through MCP: desktop operations are in GUEST_ACCESS_OPERATIONS,
-    so the branch is taken and the KeyError escapes, losing both the audit record and the "may
-    still be running" message. The refusal site is REST-only and its KeyError is swallowed by the
-    outer handler, so a refused desktop attempt returned a generic error and left no trace at all.
+    The timeout site is reachable through MCP, where the KeyError would lose both the audit record
+    and the "may still be running" message. At the REST-only refusal site the outer handler
+    swallows it, so a refused desktop attempt would return a generic error and leave no trace.
     """
     from app.routers.integrations import _guest_audit_action
 
@@ -445,13 +436,11 @@ def _capture_result(png_b64: str = "aGVsbG8="):
 
 
 def test_a_screenshot_comes_back_as_an_image_not_as_text() -> None:
-    """The whole feature is a model seeing a screen, and it did not.
+    """A capture must reach the model as an image content block.
 
-    The capture travelled as base64 inside the JSON rendering of the payload. No client presents
-    that as an image, so the model received a long string and could not see anything, and it was
-    charged as text: roughly a token per four base64 characters, against the 1334 visual tokens
-    the 1280x800 target is sized for. On a real desktop rather than an empty test one the same
-    frame is hundreds of thousands of text tokens.
+    No client presents base64 inside the JSON text as an image, so the model would see a long
+    string and be charged for it as text: roughly a token per four base64 characters, against the
+    1334 visual tokens the 1280x800 target is sized for.
     """
     from app.mcp.errors import _promote_image
 
@@ -461,14 +450,13 @@ def test_a_screenshot_comes_back_as_an_image_not_as_text() -> None:
 
     image = next(c for c in promoted.content if c.type == "image")
     assert image.data == "aGVsbG8="
-    # note: the field is mime_type on the model and serialises as the spec's mimeType.
+    # The field is mime_type on the model and serialises as the spec's mimeType.
     assert image.mime_type == "image/png"
     assert image.model_dump(by_alias=True)["mimeType"] == "image/png"
 
 
 def test_the_frame_is_not_sent_twice() -> None:
-    """It was in the text block and in the structured payload, so every capture crossed the wire
-    twice. The metadata a programmatic caller needs stays; only the bytes move."""
+    """The bytes move to the image block alone; the metadata a programmatic caller needs stays."""
     from app.mcp.errors import _promote_image
 
     promoted = _promote_image(_capture_result("QUJDREVG"))
@@ -499,8 +487,8 @@ def test_a_result_with_no_frame_is_unchanged() -> None:
 def test_a_failed_desktop_action_is_reported_as_a_failure() -> None:
     """The action reports its own outcome in data.ok, separately from whether the operation ran.
 
-    A wlroots capture that failed inside the guest came back with isError false and a payload
-    saying ok false, so a model was told the screenshot succeeded and handed no image.
+    A capture that fails inside the guest answers with ok false; passed through as is, the model
+    would be told the screenshot succeeded and handed no image.
     """
     from app.mcp.errors import desktop_result, tool_result
 
@@ -542,8 +530,8 @@ def test_every_desktop_tool_reports_the_action_outcome() -> None:
 
 
 def test_every_capture_tool_promotes_its_frame() -> None:
-    """A new capture tool that forgets this is invisible from the outside: the call succeeds, the
-    payload looks right, and only the model's inability to see is the symptom."""
+    """A capture tool that skips this still succeeds with a plausible payload; only the model
+    cannot see the frame."""
     import ast
     import inspect
 
@@ -564,13 +552,12 @@ def test_every_capture_tool_promotes_its_frame() -> None:
 # ── the Wayland input path drops leading characters without a settle ───────────────────────────
 
 def test_wtype_waits_before_its_first_keystroke() -> None:
-    """Measured on sway: "echo ..." reached the shell as "cho ...".
+    """Without a settle, "echo ..." reaches the shell as "cho ..." (seen on sway).
 
     wtype binds a virtual keyboard through the Wayland protocol and starts typing immediately.
     The protocol has no acknowledgement that the compositor processed the keymap, so whatever
-    arrives first is dropped. The action still reports success, so the guest runs a different
-    command from the one that was asked for and nothing on the calling side can tell. A leading
-    character lost from a password or a destructive command is the same defect with teeth.
+    arrives first is dropped while the action still reports success, and the guest runs a
+    different command from the one asked for.
     """
     from app.services.desktop.guest.chains import WTYPE_SETTLE_MS, key_chain, type_chain
 
@@ -594,11 +581,7 @@ def test_the_text_is_still_the_last_argument_after_the_separator() -> None:
 
 
 def test_typed_text_stays_out_of_argv_on_wayland_too() -> None:
-    """The module claimed argv was avoided and it was avoided only for xdotool.
-
-    Every Wayland guest had whatever an agent typed sitting in its process table, readable by any
-    local user in that guest, which is the exact exposure the xdotool branch exists to prevent.
-    """
+    """Text in argv sits in the guest's process table, readable by any local user in that guest."""
     from app.services.desktop.guest.chains import type_chain
 
     argv = type_chain("wayland-wlroots", "wtype", use_stdin=True, text="hunter2")

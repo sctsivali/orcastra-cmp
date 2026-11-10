@@ -1,8 +1,8 @@
 """Opening a console or a shell never parks the event loop.
 
-The LXD operation POST, the instance read and the certificate material are blocking calls. They
-used to run inline in the async socket handler, so while one console opened every other socket on
-the worker (consoles, shells, live feeds) froze, long enough for uvicorn's keepalive to drop them.
+The LXD operation POST, the instance read and the certificate material are blocking calls. Run
+inline in the async socket handler, they would freeze every other socket on the worker (consoles,
+shells, live feeds) while one console opens, long enough for uvicorn's keepalive to drop them.
 """
 
 import asyncio
@@ -82,7 +82,7 @@ async def test_a_shell_is_opened_off_the_loop(monkeypatch):
 
 
 async def test_the_console_service_calls_of_the_router_are_offloaded():
-    """Capabilities, boot order and ISO calls are plain functions run through the pool now."""
+    """Capabilities, boot order and ISO calls are plain functions run through the pool."""
     import inspect
 
     from app.routers import console

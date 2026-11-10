@@ -4,8 +4,8 @@ The follower writes an `lxd_operation` row with no actor the instant LXD announc
 operation; the router's audit record arrives a moment later (or, for a `wait=True` action,
 after the frame has already closed the row). Whichever side lands second must find the other's
 row and take it, under a lock that a concurrent claimant skips rather than waits on, and by an
-operation id when the router knows one. The alternative is two rows per click, and a panel that
-shows the operator's own start twice.
+operation id when the router knows one. Otherwise one click writes two rows and the panel shows
+the operator's own start twice.
 """
 
 import pytest
@@ -168,7 +168,7 @@ async def test_the_reverse_attach_prefers_an_open_dashboard_row_and_accepts_a_fr
     attach = next(sql for sql in db.statements if "SKIP LOCKED" in sql)
     subquery = attach[attach.index("WHERE id = (SELECT") :]
     # A finished dashboard row is this operation only when a wait=True router closed it moments
-    # ago; an open row always; an earlier attempt that failed, never (a review finding).
+    # ago; an open row always; an earlier attempt that failed, never.
     assert "(status IN ('pending', 'running') OR created_at >= now() - interval '2 minutes')" in subquery
     assert "ORDER BY (status IN ('pending', 'running')) DESC, created_at DESC" in subquery
     assert "operation_id IS NULL" in subquery

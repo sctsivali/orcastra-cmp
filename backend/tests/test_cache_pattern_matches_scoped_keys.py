@@ -1,21 +1,13 @@
-"""Regression guard: a cache-invalidation glob must match the keys actually written.
+"""A cache-invalidation glob must match the keys that are written.
 
-Every cached list response is stored under a key built by `get_scope_cache_key`, which
-appends a scope suffix: `...:scope=all` for admin and background work, or
-`...:scope=<digest>:acl=<digest>` for a scoped user. So the real Redis key for a cluster's
-member list is `orcastra:api_responses:cluster_members:list:host=nuc2:scope=all`, never the
-bare `...host=nuc2`.
+`get_scope_cache_key` appends a scope suffix to every cached list key: `...:scope=all` for
+admin and background work, `...:scope=<digest>:acl=<digest>` for a scoped user. A cluster's
+member list is stored under `orcastra:api_responses:cluster_members:list:host=<id>:scope=all`,
+never the bare `...host=<id>`.
 
-`invalidate_cluster_cache` passed the bare form to `delete_pattern`, with no trailing `*`.
-Redis KEYS treats a pattern without a wildcard as an exact match, so it matched nothing and
-the entry survived its full 180s TTL. The bug was invisible for two reasons: the memory-cache
-branch of `delete_pattern` uses a prefix match and did clear the entry, and `get()` treats a
-Redis miss as authoritative, so any test running without Redis passed while production served
-stale data. That combination is why this test exercises the Redis path with a fake client
-rather than asserting on the memory cache.
-
-Symptom in the product: register or remove a cluster member, click refresh, and the list
-still shows the old membership until the TTL expires.
+Redis KEYS treats a pattern without a wildcard as an exact match, while the memory-cache
+branch of `delete_pattern` matches by prefix, so a pattern missing its `*` passes without
+Redis and clears nothing in production. These tests exercise the Redis path with a fake client.
 """
 
 import fnmatch
@@ -38,7 +30,7 @@ class FakeRedis:
         self.store = {}
 
     def keys(self, pattern):
-        # redis KEYS is a glob: no wildcard means exact match, which is the whole point here
+        # Redis KEYS is a glob: no wildcard means an exact match.
         return [k for k in self.store if fnmatch.fnmatchcase(k, pattern)]
 
     def scan_iter(self, *, match, count):
@@ -85,7 +77,7 @@ class ScopedKeyInvalidationTests(unittest.TestCase):
         self.assertIn(other, manager.redis_client.store, "invalidating one cluster wiped another")
 
     def test_a_sibling_cluster_sharing_a_prefix_survives(self):
-        """nuc2 and nuc22 are different clusters. The first glob written here matched both."""
+        """An id that extends another is a different cluster; a bare prefix matches both."""
         target = "orcastra:api_responses:cluster_members:list:host=nuc2:scope=all"
         sibling = "orcastra:api_responses:cluster_members:list:host=nuc22:scope=all"
         suffixed = "orcastra:api_responses:cluster_members:list:host=nuc2-prod:scope=all"
@@ -98,7 +90,7 @@ class ScopedKeyInvalidationTests(unittest.TestCase):
         self.assertIn(suffixed, manager.redis_client.store, "invalidating nuc2 also wiped nuc2-prod")
 
     def test_exact_match_pattern_would_not_have_matched(self):
-        """Pins the mechanism, so a future edit that drops the * fails loudly here."""
+        """Pins the mechanism: in Redis a pattern without `*` matches nothing here."""
         key = "orcastra:api_responses:cluster_members:list:host=nuc2:scope=all"
         manager = self._manager_with(key)
 

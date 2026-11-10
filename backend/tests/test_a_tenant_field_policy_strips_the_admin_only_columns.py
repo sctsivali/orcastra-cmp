@@ -1,10 +1,10 @@
-"""Least disclosure below Admin, on every row and every frame (D12).
+"""Least disclosure below Admin, on every row and every frame.
 
 `present.task_row` and `present.log_row` are the only path from a journal row to the wire,
 REST and WebSocket alike, so the policy is asserted there once: organisation ids and the
 requestor's address reach Admin only, the cluster member reaches Admin and Partner, and a
 tenant's metadata and details are cut to the allowlist. What was never stored cannot be
-presented, which the "nothing secret is journaled" test covers on the write side.
+presented; the "nothing secret is journaled" test covers the write side.
 """
 
 import os
@@ -129,7 +129,7 @@ def test_a_partner_loses_the_organisation_and_the_requestor_address() -> None:
     assert out["requestor"] == {"username": "ops", "protocol": "tls", "address": None}
     assert out["location"] == "nuc1-member-2"
     assert "job_id" in out["metadata"]
-    # Everyone still sees who acted and through which key: the session-audit precedent.
+    # Every tier still sees who acted and through which key, as the session audit does.
     assert out["actor_email"] == "ops@example.test"
     assert out["operation_class"] == "task"
 

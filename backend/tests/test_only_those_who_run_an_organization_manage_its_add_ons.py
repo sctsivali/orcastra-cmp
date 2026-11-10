@@ -1,13 +1,12 @@
 """Only those who run an organization install, read and manage its add-ons.
 
-Every add-on surface admitted any membership of the organization (org_scope.get_user_org_ids). A
-partner whose only row in an organization was a buyer's tenant row could therefore install add-ons
-there and read and manage all of them, settings secrets and webhooks included, and so could a
-dashboard teammate stored as a plain member. The surfaces now ask orgs_the_user_runs, the rule a
-rotation of an owning add-on already used: a partner row (email compared without case), or the
-creator of an organization made in this dashboard. An OrcaHub organization's creator is the key's
-minter, a seller, and a stale "admin" row is one a demotion left behind; neither runs it. An
-Administrator still manages every organization.
+Any membership of the organization (org_scope.get_user_org_ids) is not enough: a partner whose
+only row there is a buyer's tenant row, or a dashboard teammate stored as a plain member, must not
+install add-ons or read and manage them, settings secrets and webhooks included. Every add-on
+surface asks orgs_the_user_runs: a partner row (email compared without case), or the creator of an
+organization made in this dashboard. An OrcaHub organization's creator is the key's minter, a
+seller, and a stale "admin" row is one a demotion left behind; neither runs it. An Administrator
+manages every organization.
 """
 
 import re

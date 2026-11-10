@@ -1,22 +1,15 @@
 """A caller holding a key learns which build answered it. A caller holding nothing does not.
 
-An integrator could not previously find out which build of this server it was talking to. The
-version exists on `/` and the full identity on `/api/v1/system/version`, but that router requires a
-tenant session, and an integration authenticates with an API key, so the one surface it can reach
-said nothing. The practical cost is support: "which version is this partner on" could only be
-answered by asking them.
+`/api/v1/system/version` requires a tenant session and an integration holds only an API key, so
+the build identity rides the two responses a key already receives (`whoami` and `/validate`); an
+older build omits the field. `/validate` verifies the presented secret before its success branch
+and answers every refusal with the same wording, so it is no key-id oracle and the identity stays
+credential-gated although the route takes no header auth.
 
-It rides the two responses a key already receives rather than a new endpoint, so it costs no extra
-request and an older build simply omits the field. `/validate` verifies the presented secret before
-it reaches the success branch and answers every refusal with the same wording to avoid becoming a
-key-id oracle, so the identity is credential-gated even though the route takes no header auth.
+important: the identity is self-reported. It names the build this deployment believes it runs and
+is no evidence that the deployment is genuine.
 
-important: self-reported. It says which build this deployment believes it is running. It is not
-evidence the deployment is genuine, and no caller should treat it as such.
-
-The handlers are awaited directly. `whoami` takes the validated key its dependency would have
-produced; `/validate` runs for real with only Vault replaced, so the secret check and every refusal
-branch are the shipped ones. No database and no network are touched.
+The handlers are awaited directly; `/validate` runs for real with only Vault replaced.
 """
 import asyncio
 import hashlib
@@ -64,7 +57,7 @@ def test_whoami_names_the_build_that_answered() -> None:
 
 
 def test_whoami_still_describes_the_key_itself() -> None:
-    """The field is additive. What the endpoint already answered must be untouched."""
+    """The field is additive; the rest of the answer is unchanged."""
     response = _whoami()
     assert response.valid is True
     assert response.app_name == "orcahub"
@@ -76,13 +69,11 @@ def _validate(
 ) -> APIKeyValidateResponse:
     """Drive the real `/validate` handler with a fake Vault behind it.
 
-    Only Vault is replaced. The secret comparison, the revoked/inactive/expiry branches and the
-    response construction are the shipped ones, which is the whole point: this test has to fail if
-    somebody adds the server block to a refusal branch.
+    Only Vault is replaced, so the secret comparison, the revoked/inactive/expiry branches and the
+    response construction are the real ones, and a server block on a refusal branch fails here.
     """
-    # The hashing key is read from the environment on every call, and a missing one is a 500 rather
-    # than a refusal, so it has to be set before the hash is computed as well as before the handler
-    # verifies against it.
+    # The hashing key is read from the environment on every call and a missing one is a 500, so it
+    # is set before the hash is computed as well as before the handler verifies against it.
     monkeypatch.setenv("SECRET_KEY", "test-secret-key-for-hmac-only")
     stored_hash = hmac.new(
         integrations._get_hmac_key(), b"oas_the_real_secret", hashlib.sha256
@@ -125,9 +116,8 @@ def test_a_refusal_names_no_build(
 ) -> None:
     """A caller who cannot authenticate learns nothing about the deployment.
 
-    This is what keeps the identity behind the credential. It drives the handler rather than
-    constructing the response model, because a model built by hand carries the field's default and
-    would stay green no matter what the handler did.
+    It drives the handler: a response model built by hand carries the field's default and would
+    pass whatever the handler did.
     """
     response = _validate(monkeypatch, metadata, secret=secret)
 
@@ -140,7 +130,7 @@ def test_a_refusal_names_no_build(
 def test_the_success_branch_is_the_one_that_names_the_build(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The other half of the same claim: the gate is the secret, not the endpoint."""
+    """The secret is the gate: a verified one reaches the branch that names the build."""
     response = _validate(monkeypatch, ACTIVE, secret="oas_the_real_secret")
 
     assert response.valid is True

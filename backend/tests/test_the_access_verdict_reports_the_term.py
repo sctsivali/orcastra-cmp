@@ -1,6 +1,6 @@
 """The access verdict tells a tenant why their access is narrower, and when it ended.
 
-The shell reads /me/access before it renders. It now carries the term phase of the caller's own
+The shell reads /me/access before it renders. It carries the term phase of the caller's own
 grants: read-only projects (with their dates when OrcaHub sent them, inferred when it did not),
 projects whose term ends within two weeks, and, for a tenant left with nothing, when that
 access ended. It never names another tenant's project.

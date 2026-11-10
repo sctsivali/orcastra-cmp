@@ -1,26 +1,14 @@
-"""Two surfaces returned more than the caller was entitled to, and one let a caller widen scope.
+"""Responses carry only what the caller may hold, and binding a cluster cannot widen scope.
 
-`GET /server`, `GET /server/{node}` and `GET /server/{node}/config` returned the LXD daemon's raw
-`environment` and `config` blocks. The environment block carries the cluster's certificate PEM,
-its fingerprint and every member's listen address; the config block is where an LXD daemon keeps
-`core.trust_password`. All three sit on a `require_tenant()` router, so a tenant with one assigned
-cluster received all of it.
-
-The project had already written the allowlist for exactly this data, with a comment naming the
-certificate, and applied it on one path only. The page that renders the environment filtered
-certificate keys in the browser, which narrows what is drawn and not what is sent.
-
-`POST /organizations/{org_id}/clusters` is the third. It checked that the caller had access to the
-ORGANISATION, which is their own, and never checked the CLUSTER. Org scope is then derived from
-the row it writes, so a partner could bind another tenant's cluster to an org they control and
-inherit full scope over it, with break-glass treating the cluster as owned rather than foreign.
-
-`GET /console/{instance_name}/session` is the fourth. It returned the console session dict
-verbatim, and that dict carries the LXD operation's per-fd secrets in `ws_url` and `control_url`
-plus the cluster endpoint. Together those are a bearer credential for a raw LXD console channel,
-which reaches the guest outside the proxy, outside session tracking, outside the kill paths and
-outside the break-glass watchdog. The terminal twin of that endpoint was deleted rather than
-filtered for the same disclosure; this one was left behind.
+- `GET /server`, `/server/{node}` and `/server/{node}/config` (a `require_tenant()` router) pass
+  server-side allowlists: LXD's `environment` carries the cluster certificate PEM, fingerprint and
+  member addresses, and `config` holds `core.trust_password`. A browser filter leaves them in the
+  response.
+- `POST /organizations/{org_id}/clusters` checks the CLUSTER too: org scope derives from the row it
+  writes, so an unchecked cluster id would let a partner bind another tenant's cluster.
+- No console REST route hands out a console operation: its per-fd secrets in `ws_url` and
+  `control_url` open a raw LXD console channel that bypasses the proxy, session tracking, the kill
+  paths and the break-glass watchdog.
 """
 
 import ast
@@ -37,8 +25,8 @@ from app.services.lxd.resources import (
     public_environment,
 )
 
-# A realistic LXD server payload: the harmless descriptors alongside the material that must not
-# leave. Key names are the ones LXD actually uses.
+# An LXD server payload: harmless descriptors beside material that must not leave. Key names
+# match the ones LXD uses.
 RAW_ENVIRONMENT = {
     "server_version": "5.21.1",
     "kernel": "Linux",
@@ -86,21 +74,17 @@ def test_an_unknown_config_key_is_dropped_rather_than_passed_through() -> None:
 
 
 def test_the_allowlists_do_not_overlap_by_accident() -> None:
-    """Two vocabularies, deliberately separate: config keys are dotted, environment keys are not."""
+    """Config keys are dotted and environment keys are not, so the two sets never share a key."""
     assert not (PUBLIC_CONFIG_KEYS & PUBLIC_ENVIRONMENT_KEYS)
     assert all("." in key for key in PUBLIC_CONFIG_KEYS)
 
 
 def test_every_server_response_is_filtered() -> None:
-    """Structural, because the leak was three call sites and only one of them was ever fixed.
+    """No handler in this router returns `server_data.get('config'|'environment')` raw.
 
-    A new handler in this router that returns `server_data.get('config'|'environment')` raw is the
-    same defect again, and nothing at runtime would say so.
-    note: scoped to what is RETURNED, not to every mention. Two call sites build a local
-    `metadata` dict from the raw environment purely to feed
-    `detect_cluster_type_from_metadata`, which answers with a type string and never puts the
-    block on the wire. Flagging those would be a false positive that teaches people to silence
-    this test.
+    Only returned values are checked. Some call sites build a local `metadata` dict from the raw
+    environment to feed `detect_cluster_type_from_metadata`, which answers with a type string and
+    never puts the block on the wire.
     """
     tree = ast.parse(Path(inspect.getfile(lxd_server)).read_text())
     offenders = []
@@ -130,7 +114,7 @@ def test_binding_a_cluster_checks_the_cluster_and_not_only_the_organization() ->
     assert "get_owned_clusters_ignoring_admin" in source, (
         "bind_cluster does not check that the caller owns body.cluster_id"
     )
-    # The check must come before the write, or it is decoration.
+    # The check must run before the write.
     assert source.index("get_owned_clusters_ignoring_admin") < source.index("svc.bind_cluster"), (
         "the ownership check runs after the binding is written"
     )
@@ -148,9 +132,9 @@ def test_the_cluster_check_does_not_apply_to_admin() -> None:
 def test_no_console_route_hands_out_a_console_operation() -> None:
     """A console operation's per-fd secrets are a bearer credential for the guest's screen.
 
-    The REST `GET /console/{name}/session` created one and could only withhold the secrets, so it
-    orphaned an operation on every call and was removed; the console runs on the WebSocket, which
-    never discloses its operation. No REST route of the console router may create one again.
+    A REST route would have to create an operation and could only withhold its secrets, orphaning
+    an operation on every call. The console runs on the WebSocket, which never discloses its
+    operation, and no REST route of the console router may create one.
     """
     offenders = [
         f"{sorted(route.methods or [])} {route.path}"

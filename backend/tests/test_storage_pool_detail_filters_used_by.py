@@ -3,14 +3,10 @@
 This is the behavioural half of `test_used_by_is_tenant_filtered.py`. The ratchet proves the
 handler is shaped correctly; this proves the shape produces the right response.
 
-It exists because the live fleet cannot answer the question. `org_scope_dependency` narrows a
-tenant's reachable clusters to org-scope INTERSECTED with their ACL clusters
-(`_narrow_by_tenant_acl` in app/core/org_scope.py), so `verify_cluster_access` refuses anything outside that set
-before the handler runs. The leak was therefore never reachable across organisations: it was
-reachable on a cluster the tenant IS granted, for projects on that cluster their ACL does not
-cover. Exercising it end to end needs a reachable cluster that some tenant's ACL grants, and on
-this dev fleet the only cluster that answers is granted to no ACL at all. Rather than claim a
-pass that no run can produce, the same assertions are made here against the real handler.
+`org_scope_dependency` narrows a tenant's reachable clusters to org scope intersected with their
+ACL clusters (`_narrow_by_tenant_acl` in app/core/org_scope.py), so `verify_cluster_access`
+refuses anything outside that set before the handler runs. The case that matters is a cluster the
+tenant is granted, carrying projects their ACL does not cover.
 """
 
 import asyncio
@@ -79,11 +75,11 @@ def _call(used_by, acl: Optional[dict]):
 
 def test_tenant_sees_only_its_own_instance_references() -> None:
     result = _call([ALPHA_REF, BETA_REF, ALPHA_VOL, BETA_VOL], TENANT_ACL)
-    # Owner decision 2026-10-26: a tenant keeps references to its instances only. A custom
-    # volume reference names no instance, so it passed on any rule in its project and named other
-    # parties' volumes; it is withheld even under a project-wide grant like this one.
+    # A tenant keeps references to its instances only. A custom volume reference names no
+    # instance and can name other parties' volumes, so it is withheld even under a project-wide
+    # grant like this one.
     assert set(result.used_by) == {ALPHA_REF}
-    # The point of the original bug: the other project's names must not appear at all.
+    # The other project's names must not appear at all.
     assert not any("beta" in reference for reference in result.used_by)
 
 

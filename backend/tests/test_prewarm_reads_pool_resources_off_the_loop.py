@@ -1,8 +1,8 @@
 """The collector's storage pool prewarm must not run pylxd on the leader's event loop.
 
-It used to call the client directly from the prewarm coroutine, serially per cluster: a median
-5.7 s and up to 13.9 s per run in which the leader worker answered nothing. It now goes through
-the /storage/pools/resources-all handler, whose reads run in a thread pool.
+Serial per-cluster client calls from the prewarm coroutine would leave the leader worker
+answering nothing for seconds per run. The prewarm goes through the /storage/pools/resources-all
+handler, whose reads run in a thread pool.
 """
 
 import asyncio

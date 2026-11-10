@@ -1,10 +1,9 @@
 """POST /storage/volumes creates the volume in the project it names.
 
-The route took no project, built its call on the pooled client (which carries none) and so put
-every volume in `default`, whatever project the caller worked in (RC5 acceptance F-02,
-2026-11-05). It now takes `project` and `location` and is gated exactly like update and delete:
-the project must be visible, a project without its own volumes resolves to `default` as LXD
-resolves it, and `default` stays view only where another party holds the cluster.
+The pooled client carries no project, so a call built on it alone would put every volume in
+`default`. The route takes `project` and `location` and is gated exactly like update and
+delete: the project must be visible, a project without its own volumes resolves to `default` as
+LXD resolves it, and `default` stays view only where another party holds the cluster.
 """
 
 from contextlib import asynccontextmanager

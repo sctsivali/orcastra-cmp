@@ -1,11 +1,10 @@
 """
 An IPAM row says whether its address was pinned on the device or handed out dynamically.
 
-The page listed addresses with no way to tell a reservation from a lease, which is the one
-distinction a reconciliation against a corporate IPAM needs. The rule the instances page
-already applies (a NIC device carrying `ipv4.address` / `ipv6.address`) is applied to each
-allocation here, from the instance's expanded devices so a profile-inherited pin counts, and
-compared as parsed addresses so a prefix or IPv6 compression cannot hide a match.
+A reconciliation against a corporate IPAM needs to tell a reservation from a lease. The rule
+the instances page applies (a NIC device carrying `ipv4.address` / `ipv6.address`) is applied
+to each allocation, read from the instance's expanded devices so a profile-inherited pin
+counts, and compared as parsed addresses so a prefix or IPv6 compression cannot hide a match.
 """
 
 from app.services.lxd.ipam_join import classify, network_facts
@@ -53,7 +52,7 @@ def test_a_v4_row_is_never_matched_by_a_v6_pin() -> None:
 
 
 def test_a_nic_that_names_its_network_as_parent_is_matched_by_address() -> None:
-    # a bridged NIC names the bridge as `parent`, not `network`; address equality decides
+    # A bridged NIC names the bridge in `parent` instead of `network`, so the address decides.
     rec = _record({"eth1": {"type": "nic", "nictype": "bridged", "parent": "lxdbr0",
                             "ipv4.address": "10.22.114.231"}})
     assert classify("instance", "10.22.114.231", rec, "lxdbr0", True) == "static"
@@ -90,7 +89,7 @@ NETWORKS = {
 
 def test_network_facts_resolve_the_owning_project() -> None:
     assert network_facts("ovn-a", "isolated", CONFIGS, NETWORKS) == ("ovn", "isolated", "192.168.3.1/24", "fd42::1/64")
-    # a project without features.networks borrows default's bridge
+    # A project without features.networks uses default's bridge.
     assert network_facts("lxdbr0", "shared", CONFIGS, NETWORKS) == ("bridge", "default", "10.22.114.1/24", "")
     assert network_facts("lxdbr0", "unset", CONFIGS, NETWORKS) == ("bridge", "default", "10.22.114.1/24", "")
 

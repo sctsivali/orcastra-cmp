@@ -133,7 +133,7 @@ def test_state_wrapper_preserves_legacy_defaults_but_marks_omitted_fields(monkey
 
     metrics = _sample(monkeypatch, state)
 
-    # Existing StateWrapper consumers keep their original fallback shapes.
+    # StateWrapper keeps its fallback shapes for other consumers.
     assert state.cpu == {}
     assert state.memory == {}
     assert state.disk == {}

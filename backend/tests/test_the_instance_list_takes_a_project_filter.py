@@ -1,9 +1,9 @@
 """`GET /instances?project=` narrows the list to one project.
 
-The parameter was silently dropped: FastAPI ignores a query it does not declare, so a caller
-asking for one project's instances got every project's. Profiles, networks and images take
-the same parameter; the instance list now does too, keyed into the cache like theirs, with
-the bound and the tenant ACL still last so a project the caller may not see is an empty list.
+FastAPI ignores a query parameter it does not declare, so the route must declare it. Like
+profiles, networks and images, the instance list keys the project into the cache, and the
+bound and the tenant ACL still apply last, so a project the caller may not see is an empty
+list.
 """
 
 import contextvars
@@ -40,8 +40,8 @@ class _Service:
         return ["nuc2", "nuc1"]
 
     async def read_fleet_inventory(self):
-        # The instance list reads the fleet through this since 2026-10-29; it names a late
-        # cluster instead of raising, which these doubles never produce.
+        # The instance list reads the fleet through this. It names a late cluster instead of
+        # raising, which these doubles never produce.
         vms, connected, incomplete = await self.list_all_vms_with_failures()
         return FleetInventory(vms, connected, incomplete, {})
 

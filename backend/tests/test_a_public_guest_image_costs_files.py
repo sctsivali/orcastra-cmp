@@ -2,22 +2,14 @@
 Making an image of a guest public costs `instance.files`.
 
 LXD serves a public image to any client that reaches it, trusted or not, so publishing an instance or
-a snapshot with `public: true`, or setting `public: true` on an image later, hands the guest's
-filesystem out as surely as an image export does. A write key without `instance.files` could do it,
-a `*` key included. A copy is priced the same whatever its source: LXD's remote and URL copy
-(images.go imgPostRemoteInfo, imgPostURLInfo) call UpdateImage with the request's `public` when the
-project already holds the fingerprint, so a copy naming a privately published guest image made it
-public.
-
-A private publish stays unpriced. The integrator publishes its marketplace images from a snapshot
-with `public: false` (its client source, publishImageFromSnapshotViaProxy), with a key whose preset
-never holds `instance.files`, so that body is pinned as still sent, and so is its pre-cache pull
-(`public: false`). LXD decodes `public` as a JSON
-bool and answers 400 for any other value, so a value that is not absent, null or false is priced
-rather than refused here: nothing LXD would accept is let through, and the rule reads `public` the
-way the migration rule beside it reads `migration`.
-
-Every raw-proxy test drives the real handler; the session records the request it would send.
+a snapshot with `public: true`, or setting it on an image later, hands out the guest's filesystem as
+an image export does. A copy is priced whatever its source: LXD's remote and URL copy (images.go
+imgPostRemoteInfo, imgPostURLInfo) call UpdateImage with the request's `public` when the project
+already holds the fingerprint. A private publish stays unpriced: the integrator's marketplace publish
+(`public: false`, a key preset without `instance.files`) and its pre-cache pull are pinned as sent.
+LXD answers 400 for a `public` that is not a JSON bool, so any value but absent, null or false is
+priced rather than refused here. Every raw-proxy test drives the real handler; the session records
+the request it would send.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -33,14 +25,14 @@ from tests._raw_proxy_fakes import ENDPOINT, _clean_breaker, call_raw_proxy, fen
 FP = "0f3c9a1b2c3d4e5f"
 SNAPSHOT = {"type": "snapshot", "name": "web-1/mktimg-a1b2"}
 
-# The integrator's publish, as orcastra.client-image.js builds it.
+# The integrator's publish, as its client builds it.
 ORCAHUB_PUBLISH = {
     "source": {"type": "snapshot", "name": "web-1/mktimg-a1b2"},
     "aliases": [{"name": "mkt/org-7/app", "description": "App"}],
     "public": False,
     "compression_algorithm": "gzip",
 }
-# The integrator's pre-cache pull, as the same file builds it. note: from a trusted catalogue; any
+# The integrator's pre-cache pull, as the same file builds it. It names a trusted catalogue; any
 # other server needs KEY_IMAGE_SERVERS_ALLOW (core/key_pull_sources.py).
 ORCAHUB_PULL = {
     "source": {"type": "image", "mode": "pull", "protocol": "simplestreams",

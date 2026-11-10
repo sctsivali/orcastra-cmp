@@ -1,21 +1,13 @@
-"""Decision 19 against OrcaHub v1.32.0's own bodies, and against every path that claims an org for a key.
+"""The one-org rule against OrcaHub's own bodies, and against every path that claims an org for a key.
 
-orcastra.service.js syncOrcastraClustersUnlocked pushes the connection's own org first and then
-every buyer org with a PROCESSING or COMPLETED order on its plans, with each org's full roster (no
-action field, name null for some users, roles PARTNER, TENANT and USER). provisioning.order.js
-calls provision-tenant-access at purchase with the buyer org's id, name and slug, which creates
-the buyer org under the seller's key before any push names it. The dashboard's
-refresh-organizations pulls orgs from the key's callback. Those three paths claim an org for a key.
-The only other writers of organizations.api_key_id move an org between keys and never release one:
-an Administrator's owner transfer (PUT /integrations/organizations/{id}/owner-key) and an add-on
-credential's rotation, which carries the old credential's orgs to the new one. So these are the
-count's only inputs.
+Three paths claim an org for a key: OrcaHub's sync (its own org first, then every buyer org with a
+PROCESSING or COMPLETED order, each with its full roster), provision-tenant-access at purchase
+(creates the buyer org before any push names it) and the dashboard's refresh-organizations pull.
+Every other writer of organizations.api_key_id moves an org between keys and never releases one.
 
-A buyer org's PARTNER can add any existing user, the seller's creator included, as PARTNER
-(routes/organizations/members.js invite). Decision 19 says a buyer naming the creator PARTNER can
-then neither steer nor block the rebind. The key's one claimed org can itself be a buyer org (a new
-key, a second connection, a seller slug a local org holds), so a push rebinds only when its
-organizations list names exactly one org and the key claims exactly that one.
+A buyer org's PARTNER can add the seller's creator as PARTNER, and such a buyer must neither steer
+nor block the rebind. The key's one claimed org can itself be a buyer org, so a push rebinds only
+when its organizations list names exactly one org and the key claims exactly that one.
 """
 
 import ast
@@ -73,7 +65,7 @@ FULL = ["view", "operate", "console", "snapshot", "file_transfer"]
 
 
 def hub_body(orgs: Tuple[str, ...], members: List[Tuple[str, str, str]]) -> Dict[str, Any]:
-    """syncOrcastraClustersUnlocked's body with BACKEND_URL unset: axios drops app_url."""
+    """OrcaHub's sync body with its BACKEND_URL unset, so axios drops app_url."""
     return {
         "include_clusters": True, "include_projects": True,
         "organizations": [{"id": o, "name": HUB[o][0], "slug": HUB[o][1], "description": HUB[o][2]} for o in orgs],
@@ -83,7 +75,7 @@ def hub_body(orgs: Tuple[str, ...], members: List[Tuple[str, str, str]]) -> Dict
 
 
 def provision_body(org: str, emails: List[str], **over: Any) -> Dict[str, Any]:
-    """provisionTenantAccessViaClient's body as provisioning.order.js fills it."""
+    """OrcaHub's provision-tenant-access body, as it is filled at purchase."""
     return {"organization_external_id": org, "cluster_id": SALE, "project_name": "orc-p-1", "instance_name": "*",
             "user_emails": emails, "permissions": FULL, "organization_name": HUB[org][0],
             "organization_slug": HUB[org][1], **over}
@@ -140,7 +132,7 @@ async def provision(db: AsyncSessionFacade, body: Dict[str, Any], *, method: str
     return await send(seller_key(key_id), db, body, method=method, path=path)
 
 
-# note: OrcaHub's sync body, with and without buyer orgs
+# OrcaHub's sync body, with and without buyer orgs.
 
 HUB_CASES = [
     ("seller_alone", (SELLER,), [(C, SELLER, "PARTNER")], "acme-cloud", None),
@@ -183,7 +175,7 @@ async def test_a_seller_org_already_claimed_and_absent_from_the_body_still_count
     expect(hub, await placed(db), None, ("count", 2))
 
 
-# note: provision-tenant-access claims the buyer org before any push names it
+# provision-tenant-access claims the buyer org before any push names it.
 
 async def test_a_sale_before_the_next_push_blocks_the_rebind(sale: Dict[str, Any]) -> None:
     db = world_db()
@@ -236,7 +228,7 @@ REFUSED = [
     ("unregistered_cluster", None, {"cluster_id": "ghost"}, "POST", "", 404),
     ("org_another_key_owns", _other_key_owns_the_buyer, {}, "POST", "", 409),
     ("slug_already_taken", _slug_taken, {}, "POST", "", 409),
-    # Refused by the body model since 2026-10-27, before the organization is ever written.
+    # Refused by the body model, before the organization is ever written.
     ("invalid_permission_before_any_write", None, {"permissions": ["view", "root"]}, "POST", "", 422),
     ("no_org_name_for_a_new_org", None, {"organization_name": None}, "POST", "", 404),
     ("get", None, {}, "GET", "", 405),
@@ -267,7 +259,7 @@ async def test_a_provision_that_claims_nothing_leaves_one_org(
     expect(sale, await placed(db), "acme-cloud", None)
 
 
-# note: refresh-organizations, the dashboard's pull from the key's callback
+# refresh-organizations, the dashboard's pull from the key's callback.
 
 def refresh_app(db: Any) -> FastAPI:
     app = FastAPI()
@@ -313,7 +305,7 @@ async def test_a_refresh_counts_only_what_it_claimed(
     db = world_db()
     await sync(db, (SELLER,), [(F, SELLER, "PARTNER")])
     await personal_cluster(db, "c-cluster", C)
-    # note: the URL as a sync with the key's secret stores it, bound to that secret
+    # The URL as a sync with the key's secret stores it, bound to that secret.
     vault = _FakeVault({**seller_key(), "app_url": "https://hub.example.test",
                         APP_URL_SECRET_TAG: callback_url_tag(SECRETS[1])})
     monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: vault)
@@ -335,7 +327,7 @@ async def test_a_refresh_counts_only_what_it_claimed(
     expect(hub, await placed(db), dest, warn)
 
 
-# note: the count's inputs. Nothing else writes organizations.api_key_id, and MCP and /proxy reach none of it
+# The count's inputs. Nothing else writes organizations.api_key_id, and MCP and /proxy reach none of it.
 
 _APP = Path(integrations.__file__).resolve().parents[1]
 
@@ -364,8 +356,8 @@ def test_only_these_paths_write_a_claim() -> None:
                     assigns.add((where, ast.unparse(t.value)))
     assert constructs == {"routers/integrations.py:_upsert_synced_organizations",
                           "routers/integrations.py:provision_tenant_access"}
-    # note: install is an ExtensionInstallation row, not an organization
-    # note: the claim routes set the primary of an unclaimed org only. Every other primary change is
+    # `install` is an ExtensionInstallation row; its api_key_id claims no organization.
+    # The claim routes set the primary of an unclaimed org only. Every other primary change is
     # in organization_owners: an Administrator's transfer (replace_owners), an add-on credential's
     # rotation (carry), a removal or a lost capability that moves the primary to the next able owner
     # (remove_owner, drop_unable_primary) and an Administrator's choice (set_primary). None of them
@@ -416,8 +408,8 @@ def test_no_ownership_by_primary_equality() -> None:
                        and ast.unparse(side.value) in ("Organization", "org", "existing", "owner", "slug_owner")
                        for side in sides):
                     offending.add(where)
-    # note: these compare with the primary because they are about the primary itself: whether a new
-    # primary is already the one, and which owner key a callback is tried with first
+    # These compare with the primary because they are about the primary itself: whether a new
+    # primary is already the one, and which owner key a callback is tried with first.
     assert offending == {"routers/integrations.py:set_organization_primary",
                          "services/orcahub_sync.py:_get_orcahub_credentials"}, offending
 
@@ -444,7 +436,7 @@ def test_mcp_and_proxy_reach_no_claim_writer() -> None:
     assert [n for n in PROXY_OPERATION_LEVELS if any(t in n.lower() for t in tokens)] == []
 
 
-# note: the key's one claimed org is a buyer org, and the buyer names the creator PARTNER. Only the push's
+# The key's one claimed org is a buyer org, and the buyer names the creator PARTNER. Only the push's
 # own list of orgs keeps the buyer from choosing the destination.
 
 NEW_KEY = [((SELLER, BUYER1), (SELLER, BUYER1, BUYER2)), ((SELLER,), (SELLER, BUYER2))]
@@ -454,9 +446,9 @@ NEW_KEY = [((SELLER, BUYER1), (SELLER, BUYER1, BUYER2)), ((SELLER,), (SELLER, BU
 async def test_a_new_key_whose_one_org_is_a_buyer_org_binds_nothing_into_it(
     hub: Dict[str, Any], old_claims: Tuple[str, ...], new_push: Tuple[str, ...],  # noqa: F811
 ) -> None:
-    """The creator mints a new key (not a rotate in place) or a second connection's key. The old key
-    still owns the seller org, so the new key's push is refused there and claims only the new buyer
-    org, whose PARTNER added the creator as PARTNER."""
+    """The creator mints a new key instead of rotating in place, or a second connection's key. The
+    first key still owns the seller org, so the new key's push is refused there and claims only the
+    new buyer org, whose PARTNER added the creator as PARTNER."""
     db = world_db()
     await sync(db, old_claims, [(F, o, "PARTNER") for o in old_claims])
     await personal_cluster(db, "c-cluster", C)

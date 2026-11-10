@@ -1,10 +1,10 @@
-"""A compressed body is held to the caller's cap while it inflates, not after (core/safe_http.py).
+"""A compressed body is held to the caller's cap while it inflates (core/safe_http.py).
 
-Security review 2026-11-07: fetch_guarded and post_pinned read aiter_bytes(), which hands out
-decompressed chunks, so one 64 KiB gzip chunk could inflate to about 64 MB before the size check
-ran. Two callers fetch or post to a URL a user chose (a branding image, a webhook receiver), so a
-user's own server could send that body. Bodies are now read raw and inflated here, at most the
-cap plus one byte at a time; the request asks for the body uncompressed in the first place.
+httpx's aiter_bytes() hands out decompressed chunks, so one 64 KiB gzip chunk could inflate to
+about 64 MB before a size check runs. Two callers fetch or post to a URL a user chose (a branding
+image, a webhook receiver), so a user's own server can send that body. fetch_guarded and
+post_pinned read bodies raw and inflate them at most the cap plus one byte at a time; the request
+asks for the body uncompressed in the first place.
 """
 
 from __future__ import annotations

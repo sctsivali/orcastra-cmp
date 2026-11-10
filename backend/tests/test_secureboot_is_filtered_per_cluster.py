@@ -1,23 +1,15 @@
 """`security.secureboot` is refused by some LXD versions and required by some images.
 
-Neither always-send nor never-send is correct, which is the whole point of this file.
-
   * LXD 5.x accepts the key. Community VM images (Alpine, the daily Ubuntu builds) are not
-    Secure Boot signed, so WITHOUT `security.secureboot=false` they create fine and then refuse
-    to start: "The image used by this instance is incompatible with secureboot". Verified live
-    on 5.21.7. Only signed release images carry `image.requirements.secureboot=false` and cope
-    on their own.
+    Secure Boot signed, so without `security.secureboot=false` they create fine and then refuse
+    to start: "The image used by this instance is incompatible with secureboot". Only signed
+    release images carry `image.requirements.secureboot=false` and cope on their own.
   * LXD 6.9 answers `"security.secureboot" is not supported for "virtual-machine"` and refuses
-    the create outright, and because the create is non-blocking that refusal used to reach
-    nobody.
+    the create outright.
 
-So the form keeps sending it, and the decision about whether the target will accept it lives
-next to the client that knows which target it is. This was got wrong once in the other
-direction: the key was removed from the form as "inherit loses nothing", generalised from a
-single signed release image, and that broke Alpine on the very cluster it was tested against.
-
-Fail-safe direction: an unknown version KEEPS the key, because 5.x behaviour is the one
-verified against a live cluster.
+So the form always sends it, and the backend decides per target next to the client that knows
+the server version. An unknown version keeps the key, because the 5.x behaviour is the verified
+one.
 """
 
 from pathlib import Path
@@ -53,7 +45,7 @@ class TestVersionParsing:
 
 class TestFiltering:
     def test_lxd_5_keeps_the_key(self):
-        """Verified live: without it, an Alpine VM creates and then will not boot."""
+        """Without it, an Alpine VM creates and then will not boot."""
         out = _drop_unsupported_config(_Client("5.21.7"), VM, dict(CONFIG))
         assert out["security.secureboot"] == "false"
 
@@ -67,8 +59,8 @@ class TestFiltering:
         assert out["limits.cpu"] == "1"
 
     def test_an_unknown_version_keeps_the_key(self):
-        """Fail-safe. Dropping on uncertainty would silently reintroduce the unbootable
-        community image, which is the harder of the two failures to diagnose."""
+        """Dropping on uncertainty would bring back the unbootable community image, the harder
+        of the two failures to diagnose."""
         out = _drop_unsupported_config(_Client(None), VM, dict(CONFIG))
         assert out["security.secureboot"] == "false"
 
@@ -90,8 +82,8 @@ class TestFiltering:
         assert original == CONFIG
 
     def test_only_listed_keys_are_ever_dropped(self):
-        """A version gate that quietly removed anything else would be worse than the bug it
-        fixes, because the operator asked for those values."""
+        """The operator asked for every other value, so the version gate drops only listed
+        keys."""
         cfg = {
             "security.secureboot": "false",
             "security.csm": "true",
@@ -103,8 +95,8 @@ class TestFiltering:
 
 
 def test_the_form_still_sends_it():
-    """Regression guard for the wrong fix. If this goes back to "" every community VM image
-    stops booting on LXD 5.x, which is the common case on this fleet."""
+    """The form keeps sending `false`; without it every community VM image stops booting on
+    LXD 5.x."""
     components = Path(__file__).resolve().parents[2] / "frontend/src/components"
     form_src = (components / "instance-create-form.tsx").read_text(encoding="utf-8")
     model_src = (components / "instance-create/model.ts").read_text(encoding="utf-8")

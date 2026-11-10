@@ -1,9 +1,8 @@
 """A status check reads the cluster-wide instance list only for an answer it keeps.
 
-For a clustered host the check listed every instance twice for the connected member's own
-figures (its CPU allocation and its GPU inventory) and then replaced those figures with the
-members' aggregate, which lists them again. Profiling the monitoring sweep put a three-member
-cluster's status check at 6 to 16 seconds. The member's own figures are now built only when the
+On a clustered host the members' aggregate replaces the connected member's own figures (its
+CPU allocation and its GPU inventory) and lists what it needs itself, and a cluster-wide list
+takes seconds on a multi-member cluster. The member's own figures are built only when the
 aggregate is not available, from one list shared by both consumers.
 """
 

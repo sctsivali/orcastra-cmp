@@ -4,7 +4,7 @@ for everyone it covers), and nowhere else.
 The choice is a branding key, checked like any other (services/branding/validation.py) and filled
 layer by layer like the theme (services/branding/resolve.py). The sign-in page reads the
 deployment's choice before anyone signs in (routers/public_branding.py). There is no per-account
-override (owner decision 2026-11-09): routers/user_preferences.py keeps the theme alone.
+override: routers/user_preferences.py keeps the theme alone.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ async def _row(db):
     return await db.get(UserPreferences, "sub-1")
 
 
-# Organization and deployment default
+# Organization and deployment default.
 
 
 @pytest.mark.parametrize("choice", ["show", "hide"])
@@ -80,7 +80,7 @@ def test_the_sign_in_page_is_told_the_deployments_choice() -> None:
     assert _public({"theme": "dark"})["illustrations"] is None
 
 
-# No per-account choice (owner decision 2026-11-09): the personal row stays the theme alone
+# No per-account choice: the personal row stays the theme alone.
 
 
 async def test_an_account_cannot_store_its_own_choice() -> None:

@@ -20,7 +20,7 @@ def test_cluster_delete_uses_broad_invalidators_and_keeps_targeted_cleanup() -> 
         in source
     )
 
-    # These pre-v2 exact keys matched neither pagination/project dimensions nor every scope.
+    # Exact pre-v2 keys miss the pagination, project and scope dimensions.
     for obsolete in (
         "instances:list:host=None:status=None:type=None",
         "vms:list:host=None:status=None",

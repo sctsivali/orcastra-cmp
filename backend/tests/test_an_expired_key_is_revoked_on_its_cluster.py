@@ -1,12 +1,10 @@
 """A My Keys credential is revoked on its cluster once the key's expiry passes, on both engines.
 
-The expiry was only the certificate's own NotAfter. Shown on the Incus lab (2026-11-08): a
-restricted client may replace its own certificate (certificate_self_renewal), and a holder swapped
-in one valid for a hundred years, so a key "expiring" tomorrow stayed usable indefinitely. The
-sweeper revokes the cluster half when expires_at passes: the identity and its group on LXD, the
-certificate on Incus. The record stays, marked revoked_at, so the owner still sees the key and its
-trail. An unreachable cluster or a revocation the cluster did not confirm is tried again next pass.
-Owner decision 2026-11-08: every engine.
+The certificate's own NotAfter is not enough: a restricted Incus client may replace its own
+certificate (certificate_self_renewal) with one valid for a hundred years. The sweeper revokes the
+cluster half when expires_at passes: the identity and its group on LXD, the certificate on Incus.
+The record stays, marked revoked_at, so the owner still sees the key and its trail. An unreachable
+cluster or a revocation the cluster did not confirm is tried again next pass.
 """
 
 from __future__ import annotations
@@ -101,8 +99,8 @@ async def test_a_revocation_the_cluster_did_not_confirm_is_not_marked(world):
 
 
 async def test_a_worker_that_never_connected_to_the_cluster_connects_to_revoke(world):
-    """Found live on 2026-11-08: the lease holder had no pooled client for incus-lab (get_client is
-    memory-only), so the sweep skipped the key on every pass and the certificate stayed trusted."""
+    """get_client is memory-only, so a lease holder with no pooled client must connect first;
+    skipping the key would leave the certificate trusted on every pass."""
     pool: Dict[str, Any] = {}
     connects: List[str] = []
 

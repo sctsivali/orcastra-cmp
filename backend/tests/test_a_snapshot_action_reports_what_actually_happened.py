@@ -1,13 +1,11 @@
 """Delete and restore must not report an outcome the cluster did not produce.
 
-Create already waited for its LXD operation and refused to answer 201 when the daemon rejected
-the snapshot after accepting the request. Delete awaited the same wait and threw the result away,
-then answered `success: true, "Snapshot X deleted."` regardless; restore never waited at all.
-Both are the defect this feature was written to avoid, reintroduced two handlers later.
+Create, delete and restore each wait for their LXD operation and answer from its result, so work
+the daemon rejects after accepting the request is reported as a failure, never as done.
 
-Also covered here: the ownership rule that delete enforced and restore did not, and the fact that
-being refused on a billing-linked instance now leaves an audit record. A refusal that nothing
-records is the event most worth alerting on and the one that was invisible.
+Also covered here: the ownership rule on both destructive actions, and the audit record a refusal
+on a billing-linked instance leaves. A refusal that nothing records is the event most worth
+alerting on.
 """
 
 import asyncio
@@ -67,8 +65,8 @@ def _restore(node, name=TARGET, **overrides):
 
 
 def _delete(node, name=TARGET, **params):
-    # The name is percent-encoded the way a real client sends it, so a hostile one actually
-    # reaches the handler instead of being mangled into a malformed URL by the test itself.
+    # The name is percent-encoded the way a real client sends it, so a hostile one reaches the
+    # handler instead of being mangled into a malformed URL by the test itself.
     query = f"host={HOST}&project={PROJECT}"
     for key, value in params.items():
         query += f"&{key}={value}"
@@ -77,7 +75,7 @@ def _delete(node, name=TARGET, **params):
     )
 
 
-# ── the operation actually settled ─────────────────────────────────────────────────────────
+# ── the operation settled ──────────────────────────────────────────────────────────────────
 
 
 def test_a_delete_the_daemon_rejects_is_not_reported_as_deleted():
@@ -103,9 +101,9 @@ def test_a_delete_that_has_not_settled_says_so_rather_than_claiming_completion()
 
 
 def test_a_settled_delete_says_so_and_forgets_only_its_own_instances_sizes():
-    """Ablation: sweep the whole size map on a snapshot write and the next fleet read re-measures
-    every holder on every cluster (6.8 s on dev); forget nothing and the instance keeps a
-    neighbour's size from before the delete for ten minutes."""
+    """Sweeping the whole size map would make the next fleet read re-measure every holder on every
+    cluster; forgetting nothing would keep the instance's size from before the delete for ten
+    minutes."""
     from app.core.cache import get_cache_manager
     from app.services.snapshots import fleet_sizes
 
@@ -138,12 +136,12 @@ def test_a_restore_the_daemon_rejects_is_not_reported_as_started():
 
 
 def test_a_restore_zfs_refuses_after_the_safety_copy_is_reported_as_refused(audited):
-    """The nuc2 case: the safety copy lands, and ZFS then refuses to roll back past it.
+    """The safety copy lands, and ZFS then refuses to roll back past it.
 
     ZFS rolls back only to the latest snapshot, and the safety copy is by construction later than
     the target. LXD fails the restore operation, and answers its wait with an error-typed body
-    that pylxd raises. `_settle` took that raise as "still running", so the restore was answered
-    200 "Restoring ..." and audited as accepted while the instance was never touched.
+    that pylxd raises. Read as "still running", that raise would answer 200 "Restoring ..." and
+    audit the restore as accepted while the instance was never touched.
     """
     node = FakeInstanceNode(snapshots=[{"name": TARGET}])
     node.operation_status = {"op-restore": "Failure", "*": "Success"}
@@ -204,7 +202,7 @@ def test_a_name_that_is_not_a_plain_snapshot_name_never_reaches_a_request_path(h
 
 
 def test_a_restore_of_a_snapshot_that_is_not_there_leaves_no_safety_copy_behind():
-    """The safety copy used to be taken first, so a typo cost a snapshot on a billed source."""
+    """The existence check precedes the safety copy, so a typo costs no snapshot on a billed source."""
     node = FakeInstanceNode(snapshots=[{"name": "ops-something-else-20260908T000000Z"}])
     response = _restore(node)
     assert response.status_code == 404, response.text
@@ -246,10 +244,10 @@ def test_the_settle_socket_window_outlasts_the_wait_it_asks_lxd_for():
     """A wait whose socket dies first reports "still running" for an operation that already failed.
 
     The pooled client reads for 8 seconds. `wait_for_operation` asks the daemon to hold the
-    response for 20, so without an explicit socket timeout the read expired first on every call
-    that did not settle almost immediately, `_settle` swallowed the ReadTimeout as
-    `settled: False`, and the 502-on-failure branch became unreachable for anything slower than
-    8 seconds. The rule is stated at guest_output.py:120-122 and was simply not applied here.
+    response for 20, so without an explicit socket timeout the read would expire first, `_settle`
+    would swallow the ReadTimeout as `settled: False`, and the 502-on-failure branch would be
+    unreachable for anything slower than 8 seconds. `guest_output.run_recorded` follows the same
+    rule.
     """
     node = FakeInstanceNode(snapshots=[{"name": TARGET}])
     assert _delete(node).status_code == 200
@@ -273,11 +271,11 @@ def test_the_settle_socket_window_outlasts_the_wait_it_asks_lxd_for():
 
 @pytest.mark.parametrize("terminal_status", ["Failure", "Cancelled"])
 def test_every_settled_non_success_is_reported_as_one(terminal_status):
-    """Cancelled is settled and is not success. It used to be reported as done.
+    """Cancelled is settled and is not success.
 
     The daemon cancels an operation on a restart mid-queue, and an operator can cancel one by hand.
-    The handlers compared against "Failure" alone, so the caller was told the snapshot was created,
-    deleted or restored when it had not been.
+    Comparing against "Failure" alone would tell the caller the snapshot was deleted or restored
+    when it had not been.
     """
     # A separate node per action: the delete removes the snapshot from the fake, and the restore
     # would then legitimately 404 on the existence check rather than on the operation outcome.
@@ -301,10 +299,9 @@ def test_a_running_operation_is_not_treated_as_a_failure():
 def test_a_name_carrying_a_newline_never_reaches_the_daemon_in_that_form():
     """A trailing newline is normalised away and the daemon is addressed with the clean name.
 
-    note: the anchor in `_NAME_RE` is `\\Z` rather than `$` because Python's `$` matches before a
-    trailing newline. That is defence in depth rather than the operative guard here: the validator
-    strips first, so the newline is gone before the pattern is applied either way. What this
-    asserts is the part that was actually broken, which is that the daemon is addressed with the
+    The anchor in `_NAME_RE` is `\\Z` rather than `$` because Python's `$` matches before a
+    trailing newline. That is defence in depth: the validator strips first, so the newline is gone
+    before the pattern is applied. What this asserts is that the daemon is addressed with the
     validated form.
     """
     node = FakeInstanceNode(snapshots=[{"name": TARGET}])
@@ -319,8 +316,8 @@ def test_a_name_carrying_a_newline_never_reaches_the_daemon_in_that_form():
 def test_the_daemon_is_addressed_with_the_name_that_was_validated():
     """The validator normalises before it checks, so its return value is the approved form.
 
-    Discarding it meant a name was approved as `ops-target` and then sent as `" ops-target "`,
-    which is a 404 on a snapshot that is really there.
+    Discarding it would approve `ops-target` and then send `" ops-target "`, a 404 on a snapshot
+    that exists.
     """
     node = FakeInstanceNode(snapshots=[{"name": TARGET}])
     response = _delete(node, name=f"  {TARGET}  ")
@@ -339,10 +336,9 @@ def test_the_daemon_is_addressed_with_the_name_that_was_validated():
 def test_an_accepted_response_naming_no_operation_is_not_reported_as_done():
     """A 202 whose body names no operation means the work is running and unverifiable.
 
-    `_operation_id` returned None for that case and for a genuinely synchronous 200 alike, and the
-    caller treats None as "nothing to wait for, so it is finished". Every fake in this suite
-    hardcoded an operation id, so the branch that makes that decision was unreachable from any
-    test while a real cluster answering oddly would have been reported as success.
+    `_operation_id` returns None for that case and for a synchronous 200 alike, and the caller
+    treats None as "nothing to wait for, so it is finished". The fake omits the operation id here
+    so that branch is exercised.
     """
     node = FakeInstanceNode(snapshots=[{"name": TARGET}])
     node.omit_operation = True
@@ -417,7 +413,7 @@ def test_a_restricted_project_refusing_a_snapshot_is_a_409_not_an_unknown_outcom
     audited, monkeypatch
 ):
     # Every Partner project on a shared cluster is created restricted, and LXD blocks snapshots
-    # there. This answered 502 snapshot_outcome_unknown and the form blocked the retry.
+    # there. A 502 snapshot_outcome_unknown would make the form block the retry.
     from app.routers import instance_snapshots
 
     invalidated = []
@@ -428,7 +424,7 @@ def test_a_restricted_project_refusing_a_snapshot_is_a_409_not_an_unknown_outcom
 
     monkeypatch.setattr(instance_snapshots, "get_cache_manager", lambda: _Cache())
     node = FakeInstanceNode()
-    # LXD sends this refusal as a 500 (measured on nuc2): the sentence, not the status, is the verdict.
+    # LXD sends this refusal as a 500, so the error text decides whatever the status.
     node.create_error = _lxd_refusal(
         500, f'Project "{PROJECT}" doesn\'t allow for snapshot creation'
     )

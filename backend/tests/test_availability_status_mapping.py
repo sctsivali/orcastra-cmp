@@ -1,8 +1,7 @@
 """The status derivation is the one place that turns a probe into a word an operator reads.
 
-Three call sites used to answer the question three different ways: /clusters collapsed any
-failure to NOT_AUTHORIZED, /regions collapsed any failure to OFFLINE, and /monitoring invented
-"pending_trust" by substring-matching the error text. This pins the single answer.
+/clusters, /regions and /monitoring all take a cluster's status from `derive_status`, so one
+probe reads the same on each of them. This pins its answers.
 """
 
 import ast
@@ -19,7 +18,7 @@ class DeriveStatusTests(unittest.TestCase):
         self.assertEqual(reason, AvailabilityReason.OK)
 
     def test_connected_wins_even_when_reachable_is_unknown(self):
-        # A body cached before `reachable` existed still reports a working cluster correctly.
+        # A cached body without `reachable` still reports a working cluster as online.
         status, _, _ = derive_status(connected=True, reachable=None)
         self.assertEqual(status, ClusterStatus.ONLINE)
 
@@ -35,7 +34,7 @@ class DeriveStatusTests(unittest.TestCase):
         self.assertEqual(reason, AvailabilityReason.UNREACHABLE)
 
     def test_a_dead_cluster_is_never_labelled_pending_trust(self):
-        """The headline defect. An unreachable host is not a certificate problem."""
+        """An unreachable host is not a certificate problem."""
         status, _, _ = derive_status(
             connected=False,
             reachable=False,
@@ -59,7 +58,7 @@ class DeriveStatusTests(unittest.TestCase):
 
     def test_unknown_defaults_to_offline_not_error(self):
         """A picker must not present an unconfirmed cluster as usable, and ERROR is reserved
-        for a fault in us. Defaulting the other way would paint a whole fleet red on a bug."""
+        for a fault in this server."""
         status, _, _ = derive_status(connected=False, reachable=None)
         self.assertEqual(status, ClusterStatus.OFFLINE)
 
@@ -70,8 +69,8 @@ class DeriveStatusTests(unittest.TestCase):
         self.assertEqual(message, "Connection timeout.")
 
     def test_it_never_reads_the_error_text(self):
-        """Structural, not behavioural. Guessing the status from a message is what produced
-        "pending_trust", and a reworded backend message would silently change the UI."""
+        """A parse of the source. Deriving the status from message text would let a reworded
+        backend message silently change what the UI shows."""
         source = inspect.getsource(derive_status)
         tree = ast.parse(source.lstrip())
         for node in ast.walk(tree):

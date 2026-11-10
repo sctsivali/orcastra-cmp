@@ -1,17 +1,12 @@
-"""Regression guard: `get_client` must never be awaited inline on the event loop.
+"""Ratchet: `get_client` is never called inline on the event loop.
 
-`connection_manager.get_client` is not a cheap lookup. It revalidates the pooled connection
-with a live request and, on failure, rebuilds the pylxd client, which itself performs a TLS
-handshake and a verifying GET. Against a cluster that accepts TCP and then goes silent, that
-is seconds of wall clock per call, on the loop thread, with nothing else served.
+`connection_manager.get_client` revalidates the pooled connection with a live request and,
+on failure, rebuilds the pylxd client with a TLS handshake and a verifying GET. Against a
+cluster that accepts TCP and then goes silent, that is seconds of wall clock per call on the
+loop thread, with nothing else served.
 
-That is the exact shape of the RC3 outage. The hardening pass wrapped it in `run_blocking`
-everywhere except one place: the image-import recovery sweep, whose ISO twin was converted in
-the same commit. The asymmetry survived review because both routers looked hardened at a
-glance, which is why this is a structural guard rather than a behavioural test.
-
-The rule enforced here: inside an `async def`, a call to `.get_client(...)` must be an
-argument to `run_blocking`, never a call in its own right.
+Inside an `async def`, a call to `.get_client(...)` must be an argument to `run_blocking`,
+never a call in its own right.
 """
 
 import ast
@@ -39,7 +34,7 @@ def _offending_calls(tree: ast.AST) -> List[int]:
             self.async_depth -= 1
 
         def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-            # A plain def inside an async def runs in a thread or is called deliberately.
+            # A plain def inside an async def runs in a thread or is an explicit sync call.
             depth, self.async_depth = self.async_depth, 0
             self.generic_visit(node)
             self.async_depth = depth
@@ -66,24 +61,17 @@ def _offending_calls(tree: ast.AST) -> List[int]:
     return offenders
 
 
-# Inline-call ceilings recorded as of 1.0.0-RC6 (2026-08-17). An explicit zero keeps a
-# previously improved file visible in the ratchet and rejects reintroduction there.
+# Inline-call ceilings per file. The numbers may only go down: a new inline call fails the
+# guard, and converting one without lowering the count fails it too. An explicit zero keeps
+# an improved file in the ratchet and rejects reintroduction there. Counted per file so that
+# edits which shift line numbers do not move the baseline.
 #
-# This is a ratchet, not an allowlist: the numbers may only go DOWN. A new inline call fails
-# the guard, and converting one without updating the count fails it too, so the debt cannot be
-# quietly re-added or silently forgotten.
-#
-# Counted per file rather than per line so that unrelated edits, which shift line numbers,
-# do not make the baseline lie about what it is protecting.
-#
-# The upload routers and the proxy, network-create, metrics and rebuild paths are absent by
-# design: those are the paths the RC3 outage ran through and they are converted. What remains
-# is the read and CRUD surface, where a wedged cluster now costs a bounded stall per request
-# (the pooled socket timeout is (3, 8)) rather than a parked worker forever.
+# The upload routers and the proxy, network-create, metrics and rebuild paths are converted
+# and absent. What remains is the read and CRUD surface, where a wedged cluster costs a
+# bounded stall per request (the pooled socket timeout is (3, 8)).
 BASELINE = {
-    # note: only calls inside an `async def` count. The per-node fan-out helpers are plain
-    # `def`s that already run in a thread, so they never appeared here and are not the debt
-    # this tracks. What is left below is genuine: a blocking revalidation on the event loop.
+    # Only calls inside an `async def` count. The per-node fan-out helpers are plain `def`s
+    # that already run in a thread. Each count below is a blocking revalidation on the loop.
     "app/routers/cluster_registration.py": 0,
     "app/routers/console.py": 0,
     "app/routers/my_keys.py": 1,

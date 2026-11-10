@@ -1,10 +1,7 @@
-"""A cluster member's roles are LXD's to report, not derived from its database flag.
+"""A cluster member's roles are the array LXD reports, never derived from its database flag.
 
-GET /cluster-members/{member} built the list as ``["database-leader"] if database else []``,
-a tautology that named every database member the leader. Against a real 3-member MicroCloud
-the list endpoint answered mc1=[database-leader, database], mc2=[database], mc3=[database]
-while the single read answered [database-leader] for all three. The list endpoint already
-takes the array LXD returns; the single read now does the same.
+Deriving them from the flag names every database member the leader. GET
+/cluster-members/{member} returns LXD's own roles array, as the list endpoint does.
 """
 
 from types import SimpleNamespace

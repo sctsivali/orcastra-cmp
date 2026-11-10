@@ -1,17 +1,15 @@
 """Publishing a new version, and the two things it must not disturb.
 
-The documentation told authors twice to "publish a new version" and there was no call that could.
-`POST /extensions` answers 409 on a duplicate slug and `PATCH` refuses a version change, so a
-reader following the tutorial reached a dead end with no documented escape.
+`POST /extensions` answers 409 on a duplicate slug and `PATCH` refuses a version change, so a new
+version goes through `publish_version`.
 
-The rule is that a new version replaces what the add-on ASKS FOR, and changes nothing about what
-an existing installation ALREADY HOLDS. Its grant lives on its own row, so it keeps working at the
-version it consented to, and its stored digest stops matching, which makes any rescope answer 409
-until an operator approves the new manifest. That is the re-consent the docs promise.
+A new version replaces what the add-on ASKS FOR, and changes nothing about what an existing
+installation ALREADY HOLDS. Its grant lives on its own row, so it keeps working at the version it
+consented to, and its stored digest stops matching, which makes any rescope answer 409 until an
+operator approves the new manifest. That is the re-consent the docs promise.
 
-The second thing here is older and quieter: `update_extension` recomputed the manifest digest on
-every edit, so correcting a typo in a description silently invalidated every existing consent. A
-digest is a promise about what is asked for, not about the prose.
+`update_extension` leaves the manifest digest alone, so correcting a typo in a description does
+not invalidate every existing consent. The digest covers only what is asked for.
 """
 
 import asyncio
@@ -108,7 +106,7 @@ def test_a_version_that_does_not_move_forward_is_refused(version: str) -> None:
 
 def test_somebody_elses_add_on_cannot_be_versioned() -> None:
     """A 404 rather than a 403, matching `get_extension_or_404`: not-yours and not-there are
-    deliberately indistinguishable, so the endpoint cannot be used to enumerate slugs."""
+    indistinguishable, so the endpoint does not reveal which slugs exist."""
     extension = FakeExtension()
     with pytest.raises(HTTPException) as refusal:
         _publish(extension, _manifest(version="2.0.0"), actor="someone-else@example.com")
@@ -126,7 +124,7 @@ def test_a_new_version_may_not_change_the_slug() -> None:
 
 def test_the_settings_schema_moves_with_the_version() -> None:
     """A new version that drops a settings field must drop it here too, or the form keeps
-    rendering a field the add-on no longer reads."""
+    rendering a field the new version does not read."""
     extension = FakeExtension(settings_schema=[{"key": "old", "type": "string", "label": "Old"}])
     _publish(
         extension,
@@ -139,7 +137,7 @@ def test_the_settings_schema_moves_with_the_version() -> None:
     assert keys == ["retention_days"]
 
 
-# ── the quieter bug: a cosmetic edit must not invalidate consent ────────────────────────────────
+# ── a cosmetic edit must not invalidate consent ────────────────────────────────────────────────
 
 def test_editing_a_description_leaves_the_digest_alone() -> None:
     extension = FakeExtension(manifest={"slug": "acme-health", "description": "Watches clusters"})
@@ -158,8 +156,7 @@ def test_editing_a_description_leaves_the_digest_alone() -> None:
 
 def test_publishing_a_draft_still_works_through_the_same_path() -> None:
     """The positive twin for the test above. A guard that froze the digest by freezing the whole
-    update would pass that assertion while breaking the draft-to-published step, which is the one
-    an author needs most."""
+    update would pass that assertion while breaking the draft-to-published step."""
     extension = FakeExtension(status="draft")
     asyncio.run(
         extension_service.update_extension(FakeDB(), extension, ExtensionUpdate(status="published"))
@@ -175,10 +172,9 @@ def test_publishing_a_draft_still_works_through_the_same_path() -> None:
         ("1.0.0", "1.0.1"),
         ("1.0.9", "1.1.0"),
         ("1.9.0", "2.0.0"),
-        # important: these two are the only pairs here that a string comparison gets WRONG, and
-        # without them this test passes against a comparison that never parsed anything. The first
-        # draft used ("1.0.0", "10.0.0"), which strings happen to order correctly, so ablating the
-        # parser to `return (core,)` left the whole file green.
+        # important: these two are the only pairs here that a string comparison gets WRONG;
+        # without them this test passes against a comparison that never parses anything.
+        # ("1.0.0", "10.0.0") would not do: strings happen to order it correctly.
         ("2.0.0", "10.0.0"),
         ("9.0.0", "10.0.0"),
     ],
@@ -188,8 +184,8 @@ def test_versions_order_numerically_not_as_text(lower: str, higher: str) -> None
 
 
 def test_a_double_digit_version_is_accepted_over_a_single_digit_one() -> None:
-    """The behavioural half of the case above. Comparing as text refuses 10.0.0 over 9.0.0, which
-    is an add-on author blocked from shipping by an off-by-a-character bug."""
+    """The behavioural half of the case above. Comparing as text would refuse 10.0.0 over 9.0.0
+    and block the author from shipping."""
     extension = FakeExtension(version="9.0.0")
     _publish(extension, _manifest(version="10.0.0"))
     assert extension.version == "10.0.0"

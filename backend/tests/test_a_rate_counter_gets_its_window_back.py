@@ -1,8 +1,8 @@
 """A shared rate counter whose expiry was lost gets its window back.
 
 The counter is an INCR, and the expiry is set by a second call when the count is 1. A blip between the
-two left a counter with no expiry, so an enrollment budget or a lockout spent once stayed spent until
-someone cleaned Redis by hand.
+two leaves a counter with no expiry, so an enrollment budget or a lockout spent once stays spent until
+Redis is cleaned by hand.
 """
 
 from typing import Any, Dict, List, Optional
@@ -59,9 +59,9 @@ def test_the_first_hit_sets_the_window(redis: Dict[str, Any]) -> None:
     assert redis["client"].expires == [("orcastra:ratelimit:owner-enroll:key:k", 60)]
 
 
-# The yes-or-no form (_shared_allow) had no repair: a counter past its limit with no expiry refused
-# its subject for good (console actions, guest credentials, desktop, the forced-refresh budget). The
-# Redis guard made the lost expiry likelier, since it can open between the two calls (2026-11-04).
+# The yes-or-no form (_shared_allow) needs the same repair: a counter past its limit with no expiry
+# would refuse its subject for good (console actions, guest credentials, desktop, the forced-refresh
+# budget). The Redis guard makes a lost expiry likelier, since it can open between the two calls.
 
 
 def test_a_refused_counter_without_an_expiry_gets_its_window_back(redis: Dict[str, Any]) -> None:

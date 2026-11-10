@@ -1,8 +1,8 @@
 """Every endpoint must answer "how many GPUs" from the same code.
 
-Four places used to count for themselves. /nodes counted compute cards, /cluster-members and
-/regions counted every DRM card, and /external/regions returned a hardcoded zero. The same
-Jetson therefore reported 1, 2, 2 and 0 depending on which screen an operator was looking at.
+/nodes, /cluster-members, /regions and /external/regions all read the shared GPU inventory. A
+router that counts for itself drifts: counting compute cards in one place and every DRM card in
+another makes the same Jetson report 1 on one screen and 2 on the next.
 """
 
 import ast
@@ -55,7 +55,7 @@ def test_gpu_logic_lives_in_one_place() -> None:
 
 
 def test_node_resources_is_built_in_exactly_one_place() -> None:
-    """Three hand-built constructions is how gpu_cards_total came to be set on only one."""
+    """Hand-built constructions drift: a field set in one is easily missed in another."""
     built_in = [
         path
         for path in (BACKEND / "app").rglob("*.py")
@@ -113,7 +113,7 @@ def test_the_versioned_cache_keys_move_together() -> None:
 
 
 def test_the_gpu_picker_is_guarded_by_require_client() -> None:
-    """Without the guard, an unreachable cluster answered 400 "bad request"."""
+    """Without the guard, an unreachable cluster would answer 400 "bad request"."""
     source = inspect.getsource(lxd_service.LXDService.get_node_gpus)
     assert "require_client(" in source
 
@@ -140,9 +140,8 @@ def test_the_inventory_exposes_one_public_surface() -> None:
 def test_member_resources_tells_a_missing_member_apart_from_a_fault() -> None:
     """LXD answers 404 for `?target=` on a host that is not clustered.
 
-    The handler turned every exception into a 500, so asking a standalone host for its member
-    resources reported a server fault. Verified live on `pandora`: it answered 500 before and
-    404 after.
+    Asking a standalone host for its member resources is a 404, not a server fault, and a
+    cluster that rejects the call is a 502.
     """
     source = (ROUTERS / "cluster_members.py").read_text()
     handler = source[source.index("async def get_member_resources") :]

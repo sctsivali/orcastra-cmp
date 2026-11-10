@@ -1,16 +1,12 @@
 """A cluster one worker proves reachable must stop answering 503 on the others within seconds.
 
-The breaker is per process and prod runs four workers. After a cluster that refused every
-certificate was repaired, only the worker serving Check Authentication or Verify reconnected; the
-lab measured about 37s of 503 on the rest, until their trip expired and the healer came by.
-
-What is pinned here:
-  * a trusted connect (and only a trusted one) leaves a shared "proven at" marker;
-  * a worker retries, once, a cluster it last saw fail before that marker, through
-    ensure_connection, and a retry that fails is not repeated until a newer marker;
-  * a worker with nothing failed does no cache I/O at all;
-  * the reachability caches are dropped after a recovery and after a verified adopt, and check-auth
-    uses the same helper;
+The breaker is per process, so without a shared signal only the worker that served Check
+Authentication or Verify after a repair reconnects. Pinned here:
+  * only a trusted connect leaves a shared "proven at" marker;
+  * a worker retries, once, through ensure_connection, a cluster it last saw fail before that
+    marker, and a failed retry waits for a newer marker;
+  * a worker with nothing failed does no cache I/O;
+  * reachability caches drop after a recovery and a verified adopt (check-auth uses the helper);
   * every worker starts the loop.
 """
 
@@ -73,7 +69,7 @@ def cache(monkeypatch):
     return fake
 
 
-# --- the breaker remembers a failure past its trip -------------------------------------------
+# --- The breaker remembers a failure past its trip -------------------------------------------
 
 def test_a_failure_is_remembered_past_the_trip_until_a_success_clears_it(monkeypatch):
     clock = [1_000.0]
@@ -89,7 +85,7 @@ def test_a_failure_is_remembered_past_the_trip_until_a_success_clears_it(monkeyp
     assert health.failure_times() == {}
 
 
-# --- a trusted connect announces, nothing else does ------------------------------------------
+# --- A trusted connect announces, nothing else does ------------------------------------------
 
 class _Response:
     def __init__(self, auth, status_code=200):
@@ -186,7 +182,7 @@ def test_a_hung_cache_never_holds_the_connect(monkeypatch):
     assert [key for _ns, key, _v, _ttl in hung.sets] == [CLUSTER]
 
 
-# --- the sync retries once per marker --------------------------------------------------------
+# --- The sync retries once per marker --------------------------------------------------------
 
 class _Service:
     def __init__(self, result=True, raises=None, records=None):
@@ -318,9 +314,9 @@ def test_a_worker_with_nothing_failed_reads_no_cache(cache):
 
 
 def test_a_deregistered_cluster_stops_costing_reads(cache, clock):
-    """The lab deleted a cluster while it failed and every worker kept reading its marker.
+    """A cluster deregistered while failing is forgotten, so no worker keeps reading its marker.
 
-    The 30 s sweep hands every worker the whole fleet; a cluster gone from it is forgotten.
+    The periodic sweep hands every worker the registered list; a cluster not on it is dropped.
     """
     kept = "still-registered"
     _failed_now()
@@ -362,7 +358,7 @@ def test_the_loop_does_no_work_while_nothing_failed_and_sheds_a_stuck_pass(monke
     assert all(kwargs["max_in_flight"] == 1 for kwargs in runs), "a stuck pass is skipped, never queued"
 
 
-# --- caches and wiring -----------------------------------------------------------------------
+# --- Caches and wiring -----------------------------------------------------------------------
 
 @pytest.mark.parametrize("adopted", [True, False])
 def test_a_verified_adopt_drops_the_reachability_caches(monkeypatch, cache, adopted):

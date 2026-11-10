@@ -78,7 +78,7 @@ def test_the_guest_hash_scheme_is_respected():
 
 
 def test_the_generator_alphabet_always_passes():
-    # frontend lib/guest-credentials/password.ts draws 22 of these; a thousand draws must all pass.
+    # The frontend's lib/guest-credentials/password.ts draws 22 of these; every draw must pass.
     for _ in range(1000):
         candidate = "".join(secrets.choice(GENERATOR_ALPHABET) for _ in range(22))
         check(candidate, context=["ubuntu", "instance"])

@@ -1,25 +1,13 @@
 """A failed reconnect must not become a 500 because two threads cleaned up at once.
 
-``_cleanup_temp_cert_files`` used to test membership, unlink the files, then ``del`` the
-entry. ``_temp_cert_paths`` is a plain dict with no lock, and ``get_client`` runs inside a
-thread pool via ``run_blocking``, so two threads cleaning the same cluster both passed the
-membership test and the loser raised ``KeyError`` on the delete.
+``_temp_cert_paths`` is a plain dict with no lock, and ``get_client`` runs inside a thread
+pool via ``run_blocking``. A test-then-delete cleanup lets two threads both pass the
+membership test, and the loser raises ``KeyError``. The cleanup runs inside
+``_auto_reconnect``'s failure handler, so that KeyError would replace the connection error
+and turn an unreachable cluster into a 500.
 
-The delete sits in ``_auto_reconnect``'s own failure handler, so the KeyError replaced the
-connection error that was being handled and escaped as ``Exception in ASGI application``.
-A cluster that was merely unreachable answered 500.
-
-Observed live on the running stack, 14 ERROR in a 60 minute window, 13 of them the bare
-ASGI line and one carrying the traceback::
-
-    File "/app/app/services/lxd/connection.py", line 231, in _cleanup_temp_cert_files
-        del self._temp_cert_paths[cluster_id]
-    KeyError: 'blitz01'
-
-Two tests, because either alone is weak. The deterministic one forces the exact
-interleaving and would fail against the old code every run. The threaded one is closer to
-what actually happened but can only fail probabilistically, so it is a supplement and never
-the proof.
+The deterministic tests force the interleaving; the threaded one is closer to the real
+shape but can only fail probabilistically, so it supplements them.
 """
 
 import os
@@ -45,21 +33,17 @@ def _seed(mgr: LXDConnectionManager, cluster_id: str) -> tuple:
 
 class TempCertCleanupRaceTests(unittest.TestCase):
     def test_a_second_cleanup_after_the_entry_is_gone_is_a_no_op(self):
-        """The loser of the race must return quietly, not raise.
-
-        Simulates the interleaving directly: the entry disappears while the first caller is
-        still inside the body, which is exactly what the winning thread does.
-        """
+        """The loser of the race returns quietly instead of raising."""
         mgr = LXDConnectionManager()
         cert_path, key_path = _seed(mgr, "blitz01")
 
-        # The winner completes entirely while the loser is mid-body.
+        # The winner completes first.
         mgr._cleanup_temp_cert_files("blitz01")
         self.assertNotIn("blitz01", mgr._temp_cert_paths)
         self.assertFalse(os.path.exists(cert_path))
         self.assertFalse(os.path.exists(key_path))
 
-        # The loser arrives late. Against the old code this raised KeyError.
+        # The loser arrives after the entry is gone.
         try:
             mgr._cleanup_temp_cert_files("blitz01")
         except KeyError as exc:
@@ -99,7 +83,7 @@ class TempCertCleanupRaceTests(unittest.TestCase):
         self.assertTrue(removed.is_set(), "the interleaving was never exercised")
 
     def test_many_threads_cleaning_one_cluster_all_survive(self):
-        """Closer to the real shape, but probabilistic, so it supplements rather than proves."""
+        """Concurrent cleanups of one cluster all survive (probabilistic)."""
         mgr = LXDConnectionManager()
         _seed(mgr, "nuc-2")
 
@@ -108,7 +92,7 @@ class TempCertCleanupRaceTests(unittest.TestCase):
         def clean():
             try:
                 mgr._cleanup_temp_cert_files("nuc-2")
-            except Exception as exc:  # noqa: BLE001 - the point is to catch anything
+            except Exception as exc:  # noqa: BLE001 - any exception fails the test
                 errors.append(exc)
 
         with ThreadPoolExecutor(max_workers=8) as pool:

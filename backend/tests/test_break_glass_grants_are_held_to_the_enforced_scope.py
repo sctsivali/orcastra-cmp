@@ -1,10 +1,9 @@
-"""The break-glass grant list is held to the scope the request enforces (security review finding 6).
+"""The break-glass grant list is held to the scope the request enforces.
 
-It recomputed `get_user_allowed_clusters()`, the org-derived set, instead of the set
-org_scope_dependency narrows by the Tenant ACL, the same bug console.py's session list once had: a
-Tenant narrowed off a cluster of its organization still read the grants there, with the reason,
-ticket, admin e-mail and key id. On a cluster several organizations hold it also read the grants
-that target the others, although the route promises "nothing from other orgs".
+It uses the set org_scope_dependency narrows by the Tenant ACL, not the org-derived
+`get_user_allowed_clusters()`: otherwise a Tenant narrowed off a cluster of its organization reads
+the grants there, with the reason, ticket, admin e-mail and key id. The list is also held to the
+caller's organizations, so on a cluster several organizations hold it shows nothing from the others.
 """
 
 import asyncio

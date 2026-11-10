@@ -1,13 +1,13 @@
 """A restore LXD refuses because the project sets limits is answered with a reason and a way out.
 
-LXD 5.21.5 and later (seen on 5.21.5 and 5.21.8, 2026-11-05) re-check project policy on a snapshot
-restore and refuse it when a `volatile.*` key would change: `Changing "volatile.uuid.generation" on
-container "x" in project "p" is forbidden`. Most restores change one, so in a project with
-`limits.*` only an instance's first restore passes. Measured on the lab: clearing the project's
-limits lets every restore through, and setting them again brings the refusal back.
+LXD 5.21.5 and later re-check project policy on a snapshot restore and refuse it when a
+`volatile.*` key would change: `Changing "volatile.uuid.generation" on container "x" in project "p"
+is forbidden`. Most restores change one, so in a project with `limits.*` only an instance's first
+restore passes. Clearing the project's limits lets every restore through, and setting them again
+brings the refusal back.
 
-The daemon text alone read like a broken instance, so the operator was left with a 502 and no idea
-that the project's limits were the lever.
+The daemon text alone reads like a broken instance, so the answer is a 409 that names the project's
+limits as the lever.
 """
 
 import pytest

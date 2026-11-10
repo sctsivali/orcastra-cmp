@@ -1,13 +1,11 @@
 """At most one snapshot per schedule per slot, with the cluster itself as the dedupe store.
 
-Not exactly-once, which is not available across a network. The property that IS available: the
-snapshot's name is derived from the DUE SLOT rather than from `now`, and LXD refuses a name it
-already holds. So a worker that died after the daemon created the snapshot but before its row was
-updated retries the same slot, composes the same name, and is refused rather than taking a second
-copy of a moment that has already passed.
+Exactly-once is not available across a network. Instead the snapshot's name is derived from the
+due slot rather than from `now`, and LXD refuses a name it already holds. A worker that died
+after the daemon created the snapshot but before its row was updated retries the same slot,
+composes the same name, and is refused rather than taking a second copy.
 
-The refusal arrives asynchronously as the operation's error, never as an HTTP status. Confirmed
-against a live daemon rather than assumed:
+The refusal arrives asynchronously as the operation's error, never as an HTTP status:
 
     Failed creating instance snapshot record "ops-...":
     Snapshot "ct-.../ops-..." already exists
@@ -90,12 +88,12 @@ def test_a_genuine_failure_is_not_mistaken_for_a_replay():
 
 
 def test_the_reaper_returns_the_row_without_touching_its_slot():
-    """The one deliberate difference from the webhook dispatcher's reaper.
+    """Unlike the webhook dispatcher's reaper, this one retries the slot.
 
-    That one returns a row to `pending` so the DELIVERY is retried. This returns it to `idle` with
-    `due_slot` untouched so the SLOT is retried, which is what the slot-derived name makes safe. A
-    duplicate delivery is tolerable because the receiver dedupes on an event id; a duplicate
-    snapshot has no such backstop.
+    The webhook reaper returns a row to `pending` so the delivery is retried. This one returns it
+    to `idle` with `due_slot` untouched so the slot is retried, which the slot-derived name makes
+    safe. A duplicate delivery is tolerable because the receiver dedupes on an event id; a
+    duplicate snapshot has no such backstop.
     """
     sql = str(REAP_SQL)
     assert "run_state = 'idle'" in sql
@@ -112,14 +110,12 @@ def test_a_held_slot_is_retried_until_a_newer_one_comes_round():
 
 
 def test_an_accepted_but_unconfirmable_create_is_not_reported_as_done():
-    """A 202 naming no operation is the one case where "accepted" must not become "taken".
+    """A 202 naming no operation is never reported as a snapshot taken.
 
-    `_operation_id` raises rather than flattening it into the synchronous case, and the reason is
-    the defect this codebase keeps finding: the daemon accepted work that is still running, and a
-    caller that read that as done would announce a restore point nobody has.
-
-    The slot is HELD, not advanced. Completion is unverifiable, so the retry has to get another
-    chance, and the slot-derived name makes that retry safe either way.
+    `_operation_id` raises rather than treating it as the synchronous case: the daemon accepted
+    work that may still be running, and reading that as done would announce a restore point that
+    may not exist. The slot stays held so the retry gets another chance, and the slot-derived
+    name makes that retry safe either way.
     """
     schedule = FakeSchedule(keep_last=3, due_slot=SLOT)
     node = FakeInstanceNode(snapshots=ops_rows(12, 1))

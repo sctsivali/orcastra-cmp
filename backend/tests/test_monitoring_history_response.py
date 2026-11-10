@@ -1,8 +1,8 @@
-"""GET /monitoring/history: the same JSON as before the store changed, and the refill rules.
+"""GET /monitoring/history: the body response_model would produce, and the refill rules.
 
-The endpoint now returns the store's encoded body instead of letting FastAPI serialize a list of
+The endpoint returns the store's encoded body instead of letting FastAPI serialize a list of
 models, so the first tests pin the bytes against what `response_model=List[MetricsHistoryPoint]`
-produced. The rest pin when the endpoint refills a scope: the previous release's key for every
+produces. The rest pin when the endpoint refills a scope: the previous string key for every
 scope, Postgres for the admin scope only and only when its history starts well inside the day,
 nothing while Redis is failing, and one scoped collection when a scope has no point at all.
 """
@@ -87,7 +87,7 @@ def _history(**params):
 
 
 def _previous_body(points: List[dict]) -> bytes:
-    """What the endpoint answered before: FastAPI serializing models through response_model."""
+    """The reference body: FastAPI serializing models through response_model."""
     app = FastAPI()
 
     @app.get("/history", response_model=List[MetricsHistoryPoint])

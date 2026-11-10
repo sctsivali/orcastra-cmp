@@ -1,9 +1,9 @@
-"""When a schedule fires, and why the vocabulary is four shapes rather than a cron string.
+"""When a schedule fires, and why the vocabulary is four frequencies instead of a cron string.
 
-A cron field would be more expressive and would also need a parser, a dependency and a syntax an
-operator has to be taught. These four cover what an operator console is actually asked for, and a
-Select cannot produce an invalid value. What it CAN produce is a coherent-looking pair that means
-nothing, which is what most of this file is about.
+A cron field would need a parser, a dependency and a syntax operators have to learn. Four
+frequencies cover what an operator console is asked for, and a Select cannot produce an invalid
+value. It can still produce a combination of fields that means nothing, which most of these tests
+cover.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -88,8 +88,8 @@ def test_the_next_slot_is_strictly_later_than_a_slot_itself():
 
 
 def test_a_run_that_took_time_does_not_push_every_future_run_later():
-    """The whole of drift control. Chaining from `finished_at` walks the schedule out of its
-    window over months, and nobody notices until the nightly snapshot is in the working day."""
+    """The next slot follows the slot itself. Chaining from `finished_at` would push the schedule
+    later with every run until a nightly snapshot lands in the working day."""
     slot = r.latest_slot_at_or_before("daily", 3, 0, None, at(2026, 9, 9, 3, 0, 40))
     assert slot == at(2026, 9, 9, 3, 0)
     assert r.next_slot_after("daily", 3, 0, None, slot) == at(2026, 9, 10, 3, 0)

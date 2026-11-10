@@ -1,12 +1,12 @@
 """A push rebinds its creator's personal clusters only into the one org its key claimed.
 
-The creator rule decided who triggers a rebind, not where the clusters go. The destination was
-the creator's primary org from org_scope, which puts any org where they are a partner first and
-then sorts by id. So another key could push the creator as a partner into its own older org, and
-the creator's own onboarding push later moved their clusters there. The destination is now an org
-this key claimed (organizations.api_key_id) that this push names with the creator as a partner.
-The key must claim exactly one org after the push, so a key that also claims a buyer org binds
-nothing (test_a_push_rebinds_only_while_its_key_claims_one_org).
+The creator rule decides who triggers a rebind, not where the clusters go. The primary org from
+org_scope puts any org where the creator is a partner first and then sorts by id, so another key
+that pushed the creator as a partner into its own older org would receive the clusters on the
+creator's own onboarding push. The destination is an org this key claimed (organizations.api_key_id)
+that this push names with the creator as a partner. The key must claim exactly one org after the
+push, so a key that also claims a buyer org binds nothing
+(test_a_push_rebinds_only_while_its_key_claims_one_org).
 """
 
 import inspect
@@ -108,7 +108,7 @@ async def push(db: AsyncSessionFacade, api_key: Dict[str, Any], body: Dict[str, 
 
 
 def body(orgs: List[Dict[str, Any]], members: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """The body OrcaHub v1.32.0 sends (orcastra.client.js sync). app_url is absent when unset."""
+    """The sync body OrcaHub v1.32.0 sends. app_url is absent when unset."""
     return {"include_clusters": True, "include_projects": True, "organizations": orgs, "members": members}
 
 
@@ -125,19 +125,19 @@ async def personal_cluster(db: AsyncSessionFacade, cluster_id: str, owner: str) 
     await db.commit()
 
 
-# ── the probe: another key chose the destination ───────────────────────────────────────────────
+# ── The probe: another key chose the destination ───────────────────────────────────────────────
 
 async def test_another_key_cannot_choose_where_the_creators_own_push_rebinds(world: Dict[str, Any]) -> None:
     db = sqlite_session(*org_tables())
     await personal_cluster(db, "partner-cluster", PARTNER)
 
-    # another key pushes the partner as PARTNER into its own org, which is older (lower id)
+    # Another key pushes the partner as PARTNER into its own org, which is older (lower id).
     await push(db, key(K_ATTACKER, ATTACKER),
                body([org("ext-a", "attacker")], [member(PARTNER, "ext-a", "PARTNER")]))
     assert (await bound(db))["partner-cluster"] is None
     assert await org_scope._ordered_org_ids_for_email(PARTNER, db) == [await org_id(db, "attacker")]
 
-    # the partner's own OrcaHub pushes the partner into the partner's org
+    # The partner's own OrcaHub pushes the partner into the partner's org.
     await push(db, key(K_PARTNER, PARTNER),
                body([org("ext-p", "partner")], [member(PARTNER, "ext-p", "PARTNER")]))
     own = await org_id(db, "partner")
@@ -206,7 +206,7 @@ async def test_the_primary_org_ordering_is_not_consulted(
     assert asked == []
 
 
-# ── zero or several destinations ───────────────────────────────────────────────────────────────
+# ── Zero or several destinations ───────────────────────────────────────────────────────────────
 
 async def test_several_claimed_orgs_naming_the_creator_rebind_nothing(
     world: Dict[str, Any], caplog: pytest.LogCaptureFixture
@@ -335,7 +335,7 @@ def test_the_directory_fake_refuses_role_admin_like_the_real_writer() -> None:
         asyncio.run(Directory().change_integration_role_groups(PARTNER, add=ROLE_ADMIN))
 
 
-# ── the creator must be a partner in the destination ───────────────────────────────────────────
+# ── The creator must be a partner in the destination ───────────────────────────────────────────
 
 @pytest.mark.parametrize("role", ["PARTNER", "USER", "TENANT", "user", "OWNER", " PARTNER"])
 async def test_a_buyer_org_naming_the_creator_with_any_role_binds_nothing(
@@ -343,8 +343,8 @@ async def test_a_buyer_org_naming_the_creator_with_any_role_binds_nothing(
 ) -> None:
     """A buyer org's own partner can add the seller's creator with any role, PARTNER included, and
     the seller's push carries every member of every buyer org. With the creator absent from the
-    seller's roster the buyer org was the one destination. The key claims both orgs now, so nothing
-    binds whatever role the buyer org gave."""
+    seller's roster the buyer org would be the one destination; the key claims both orgs, so
+    nothing binds whatever role the buyer org gave."""
     db = sqlite_session(*org_tables())
     await personal_cluster(db, "partner-cluster", PARTNER)
     caplog.set_level(logging.WARNING, logger=integration_cluster_rebind.__name__)

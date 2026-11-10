@@ -1,10 +1,8 @@
 """A click at the pointer's current position returns instead of waiting out the exec budget.
 
 `xdotool mousemove --sync X Y` never returns when the pointer is already at (X, Y): it waits for a
-motion event that cannot come. Measured live on xdotool 3.20211022.1 under Xvfb (rc 143 after
-`timeout 8`), and through MCP as a desktop_control left_click that came back `[timeout]` after 30 s
-right after a mouse_move to the same spot. Every synced move is now preceded by a one-pixel step
-aside, so the synced move is always a real one and --sync keeps its guarantee.
+motion event that cannot come (xdotool 3.20211022.1 under Xvfb). Every synced move is preceded by
+a one-pixel step aside, so the synced move is always a real one and --sync keeps its guarantee.
 """
 
 from typing import List

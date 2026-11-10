@@ -1,12 +1,8 @@
 """A tenant gets no snapshot rights until SNAPSHOT_TENANT_ENFORCEMENT_ENABLED is set.
 
-The `snapshot` permission has been in the vocabulary, and pushed by OrcaHub's tenant-access sync,
-for a long time while nothing in Orcastra ever checked it. Grants accumulated meanwhile: 55
-policy rules carry it and 28 of those target a live cluster with real tenants behind them.
-
-Wiring enforcement under the existing TENANT_PERM_ENFORCEMENT_ENABLED flag, which is already on,
-would have turned every one of those into a live capability the moment this shipped, as a side
-effect of adding a UI. This flag makes that a deliberate act instead.
+Existing policy rules, including those pushed by OrcaHub's tenant-access sync, may already carry
+the `snapshot` permission. Enforcing it under TENANT_PERM_ENFORCEMENT_ENABLED would turn every
+such grant into a live capability at once; a separate flag makes enabling it an explicit step.
 
 Admin and Partner carry no tenant ACL and are unaffected either way.
 """
@@ -41,8 +37,7 @@ def _client(svc, *, acl, flag_on: bool) -> TestClient:
     app.dependency_overrides[get_current_user] = lambda: None
     app.dependency_overrides[org_scope_dependency] = lambda: None
 
-    # Settings are lru_cache'd, so the flag is flipped on the cached instance rather than by
-    # rebuilding it, which is also how the running process would see a restart-time change.
+    # Settings are lru_cache'd, so the flag is flipped on the cached instance.
     settings = get_settings()
     original_flag = settings.snapshot_tenant_enforcement_enabled
     object.__setattr__(settings, "snapshot_tenant_enforcement_enabled", flag_on)
@@ -96,8 +91,8 @@ def test_a_tenant_without_the_grant_is_refused_even_with_the_flag_on():
 
 
 def test_restore_additionally_requires_operate():
-    # Several live policy rules grant snapshot WITHOUT operate. Restore stops the instance and
-    # discards writes, so it is a lifecycle action and needs the lifecycle permission too.
+    # A rule may grant snapshot without operate. Restore stops the instance and discards
+    # writes, so it is a lifecycle action and needs the lifecycle permission too.
     node = FakeInstanceNode(snapshots=[{"name": "ops-t-20260908T000000Z"}])
     acl = {HOST: {(PROJECT, "*"): {"view", "snapshot"}}}
     client = _client(service(FakeClient(node)), acl=acl, flag_on=True)

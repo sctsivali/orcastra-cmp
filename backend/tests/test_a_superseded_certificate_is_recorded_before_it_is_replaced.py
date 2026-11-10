@@ -1,8 +1,8 @@
 """Every path that lets go of a client certificate writes it down before Vault forgets it.
 
-Trust entries piled up on the clusters because nothing remembered which certificates the dashboard
-had replaced. The record is only useful if it is written before the overwrite: written after, a
-failed overwrite leaves nothing, and a racing renewal leaves a trusted certificate no one names.
+The record names the certificates the dashboard replaced, so their trust entries can be removed
+from the clusters. It is only useful if written before the overwrite: written after, a failed
+overwrite leaves nothing, and a racing renewal leaves a trusted certificate no one names.
 """
 
 import asyncio

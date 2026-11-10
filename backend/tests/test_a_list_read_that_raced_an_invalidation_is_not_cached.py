@@ -1,12 +1,10 @@
-"""A list read in flight when an instance changed must not write the old picture back.
+"""A list read in flight when an instance changed must not write the stale picture back.
 
 The instance list is cached for 30 s and cleared when a create is accepted and again when its
-background start lands. A fleet read takes about ten seconds on a deployment with a dead
-cluster registered, so the console's own re-read was already running when the start landed:
-it read Stopped, the clearance ran, and then the read wrote Stopped back for a full TTL. The
-row read Stopped for 39 s after the cluster had the instance Running, with the clearance in
-place. Every instance invalidation now leaves a generation token, and a list read caches its
-answer only if the token it saw before reading is still the one after.
+background start lands. A fleet read can take seconds with a dead cluster registered, so a
+re-read already running when the start lands reads Stopped, misses the clearance, and would
+write Stopped back for a full TTL. Every instance invalidation leaves a generation token, and
+a list read caches its answer only if the token it saw before reading is still the one after.
 """
 
 from fastapi import FastAPI
@@ -53,8 +51,8 @@ class _Service:
         return [vm], ["mc-lab"], []
 
     async def read_fleet_inventory(self):
-        # The instance list reads the fleet through this since 2026-10-29; it names a late
-        # cluster instead of raising, which these doubles never produce.
+        # The instance list reads the fleet through this; it names a late cluster instead of
+        # raising, which these doubles never produce.
         vms, connected, incomplete = await self.list_all_vms_with_failures()
         return FleetInventory(vms, connected, incomplete, {})
 

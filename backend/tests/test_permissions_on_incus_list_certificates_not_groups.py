@@ -1,11 +1,10 @@
 """The Permissions pages read an Incus cluster's trust store, and never ask it for groups.
 
-Incus has no /1.0/auth. On a mixed fleet the identities list asked every node for
-/1.0/auth/identities, so an Incus cluster answered 404 and was reported unreachable; the groups
-list did the same. Now an Incus node lists its trust-store certificates as identities (fingerprint,
-type, restricted, projects), the groups list names it apart as unsupported, every group write on
-it is refused with groups_not_on_incus, and deleting a certificate refuses the dashboard's own and
-any member (server) certificate.
+Incus has no /1.0/auth, so its 404 there must not read as an unreachable cluster. An Incus node
+lists its trust-store certificates as identities (fingerprint, type, restricted, projects), the
+groups list names it apart as unsupported, every group write on it is refused with
+groups_not_on_incus, and deleting a certificate refuses the dashboard's own and any member
+(server) certificate.
 """
 
 from __future__ import annotations
@@ -86,8 +85,8 @@ async def test_the_groups_list_names_an_incus_cluster_apart_from_an_unreachable_
 
 
 async def test_an_incus_cluster_first_reached_by_the_groups_list_is_still_named_apart(fleet):
-    """A worker with no pooled client connects inside the fan-out; Incus then answers 404 on
-    /1.0/auth, which read as an unreachable cluster."""
+    """A worker with no pooled client connects inside the fan-out; the 404 Incus then answers on
+    /1.0/auth still marks it unsupported rather than unreachable."""
     manager = fleet.service.connection_manager
     manager.peek_client = lambda node: None
     manager.get_client = lambda node: None
@@ -167,8 +166,8 @@ def test_a_cluster_without_pending_or_any_certificate_reads_as_holding_none_of_t
 
 
 async def test_a_pending_certificate_vault_cannot_read_stops_the_delete(fleet, monkeypatch):
-    """The page reader takes any pending-read failure for "no pending certificate"; here that
-    left a rotation's new certificate open to deletion (security review, 2026-11-08)."""
+    """The page reader takes any pending-read failure for "no pending certificate"; the delete
+    must not, or a rotation's new certificate is open to deletion."""
     from app.core.vault_client import VaultClientError
 
     current, _fp = _pem()

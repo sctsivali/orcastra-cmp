@@ -1,10 +1,9 @@
 """The stranded-rebuild sweep names a session maker that exists.
 
-`recover_stranded_rebuilds` imported `AsyncSessionLocal`, a name `app.core.database` never
-exported, so every boot since 2026-09-08 logged "Could not start import recovery loop" and no
-worker ever failed a rebuild whose driver had died with its process. A green suite hid it
-because nothing called the function. This runs it against a session whose select answers
-nothing and asserts it returns rather than raising ImportError.
+An import of a name `app.core.database` does not export fails only when the function runs, and
+then no worker fails a rebuild whose driver died with its process. This runs
+`recover_stranded_rebuilds` against a session whose select answers nothing and asserts it
+returns 0 instead of raising ImportError.
 """
 
 import pytest

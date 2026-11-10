@@ -1,13 +1,10 @@
 """A freshness marker must survive the cache without being renewed by it.
 
-The point of collected_at is to tell an operator how old a number is. A body that is stamped
-when it is *read* rather than when it was *collected* reports every cached read as current,
-which is worse than having no marker at all: it turns "I don't know" into a confident lie on
-the exact surface someone is checking to find out.
-
-The live example this guards against was already in the tree. project_from_nodes_body replays
-an already-cached /nodes body, and _availability stamped checked_at=_now() unconditionally, so
-the picker reported "checked just now" for data up to three minutes old.
+collected_at tells an operator how old a number is. A body stamped when it is *read* rather than
+when it was *collected* reports every cached read as current, which is worse than having no
+marker at all. ex; project_from_nodes_body replays an already-cached /nodes body, and stamping
+checked_at at read time would make the picker report "checked just now" for data up to three
+minutes old.
 """
 
 import json
@@ -25,8 +22,8 @@ from app.services.lxd.node_resources import build_node_resources
 from app.services.lxd.gpu import GpuInventory
 
 
-# note: deliberately far in the past, so "did this get restamped at read time" is a
-# question the wall clock can answer without the test being flaky near midnight.
+# Far in the past, so the wall clock shows whether a body was restamped at read time without
+# the test being flaky near midnight.
 COLLECTED = datetime(2020, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 
@@ -50,13 +47,13 @@ def test_collected_at_survives_the_cache_round_trip():
 
 
 def test_an_absent_stamp_stays_absent():
-    """A pre-v5 cached body must read as unknown, never as now."""
+    """A cached body without the field must read as unknown, never as now."""
     assert NodeResources().collected_at is None
     assert _round_trip(NodeResources()).collected_at is None
 
 
 def test_the_schema_version_was_bumped():
-    """The field is worthless while v4 bodies are still being served under the same key."""
+    """The field means nothing while bodies of an older shape are served under the same key."""
     assert RESOURCE_SCHEMA_VERSION != "v6", "bump RESOURCE_SCHEMA_VERSION when the shape changes"
 
 
@@ -70,7 +67,7 @@ def test_build_node_resources_carries_the_stamp_rather_than_minting_one():
 
 
 def test_the_availability_projection_reports_collection_time_not_read_time():
-    """The regression that was already shipping."""
+    """A replayed /nodes body keeps its collection time as checked_at."""
     body = {
         "collected_at": COLLECTED.isoformat(),
         "nodes": [
@@ -94,10 +91,10 @@ def test_the_availability_projection_reports_collection_time_not_read_time():
 
 
 def test_a_live_probe_still_reports_now():
-    """The fallback must stay: a real probe genuinely did happen just now."""
+    """A body without a batch stamp comes from a probe made just now, so it reports now."""
     body = {"nodes": [{"name": "nuc2", "endpoint": "https://nuc2:8443", "connected": True}]}
 
     rows = lxd_status.project_from_nodes_body(body)
 
-    # No batch stamp on a pre-v5 body, so it falls back rather than reporting a wrong time.
+    # No batch stamp, so it falls back to now rather than reporting a wrong time.
     assert datetime.now(timezone.utc) - rows[0].checked_at < timedelta(minutes=1)

@@ -1,9 +1,8 @@
 """Host-level detail is for Partners and Admins; a Tenant gets the same body without it.
 
-A Tenant reaches an instance, not the hypervisor under it, and /nodes already withheld the LXD
-endpoint from Tenants while the instance list, the instance metrics, /clusters and the storage pools
-still handed it out, together with the cluster member, the host process id and the pool's backing
-path.
+A Tenant reaches an instance and never the hypervisor under it. The instance list, the instance
+metrics, /clusters, the profiles and the storage pools and volumes withhold from a Tenant the LXD
+endpoint, the cluster member, the host process id and the pool's backing details.
 """
 
 import ast
@@ -99,8 +98,8 @@ class _Service:
         return [HOST]
 
     async def read_fleet_inventory(self):
-        # The instance list reads the fleet through this since 2026-10-29; it names a late
-        # cluster instead of raising, which these doubles never produce.
+        # The instance list reads the fleet through this. It names a late cluster instead of
+        # raising, which these doubles never produce.
         vms, connected, incomplete = await self.list_all_vms_with_failures()
         return FleetInventory(vms, connected, incomplete, {})
 
@@ -144,7 +143,7 @@ def test_the_policy_returns_copies_and_never_mutates(tier):
     assert vm.config == VM_CONFIG and vm.expanded_devices == VM_DEVICES, "input untouched"
     if tier == "tenant":
         assert (shown_vm.host_endpoint, shown_vm.location, shown_metrics.pid) == (None, None, None)
-        # the root pool's driver is the provider's storage (owner decision 2026-10-26)
+        # The root pool's driver describes the provider's storage.
         assert shown_metrics.disk_io_storage_driver is None and metrics.disk_io_storage_driver == "zfs"
         assert shown_vm.config == TENANT_VM_CONFIG and shown_vm.expanded_devices == TENANT_VM_DEVICES
         assert shown_vm.devices == {"eth0": TENANT_VM_DEVICES["eth0"]}
@@ -154,7 +153,7 @@ def test_the_policy_returns_copies_and_never_mutates(tier):
 
 
 def test_a_tenant_pool_keeps_only_its_name():
-    # Owner decision 2026-10-26: no size, driver or state; it used to keep the size settings.
+    # A tenant sees a pool's name only: no size, driver or state.
     class Pool(host_detail.BaseModel):
         name: str
         config: dict
@@ -258,8 +257,8 @@ def test_a_cached_pool_list_reaches_a_tenant_without_its_backing_path(monkeypatc
 
     assert response.status_code == 200, response.text[:200]
     pool = response.json()["pools"][0]
-    # Owner decision 2026-10-26: a tenant reads a pool's name and what uses it, not its size,
-    # driver or state; a pool is shared by every party on the cluster.
+    # A tenant reads a pool's name and what uses it, but no size, driver or state: a pool is
+    # shared by every party on the cluster.
     if tier == "tenant":
         assert (pool["config"], pool["driver"], pool["status"]) == ({}, None, None)
     else:
@@ -305,7 +304,7 @@ def test_every_route_returning_host_detail_applies_the_tier_policy():
             assert "org_scope_dependency" in source.split("def ", 1)[0] or (
                 "Depends(org_scope_dependency)" in source
             ), f"{path.name} must run org_scope_dependency, or an unset scope reads as Admin"
-    # 14 since the two storage volume routes joined (owner decision 2026-10-26)
+    # Includes the two storage volume routes.
     assert len(checked) == 14, checked
 
 
@@ -402,8 +401,8 @@ def test_a_cluster_row_reaches_a_tenant_without_hypervisor_metadata(monkeypatch,
     ["/storage/pools/resources-all", "/storage/pools-resources", "/storage/pools/default/resources?host=nuc2"],
 )
 def test_pool_capacity_is_refused_to_a_tenant(path):
-    # The whole pool's size and usage count every party's volumes, the figure the monitoring
-    # dashboard also withholds from a tenant (owner decision 2026-10-26).
+    # The whole pool's size and usage count every party's volumes; the monitoring dashboard
+    # withholds the same figure from a tenant.
     from app.core.auth import AuthenticatedUser
 
     app = FastAPI()
@@ -427,9 +426,9 @@ VOLUME_CONFIG = {
 
 @pytest.mark.parametrize("tier", ["partner", "tenant"])
 def test_a_cached_volume_list_reaches_a_tenant_with_size_and_snapshots_only(monkeypatch, tier):
-    # Owner decision 2026-10-26: a tenant reads its volumes' size and snapshot settings. The
-    # other keys name the pool's backend (zfs.*, block.*) and location names the cluster member,
-    # which vm_for_tier already withholds for an instance.
+    # A tenant reads its volumes' size and snapshot settings. The other keys name the pool's
+    # backend (zfs.*, block.*) and location names the cluster member, which vm_for_tier also
+    # withholds for an instance.
     client, manager = _client(monkeypatch, volumes_module.router)
     body = {
         "total": 1,
@@ -462,10 +461,10 @@ def test_a_cached_volume_list_reaches_a_tenant_with_size_and_snapshots_only(monk
 
 
 def test_a_tenant_reads_only_instance_references_and_no_cluster_member():
-    # LXD appends ?target=<member> to a volume or image reference on a clustered pool, so a
-    # used_by list would name the member the location field no longer does. And a reference that
-    # names no instance passes on any rule in its project, so it named other parties' custom
-    # volumes and images: a tenant keeps instance references only (owner decision 2026-10-26).
+    # LXD appends ?target=<member> to a volume or image reference on a clustered pool, so used_by
+    # would name the member that location withholds. A reference that names no instance passes any
+    # rule in its project and can name other parties' volumes and images, so a tenant keeps
+    # instance references only, without the target.
     class Volume(host_detail.BaseModel):
         name: str
         config: dict = {}
@@ -495,7 +494,7 @@ def test_a_tenant_reads_only_instance_references_and_no_cluster_member():
 
 def test_the_volume_detail_ignores_a_tenant_member_probe(monkeypatch):
     # A per-member pool answers only from the member that holds the volume, so honouring a
-    # tenant's ?location= turned 200 against 404 into a way to find the member.
+    # tenant's ?location= would let 200 against 404 reveal the member.
     seen = {}
 
     class _Node:

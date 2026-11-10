@@ -1,23 +1,10 @@
-"""When a stored expiry means "no longer a credential", whatever shape it arrives in.
+"""When a stored expiry means "not a credential any more", whatever shape it arrives in.
 
-The enforcement was correct for the data that exists and could not survive anything else. Every
-`expires_at` in this deployment was written by `create_api_key`, which emitted a naive UTC ISO
-string, and the check compared it against a naive `datetime.utcnow()`. Naive met naive and the
-answer was right.
-
-Measured against the running deployment before this was written, by writing each value into Vault
-and presenting the key:
-
-    '2020-01-01T00:00:00'        -> 401, correct
-    '2020-01-01T00:00:00Z'       -> 500
-    '2020-01-01T00:00:00+00:00'  -> 500
-    '2099-01-01T00:00:00Z'       -> 500   (a key that had NOT expired)
-    'not-a-date'                 -> 500
-    ''                           -> 200   (accepted; the expiry check was skipped entirely)
-
-The 500s are a TypeError from comparing aware to naive and a ValueError from the parse, neither
-of which had a handler on the authentication path. The 200 is the sharper one: the caller tested
-`if expires_at:`, so an empty string read as "never expires".
+A stored `expires_at` may be naive UTC, carry an offset, or be unreadable. Comparing aware to
+naive raises TypeError and a bad parse raises ValueError, and on the authentication path either
+is a 500 rather than a 401; an empty string must not read as "never expires" either. So every
+notation parses to an aware UTC instant, a naive value reads as UTC, and anything unreadable
+refuses the key.
 """
 
 import ast
@@ -44,7 +31,7 @@ PAST = datetime(2020, 1, 1, tzinfo=timezone.utc)
 FUTURE = datetime(2099, 1, 1, tzinfo=timezone.utc)
 
 
-# ── the shapes that used to crash ──────────────────────────────────────────────────────────
+# ── one instant, many notations ────────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -53,7 +40,7 @@ FUTURE = datetime(2099, 1, 1, tzinfo=timezone.utc)
         "2020-01-01T00:00:00",
         "2020-01-01T00:00:00Z",
         "2020-01-01T00:00:00+00:00",
-        "2020-01-01T07:00:00+07:00",  # the same instant, written from Jakarta
+        "2020-01-01T07:00:00+07:00",  # the same instant, written at UTC+7
         "2020-01-01T00:00:00.123456",
         "2020-01-01T00:00:00.123456Z",
     ],
@@ -72,22 +59,21 @@ def test_a_past_expiry_refuses_the_key_in_every_notation(stored: str) -> None:
     ],
 )
 def test_a_future_expiry_accepts_the_key_in_every_notation(stored: str) -> None:
-    """The sharpest of the original failures: an offset on a key years from expiring was a 500."""
+    """An offset on a key years from expiring must not turn into a 500."""
     assert is_expired(stored) is False
 
 
 def test_the_same_instant_written_two_ways_decides_the_same() -> None:
-    """An offset is information, not decoration; dropping it moves the instant."""
+    """Dropping the offset would move the instant."""
     assert parse_expiry("2020-01-01T07:00:00+07:00") == parse_expiry("2020-01-01T00:00:00Z")
 
 
 def test_a_naive_value_is_read_as_utc_wherever_the_host_lives() -> None:
-    """Every writer in this repo emitted naive UTC, so this is what those values already meant.
+    """A naive stored value was written as UTC, so it is read as UTC.
 
-    important: the process timezone is forced here. This box runs UTC, so `astimezone` and
-    `replace(tzinfo=utc)` give the same answer on it and an ablation that swapped them passed.
-    Under Asia/Jakarta the difference is seven hours in the direction that keeps an expired key
-    working, which is the failure worth catching.
+    important: the process timezone is forced here. On a UTC host `astimezone` and
+    `replace(tzinfo=utc)` give the same answer, so swapping them would pass unnoticed. Under
+    Asia/Jakarta the difference is seven hours in the direction that keeps an expired key working.
     """
     import os
     import time as _time
@@ -107,7 +93,7 @@ def test_a_naive_value_is_read_as_utc_wherever_the_host_lives() -> None:
         _time.tzset()
 
 
-# ── the shape that used to be accepted ─────────────────────────────────────────────────────
+# ── unreadable values ──────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -116,9 +102,8 @@ def test_a_naive_value_is_read_as_utc_wherever_the_host_lives() -> None:
         "", "   ", "not-a-date", "2020-13-45", 12345, [], {}, True,
         "+00:00", "2020-01-01T00:00:00+25:00", "99999-01-01T00:00:00",
         # important: these raise OverflowError from `astimezone`, not ValueError, so an
-        # `except ValueError` did not catch them. That is the same shape as the defect this
-        # module exists to remove: uncaught on the authentication path, and through the key
-        # list it would 500 the whole listing for an org over one poisoned record.
+        # `except ValueError` would not catch them: uncaught on the authentication path, and
+        # through the key list one poisoned record would 500 the whole listing for an org.
         "9999-12-31T23:59:59-23:00",
         "0001-01-01T00:00:00+23:00",
     ],
@@ -126,8 +111,8 @@ def test_a_naive_value_is_read_as_utc_wherever_the_host_lives() -> None:
 def test_an_unreadable_expiry_refuses_the_key(stored) -> None:
     """If the server cannot tell whether a credential is still valid, it is not.
 
-    The empty string is the one that mattered in production: `if expires_at:` skipped the check
-    entirely, so a key storing "" was accepted forever.
+    The empty string matters most: an `if expires_at:` check would skip it and accept a key
+    storing "" forever.
     """
     assert is_expired(stored) is True
     with pytest.raises(MalformedExpiry):
@@ -135,11 +120,10 @@ def test_an_unreadable_expiry_refuses_the_key(stored) -> None:
 
 
 def test_nothing_escapes_the_parse_as_a_bare_exception() -> None:
-    """The module's contract is that anything unreadable is refused, not that it raises usefully.
+    """Anything unreadable is refused; no exception escapes the parse.
 
-    An escaping exception on this path is a 500 rather than a 401, which is exactly what the
-    original code did, so the guard has to name every exception the conversion can produce and
-    not just the obvious one.
+    An escaping exception on this path is a 500 rather than a 401, so the guard has to name every
+    exception the conversion can produce.
     """
     hostile = [
         "9999-12-31T23:59:59-23:00", "0001-01-01T00:00:00+23:00", "99999-01-01T00:00:00",
@@ -195,7 +179,7 @@ def test_the_state_an_operator_reads(delta, expected) -> None:
 
 
 def test_a_new_timestamp_is_written_with_its_offset() -> None:
-    """So the stored form stops meaning UTC only by convention."""
+    """The stored form carries its offset rather than meaning UTC by convention."""
     written = utc_isoformat(FUTURE)
     assert written.endswith("+00:00")
     assert parse_expiry(written) == FUTURE
@@ -205,10 +189,9 @@ def test_a_new_timestamp_is_written_with_its_offset() -> None:
 
 
 # The functions that decide whether a presented credential still works, or that report that
-# decision to an operator. Deliberately not the whole file: `last_used_at`, `revoked_at` and the
-# certificate validity window are also naive, and they are display or issuance timestamps rather
-# than decisions. Widening this to every `utcnow()` is ruff's `DTZ` family, which
-# `backend/ruff.toml` says lands in its own commit.
+# decision to an operator. Not the whole file: `last_used_at`, `revoked_at` and the certificate
+# validity window are also naive, but they are display or issuance timestamps rather than
+# decisions. Covering every `utcnow()` is the job of ruff's `DTZ` rules, which are not enabled.
 CREDENTIAL_DECIDERS = (
     ("integrations.py", "validate_api_key"),
     ("integrations.py", "validate_api_key_endpoint"),
@@ -231,10 +214,9 @@ def _function(filename: str, name: str):
 
 
 def test_no_credential_decision_reads_a_naive_clock() -> None:
-    """`datetime.utcnow()` is what made the comparison unable to meet an offset.
+    """`datetime.utcnow()` cannot be compared with an offset-bearing stored value.
 
-    A naive clock cannot be compared to an aware stored value at all: Python raises rather than
-    guessing, and on the authentication path that raise had no handler.
+    Python raises rather than guessing, and on the authentication path that would be a 500.
     """
     offenders = []
     for filename, name in CREDENTIAL_DECIDERS:
@@ -253,11 +235,9 @@ def test_no_credential_decision_reads_a_naive_clock() -> None:
 
 
 def test_the_expiry_decision_is_made_in_one_place() -> None:
-    """Two call sites drifting is how one of them ended up inside a broad except and the other
-    outside any try at all."""
-    # note: scoped to the API-key deciders. `integrations.py` also parses an expiry for tenant
-    # policy assignments, which is a different subsystem with its own QA surface and is recorded
-    # as an open finding rather than changed here.
+    """One helper decides expiry, so the call sites cannot drift into different failure modes."""
+    # Scoped to the API-key deciders. `integrations.py` also parses an expiry for tenant policy
+    # assignments, a different subsystem that this does not cover.
     for filename, name in CREDENTIAL_DECIDERS:
         function = _function(filename, name)
         hand_rolled = [
@@ -286,8 +266,7 @@ def test_the_expiry_decision_is_made_in_one_place() -> None:
     [
         ({"is_active": True, "expires_at": None}, "active"),
         ({"is_active": True, "expires_at": "2099-01-01T00:00:00Z"}, "active"),
-        # The shape of all six lapsed keys in this deployment: past its date, still flagged
-        # active, and counted among the active ones until now.
+        # The usual lapsed shape: past its date and still flagged active.
         ({"is_active": True, "expires_at": "2020-01-01T00:00:00"}, "expired"),
         ({"is_active": True, "expires_at": "2020-01-01T00:00:00Z"}, "expired"),
         ({"is_active": True, "expires_at": "not-a-date"}, "expired"),
@@ -306,12 +285,10 @@ def test_what_a_stored_key_counts_as(metadata, expected) -> None:
 
 
 def test_the_tally_counts_each_state_once() -> None:
-    """Six keys in this deployment were past their expiry and counted among the active ones.
+    """Each key lands in exactly one state, and a lapsed key is not counted as active.
 
-    Behavioural, and that matters: the structural versions of this test both passed against a
-    broken tally. The first matched a `status == 'expired'` comparison that also appears where
-    the row's own flag is derived; the second asserted `expired_count` was incremented, which
-    stays true if the branch bodies are swapped and every count is wrong.
+    Behavioural because a structural check can pass against a broken tally (ex; asserting that
+    `expired_count` is incremented stays true if the branch bodies are swapped).
     """
     records = [
         {"is_active": True, "expires_at": None},
@@ -375,8 +352,8 @@ def test_a_revoked_and_lapsed_key_still_reports_that_it_lapsed() -> None:
     "builder", ["create", "get", "permissions", "capabilities", "revoke", "list"]
 )
 def test_every_handler_builds_the_key_the_same_way(builder: str) -> None:
-    """Five handlers construct APIKeyInfo and only the list passed the derived fields, so the
-    detail endpoint answered `expiry_state: "never"` beside a date in 2020."""
+    """Every handler builds APIKeyInfo through `_key_info`, so none can omit the fields derived
+    from `expires_at` (ex; answering `expiry_state: "never"` beside a past date)."""
     tree = ast.parse((BACKEND / "app" / "routers" / "integrations.py").read_text())
     direct = [
         node.lineno
@@ -407,8 +384,8 @@ def test_a_usable_lifetime_is_accepted(days: int) -> None:
 def test_a_lifetime_that_means_nothing_is_refused_at_the_boundary(days: int) -> None:
     """Zero is the interesting one: it would mean "expires the instant it is issued".
 
-    The handler used to branch on `if request.expire_days:`, so a zero would have fallen into
-    the never-expires branch, which is the opposite of what it says.
+    A truthy check on `expire_days` would send a zero into the never-expires branch, the
+    opposite of what it says.
     """
     import pydantic
 

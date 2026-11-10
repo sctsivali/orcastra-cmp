@@ -1,15 +1,10 @@
-"""Events have to be emitted, not merely catalogued.
+"""Every catalogued event is emitted, and reaches only the subscriptions that should hear it.
 
-Nine events were defined in `EXTENSION_EVENTS`, served to add-on authors through
-`GET /extensions/self`, and documented publicly with a "when it fires" column. `enqueue_event`
-had no caller anywhere in the application, so none of them ever fired. A subscription verified,
-went active, showed a fingerprint, and delivered nothing for the rest of its life. The retry
-schedule, the stuck-delivery reaper and the auto-suspend threshold were all unreachable too,
-because the queue was never non-empty.
-
-The half that was missing was selection: `enqueue_event` takes its subscriptions as a parameter
-and nothing chose them. These tests are about that choice, because enqueuing to the wrong set is
-the failure that would replace the one being fixed.
+`EXTENSION_EVENTS` is served to add-on authors through `GET /extensions/self` and documented
+publicly with a "when it fires" column, so each entry needs a code path that emits it.
+`enqueue_event` takes its subscriptions as a parameter; these tests cover how
+`emit_resource_event` selects them, because enqueuing to the wrong set leaks events across
+tenants.
 """
 
 import asyncio
@@ -112,9 +107,8 @@ def test_an_event_reaches_a_subscription_that_asked_for_it(monkeypatch) -> None:
 
 
 def test_a_subscription_that_did_not_ask_for_it_hears_nothing(monkeypatch) -> None:
-    """The negative twin. Without it the test above would pass just as well if the selector
-    returned every subscription in the deployment, which is a cross-tenant leak rather than a
-    feature."""
+    """The negative twin. Without it the test above would also pass if the selector returned
+    every subscription in the deployment, which is a cross-tenant leak."""
     install = FakeInstall(id=1, granted_scope=[{"cluster_id": "nuc2"}])
     sub = FakeSubscription(id=10, installation_id=1, event_types=["orcastra.project.deleted.v1"])
 
@@ -147,7 +141,7 @@ def test_a_suspended_installation_hears_nothing(monkeypatch) -> None:
 
 def test_every_catalogued_event_has_somewhere_that_emits_it() -> None:
     """The catalogue is published to add-on authors, so an entry nothing sends is a promise the
-    platform does not keep. This is the check that would have failed the day the feature landed."""
+    platform does not keep."""
     import subprocess
 
     from app.core.extension_manifest import EXTENSION_EVENTS
@@ -164,8 +158,8 @@ def test_every_catalogued_event_has_somewhere_that_emits_it() -> None:
 
 
 def test_a_failure_to_notify_never_fails_the_operation(monkeypatch) -> None:
-    """The resource already changed on the customer's cluster by the time this runs. Losing an
-    event is bad; losing the caller's instance because the event system had a bad day is worse."""
+    """The resource has already changed on the customer's cluster when this runs, so a lost
+    event must not fail the caller's operation."""
     import app.core.database as database
 
     class _Broken:

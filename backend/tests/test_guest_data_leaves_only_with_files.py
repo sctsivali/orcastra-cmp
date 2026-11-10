@@ -1,18 +1,14 @@
-"""
-A raw-proxy request that hands a guest's data out costs `instance.files`.
+"""A raw-proxy request that hands a guest's data out costs `instance.files`.
 
 A POST with `migration: true` on an instance, an instance snapshot or a custom volume answers with
 an operation whose control, fs and criu secrets stream the filesystem to anyone who presents them
-(and a `target` pushes it to a server the caller names). GET /1.0/images/<fp>/export returns the
-image tarball, and POST /1.0/images/<fp>/secret lets an untrusted client download it. A write key
-without `instance.files` could do all of it, a `*` key included, while reading one file through
-/files cost that capability.
+(a `target` pushes it to a server the caller names). GET /1.0/images/<fp>/export returns the image
+tarball, and POST /1.0/images/<fp>/secret lets an untrusted client download it. Each costs what
+reading one file through /files costs, for every key including `*`.
 
-The integrator's own write paths never send one of these bodies (its client source was read), so
-each of them is pinned as still sent for a key holding its preset. That includes its marketplace
-publish (POST /1.0/images from a snapshot), which this rule does not price.
-
-Every raw-proxy test drives the real handler; the session records the request it would send.
+The integrator's own write bodies never send one of these, so each is pinned as still sent for a
+key holding its preset, its marketplace publish (POST /1.0/images from a snapshot) included. Every
+raw-proxy test drives the real handler; the session records the request it would send.
 """
 
 import re
@@ -195,8 +191,8 @@ async def test_a_key_granted_files_sends_it_as_asked(
 async def test_a_key_granted_files_still_cannot_push_to_a_host_it_names(
     method: str, path: str, body: Any, audits: List[Dict[str, Any]]
 ) -> None:
-    """Security review 2026-11-08: instance.files priced the push but let it through, so a key
-    holding it made the daemon dial any operation URL it named."""
+    """instance.files does not cover a push: the daemon would dial any operation URL the key
+    named."""
     outcome, session = await call_raw_proxy(WITH_FILES, method, path, body=body)
 
     assert getattr(outcome, "status_code", None) == 403, outcome
@@ -244,7 +240,7 @@ _HANDS_OUT = re.compile(r"migrat|publish|export|secret|backup|copy|move|transfer
 
 
 def test_ratchet_no_proxy_operation_hands_out_guest_data_unpriced() -> None:
-    """/proxy and MCP send none of these today. An operation added later that does costs files."""
+    """/proxy and MCP send none of these; an operation added that does must cost files."""
     for operation in PROXY_OPERATION_LEVELS:
         if _HANDS_OUT.search(operation):
             assert GUEST_ACCESS_OPERATIONS.get(operation) == "instance.files", operation

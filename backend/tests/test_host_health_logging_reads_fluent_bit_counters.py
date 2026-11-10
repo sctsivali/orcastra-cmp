@@ -1,9 +1,9 @@
 """Host Health reports logging down when Fluent Bit stops reading or stops delivering, even though
 Fluent Bit's own health endpoint keeps answering `ok`.
 
-The fixture is dev's Fluent Bit 4.2.2 on 2026-10-27: OpenSearch unreachable for six weeks, the tail
-input paused since 2026-09-09 because the audit emitter's memory buffer was full, `proc_records`
-zero on every output, and `/api/v1/health` still `ok`.
+The fixture is a Fluent Bit 4.2.2 scrape with OpenSearch unreachable for weeks: the tail input paused
+because the audit emitter's memory buffer was full, `proc_records` zero on every output, and
+`/api/v1/health` still `ok`.
 """
 
 import json
@@ -253,7 +253,7 @@ def test_a_stall_stays_down_when_opensearch_is_also_unreachable(monkeypatch) -> 
 
 
 def test_a_restart_is_seen_even_when_the_new_process_has_delivered_more() -> None:
-    """Live 2026-10-27: a restarted shipper read as "48 delivered in 13 min" after 2 min of uptime."""
+    """A restarted shipper must not read as "48 delivered in 13 min" after 2 min of uptime."""
     before_restart = _sample(1_000.0, proc=20, retries=0, uptime=80)
     after_restart = _sample(1_780.0, proc=48, retries=0, uptime=120)  # 13 min later, up for 2 min
     result = logging_check.assess(after_restart, [before_restart], stall_seconds=180)

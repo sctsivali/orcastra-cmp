@@ -1,7 +1,7 @@
 """CPU is reported as a share of the instance's effective vCPUs, never as "percent of one core".
 
-The old reader put a fully busy 4-vCPU instance at 400% under a label that said "across all
-vCPUs", and clamped at 800, so a busy 16-vCPU instance read half its real load.
+A fully busy instance reads 100% whatever its vCPU count, matching the "across all vCPUs" label;
+busy vCPUs are reported beside the percent.
 """
 
 from types import SimpleNamespace
@@ -58,7 +58,7 @@ def _two_samples(monkeypatch, first, second, *, client=None):
     [("4", 4), ("0-3", 4), ("0,2", 2), ("0-3,8-11", 8), ("2", 2)],
 )
 def test_vm_limits_are_the_denominator(monkeypatch, limits, vcpus):
-    # 2 busy vCPUs for 10 s
+    # 2 busy vCPUs for 10 s.
     metrics = _two_samples(
         monkeypatch,
         _instance(kind="virtual-machine", limits=limits, cpu_ns=0),

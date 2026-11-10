@@ -2,13 +2,11 @@
 
 The owner key is the only key that syncs an organization, updates its members and policies and
 provisions for it, so an organization whose owner is revoked, expired, deleted or unreadable is
-frozen. The list could not say so: it named the key id and the application, read through a helper
-that also loaded the key's secret document. It now reads each owner's metadata only, live rather
-than from the shared cache, and reports the owner's name, state, expiry and the organization's
-clusters. Membership still scopes what a Partner sees, and only an Admin or a partner of the owner
-key's home organization, as a sale proves it, reads its owner key's name, state and expiry: a buyer's
-founder, whom OrcaHub makes a partner of the buyer, does not, and before the key's first sale nobody
-but an Admin does.
+frozen. The list reads each owner's metadata only (never the secret document), bypasses the shared
+cache, and reports the owner's name, state, expiry and the organization's clusters. Membership
+scopes what a Partner sees. Only an Admin or a partner of the key's home organization, as a sale
+proves it, reads the owner key's name, state and expiry: a buyer's founder, whom OrcaHub makes a
+partner of the buyer, does not, and before the key's first sale only an Admin does.
 """
 
 from datetime import timedelta

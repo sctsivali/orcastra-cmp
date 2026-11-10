@@ -1,4 +1,4 @@
-"""Host Health gives one honest row per dependency, keeps when each changed, and records a change once.
+"""Host Health gives one row per dependency, keeps when each changed, and records a change once.
 
 The report is collected by one worker and read by all; a check that cannot answer is `unknown`,
 never `ok`; the identity check never writes to the IdP; transitions reach the audit trail once,

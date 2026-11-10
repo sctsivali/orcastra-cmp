@@ -1,9 +1,8 @@
 """Every touch of a My Key is on its trail: issued or refused, downloaded or refused, deleted.
 
-A download hands out the private key and wrote no record at all. A refused create or a refused
-download wrote none either, and those are the records most worth having. Each record carries the
-client it came from, kept on key rows only, and key rows are kept a year rather than the cluster
-log's thirty days.
+A download hands out the private key, and a refused create or download is the record most worth
+having. Each record carries the client it came from, kept on key rows only; key rows are kept a
+year by default rather than the cluster log's thirty days.
 """
 
 from __future__ import annotations
@@ -80,7 +79,7 @@ async def test_a_refused_create_is_recorded(monkeypatch, audits) -> None:
         return KeyTarget(project or "default")
 
     monkeypatch.setattr(my_keys, "verify_cluster_access", lambda _c: None)
-    # note: what a key may grant is its own test (test_my_keys_are_held_to_the_bound_and_their_owner)
+    # What a key may grant has its own test (test_my_keys_are_held_to_the_bound_and_their_owner).
     monkeypatch.setattr(my_keys, "authorize_new_key", _authorized)
     request = my_keys.KeyCreateRequest(name="ops", node="nuc2", auth_level="standard")
     with pytest.raises(HTTPException):
@@ -135,8 +134,8 @@ def test_key_rows_are_kept_for_their_own_retention() -> None:
 
 
 def test_a_failed_create_is_recorded_as_a_request_never_as_a_key_id(monkeypatch) -> None:
-    """Security review 2026-10-27: a request named after another owner's key id must not land in
-    that key's trail, so a failed create has its own type and a prefixed id."""
+    """A request named after another owner's key id must not land in that key's trail, so a
+    failed create has its own type and a prefixed id."""
     from app.routers import my_keys
 
     events = []

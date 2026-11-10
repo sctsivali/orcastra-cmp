@@ -1,19 +1,13 @@
-"""
-Regression guard for the RC3 production outage.
+"""Guard: every raw `requests` call carries an explicit timeout.
 
-On 2026-07-30 a `requests` call with no timeout, running inline on the asyncio event loop,
-parked all four uvicorn workers for 50 hours. The call was
-`client.api.session.get(url, verify=False)` in `raw_proxy`.
+pylxd applies the client timeout only when the call goes through `client.api.<verb>`, because
+`_APINode.get` does `kwargs["timeout"] = kwargs.get("timeout", self._timeout)`. A call on
+`client.api.session` bypasses that, and a bare `requests.Session` has no default timeout, so the
+call blocks until the kernel gives up. Against a peer that accepts TCP and then goes silent, that
+is never; inline on the event loop it parks the whole worker.
 
-Why a raw session call is special: pylxd only applies the client timeout when the call goes
-through `client.api.<verb>`, because `_APINode.get` does
-`kwargs["timeout"] = kwargs.get("timeout", self._timeout)`. Reaching for `client.api.session`
-bypasses that, and a bare `requests.Session` has no default timeout, so the call blocks until
-the kernel gives up. Against a peer that accepts TCP and then goes silent, that is never.
-
-Every raw session or module-level `requests` call must therefore carry an explicit timeout.
-
-This guard ships with NO allowlist on purpose. An allowlist is how this class of bug comes back.
+Every raw session or module-level `requests` call must therefore carry an explicit timeout. There
+is no allowlist: an exemption is how this class of bug comes back.
 """
 
 import ast
@@ -56,9 +50,8 @@ def find_untimed_calls(root: Path) -> list[str]:
                 continue
             if any(kw.arg == "timeout" for kw in node.keywords):
                 continue
-            # note: a timeout smuggled through **kwargs would be a false positive here.
-            # There are none today. If one appears, refactor the call rather than weaken
-            # this guard.
+            # A timeout passed through **kwargs would be a false positive here. Refactor such
+            # a call rather than weaken this guard.
             offenders.append(f"{py.relative_to(root.parent)}:{node.lineno} .{fn.attr}()")
     return offenders
 

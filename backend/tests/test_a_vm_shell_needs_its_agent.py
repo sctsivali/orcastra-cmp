@@ -1,7 +1,7 @@
 """A shell on a VM without lxd-agent is refused before the exec, with the reason.
 
-LXD 5.21 accepts that exec and then drops its sockets, so the failure used to look like a lost
-connection, and the browser retried it every second for as long as the page stayed open.
+LXD 5.21 accepts that exec and then drops its sockets, so without the check the failure looks
+like a lost connection that the browser retries every second for as long as the page is open.
 """
 
 from __future__ import annotations

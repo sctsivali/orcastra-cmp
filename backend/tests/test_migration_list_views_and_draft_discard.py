@@ -1,9 +1,8 @@
 """The migration list filters by view on the server, and an operator can discard their own draft.
 
-The Active and Needs Attention tabs were computed from the newest 100 jobs the browser loaded, so
-an older retained or blocked job dropped out of them and stopped being polled. The server now
-answers one view at a time with exact counts for all three. Drafts could only expire; their
-author can now discard one that never started (owner decision 2026-11-05: the author only).
+Computed in the browser from the newest page of jobs, the Active and Needs Attention tabs would
+drop an older retained or blocked job and stop polling it. The server answers one view at a time
+with exact counts for all three. Only a draft's author can discard it, and only before it started.
 """
 
 from __future__ import annotations

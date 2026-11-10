@@ -1,7 +1,7 @@
 """Project inventory asks LXD for its dashed collection paths, never pylxd attribute names.
 
-Found live: pylxd turns ``client.api.network_acls`` into ``/1.0/network_acls``, which LXD
-answers with 404, so every project relocation preflight failed closed on ACL inventory.
+pylxd turns ``client.api.network_acls`` into ``/1.0/network_acls``, which LXD answers with
+404, so every project relocation preflight would fail closed on ACL inventory.
 """
 
 from __future__ import annotations

@@ -1,12 +1,9 @@
 """An integration key granting a cluster another party holds is managed only by its own side.
 
-Every single-key handler and the key list authorised by cluster overlap alone. On a cluster
-bound to two partner organizations, each partner overlapped the other's keys, so one partner
-could read another's grants and mapped users, and revoke or delete the key that runs the other
-partner's OrcaHub sync and provisioning.
-
-Ported from the v1.0.0-RC4-hotfix2 line (c8f77aa). This line has one more single-key handler
-(capabilities), and its refresh calls back through httpx.
+Authorising by cluster overlap alone would, on a cluster bound to two partner organizations,
+let one partner read the other's grants and mapped users, and revoke or delete the key that
+runs the other partner's OrcaHub sync and provisioning. Every single-key handler (capabilities
+included), the key list and the refresh, which calls back through httpx, apply the side rule.
 """
 
 from typing import Any, Dict, List
@@ -30,7 +27,7 @@ OTHER = "partner-b@example.test"
 
 
 def _user(email: str, groups: List[str] = ["role_partner"]) -> AuthenticatedUser:
-    # note: resolve_roles caches by user_id, so each role gets its own id
+    # resolve_roles caches by user_id, so each role gets its own id.
     return AuthenticatedUser(user_id=f"{groups[0]}:{email}", email=email, groups=list(groups))
 
 
@@ -211,7 +208,7 @@ def test_no_async_handler_reads_a_key_from_vault_on_the_loop() -> None:
 #
 # OrcaHub makes every organization's founder a PARTNER, so the sync writes a partner row in each
 # buyer organization, and every buyer carries the seller's key. "Manages a key that syncs an
-# organization I run" would therefore hand a buyer's founder the seller's integration key. Only
+# organization the caller runs" would hand a buyer's founder the seller's integration key. Only
 # the key's home organization lends it (services/cluster_parties.side_keys).
 
 SELLER, FOUNDER = "p@example.com", "founder@example.com"

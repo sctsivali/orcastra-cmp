@@ -1,15 +1,13 @@
 """The console learns a deployment's capability instead of discovering it through a 404.
 
 `SNAPSHOT_SCHEDULES_ENABLED` is off by default and gates both the scheduler loop and the router
-mount (`main.py:335` and `main.py:689`). Nothing told the console that, so on a stock deployment
-the Snapshot Schedules card printed "No schedules yet" for a deployment that has no schedule
-surface at all, and the instance tab's Schedule button was enabled and submitted into a 404.
+mount in `main.py`. Without the flag in the response, the console would show an empty schedule
+list and an enabled Schedule button that submits into a 404 on a deployment with no schedules.
 
 `/system/settings` is already polled every 60 seconds for `read_only_mode`, so reporting the flag
-there costs no request. These tests pin the two properties that make it useful: the field is part
-of the response contract, and its value is read from the setting rather than fixed.
-
-Hermetic: settings are stubbed in place, so no environment, no database and no network.
+there costs no request. The field must be part of the response contract, and its value must be
+read from the setting rather than fixed. Settings are stubbed in place: no environment, database
+or network.
 """
 import asyncio
 import sys
@@ -79,15 +77,15 @@ def test_a_deployment_with_the_feature_off_says_so(monkeypatch) -> None:
 
 
 def test_a_deployment_with_the_feature_on_says_so(monkeypatch) -> None:
-    """Both directions, because a hard-coded literal passes whichever one is tested alone."""
+    """Both directions: a hard-coded literal would pass either one tested alone."""
     assert _read(monkeypatch, enabled=True).snapshot_schedules_enabled is True
 
 
 def test_the_reported_flag_is_the_one_that_gates_the_router() -> None:
-    """Reporting a second, differently-named flag would be a control that lies convincingly.
+    """The reported flag must be the one `main.py` mounts the schedules router under.
 
-    `main.py` mounts `snapshot_schedules_router` under `settings.snapshot_schedules_enabled`, and
-    the environment variable that sets it is the one the deployment docs name.
+    `main.py` mounts the router under `settings.snapshot_schedules_enabled`, and the environment
+    variable that sets it is the one the deployment docs name.
     """
     assert Settings(SNAPSHOT_SCHEDULES_ENABLED=True).snapshot_schedules_enabled is True
     assert Settings(SNAPSHOT_SCHEDULES_ENABLED=False).snapshot_schedules_enabled is False

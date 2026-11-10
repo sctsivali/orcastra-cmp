@@ -1,13 +1,9 @@
-"""The OpenAPI title is the one product-name surface no deployment can show us.
+"""The OpenAPI title carries the product name.
 
 ``create_app`` sets ``openapi_url`` to None unless DEBUG is on, so on a normal install
-``/openapi.json``, ``/docs`` and ``/redoc`` all answer 404 and the title cannot be read back
-over HTTP. Worse, the operator tooling treats an exposed ``/docs`` as a deployment fault, so
-turning DEBUG on to look is not an option either. Without this test the string is only ever
-verified by reading the source, which is exactly how a rename leaves one surface behind.
-
-``app.openapi()`` builds the schema in process regardless of ``openapi_url``, so the title is
-checkable even though the route is not served.
+``/openapi.json``, ``/docs`` and ``/redoc`` answer 404 and the title cannot be read back over
+HTTP. ``app.openapi()`` builds the schema in process regardless of ``openapi_url``, so the title
+is checked here.
 """
 import sys
 from pathlib import Path
@@ -23,8 +19,8 @@ def test_the_openapi_title_carries_the_product_name():
 
 
 def test_the_title_still_comes_from_settings_not_a_literal():
-    # An operator can override API_TITLE in the environment. If the title were hardcoded in
-    # create_app the override would silently stop working, and nothing else would notice.
+    # An operator can override API_TITLE in the environment; a title hardcoded in create_app
+    # would silently ignore the override.
     assert Settings(api_title="Something Else").api_title == "Something Else"
     assert create_app().openapi()["info"]["title"] == Settings().api_title
 

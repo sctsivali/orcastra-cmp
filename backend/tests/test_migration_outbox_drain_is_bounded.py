@@ -1,8 +1,9 @@
 """The migration outbox cannot hold the recovery loop or hammer a receiver that is down.
 
-The drain ran inline in the 15 s recovery tick with up to 50 rows of 10 s OrcaHub POSTs and a
-flat 30 s retry, so a black-holed receiver delayed every queued job, retention cleanup and plan
-expiry by minutes, and rows outliving their 90 s lease were claimed and sent again.
+The drain runs inside the recovery tick, so an unbounded drain against a black-holed receiver
+would delay every queued job, retention cleanup and plan expiry, and rows outliving their lease
+would be claimed and sent again. Each drain stops at a time budget and hands back the rest, and
+failed deliveries back off exponentially.
 """
 
 from __future__ import annotations

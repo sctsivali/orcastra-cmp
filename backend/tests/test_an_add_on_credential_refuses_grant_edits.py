@@ -1,11 +1,11 @@
 """The key routes refuse to change an add-on credential's grant, and keep its kill switch.
 
 An add-on's credential is an integration key, so PUT /api-keys/{id}/capabilities and
-/permissions reached it for any partner whose clusters overlapped its grant. That changed what a
-third party holds outside the operator's install consent. The installation owns the grant now:
-those edits answer 409 and name rescope. Revoke stays, and the installation's own flows (rescope,
+/permissions would reach it for any partner whose clusters overlap its grant, changing what a
+third party holds outside the operator's install consent. The installation owns the grant: those
+edits answer 409 and name rescope. Revoke stays, and the installation's own flows (rescope,
 rotation, the reconcile sweep) keep working after one. A delete is refused only while an
-installation claims the key, so a superseded or reclaimed credential is deletable as before.
+installation claims the key, so a superseded or reclaimed credential stays deletable.
 """
 
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -42,7 +42,7 @@ class Vault(_FakeVault):
         self.store.pop(path, None)
 
     def vault_delete_metadata(self, path: str) -> None:
-        # a permanent delete names the KV v2 metadata path; the record is stored by its data path
+        # A permanent delete names the KV v2 metadata path; the record is stored by its data path.
         self.deletes.append(path)
         self.store.pop(path.replace("secret/metadata/", "secret/data/", 1), None)
 
@@ -124,7 +124,7 @@ def metadata_of(vault: Vault, key_id: str) -> Dict[str, Any]:
 def installations(*claims: Tuple[str, Optional[str]]) -> AsyncSessionFacade:
     """Real rows of the two columns the claim reads, one (api_key_id, previous_api_key_id) each.
 
-    note: the full model has Postgres-only columns, so SQLite holds only the ones the query names.
+    The full model has Postgres-only columns, so SQLite holds only the ones the query names.
     The organization tables are there too, empty, because revoke and delete first read which
     organizations the key owns (services/integration_key_ownership.py).
     """

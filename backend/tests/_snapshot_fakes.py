@@ -1,8 +1,7 @@
 """Shared fake pylxd graph for the snapshot and mobility routers.
 
-Hand-rolled rather than MagicMock so an assertion about what reached the daemon is an assertion
-about a real recorded call, not about a mock's memory of one. The whole point of these files is
-to prove the EFFECT of a control, and a mock that answers anything makes that impossible.
+Hand-rolled rather than MagicMock so an assertion about what reached the daemon is about a
+recorded call. A mock that answers anything cannot prove the effect of a control.
 """
 
 import time
@@ -38,12 +37,11 @@ class FakeSnapshots:
         self._name = name
 
     def get(self, params=None, timeout=None):
-        """The per-instance snapshot listing, which is the one read that answers a size.
+        """The per-instance snapshot listing, the one read that answers a size.
 
-        Recorded with the socket timeout and the instance it was asked about, so a test can
-        prove the fleet size phase read exactly the holders it may see, and nothing else.
-        A per-instance list, error or delay keyed by (project, instance) lets one holder
-        answer differently from the rest; the fallbacks keep every older test unchanged.
+        Recorded with the socket timeout and the instance asked about, so a test can prove the
+        fleet size phase read exactly the holders it may see. A per-instance list, error or delay
+        keyed by (project, instance) lets one holder answer differently from the rest.
         """
         params = dict(params or {})
         holder = (params.get("project"), self._name)
@@ -67,8 +65,8 @@ class FakeSnapshots:
         self._owner.snapshots.append(entry)
         if self._owner.omit_operation:
             return _Response({}, 202)
-        # A distinct id per create, so a test can say "the safety copy failed and the restore would
-        # not have". No test addresses these by name; they exist to key operation_status.
+        # A distinct id per create keys operation_status, so the safety copy can fail while the
+        # restore succeeds.
         self._owner.create_count += 1
         return _Response(
             {"operation": f"/1.0/operations/op-create-{self._owner.create_count}"}, 202
@@ -99,15 +97,13 @@ class FakeInstanceNode:
         self.create_error: Optional[Exception] = None
         self.create_count = 0
         self.state_usage = 1_000_000_000
-        # How the LXD operation behind an accepted request settles.
         self.devices: Dict[str, Any] = {}
         self.profiles: List[str] = ["default"]
+        # How the LXD operation behind an accepted request settles.
         self.operation_status = "Success"
         self.operation_err = None
-        # When set, every accepted (202) response names no operation. Without this the fakes
-        # always hand back an id, so the branch that decides what "no operation" means was
-        # unreachable from any test and an accepted-but-unconfirmable action looked like a
-        # completed one.
+        # When set, every accepted (202) response names no operation, which reaches the branch
+        # that decides what an accepted but unconfirmable action means.
         self.omit_operation = False
         # Projects the fallback path enumerates when a daemon cannot answer about all of them.
         self.projects: List[str] = [PROJECT]
@@ -128,7 +124,7 @@ class FakeInstanceNode:
         # What `GET /1.0/warnings?recursion=1` answers.
         self.warnings: List[Dict[str, Any]] = []
         # The pool behind the root disk and its driver. None leaves the root disk out of
-        # `expanded_devices`, which is what every test written before the restore plan expects.
+        # `expanded_devices`.
         self.root_pool: Optional[str] = None
         self.pool_driver: str = "dir"
 
@@ -243,8 +239,8 @@ class _Instances:
         """`recursion=2` folds each instance's snapshots into the instance listing.
 
         Honours `all-projects` the way LXD does, including refusing a request that carries both
-        it and `project`. That refusal is not decoration: it is the shape a caller reusing
-        `_project_params` on the fast path would produce, and every cluster would 400 at once.
+        it and `project`: a caller reusing `_project_params` on the fast path sends that shape,
+        and every cluster would answer 400.
         """
         params = dict(params or {})
         if "all-projects" in params and "project" in params:
@@ -280,7 +276,7 @@ class _Operations:
         self._node = node
 
     def __getitem__(self, operation_id):
-        # The id is carried, not dropped: it is what lets one operation fail while another settles.
+        # Carry the id so one operation can fail while another settles.
         return _OperationNode(self._node, operation_id)
 
     def get(self, params=None, timeout=None):
@@ -329,10 +325,9 @@ class _OperationNode:
     def _outcome(self):
         """One status for the node, or a different one per operation id.
 
-        important: a dict is what makes "the safety copy failed but the restore would have
-        succeeded" reachable. With a single status for the whole node the two are indistinguishable,
-        so the branch that aborts a restore on a failed safety copy could not be tested at all, and
-        it duly shipped broken. A scalar still works, so every existing test is untouched.
+        A dict makes "the safety copy failed but the restore would have succeeded" reachable,
+        which the branch that aborts a restore on a failed safety copy needs. A scalar applies to
+        every operation.
         """
         status = self._node.operation_status
         err = self._node.operation_err
@@ -352,10 +347,10 @@ class _OperationNode:
 class _OperationWait:
     """`/1.0/operations/<id>/wait`, as LXD answers it.
 
-    important: LXD answers the wait of a FAILED or cancelled operation with an error-typed body
-    (verified on nuc2, LXD 5.21: a ZFS restore refused for a later snapshot), and pylxd raises
-    that as LXDAPIException. A fake that returned a tidy Failure here hid that every snapshot
-    write the daemon failed was reported as still running.
+    important: LXD answers the wait of a failed or cancelled operation with an error-typed body
+    (LXD 5.21, ex; a ZFS restore refused for a later snapshot), and pylxd raises that as
+    LXDAPIException. A fake returning a plain Failure body would hide failed snapshot writes
+    behind "still running".
     """
 
     def __init__(self, operation: _OperationNode):
@@ -409,7 +404,7 @@ class _Api:
 
 
 class _StoragePools(_Response):
-    """The pool listing as before, plus one pool's record for the restore plan's driver read."""
+    """The pool listing, plus one pool's record for the restore plan's driver read."""
 
     def __init__(self, node: FakeInstanceNode):
         super().__init__({"metadata": ["/1.0/storage-pools/default"]})
@@ -438,9 +433,8 @@ class FakeClient:
             "environment": {
                 "certificate": "-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----"
             },
-            # Both branches of the fleet reader have to be reachable from a test, so this is a
-            # constructor argument rather than a constant. A daemon predating the extension is
-            # the fallback path's only caller.
+            # A constructor argument so a test reaches both fleet reader branches; a daemon
+            # without the extension takes the fallback path.
             "api_extensions": ["instance_all_projects"] if supports_all_projects else [],
         }
 
@@ -448,9 +442,8 @@ class FakeClient:
 class ConnectionManager:
     """One client for every host, or an explicit per-host mapping.
 
-    important: passing `clients` at all makes it authoritative, INCLUDING an empty one. Falling
-    back to the shared client for a host the mapping omits would make every cluster reachable,
-    which is precisely the condition a test about an unreachable cluster needs to create.
+    Passing `clients` makes the mapping authoritative, even an empty one: a host it omits gets no
+    client, which is how a test models an unreachable cluster.
     """
 
     def __init__(self, client, hosts=(HOST,), clients=None):
@@ -468,8 +461,8 @@ class ConnectionManager:
 
 
 class _CertManager:
-    """Only list_clusters is exercised. get_node_names is apply_cluster_filter over it, which is
-    what proves scope on a read that names no host, so a fake without it cannot test the fan-out."""
+    """Only list_clusters is exercised: LXDService.get_node_names runs apply_cluster_filter over
+    it, which scopes a fan-out read that names no host."""
 
     def __init__(self, hosts):
         self._hosts = list(hosts)
@@ -481,8 +474,8 @@ class _CertManager:
 def service(client, hosts=(HOST,), clients=None):
     """An LXDService over one fake client, or a mapping of host to client for a fan-out test.
 
-    `clients` is what makes a per-cluster assertion possible: with one client shared by every
-    host, two clusters are indistinguishable and a memo that collides across them still passes.
+    `clients` makes a per-cluster assertion possible: with one client shared by every host, two
+    clusters are indistinguishable and a memo that collides across them still passes.
     """
     from app.services.lxd_service import LXDService
 

@@ -2,11 +2,11 @@
 A refused reach inside a guest is recorded whatever its body says.
 
 The raw proxy holds a body to one spelling (core/api_key_body.py) and prices a guest path
-(core/api_key_capabilities.assert_guest_access_allowed, core/guest_data_export.py). When the body rule
-ran first, an attempt such as `POST /exec {"Command": ["id"]}` from a key without instance.exec was
-answered 400 and left no record, where the same attempt spelled in lowercase is 403 plus a failure
-record. So the path gates run first, the body rule next, and the body gates after it, and every
-refusal of the body rule is recorded too. The same record is kept on /proxy, where MCP arrives.
+(core/api_key_capabilities.assert_guest_access_allowed, core/guest_data_export.py). The path gates
+run first, the body rule next and the body gates after it, and every refusal of the body rule is
+recorded. Otherwise `POST /exec {"Command": ["id"]}` from a key without instance.exec would answer 400
+with no record, while the lowercase spelling answers 403 with a failure record. /proxy, where MCP
+arrives, keeps the same record.
 
 Every raw-proxy test drives the real handler; the session records the request it would send.
 """

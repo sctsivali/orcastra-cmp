@@ -1,9 +1,9 @@
 """GET /me/access tells the dashboard whether to show the access notice, and agrees with enforcement.
 
-Issue #17. The verdict for a Tenant is computed from the same three steps org_scope_dependency takes
-for every scoped route, so "no cluster access yet" on the notice and an empty scope on the API are
-one fact. The second half runs it against real rows: a member with an assigned policy on a bound
-cluster, and a member of the same organization with nothing assigned.
+The verdict for a Tenant is computed from the same three steps org_scope_dependency takes for every
+scoped route, so "no cluster access yet" on the notice and an empty scope on the API are one fact.
+The second half runs it against real rows: a member with an assigned policy on a bound cluster, and
+a member of the same organization with nothing assigned.
 """
 
 import asyncio
@@ -107,7 +107,7 @@ def test_a_tenant_verdict_matches_the_enforced_scope(monkeypatch, allowed, acl, 
 @pytest.fixture
 def world():
     db = sqlite_session(Organization, OrganizationMember, OrganizationCluster, TenantAccessPolicy, TenantPolicyAssignment)
-    # note: SQLite has no JSONB, so only this copied DDL uses JSON; the ORM queries are unchanged.
+    # SQLite has no JSONB, so only this copied DDL uses JSON; the ORM queries are unchanged.
     metadata = MetaData()
     Organization.__table__.to_metadata(metadata)
     TenantAccessPolicy.__table__.to_metadata(metadata)

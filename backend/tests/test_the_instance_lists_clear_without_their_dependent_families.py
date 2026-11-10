@@ -3,8 +3,7 @@
 `invalidate_instance_lists` is the fast tier the event-stream clearance runs every 10 s at most:
 it advances `instance_list_generation`, the token /instances and /vms fence on, and clears only
 `instances:*` and `vms:*`. `invalidate_instance_cache` runs it first and then every `used_by`
-family, IPAM and capacity, exactly as before. `invalidate_project_caches` is the family a project
-write clears.
+family, IPAM and capacity. `invalidate_project_caches` is the family a project write clears.
 """
 
 from app.core.cache import (

@@ -119,8 +119,8 @@ class ClientIpTrustTests(unittest.TestCase):
         self.assertTrue(resolution.trusted_proxy)
 
     def test_a_configured_list_replaces_the_default(self) -> None:
-        # RC5 acceptance FU-6: the default was always added to a configured list, so a list could
-        # widen trust but never narrow it, and the installer's narrow value had no effect.
+        # A configured list replaces the default instead of extending it, so it can narrow trust as
+        # well as widen it.
         request = make_request({"x-orcastra-client-ip": "195.178.110.104"}, "172.18.0.5")
 
         self.assertEqual(

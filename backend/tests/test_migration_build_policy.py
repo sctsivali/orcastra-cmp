@@ -117,7 +117,7 @@ def test_an_incus_build_below_the_baseline_is_refused_unless_it_is_allow_listed(
 @pytest.mark.parametrize(
     "version,approved,basis",
     [
-        # The 2026-10-29 advisory batch (migration websocket secrets, dependent volumes) is fixed in
+        # The Incus advisory batch (migration websocket secrets, dependent volumes) is fixed in
         # 7.6.0; the LTS backports first ship in 7.0.3 and 6.0.8 (core/engine_baseline.py).
         ("7.6", True, "policy"),
         ("7.6.0", True, "policy"),

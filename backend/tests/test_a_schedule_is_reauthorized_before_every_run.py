@@ -1,13 +1,11 @@
 """A schedule is a standing instruction that outlives the session that made it by months.
 
-Authorizing it once at creation would be the same mistake the webhook dispatcher records having
-avoided: "an organization can lose a cluster between the moment an event was enqueued and the
-moment it goes out. Without this, revocation is not real." A schedule's window is not seconds, it
-is a quarter.
+Authorized only at creation, a revoked grant would keep acting for months, so every run is
+re-authorized, as the webhook dispatcher re-authorizes every delivery before it is sent.
 
 Two of these refusals exist because a name is not an identity. `cluster_id` is free text with no
 foreign key anywhere in this schema, so a cluster deleted and re-registered by a different
-organization matches the old string exactly. LXD instance names are unique per project rather than
+organization matches the stored string exactly. LXD instance names are unique per project but not
 stable, so an instance deleted and recreated under the same name is a different instance, possibly
 a different tenant's, on a shared cluster.
 """

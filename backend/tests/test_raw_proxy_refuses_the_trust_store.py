@@ -5,10 +5,10 @@ The raw proxy refuses the trust store and traversal, and never follows a redirec
 `/1.0/certificates` is not project-scoped and a `write` grant can add a certificate to it. A
 traversal or a redirect could take the request outside every path check. requests (urllib3 2.x)
 also drops `.` segments and the fragment on the client side, so `/1.0/./certificates` and
-`/1.0/certificates#x` reached the trust store past a check that looked for `..` in the raw string.
+`/1.0/certificates#x` would reach the trust store past a check that only looks for `..` in the
+raw string.
 
-Ported from the RC4-hotfix2 line and adapted to this line's guards, which live in
-app/core/api_key_capabilities.py and read app/core/raw_proxy_path.py.
+The guards live in app/core/api_key_capabilities.py and read app/core/raw_proxy_path.py.
 """
 
 import threading
@@ -50,8 +50,8 @@ REFUSED = [
     "/1.0/certificates#",
 ]
 
-# note: the hotfix2 line collapsed empty segments and cut a decoded `#` or `?`, so these answered
-# 403 there. This line refuses the malformed spelling itself with 400 before any prefix is read.
+# An empty segment or an encoded `#` or `?` is refused as malformed with 400 before any prefix is
+# read.
 MALFORMED = [
     "/1.0//certificates",
     "//1.0/certificates",
@@ -232,8 +232,8 @@ async def test_the_member_count_read_still_reaches_the_cluster() -> None:
     assert session.urls == [f"{ENDPOINT}/cluster/members"]
 
 
-# A version glued to the next segment. The old URL build stripped the string `/1.0` while a guard
-# could strip a whole segment, so `1.0certificates` was judged and LXD got /certificates.
+# A version glued to the next segment. Guards and the URL build both read `1.0certificates` as one
+# segment; stripping the string `/1.0` in one place only would send LXD /certificates.
 GLUED_VERSION = [
     "/1.0certificates",
     "/1.0%63ertificates",

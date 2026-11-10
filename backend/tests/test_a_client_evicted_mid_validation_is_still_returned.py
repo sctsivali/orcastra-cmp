@@ -1,11 +1,9 @@
 """get_client returns the client it validated, even if another thread evicted it meanwhile.
 
-It validated `self._clients[cluster_id]` and then read `self._clients[cluster_id]` again to return
-it. Validation is a live GET /1.0 (about a second on central-1), and the pool is shared by every
-thread in the worker: a concurrent reconnect, the healer or the dead-cluster probe can call
-cleanup_connection in between. The second read then raised KeyError, and on dev (2026-11-04) the
-system warnings feed reported central-1 as failed for that read. The pooled client had just
-answered, so the right answer is that client.
+Validation is a live GET /1.0 that can take about a second, and the pool is shared by every thread
+in the worker: a concurrent reconnect, the healer or the dead-cluster probe can call
+cleanup_connection between validating `self._clients[cluster_id]` and returning it. Reading the
+dict a second time would raise KeyError; the client that just answered is the right answer.
 """
 
 from __future__ import annotations

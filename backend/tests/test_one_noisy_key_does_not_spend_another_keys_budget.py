@@ -1,18 +1,14 @@
-"""External integrations need a budget of their own, not a share of one IP's.
+"""Each API key spends a rate-limit budget of its own, beside its address's.
 
-Rate limiting was keyed on the client IP and its subnet. `_rate_limit_subject` understands only
-`Authorization: Bearer`, so an API-key request fell through to `ip:{client_ip}`. Every external
-integration reaching this deployment from one egress address therefore shared a single bucket: an
-agent polling in a loop, or a harness retrying, would spend the budget that OrcaHub's scheduled
-sync needed, and the victim saw 429s it could not explain or influence.
+`_rate_limit_subject` understands only `Authorization: Bearer`, so an API-key request lands on
+`ip:{client_ip}`. Without a per-key bucket every integration behind one egress address shares that
+bucket, and one key polling in a loop spends the budget another integration's scheduled sync needs.
 
-Where the budget is spent is the whole design, and the obvious placement is wrong. Counting in
-the middleware, keyed on `X-API-Key-ID`, looks natural and is a targeted denial of service: a key
-id is a public identifier, not a credential. It is returned to any partner listing organizations
-(`IntegrationOrgResponse.api_key_id`), written to logs, and sent in the header of every outbound
-callback. Anyone holding one could present it with a garbage secret and burn that integration's
-whole minute from an unauthenticated request. So the spend happens after the secret verifies, and
-unauthenticated traffic stays on the per-IP bucket.
+The spend happens after the secret verifies. A key id is public: it is returned to any partner
+listing organizations (`IntegrationOrgResponse.api_key_id`), written to logs, and sent in the
+header of every outbound callback. Counted in the middleware, it would let anyone burn an
+integration's whole minute with a garbage secret. Unauthenticated traffic stays on the per-IP
+bucket.
 """
 
 import unittest
@@ -54,11 +50,8 @@ class UnauthenticatedTrafficTests(unittest.TestCase):
     """The middleware must not open a per-key bucket, whatever header it is shown."""
 
     def test_a_forged_key_id_opens_no_bucket_in_the_middleware(self) -> None:
-        """The denial-of-service this placement exists to avoid.
-
-        A key id is public. If the middleware counted it, presenting a victim's id with any
-        secret at all would spend the victim's budget from an unauthenticated request.
-        """
+        """A key id is public, so a middleware count would let an unauthenticated request
+        presenting a victim's id spend the victim's budget."""
         keys = [key for key, _limit in buckets(make_request({"X-API-Key-ID": VALID_ID}))]
         self.assertFalse(
             [k for k in keys if k.startswith("apikey:")],
@@ -125,18 +118,14 @@ class AuthenticatedBudgetTests(unittest.TestCase):
 
 
 class BudgetSizingTests(unittest.TestCase):
-    """The property the whole bucket depends on, and the one easy to get backwards.
+    """The per-key budget must be strictly lower than the per-IP one.
 
     At or above the per-IP limit the IP bucket is always reached first, the per-key bucket never
-    binds, and a runaway key still spends every other integration's budget. Isolation exists only
-    while the per-key figure is strictly lower, which also guarantees a second key behind the same
-    address always retains `rate_limit_requests - rate_limit_api_key_requests` headroom.
+    binds, and a runaway key still spends every other integration's budget. Below it, a second key
+    behind the same address keeps `rate_limit_requests - rate_limit_api_key_requests` headroom.
 
-    important: asserted against the DEFAULTS, not against `get_settings()`. Reading the live
-    settings couples the suite to whatever `.env` the box happens to carry, so a deployment that
-    lowers RATE_LIMIT_REQUESTS would fail this test for an environmental reason while CI, which
-    has no .env, stayed green. That is the flaky-for-environmental-reasons shape, and the runtime
-    already warns about the misconfiguration at startup, which is where an operator can act on it.
+    Asserted against the defaults rather than `get_settings()`, so a host's `.env` cannot fail the
+    suite. The runtime warns about a misconfigured deployment at startup.
     """
 
     def test_the_default_per_key_budget_binds_before_the_default_ip_budget(self) -> None:
@@ -151,13 +140,10 @@ class BudgetSizingTests(unittest.TestCase):
         )
 
     def test_a_deployment_that_breaks_the_relationship_is_warned_about(self) -> None:
-        """The other half: defaults cannot protect an operator who tunes either variable.
+        """Startup warns an operator who tunes either variable out of that relationship.
 
-        important: reads the file rather than importing `app.main`. Importing it constructs the
-        whole FastAPI app as a side effect, including every router prefix, so this test failed
-        intermittently with "A path prefix must start with '/'" depending on which other test the
-        randomised order had already run. A structural assertion must not depend on application
-        import succeeding.
+        Reads the file rather than importing `app.main`: the import builds the whole FastAPI app
+        as a side effect and can fail depending on which tests ran before.
         """
         import ast
         from pathlib import Path
@@ -182,11 +168,9 @@ class BudgetSizingTests(unittest.TestCase):
 
 class SpendPlacementTests(unittest.TestCase):
     def test_the_spend_happens_after_the_secret_is_verified(self) -> None:
-        """Structural: the placement IS the security property, and moving it looks harmless.
-
-        `validate_api_key` verifies through `_validate_api_key_blocking` and then checks revoked,
-        inactive and expired. The budget must be spent after all of that, so a request that never
-        proves it holds the key cannot charge it.
+        """`validate_api_key` verifies through `_validate_api_key_blocking` and then checks
+        revoked, inactive and expired. The budget is spent after all of that, so a request that
+        never proves it holds the key cannot charge it.
         """
         import inspect
 

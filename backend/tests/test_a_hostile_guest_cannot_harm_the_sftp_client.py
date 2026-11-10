@@ -1,7 +1,7 @@
 """The SFTP peer is a guest, and root in a guest can answer anything.
 
 On a virtual machine the bytes come from lxd-agent, which the guest can replace, and LXD copies
-them to us unread. Every case here is an answer an honest server would never give: each must end
+them through unread. Every case here is an answer an honest server would never give: each must end
 in a refusal within the operation's timeout, without allocating from a stated length and without
 leaving a task behind.
 """
@@ -71,7 +71,7 @@ async def test_a_malformed_reply_ends_the_connection_with_a_refusal(name):
         with pytest.raises(GuestFileError) as refused:
             await client.lstat(b"/etc")
         assert refused.value.code in {"guest_protocol_error", "guest_disconnected"}
-        # note: the connection is finished, so a second call cannot read a stale or forged reply.
+        # The connection is finished, so a second call cannot read a stale or forged reply.
         with pytest.raises(GuestFileError):
             await client.lstat(b"/etc")
     await asyncio.wait_for(task, 1)
@@ -159,7 +159,7 @@ async def test_a_stall_at_any_operation_times_out_and_ends_the_connection(stalle
             else:
                 await client.rename(b"/f", b"/g")
         assert refused.value.code == "guest_timeout"
-        # note: a late reply after a timeout must find nobody listening.
+        # A timeout ends the connection, so a late reply cannot reach a later call.
         with pytest.raises(GuestFileError):
             await client.lstat(b"/f")
     task.cancel()

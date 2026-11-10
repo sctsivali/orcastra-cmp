@@ -1,8 +1,8 @@
 """Only Partners and Admins read host kernel advisories, and only for clusters in their scope.
 
 Host kernels are host facts: a Tenant has no business with them, and a Partner asking for a
-cluster outside its organization is refused before any cluster is touched. Reading Ubuntu's
-records now (POST .../check) reaches the internet on the deployment's behalf, so only an
+cluster outside its organization is refused before any cluster is touched. A live read of
+Ubuntu's records (POST .../check) reaches the internet on the deployment's behalf, so only an
 Administrator may ask for it.
 """
 

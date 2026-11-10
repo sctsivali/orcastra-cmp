@@ -1,9 +1,7 @@
 """What a command run inside a guest costs, returns, and leaves behind.
 
-The raw-proxy route to the same power had none of this: no cap on the output it buffered, no
-bound on how long it held a worker, and an audit record that named the path but never the command
-and was collapsed by the log deduplication filter, so a hundred different commands against one
-instance inside a minute produced a single line.
+The output buffered is capped, the time a worker is held is bounded, and the audit record names
+the command an exec ran rather than only the path it reached.
 """
 
 import ast
@@ -23,18 +21,16 @@ class _Result:
         self.exit_code = exit_code
 
 
-# note: these exercise the STREAMING transport, and pass `stdin` to select it. Since the frame-loss
-# fix, an exec without stdin goes through LXD's recorded output instead, so a fake that only
-# implements `execute` would no longer be reached. The properties below still matter, because
-# stdin cannot use the recorded path: LXD refuses `wait-for-websocket` together with
-# `record-output`.
+# These exercise the STREAMING transport, and pass `stdin` to select it. An exec without stdin
+# goes through LXD's recorded output instead, so a fake that only implements `execute` would not
+# be reached. The streaming path still matters because stdin cannot use the recorded one: LXD
+# refuses `wait-for-websocket` together with `record-output`.
 class _Instance:
-    """Stands in for pylxd, and drives the handlers the way pylxd actually does.
+    """Stands in for pylxd, and drives the handlers the way pylxd does.
 
     important: it feeds `frames` to `stdout_handler` one at a time, as BYTES, because that is
-    what `decode=False` produces and it is the whole reason the cap can bound memory. An earlier
-    version of this double returned a finished `.stdout` string, which meant the truncation and
-    binary tests exercised a code path production does not have.
+    what `decode=False` produces and it is how the cap bounds memory. A double that returned a
+    finished `.stdout` string would test a code path production does not have.
     """
 
     name = "web-1"
@@ -60,8 +56,8 @@ class _Instance:
 def test_a_shell_string_is_refused_with_the_argv_it_should_have_sent() -> None:
     """Accepting a string would mean inventing a quoting rule at this boundary.
 
-    Every quoting rule invented at a boundary is a place where the audit record and what actually
-    ran can disagree, which is the one thing an audit record may not do.
+    A quoting rule invented at a boundary is a place where the audit record and what ran can
+    disagree.
     """
     with pytest.raises(HTTPException) as raised:
         exec_instance(_Instance(), {"command": "rm -rf /tmp/x"})
@@ -87,7 +83,7 @@ def test_a_shell_is_available_when_asked_for_explicitly() -> None:
 
 
 def test_a_failed_command_is_a_successful_call() -> None:
-    """"grep found nothing" must not be indistinguishable from "the cluster is unreachable"."""
+    """"grep found nothing" must be distinguishable from "the cluster is unreachable"."""
     instance = _Instance(exit_code=1, stderr_frames=[b"no match"])
     result = exec_instance(instance, {"command": ["grep", "x"], "stdin": ""})
     assert result["exit_code"] == 1
@@ -125,7 +121,7 @@ def test_output_within_the_cap_is_not_flagged() -> None:
 
 
 def test_binary_output_does_not_raise() -> None:
-    """`cat` on a binary must give replacement characters, not a failed call.
+    """`cat` on a binary gives replacement characters rather than a failed call.
 
     pylxd's own decode is a bare `buffer.decode("utf-8")` with no error handler, so this only
     holds because the exec asks for `decode=False` and does the decoding itself.
@@ -190,8 +186,8 @@ def test_exec_has_a_budget_of_its_own() -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name == "proxy_operation"
     )
-    # note: a Name node, not the spelling. The constant is imported at module scope, so a
-    # substring match over the handler's source would be satisfied by nothing at all changing.
+    # Matched as a Name node rather than by spelling: the constant is imported at module scope,
+    # so a substring match over the handler's source would pass even if the handler dropped it.
     uses_it = any(
         isinstance(node, ast.Name) and node.id == "EXEC_TIMEOUT" for node in ast.walk(handler)
     )
@@ -201,10 +197,8 @@ def test_exec_has_a_budget_of_its_own() -> None:
 def test_the_audit_describes_the_request_and_never_the_result() -> None:
     """An audit index that stored guest output would become a copy of every secret anyone read.
 
-    Sizes and the exit code carry the forensic value without the liability. Asserted against
-    `_guest_audit_details`, which is where the shape now lives: it was a literal dict inside one
-    branch, written for exec, and a successful desktop action consequently produced no record at
-    all on this route.
+    Sizes and the exit code carry the forensic value without the liability. The shape lives in
+    `_guest_audit_details`, which exec and the desktop actions share.
     """
     import inspect
 
@@ -235,8 +229,8 @@ def test_the_audit_describes_the_request_and_never_the_result() -> None:
 
 
 def test_typed_text_is_recorded_by_length_and_never_by_value() -> None:
-    """Desktop input goes through the same audit as exec, and the first thing an agent types at a
-    login prompt is a password. The exec path already argues this for command output."""
+    """Desktop input goes through the same audit as exec, and text typed at a login prompt is
+    often a password, so only its length is recorded."""
     import inspect
 
     from app.routers import integrations
@@ -257,9 +251,9 @@ def test_the_actor_is_the_key_not_a_field_the_caller_supplies() -> None:
         for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef) and node.name == "_audit_key_action"
     )
-    # note: read the dict keys rather than grepping the source. ast.unparse normalises string
-    # quoting, so a double-quoted literal in the file arrives here single-quoted, and a
-    # substring match on the quoted form silently passes whatever the code does.
+    # Reads the dict keys rather than grepping the source: ast.unparse normalises string quoting,
+    # so a double-quoted literal in the file arrives here single-quoted, and a substring match on
+    # the quoted form would pass whatever the code does.
     recorded = {
         key.value
         for node in ast.walk(helper)
@@ -273,11 +267,11 @@ def test_the_actor_is_the_key_not_a_field_the_caller_supplies() -> None:
 
 
 def test_a_timed_out_exec_says_the_command_survived_and_names_no_host() -> None:
-    """Two things go wrong with the raw message.
+    """The raw transport message is not passed through.
 
-    The command did not stop when the wait did, so a bare failure invites a retry that runs it
-    twice. And the underlying error is a urllib3 string carrying the LXD host's address, which is
-    infrastructure an integration has no business learning from a timeout.
+    The command does not stop when the wait does, so a bare failure invites a retry that runs it
+    twice. And the underlying error is a urllib3 string carrying the LXD host's address, which an
+    integration should not learn from a timeout.
     """
     tree = ast.parse(ROUTER.read_text())
     handler = next(
@@ -349,9 +343,9 @@ def test_a_refused_reach_into_a_guest_is_recorded() -> None:
         for node in ast.walk(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "raw_proxy"
     )
-    # note: the try whose BODY is the assert itself, not the handler's outer try that merely
-    # contains it. ast.walk yields the outer one first, and matching that passed while the
-    # refusal was re-raised with no record.
+    # The try whose BODY is the assert itself, not the handler's outer try that contains it:
+    # ast.walk yields the outer one first, and matching that would pass even if the refusal
+    # were re-raised with no record.
     guarded = [
         node
         for node in ast.walk(handler)
@@ -366,11 +360,11 @@ def test_a_refused_reach_into_a_guest_is_recorded() -> None:
 
 
 def test_the_public_key_id_survives_the_audit_sanitizer() -> None:
-    """`api_key_id` contains the substring `api_key`, which the denylist matched.
+    """`api_key_id` contains the substring `api_key`, which a substring denylist would match.
 
-    It is the PUBLIC half of the credential: returned in create and validate responses and shown
-    on the key card. Redacting it removed the only actor an API-key action has, so the record of
-    what a key did could not say which key. The secret never reaches details at all.
+    It is the PUBLIC half of the credential, returned in create and validate responses and shown
+    on the key card. Redacting it would remove the only actor an API-key action has. The secret
+    never reaches details at all.
     """
     from app.services.activity_logger import get_activity_logger
 
@@ -404,12 +398,11 @@ def test_both_doors_record_a_refused_reach_into_a_guest() -> None:
 
 
 def test_a_runaway_exec_cannot_take_the_shared_proxy_pool() -> None:
-    """`run_blocking` frees the caller, not the thread (core/blocking.py says so explicitly).
+    """`run_blocking` frees the caller but not the thread (core/blocking.py).
 
     pylxd's exec polls its operation over a websocket with no per-attempt bound, so a command that
-    never returns holds its worker until it does. On the shared pool eight of those would take
-    every read, every raw-proxy call and every fan-out with them. Its own pool means the blast
-    radius is other execs.
+    never returns holds its worker until it does. On the shared pool enough of those would take
+    every read, raw-proxy call and fan-out with them; on its own pool they only crowd other execs.
     """
     from app.services.lxd.proxy import exec_executor, proxy_executor
 
@@ -417,18 +410,17 @@ def test_a_runaway_exec_cannot_take_the_shared_proxy_pool() -> None:
 
     from app.services.lxd.proxy_operations import operation_pool
 
-    # Behavioural rather than structural: the choice moved into `operation_pool`, and asserting on
-    # the name appearing in the handler stopped saying anything about which operations get it.
+    # Behavioural rather than structural: `operation_pool` makes the choice, so the handler's
+    # source says nothing about which operations get which pool.
     assert operation_pool("exec_instance")[0] is exec_executor
     assert operation_pool("list_instances")[0] is proxy_executor
 
 
 def test_the_timeout_path_exec_actually_takes_is_the_one_that_records_it() -> None:
-    """`BlockingTimeout` is caught before the generic handler, so exec landed on a path with no
-    audit record, no "still running" message, and a `record_failure` that tripped the shared
-    circuit breaker for every other caller of that cluster.
+    """`BlockingTimeout` is caught before the generic handler, so the guest branch lives there.
 
-    The live QA missed it because a socket read expired first and took the other branch.
+    Otherwise a timed-out exec gets no audit record, no "still running" message, and a
+    `record_failure` that trips the shared circuit breaker for every other caller of that cluster.
     """
     tree = ast.parse(ROUTER.read_text())
     handler = next(
@@ -451,12 +443,9 @@ def test_the_timeout_path_exec_actually_takes_is_the_one_that_records_it() -> No
     assert "_audit_key_action" in body, "a timed-out guest call leaves no record of having run"
     assert "_still_running_message" in body, "the caller is told only that it timed out"
 
-    # important: keyed on the SET, not on the name `exec_instance`, which is what this assertion
-    # used to look for. Exec was the first operation to reach inside a guest and for a while the
-    # only one, so a branch written for it read as the guest-access branch and was not. Adding
-    # get_file and put_file to GUEST_ACCESS_OPERATIONS would have left them on the generic path
-    # this whole test exists to keep guest calls off: no audit record, no "still running", and a
-    # record_failure that condemns the cluster for every other caller.
+    # important: keyed on the SET rather than the name `exec_instance`. A branch written for exec
+    # alone would leave get_file and put_file on the generic path: no audit record, no "still
+    # running", and a record_failure that condemns the cluster for every other caller.
     guest_branch = next(
         node
         for node in ast.walk(blocking_timeout)
@@ -468,10 +457,10 @@ def test_the_timeout_path_exec_actually_takes_is_the_one_that_records_it() -> No
 
 
 def test_the_timeout_message_states_the_budget_that_actually_bound_the_call() -> None:
-    """One message served both operations and quoted the wrong number for one of them.
+    """Each operation's timeout message quotes its own budget and its own advice.
 
-    A timed-out exec was told it had exceeded a 60s budget it was never given, and pointed at
-    `"wait": false`, a flag exec does not read. Both halves send a caller somewhere useless.
+    A timed-out exec must not quote the general operation budget, nor point at `"wait": false`,
+    a flag exec does not read.
     """
     from app.routers.integrations import _still_running_message
 
@@ -489,13 +478,11 @@ def test_the_timeout_message_states_the_budget_that_actually_bound_the_call() ->
 
 
 def test_each_tier_runs_on_its_own_pool() -> None:
-    """Three tiers, and the desktop one is the reason this is not a two-way choice.
+    """Desktop, guest access and ordinary operations each run on their own pool.
 
-    `services/desktop/runtime.py` argues that desktop must never borrow `exec_executor`, because
-    "a screenshot loop at even a modest rate would fill all four and take the ordinary
-    exec_instance of every other integration down with it". Selecting on GUEST_ACCESS_OPERATIONS
-    alone did exactly that, and the desktop pool it built was never used, so the starvation the
-    module was written to prevent was reachable.
+    `services/desktop/runtime.py` explains why desktop must never borrow `exec_executor`: a
+    screenshot loop would fill it and take every other integration's exec_instance down with it.
+    Selecting on GUEST_ACCESS_OPERATIONS alone would put desktop calls on the exec pool.
     """
     from app.services.desktop.runtime import DESKTOP_MAX_IN_FLIGHT, desktop_executor
     from app.services.lxd.proxy import (
@@ -538,9 +525,8 @@ def test_a_click_is_not_given_a_captures_budget() -> None:
 
 
 def test_the_socket_window_is_derived_from_the_budget_actually_spent() -> None:
-    """`_client_for` sized its window from a two-way choice while the router spent a three-way
-    one, so a desktop call could be budgeted at one number and cut off by a window sized for
-    another."""
+    """`_client_for` derives the socket window from `operation_timeout`, so a call's budget and
+    its socket window cannot disagree."""
     import inspect
 
     from app.services.lxd import proxy_operations

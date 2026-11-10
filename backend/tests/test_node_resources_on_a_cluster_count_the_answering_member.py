@@ -1,13 +1,12 @@
 """A clustered host's resource read counts the member that answered, and the facade
 aggregates it for the readers that want the cluster.
 
-/1.0/resources on a clustered host answers for whichever member the connection landed on.
-The read then summed every running instance on the whole cluster against that one member's
-threads, which is how a MicroCloud with 307 vCPUs allocated across three members reported
-"available CPU (-227)" on one of them and refused every project create. The read now counts
-only the instances placed on the answering member, clamps the remainder at zero, and reports
-the allocation ratio; the facade hands the project pre-flight and the server resources route
-the cluster aggregate, the same one the /nodes card shows.
+/1.0/resources on a clustered host answers for whichever member the connection landed on, so
+summing every running instance on the cluster against that member's threads reports a negative
+remainder and refuses every project create. The read counts only the instances placed on the
+answering member, clamps the remainder at zero, and reports the allocation ratio. The facade
+hands the project pre-flight and the server resources route the cluster aggregate, the same one
+the /nodes card shows.
 """
 
 from types import SimpleNamespace
@@ -23,7 +22,7 @@ from app.services.lxd.resources import ResourceManager
 
 class _Client:
     def __init__(self, clustered: bool, member: str = "mc1") -> None:
-        # `auth: trusted` because resolve_clustered only believes a trusted /1.0 body
+        # `auth: trusted` because resolve_clustered only believes a trusted /1.0 body.
         self.host_info = {"auth": "trusted", "environment": {"server_clustered": clustered, "server_name": member}}
         self.storage_pools = SimpleNamespace(all=lambda: [])
 
@@ -85,8 +84,8 @@ def _service(client, monkeypatch, aggregate):
         calls.append(node_name)
         return aggregate
 
-    # dev's layout: the clustered decision lives in node_resources.resources_for_host, which
-    # both the dict facade and the detail read go through
+    # The clustered decision lives in node_resources.resources_for_host, which both the dict
+    # facade and the detail read go through.
     monkeypatch.setattr(nr_module, "aggregate_microcloud_resources", _aggregate)
     return svc, calls
 

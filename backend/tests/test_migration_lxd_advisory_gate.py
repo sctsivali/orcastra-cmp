@@ -157,7 +157,7 @@ def test_preflight_gate_keeps_staged_copy_when_native_move_is_unapproved() -> No
     assert result.strategy == "same_cluster_copy"
     assert result.capabilities["lxd_native_cross_project_move_selected"] is False
     assert result.capabilities["lxd_native_cross_project_move_security_approved"] is False
-    # The native path is never selected, so its build gate no longer warns on every plan.
+    # The native path is never selected, so its build gate does not warn on every plan.
     assert result.warnings == []
 
 

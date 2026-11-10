@@ -1,11 +1,9 @@
 """The cluster log keeps what changed, what was denied and who signed in; not every read.
 
-Forty minutes of the first live journal held 3,829 log rows, 3,355 of them `vault.secret.read`
-(the certificate read behind every dial of a dead cluster) and 367 `integration.proxy.request`
-(the hub's polling), which buried the twenty rows an operator would look for and would have
-grown to millions inside one retention window. Those records stay on stdout, the audit of
-record. This pins the set of suppressed reads against the catalogue and the message wording
-for an action the description table does not name.
+Machine reads such as `vault.secret.read` (behind every dial of a dead cluster) and
+`integration.proxy.request` (hub polling) would bury the rows an operator looks for. They stay
+on stdout, the audit of record. This pins the suppressed set against the catalogue and the
+message wording for an action the description table does not name.
 """
 
 from app.services.activity_logger import ACTION_CATEGORIES
@@ -41,8 +39,9 @@ def test_writes_denials_and_sign_ins_still_land():
 
 
 def test_a_vault_write_with_no_person_behind_it_is_plumbing():
-    """Live: 204 `vault.kv.put` rows in two hours, every one the last-used stamp on an
-    integration key's metadata, written by nobody. A person's or a key's Vault write lands."""
+    """A Vault write with no actor (ex; an integration key's last-used stamp) is dropped.
+
+    A person's or a key's Vault write lands."""
     record = _record("vault.kv.put")
     record["actor"] = {"user_id": None, "user_type": None, "role": None}
     assert record_to_log_row(record) is None

@@ -1,13 +1,10 @@
 """One terminal is one row, even when two workers each think they own it.
 
 register() closes a stale duplicate by scanning its own dict, which only works while
-the reconnect lands on the same worker. When it lands elsewhere the old worker keeps
-its entry alive and keeps publishing it. Nobody noticed while a read only ever saw one
-worker; now that a read sees all of them, the operator would get two rows for one
-terminal - a regression caused by fixing the read path, not by the reconnect.
-
-Not theoretical: both LXD sockets run with ping_interval=None, so a closed laptop lid
-leaves the old proxy beating until the browser's close finally lands.
+the reconnect lands on the same worker. When it lands elsewhere the first worker keeps
+its entry alive and keeps publishing it, so a read across all workers would show two
+rows for one terminal. Both LXD sockets run with ping_interval=None, so a closed
+laptop lid leaves the stale proxy alive until the browser's close lands.
 """
 
 from app.services.session_models import SessionInfo, SessionProtocol
@@ -38,7 +35,7 @@ def test_the_newest_of_two_entries_for_one_connection_wins():
 
 
 def test_the_key_is_the_same_tuple_register_matches_on():
-    # differ by instance, by host, and by user: each is a genuinely separate session
+    # A different instance, host or user makes a separate session.
     a = _session("op-a", 100.0, instance="web-1")
     b = _session("op-b", 100.0, instance="web-2")
     c = _session("op-c", 100.0, host="pandora")
@@ -50,7 +47,7 @@ def test_the_key_is_the_same_tuple_register_matches_on():
 
 
 def test_sessions_without_an_email_are_never_collapsed():
-    # an empty email is not an identity. Collapsing on it would fold every anonymous
+    # An empty email is not an identity. Collapsing on it would fold every anonymous
     # session on one instance into a single row.
     a = _session("op-a", 100.0, email="")
     b = _session("op-b", 200.0, email="")
@@ -63,7 +60,7 @@ def test_sessions_without_an_email_are_never_collapsed():
 def test_a_terminal_and_a_console_are_two_sessions():
     # The protocol is in the key, as in register(). A console window keeps its Graphics, Text
     # and Serial tabs connected side by side, so a shell and a display on one instance are two
-    # live sessions. Collapsing them hid one and later lost its disconnect audit row.
+    # live sessions. Collapsing them would hide one and lose its disconnect audit row.
     term = _session("op-term", 100.0)
     console = _session("op-console", 200.0)
     console.protocol = SessionProtocol.GRAPHICS

@@ -1,13 +1,12 @@
 """Volumes are read one request per pool, across every project, with no per-volume sync.
 
-pylxd's collection manager listed a pool's volumes at recursion 0 in the default project and
-then synced every volume with its own GET. On a clustered host a per-member pool lists its
-volumes as `/1.0/storage-pools/local/volumes/custom/backups?target=member-a`, which the
-per-volume sync could not read, and the first refusal dropped the rest of that pool. On a
-production MicroCloud the page showed zero volumes and zero ISOs for a cluster holding 140.
+pylxd's collection manager lists a pool's volumes at recursion 0 in the default project and
+then syncs every volume with its own GET. On a clustered host a per-member pool lists its
+volumes as `/1.0/storage-pools/local/volumes/custom/backups?target=member-a`, which that
+per-volume sync cannot read, so the first refusal would drop the rest of the pool.
 
-Now one `?recursion=1&all-projects=true` per pool where LXD supports it, one read per owning
-project otherwise, every row keeping its project and member.
+Instead there is one `?recursion=1&all-projects=true` per pool where LXD supports it, one read
+per owning project otherwise, and every row keeps its project and member.
 """
 
 from typing import Any, Dict, List
@@ -49,7 +48,7 @@ class _APINode:
 
 
 class _Client:
-    """No `storage_pools` manager on purpose: any lazy pylxd path fails loudly."""
+    """Has no `storage_pools` manager, so any lazy pylxd path fails."""
 
     project = None
 
@@ -160,8 +159,8 @@ def test_without_the_extension_every_project_is_read_and_only_its_own_rows_kept(
             rows = [{"name": f"vol-{project}", "type": "custom", "content_type": "filesystem",
                      "location": "none", "config": {}, "used_by": []}]
             if project == "shares-default":
-                # what LXD really answers for a non-owning project: default's custom volume
-                # under the project's name, plus the project's own instance root volume
+                # LXD answers a non-owning project with default's custom volume under the
+                # project's name, plus the project's own instance root volume.
                 rows = [{"name": "vol-default", "type": "custom", "content_type": "filesystem", "location": "none", "config": {}, "used_by": []},
                         {"name": "web01", "type": "container", "content_type": "filesystem", "location": "none", "config": {}, "used_by": []}]
             return _Resp(200, {"metadata": rows})

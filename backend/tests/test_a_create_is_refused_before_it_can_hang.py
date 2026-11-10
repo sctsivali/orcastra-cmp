@@ -1,14 +1,11 @@
-"""An instance create must be refused at the boundary, not left spinning.
+"""An instance create must be refused at the boundary with a reason, not left spinning.
 
-Picking a network the target project cannot reach produced an LXD create that
-was accepted as an async operation and then failed in the background. The console's placeholder
-row has no path to learn that, so the instance sat at "Creating..." with empty IP, Profiles and
-Root Disk columns until someone went looking in the daemon log. The right behaviour is the
-opposite: refuse it up front with a reason, or succeed.
+LXD accepts a create whose network the target project cannot reach as an async operation and
+fails it in the background. The console's placeholder row has no path to learn that, so the
+instance would sit at "Creating..." with empty IP, Profiles and Root Disk columns.
 
-The two cases a naive version of this check misses are pinned first, because they are the ones
-the field reports: the NIC normally arrives from a profile rather than from the request,
-and it can name its network with `parent` instead of `network`.
+Two cases are pinned first: the NIC normally arrives from a profile rather than from the
+request, and it can name its network with `parent` instead of `network`.
 """
 
 import asyncio
@@ -147,8 +144,7 @@ def client_with_isolated_project():
 
 class TestTheCasesTheAuditFiled:
     def test_a_network_from_another_project_is_refused(self):
-        """The sequence as reported: create in UAT-Hermes, pick br-uplink from the global
-        list the form offered, watch it hang."""
+        """Create in UAT-Hermes with br-uplink, a network only the `default` project has."""
         client = client_with_isolated_project()
         with pytest.raises(NicPreflightError) as exc:
             check_nics(
@@ -210,12 +206,12 @@ class TestTheCasesTheAuditFiled:
 
     @pytest.mark.parametrize("nictype", ["macvlan", "physical", "sriov", "ipvlan", "routed", "bridged"])
     def test_a_parent_that_names_a_host_interface_is_not_a_missing_network(self, nictype):
-        """The regression this pins broke instance create on a stock LXD host.
+        """A stock LXD host's default profile hands out `eth0` as macvlan on a physical parent.
 
-        A default profile hands out `eth0` as macvlan on a physical parent. `enp86s0` is listed
-        by /1.0/networks with managed:false, so reading `parent` as a network reference made it
-        resolve and then fail the managed test, refusing a create the daemon would have taken.
-        LXD resolves a host parent itself, so there is nothing here to refuse.
+        `enp86s0` is listed by /1.0/networks with managed:false, so reading `parent` as a
+        network reference would resolve it and then fail the managed test, refusing a create
+        the daemon would take. LXD resolves a host parent itself, so there is nothing here to
+        refuse.
         """
         client = client_with_isolated_project()
         check_nics(
@@ -226,7 +222,7 @@ class TestTheCasesTheAuditFiled:
         )
 
     def test_an_inherited_macvlan_nic_does_not_block_a_create(self):
-        """The exact shape nuc1's default profile carries."""
+        """A default profile with a macvlan eth0 on a host interface and a root disk."""
         client = FakeClient(
             projects={DEFAULT_PROJECT: {}},
             networks={DEFAULT_PROJECT: [bridge("lxdbr0", "10.0.5.1/24")]},
@@ -245,7 +241,7 @@ class TestTheCasesTheAuditFiled:
         check_nics(client, None, {}, ["default"])
 
     def test_an_explicit_network_is_still_refused_when_the_project_lacks_it(self):
-        """The reported case must keep failing: `network=` is a managed reference."""
+        """`network=` is a managed reference, so a project that lacks it is refused."""
         client = client_with_isolated_project()
         with pytest.raises(NicPreflightError):
             check_nics(
@@ -312,7 +308,7 @@ class TestInheritedProjects:
 
 
 class TestFixedAddresses:
-    """Ch 5.1: a NIC may pin its IPv4, and a bad one must not reach the daemon."""
+    """A NIC may pin its IPv4, and a bad one must not reach the daemon."""
 
     def _client(self):
         return FakeClient(
@@ -413,9 +409,8 @@ class TestNotInventingRefusals:
 class TestTheRefusalReachesTheCallerAsAClientError:
     """The create route maps LXDOperationError to a status by substring.
 
-    A fail-fast that arrives as a 500 or a 503 is no better than the hang it replaced: the
-    console renders one as an outage and the other as "try again later", and neither tells the
-    operator to pick a different network. So the wording of these refusals is load-bearing.
+    The console renders a 500 as an outage and a 503 as "try again later", and neither tells the
+    operator to pick a different network, so the wording of these refusals is load-bearing.
     """
 
     # Mirrors routers/instances.py create_instance, which is where the mapping lives.

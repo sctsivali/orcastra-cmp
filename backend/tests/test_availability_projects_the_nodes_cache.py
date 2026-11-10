@@ -1,12 +1,11 @@
-"""The picker must ride the /nodes fan-out, not generate its own.
+"""The picker reads the /nodes fan-out instead of starting its own.
 
-Six create forms open a node picker. If each one triggered a resource fan-out the endpoint
-would be a load generator, and on a fleet where most clusters are down each open would pay a
-connect timeout per dead cluster. When the node-status page or the metrics prewarm has already
-paid for the fan-out, this reads it from Redis for the cost of one GET.
+Six create forms open a node picker. A resource fan-out per open would make the endpoint a load
+generator, and on a fleet where most clusters are down each open would pay a connect timeout per
+dead cluster. When the node-status page or the metrics prewarm has already run the fan-out, this
+reads it from Redis for the cost of one GET.
 
-The payload assertion matters as much as the latency one: a picker row needs a name and a
-status, not the hardware inventory of every cluster the caller can see.
+A picker row needs a name and a status, so the payload carries no hardware inventory.
 """
 
 import pytest
@@ -76,8 +75,8 @@ def client(monkeypatch):
     from app.core.org_scope import org_scope_dependency
 
     cache = _Cache()
-    # note: patched on the service, not the router. resolve_availability owns the cache read
-    # for both /nodes/availability and /integrations/available-clusters.
+    # Patched on the service: resolve_availability owns the cache read for both
+    # /nodes/availability and /integrations/available-clusters.
     monkeypatch.setattr(lxd_status, "get_cache_manager", lambda: cache)
 
     def _explode(*args, **kwargs):
@@ -105,7 +104,7 @@ def test_the_projection_preserves_the_three_states(client):
     by_name = {r["name"]: r for r in tc.get("/nodes/availability").json()["clusters"]}
     assert by_name["nuc2"]["status"] == ClusterStatus.ONLINE.value
     assert by_name["blitzkrieg"]["status"] == ClusterStatus.OFFLINE.value
-    # answered and refused our certificate, which is a different problem with a different fix
+    # Answered but refused the client certificate: a different problem with a different fix.
     assert by_name["central1-argon"]["status"] == ClusterStatus.NOT_AUTHORIZED.value
 
 

@@ -1,9 +1,8 @@
 """A hand-rolled session for the task journal tests: records compiled SQL and parameters.
 
-The repository speaks raw `text()` SQL, so there is no ORM statement to introspect; what a test
-can pin is the exact text a statement compiled to and the parameters that travelled with it.
-A responder decides what each statement answers, so a test can play the row a `SELECT ... FOR
-UPDATE` finds or the rowcount an `UPDATE` reports.
+The repository uses raw `text()` SQL, so tests pin the compiled text and its parameters. A
+responder decides what each statement returns, ex; the row a `SELECT ... FOR UPDATE` finds or the
+rowcount an `UPDATE` reports.
 """
 
 from __future__ import annotations

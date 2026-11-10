@@ -1,11 +1,11 @@
 """A cluster counts as held by another party only when a holder is outside the caller's party.
 
-Provisioning binds every buyer organization to the partner's cluster, so counting bindings made
-every partner cluster with a sale look shared. The party is decided from the database alone: the
-organizations the caller runs (created, or joined above tenant), plus any organization keyed to
+Provisioning binds every buyer organization to the partner's cluster, so counting bindings would
+make every partner cluster with a sale look shared. The party is decided from the database alone:
+the organizations the caller runs (created, or joined above tenant), plus any organization keyed to
 the same integration key as one of those. Who minted a key never decides it, because a minter can
 be an admin who belongs to several partners, can have left, or the key can be deleted while its
-organizations stay. These run the real queries on SQLite rows, in the shapes the reviews found.
+organizations stay. These run the real queries on SQLite rows.
 """
 
 import pytest
@@ -41,7 +41,7 @@ async def _world():
     db = sqlite_session(Organization, OrganizationMember, OrganizationCluster, OrganizationOwnerKey)
     db.add_all([
         # A's home org, synced from OrcaHub on A's connection key, run by A and A2. The admin
-        # account is a partner member too, as it is on the dev copy.
+        # account is a partner member too.
         _org(1, "a-home", "system", "oak_a"),
         _member(1, A), _member(1, A2), _member(1, ADMIN),
         # a partner added to A's home org from the dashboard, stored as the legacy "member" role
@@ -53,7 +53,7 @@ async def _world():
         _org(2, "b-home", "system", "oak_b"),
         _member(2, B),
         _org(4, "b-buyer", B, "oak_b"),
-        # an org on a key that syncs nobody's home org here (deleted, rotated or admin-minted)
+        # an org on a key that syncs no home org here (deleted, rotated or admin-minted)
         _org(5, "orphan", "system", "oak_gone"),
         # X runs its own org and also buys from A as a tenant of A's buyer org
         _org(8, "x-home", "system", "oak_x"),
@@ -63,7 +63,7 @@ async def _world():
         _org(9, "l-home", L, None, source="local"),
         _member(9, L), _member(9, L2),
         _org(10, "l-buyer", L, "oak_l"),
-        # an org A2 once ran, now deactivated, keyed to a key nobody else carries
+        # A2's org, on a key no other org carries; one test deactivates it
         _org(14, "a2-retired", "system", "oak_retired"),
         _member(14, A2),
         # an org X holds a stale admin row in (left by a demotion)
@@ -87,8 +87,8 @@ async def _world():
         *_bind("x-two", 8, 15),
         *_bind("squat", None, registered_by=B),
         *_bind("mine", None, registered_by=A),
-        # each home holds a cluster its own partner registered and its key sold on, as every home
-        # with a sale does on the dev copy (A's is "sold" above)
+        # each home holds a cluster its own partner registered and its key sold on (A's is "sold"
+        # above)
         *_bind("b-sold", 2, registered_by=B), *_bind("b-sold", 4),
         *_bind("x-sold", 8, registered_by=X), *_bind("x-sold", 16),
     ])
