@@ -1,5 +1,4 @@
-# Makefile for Orcastra CMP
-# This Makefile provides convenient commands for managing the development and production environment
+# Orcastra CMP: build, run, test and release commands. `make help` lists them.
 
 .PHONY: ci-local setup-hooks help build build-nc up down restart logs logs-backend logs-frontend logs-redis ps clean prune status health test-backend test-frontend install-backend install-frontend dev-backend dev-frontend shell-backend shell-frontend redis-cli backup restore config version env-check pull update quick-start quick-restart quick-rebuild
 
@@ -10,9 +9,8 @@ ifeq ($(DOCKER_COMPOSE),)
 	DOCKER_COMPOSE := docker compose
 endif
 
-# Test and lint gates are hermetic and must not need deployment secrets just to let
-# GNU make parse their recipes. Load the local deployment environment only when at
-# least one requested goal can actually consume it.
+# Test and lint goals are hermetic. Load the local deployment environment only when a
+# requested goal uses it.
 ENV_INDEPENDENT_GOALS := test-backend test-frontend lint-backend lint-frontend test-qa-artifacts lint-qa-artifacts ci-local
 LOAD_LOCAL_ENV := 1
 ifneq ($(strip $(MAKECMDGOALS)),)
@@ -29,19 +27,14 @@ endif
 APP_VERSION ?= unknown
 CONTAINER_PREFIX ?= dev-orcastra-dashboard
 
-# Provenance stamped into every image. The Dockerfiles already declare the ARG and
-# emit org.opencontainers.image.revision from it; nothing ever supplied the value,
-# so every image built here carried an empty revision and could not say which
-# commit it came from. That turned every "what is actually deployed" question into
-# a hunt for a content marker that happened to differ between two commits.
-# note: a tree with uncommitted changes gets a -dirty suffix. A bare sha would name
-# a commit the image does not actually contain, which is worse than saying nothing.
+# Commit stamped into every image as org.opencontainers.image.revision. A tree with
+# uncommitted changes gets a -dirty suffix, since a bare sha would name a commit the
+# image does not contain.
 BUILD_COMMIT := $(or $(BUILD_COMMIT),$(shell git rev-parse HEAD 2>/dev/null)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty))
 BUILD_DATE := $(or $(BUILD_DATE),$(shell date -u +%Y-%m-%dT%H:%M:%SZ))
 BUILD_ENV = APP_VERSION=$(APP_VERSION) BUILD_COMMIT=$(BUILD_COMMIT) BUILD_DATE=$(BUILD_DATE)
 
-# Registry namespace for published images. One variable so a fork, a mirror or a staging
-# registry is a single override instead of an edit in three recipes plus both compose files.
+# Registry namespace for published images; override it for a fork, mirror or staging registry.
 REGISTRY_REPO ?= svlct/orcastra-dashboard
 
 # Colors for output
@@ -228,26 +221,14 @@ install-all: install-backend install-frontend ## Install all dependencies locall
 
 ##@ Testing Commands
 
-# note: the runtime image does not ship pytest (it is in requirements-dev.txt, not
-# requirements.txt), so the default target runs on the host. Override PYTEST to point at
-# a specific interpreter, ex; PYTEST=.venv/bin/pytest make test-backend
+# The runtime image does not ship pytest (requirements-dev.txt), so tests run on the host.
+# Override PYTEST for a specific interpreter, ex; PYTEST=.venv/bin/pytest make test-backend
 PYTEST ?= python3 -m pytest
 
-# important: the suite runs with every variable this Makefile sourced from .env UNSET, which is
-# what "hermetic" above was always supposed to mean and did not.
-#
-# `include .env` plus `export` near the top of this file hands every value in .env to every
-# recipe's environment, verbatim. Docker Compose strips the quotes around a value; GNU make does
-# not. So a perfectly ordinary API_PREFIX="/api/v1" reached pydantic-settings as the nine
-# characters "/api/v1 WITH the quotes, app/main.py builds the app at import time, and FastAPI's
-# include_router asserts a prefix starts with "/". Two tests that import create_app failed to
-# COLLECT, which reads as a broken test file rather than as a broken environment. CI has no .env,
-# so CI stayed green and only the machine doing the work saw it.
-#
-# Unsetting the names rather than fixing the one that bit: any other quoted value is the same
-# defect waiting, and a test suite that reads the developer's deployment settings is not a test
-# suite. The public template is the source of variable names, so lint and test goals never need
-# to open the secret-bearing local file. Values are never read from either file.
+# important: tests run with every variable named in .env.example unset. `include .env` plus
+# `export` hands .env values to recipes verbatim, and make keeps the quotes Compose strips:
+# API_PREFIX="/api/v1" would reach the app with the quotes and break app creation. Names come
+# from the public template, so test and lint goals never open the local .env.
 ENV_NAMES := $(shell sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\1/p' .env.example 2>/dev/null | sort -u)
 ENV_SCRUB := $(if $(ENV_NAMES),env $(foreach v,$(ENV_NAMES),-u $(v)),)
 
@@ -255,24 +236,19 @@ test-backend: ## Run backend tests (host, in a scrubbed environment)
 	@echo "$(COLOR_GREEN)Running backend tests...$(COLOR_RESET)"
 	@cd backend && $(ENV_SCRUB) $(PYTEST)
 
-# The deployed image, which is what this target is meant to exercise. Falls back to the
-# APP_VERSION tag when nothing is running.
+# The deployed image, or the APP_VERSION tag when nothing is running.
 BACKEND_IMAGE = $(shell docker inspect --format '{{.Config.Image}}' $(CONTAINER_PREFIX)-backend 2>/dev/null || echo $(CONTAINER_PREFIX)-backend:$(APP_VERSION))
 
-# note: a production image deliberately ships neither the test tree nor pytest, so the suite
-# cannot be run inside the live container. This mounts the source read-only into a throwaway
-# container built from the deployed image, which is the thing actually worth proving: that the
-# shipped interpreter and dependency set run the suite green. pytest writes its cache next to
-# the source, so it is disabled against the read-only mount.
+# Runs the suite with the deployed image's interpreter and dependencies. The production image
+# ships neither tests nor pytest, so the source is mounted read-only into a throwaway container
+# (with the pytest cache disabled).
 test-backend-docker: ## Run backend tests against the deployed image's dependency set
 	@echo "$(COLOR_GREEN)Running backend tests against $(BACKEND_IMAGE)...$(COLOR_RESET)"
 	@docker run --rm -v $(PWD)/backend:/src:ro -w /src --entrypoint sh $(BACKEND_IMAGE) \
 		-c 'pip install --user -q -r requirements-dev.txt && python -m pytest -p no:cacheprovider'
 
-# note: there is no frontend unit-test suite and package.json has no `test` script, so this
-# target used to invoke a command that could not succeed. The checks that DO exist are a
-# typecheck, a lint and three structural guards; the behavioural coverage lives in the
-# out-of-tree Playwright harness. CONTRIBUTING.md points here, so it has to be honest.
+# There is no frontend unit-test suite: this runs the typecheck and the structural guards.
+# Browser coverage lives in frontend/e2e.
 test-frontend: ## Run the frontend checks that exist (typecheck + structural guards)
 	@echo "$(COLOR_GREEN)Typechecking frontend...$(COLOR_RESET)"
 	@cd frontend && npx tsc --noEmit
@@ -403,12 +379,13 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-ui-glossary.mjs
 	@echo "$(COLOR_GREEN)Checking the documentation index...$(COLOR_RESET)"
 	@node scripts/checks/check-doc-index.mjs
+	@echo "$(COLOR_GREEN)Checking comments for change history...$(COLOR_RESET)"
+	@node scripts/checks/check-comment-hygiene.mjs
 	@echo "$(COLOR_GREEN)✓ Frontend checks passed$(COLOR_RESET)"
 
-# Hosted CI runs only on pull requests and by hand, so this is the gate before a direct push: every
-# job of .github/workflows/ci.yml, read from that file, on this machine. STAGES picks a subset of
-# commits guards backend frontend e2e; E2E_PROJECTS the browser projects; CI_LOCAL_BASE the commit
-# range base when the branch has no upstream. Scrubbed like test-backend, and for the same reason.
+# Every job of .github/workflows/ci.yml on this machine; the gate before a direct push.
+# STAGES picks a subset of commits guards backend frontend e2e, E2E_PROJECTS the browser
+# projects, CI_LOCAL_BASE the commit range base. Environment scrubbed like test-backend.
 ci-local: ## Run every CI job locally (the gate before a direct push)
 	@$(ENV_SCRUB) bash scripts/ci-local.sh $(STAGES)
 
@@ -417,17 +394,13 @@ setup-hooks: ## Point git at the repo's hooks (run once per clone)
 	@echo "$(COLOR_GREEN)✓ core.hooksPath set to .githooks$(COLOR_RESET)"
 	@echo "  The commit-msg hook needs frontend deps: cd frontend && npm install"
 
-# note: ruff, not pylint. There is no pylintrc anywhere in this repo, and unconfigured pylint on
-# 42k lines of FastAPI and SQLAlchemy emits thousands of missing-docstring and
-# too-many-arguments findings, so it could never be green without a curated disable-list. ruff's
-# E9,F set is bug-shaped and is green today. Scope and rationale: backend/ruff.toml.
+# ruff with the E9,F rule set; scope and rationale in backend/ruff.toml.
 lint-backend: ## Lint backend code
 	@echo "$(COLOR_GREEN)Linting backend code...$(COLOR_RESET)"
 	@cd backend && ruff check app/
 
-# note: the local eslint binary, not `next lint`. The latter is deprecated in Next 15 and passes
-# eslintrc-era options that a newer ESLint rejects, so it fails for reasons unrelated to the
-# code. Scope and rationale: frontend/.eslintrc.README.md.
+# The local eslint binary: `next lint` is deprecated in Next 15 and passes eslintrc options
+# newer ESLint rejects. Scope: frontend/.eslintrc.README.md.
 lint-frontend: ## Lint frontend code
 	@echo "$(COLOR_GREEN)Linting frontend code...$(COLOR_RESET)"
 	@cd frontend && ./node_modules/.bin/eslint src --ext .ts,.tsx
@@ -515,8 +488,6 @@ quick-rebuild: down build-nc up ## Quick rebuild without cache and restart
 # Default target
 .DEFAULT_GOAL := help
 
-# Operator-only targets (releases, version sync, the isolated QA lab, Vault PKI, the add-on API
-# export) drive tooling kept on the operator VM rather than in this repository, so they live in a
-# local.mk beside this file. A clone without it gets only the targets that work from the
-# repository alone.
+# Optional local.mk for operator targets whose tooling lives outside this repository (releases,
+# Vault PKI and similar). A plain clone has only the targets that work from the repository.
 -include local.mk

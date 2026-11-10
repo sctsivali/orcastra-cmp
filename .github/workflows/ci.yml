@@ -1,20 +1,13 @@
 # Continuous integration.
 #
-# Hosted runners cover the hermetic suites plus the boundaries the local sandbox cannot exercise:
-# real PostgreSQL/asyncpg, loopback sockets, and a browser driven against a production frontend
-# build. Every external API is fixture-backed; these jobs never receive deployment credentials.
+# Hermetic suites plus real PostgreSQL/asyncpg, loopback sockets and a browser run against a
+# production frontend build. External APIs are fixture-backed; no job receives deployment
+# credentials. Checks that need a running deployment (make test-backend-docker, the credentialed
+# browser harness) are not part of CI.
 #
-# What is deliberately NOT here, because it needs the dev VM and cannot work on a hosted runner:
-# make test-backend-docker (inspects a running container), the credentialed Playwright harness
-# in /root/qa-orcastra, which drives real Authentik SSO against a private address, and the
-# isolated-lab contracts, which live with the lab tooling on that VM rather than in this repository
-# (make ci-local runs them there).
-#
-# note: hosted minutes on a private repository are metered. Running on every push to main and dev
-# billed about 56 runner-minutes per push, four of them browser jobs, and that exhausted the plan.
-# The pipeline now runs on pull requests with one browser project, and by hand from the Actions
-# tab (with the full four-project matrix on request). The gate before a direct push is
-# `make ci-local`, which runs every job below on the developer's machine from this same file.
+# Runs on pull requests with one browser project, or by hand with the full four-project matrix.
+# `make ci-local` runs every job below locally from this same file and is the gate before a
+# direct push.
 
 name: CI
 
@@ -68,24 +61,21 @@ jobs:
         working-directory: backend
         run: pip install -r requirements-dev.txt
 
-      # E9 and F only: syntax errors, undefined names, unresolved imports, locals used before
-      # assignment. See backend/ruff.toml for why pylint is not used.
+      # E9 and F only; scope in backend/ruff.toml.
       - name: Lint
         working-directory: backend
         run: ruff check app/
 
-      # Journal contracts intentionally use asyncpg against a database migrated to the exact
-      # application head. The database name contains "test", which is required by the fixture's
-      # destructive-operation guard before it can truncate its three journal-only tables.
+      # Journal contracts run on asyncpg against a database migrated to head. The fixture only
+      # truncates its tables when the database name contains "test".
       - name: Migrate journal test database
         working-directory: backend
         env:
           DATABASE_URL: postgresql+asyncpg://orcastra_test:orcastra_test@127.0.0.1:5432/orcastra_journal_test
         run: alembic upgrade head
 
-      # Most tests stay hermetic. JOURNAL_TEST_DATABASE_URL opts only the explicit PostgreSQL
-      # contract module into the disposable service. The hosted runner also supplies the loopback
-      # socket capability needed by the delivery-signature and retry-amplification contracts.
+      # Tests stay hermetic except the PostgreSQL contract module, which JOURNAL_TEST_DATABASE_URL
+      # points at the service above. Webhook delivery contracts need loopback sockets.
       - name: Tests
         working-directory: backend
         env:
@@ -112,14 +102,13 @@ jobs:
         working-directory: frontend
         run: npx tsc --noEmit
 
-      # The local binary, not `next lint`: that is deprecated in Next 15 and passes eslintrc-era
-      # options a newer ESLint rejects, so it fails for reasons unrelated to the code.
+      # The local binary: `next lint` is deprecated in Next 15 and passes eslintrc options that
+      # newer ESLint rejects.
       - name: Lint
         working-directory: frontend
         run: ./node_modules/.bin/eslint src --ext .ts,.tsx
 
-      # Load-bearing rather than ceremonial: two routes are split behind Suspense precisely
-      # because useSearchParams breaks prerendering without it, and only the build catches that.
+      # Only the build catches a useSearchParams call without a Suspense boundary.
       - name: Build
         working-directory: frontend
         env:
@@ -153,110 +142,84 @@ jobs:
         run: node scripts/checks/check-guard-parity.mjs .
       - name: Instance specification workflow
         run: node scripts/checks/check-instance-specification-workflow.mjs .
-      # Pure filesystem AST walk over frontend/src, no install needed. Catches a mutation form
-      # shipping without a synchronous double-submit guard.
+      # Mutation forms need a synchronous double-submit guard.
       - name: Submit guards
         run: node scripts/checks/check-submit-guards.mjs .
-      # Same shape: no install, no browser. Both were only run by make test-frontend, so a pull
-      # request could land a table off the shared type scale, or a page dropping the
-      # unreachable-cluster banner, without either guard ever firing.
       - name: Table typography
         run: node scripts/checks/check-table-typography.mjs .
-      # A count, size, rate or duration in Geist Mono beside the same figures in the body face:
-      # the Sessions summary strip had three faces and sizes in one row.
+      # Counts, sizes, rates and durations use one face and size within a row.
       - name: Number typography
         run: node scripts/checks/check-number-typography.mjs .
       - name: Unreachable-cluster banners
         run: node scripts/checks/check-unreachable-banner.mjs .
-      # A control that asks an operator to choose a cluster must say whether that cluster is
-      # answering, and hand the hook's options to SearchableSelect rather than a plain Select.
-      # The vocabulary existed; four pickers were simply never wired to it, and two of them hid
-      # the unreachable clusters instead of marking them.
+      # Cluster pickers show whether each cluster is answering and use SearchableSelect.
       - name: Node picker status coverage
         run: node scripts/checks/check-node-picker-status.mjs .
-      # jitter() in a render body hands TanStack a new interval on every render, which restarts
-      # the timer; a page that re-renders faster than the interval never polls at all.
+      # jitter() in a render body restarts the poll timer on every render.
       - name: Poll jitter resolved once
         run: node scripts/checks/check-poll-jitter.mjs .
-      # A socket proves its caller with a single-use ticket, never the access token in its URL;
-      # the SPICE channels each take their own.
+      # Sockets authenticate with single-use tickets, never an access token in the URL; each
+      # SPICE channel takes its own.
       - name: WebSocket tickets
         run: node scripts/checks/check-ws-tickets.mjs .
-      # A list an API returns with no upper bound is a SearchableSelect, never a plain Select;
-      # the project picker on the create form outgrew its popover on one fleet.
+      # Unbounded API lists use SearchableSelect instead of a plain Select.
       - name: Long-list selects
         run: node scripts/checks/check-long-list-selects.mjs .
       - name: Banner role gates
         run: node scripts/checks/check-banner-role-gate.mjs .
-      # The nav hides a route by role; the route itself must also refuse it. Two of the seven
-      # partner destinations shipped with no page-level gate at all.
+      # A route hidden from a role in the nav must also refuse that role itself.
       - name: Role gates
         run: node scripts/checks/check-role-gates.mjs .
-      # A logout or role transition must clear every role-scoped query and live transport before
-      # the next identity can render. This keeps an in-process browser session from carrying
-      # operator inventory into a Tenant view.
+      # Logout or a role change clears every role-scoped query and live transport before the
+      # next identity renders, so operator data cannot leak into a Tenant view.
       - name: Auth transition isolation
         run: node scripts/checks/check-auth-transition-isolation.mjs .
-      # Tenant UI must use the minimal availability and instance-specification projections; a
-      # direct node inventory read is both unnecessary and a host-capacity disclosure.
+      # Tenant UI uses the minimal availability projections; a node inventory read would
+      # disclose host capacity.
       - name: Tenant node-inventory isolation
         run: node scripts/checks/check-tenant-node-inventory.mjs .
-      # Controlled wire values stay lowercase, while the display layer owns their Title Case
-      # labels. The guard rejects a raw status field rendered back into JSX.
+      # Wire values stay lowercase; the display layer owns their labels. Raw status fields may
+      # not be rendered in JSX.
       - name: Controlled status labels
         run: node scripts/checks/check-status-display.mjs .
       - name: Technologies role split
         run: node scripts/checks/check-technologies-role-split.mjs .
       - name: Instance live Metrics contract
         run: node scripts/checks/check-instance-live-metrics.mjs .
-      # A document reload anywhere in the console surface beacons kill-all-sessions, so it
-      # takes out every other console and terminal the operator has open, not just the panel
-      # that failed. Two of these shipped and were removed.
+      # A document reload in the console beacons kill-all-sessions and closes every console and
+      # terminal the operator has open.
       - name: Console reloads
         run: node scripts/checks/check-no-console-reload.mjs .
       - name: Console session project scope
         run: node scripts/checks/check-console-session-project-scope.mjs .
-      # useSearchParams opts a component out of prerendering, so Next needs a Suspense
-      # boundary above it or `next build` fails on that route. Typecheck does not see it, so
-      # this used to surface only at the Build step minutes later.
+      # useSearchParams needs a Suspense boundary above it or `next build` fails on that route.
+      # Catches it before the slower Build step.
       - name: SearchParams Suspense boundaries
         run: node scripts/checks/check-searchparams-suspense.mjs .
-      # A column an operator can see is a column an operator can filter by. Every column with
-      # a sort accessor must declare a facet, a filter, a search accessor or a written waiver;
-      # a node or project column must declare which dimension it is; and no table may mark
-      # more than two non-dimension facets primary.
+      # Every sortable column declares a facet, filter, search accessor or written waiver; node
+      # and project columns declare their dimension; at most two non-dimension primary facets.
       - name: Table filter coverage
         run: node scripts/checks/check-table-filters.mjs .
-      # A filter that serialises into a shared link and parses back as something else is the
-      # worst failure this system can have: the URL looks right and the table is wrong. This
-      # compiles the codec standalone and round-trips every kind, including a text query that
-      # is literally the empty sentinel.
+      # Every filter kind survives a URL round trip, including a text query equal to the empty
+      # sentinel.
       - name: Filter URL round trip
         run: node scripts/checks/check-filter-url-roundtrip.mjs .
-      # Profile in the user menu is derived from the IdP end-session URL each deployment sets.
-      # A wrong derivation sends a partner's users to another IdP and nothing errors.
+      # The user menu's Profile link is derived from the IdP end-session URL; a wrong
+      # derivation silently sends users to another IdP.
       - name: IdP account settings link
         run: node scripts/checks/check-idp-urls.mjs .
-      # A same-path URL write from an interaction (a facet, a tab, a picker) must be a history
-      # write, not a navigation: on Next 15.5 a params-only router.replace can take the
-      # aliased-prefetch path and scroll the page to the top under the open popover.
+      # Same-path URL writes from interactions use history writes: on Next 15.5 a params-only
+      # router.replace can scroll the page to the top under an open popover.
       - name: URL writes
         run: node scripts/checks/check-url-writes.mjs .
-      # A link into a filtered list is built by one registry, whose keys are proven against
-      # the target page's table definition. A hand-written href spelled the key for the wrong
-      # table or carried the display name where the facet compares the id, and landed on
-      # "No X matches the current filters" above a list that had the rows.
+      # Links into filtered lists come from one registry whose keys are checked against the
+      # target table's definition.
       - name: Inventory links
         run: node scripts/checks/check-inventory-links.mjs .
-      # A Node or Cluster cell renders one component that owns the Partner gate. Three tables
-      # linked the node into Clusters (two of them for a Tenant, who landed on the welcome
-      # page) while twenty others printed the same id as dead text.
+      # Node and Cluster cells render NodeLink, which owns the Partner gate.
       - name: Node and Cluster cells
         run: node scripts/checks/check-node-link.mjs .
-      # A button holding nothing but an icon is announced as a bare "button" unless the
-      # element names itself. A Radix Tooltip does not do it: it contributes
-      # aria-describedby, which is a description. Measured live before this check existed,
-      # the dashboard had 22 such buttons on one screen and the shared pagination 4 more.
+      # Icon-only buttons need an accessible name; a Radix Tooltip only adds a description.
       - name: Icon button names
         run: node scripts/checks/check-icon-button-names.mjs .
       # Card illustrations are decoration in one palette: colour only in their stylesheet, flat,
@@ -264,62 +227,36 @@ jobs:
       # check-semantic-colour.mjs does not read SVG fill or stroke attributes.
       - name: Card illustrations
         run: node scripts/checks/check-illustrations.mjs .
-      # An attribute that lands below its own opening `>` is a text child, and JSX renders it
-      # verbatim. Every project card on /inventory drew "aria-label=Project actions for <name>"
-      # across its title for three days, from the very commit meant to name that button. tsc,
-      # eslint and the icon-button guard all accept the shape.
+      # An attribute placed after its opening `>` is a text child that JSX renders verbatim.
+      # tsc and eslint accept it.
       - name: Stray JSX attributes
         run: node scripts/checks/check-jsx-stray-attrs.mjs .
-      # truncateFingerprint cut every 64 character image fingerprint to 12 and appended "...",
-      # and one of its four call sites fed the result into an accessible NAME, so the aliases
-      # cell announced "Show all 3 aliases on 1a4eed830630...". Seventeen more sites hand-rolled
-      # the same slice-plus-dots, six cut an id and appended nothing at all, and 74 elements
-      # clipped in CSS with no title, no aria-label and no reveal control above them.
-      #
-      # Ordered after the stray-attribute check on purpose: two of its rules read aria-label and
-      # title out of opening tags, and an attribute that has fallen into child position would
-      # make them credit an element with a name it does not carry.
+      # Truncated text must be revealable and must not feed a truncated value into an
+      # accessible name. Runs after the stray-attribute check, because two of its rules read
+      # aria-label and title from opening tags.
       - name: Truncation reveal
         run: node scripts/checks/check-truncation-reveal.mjs .
 
-      # /technologies rendered "Fleet totals" above a card titled "CPU Resources" whose rows
-      # read "Total Cores" and "Memory per Node", then "Hardware by node" above rows reading
-      # "CPU topology", "Base clock" and "Physical cores". "Logical CPUs" sat one line above
-      # "Physical cores" in the same grid. Across the app 71 strings broke the contract in one
-      # direction or the other, and clustering/members/page.tsx shipped "No Members Found" and
-      # "No members found" six lines apart.
-      #
-      # Checked both ways: titles must be Title Case, and empty or error states must be
-      # sentences whatever element renders them.
+      # Titles are Title Case; empty and error states are sentence case whatever element
+      # renders them.
       - name: Heading case
         run: node scripts/checks/check-heading-case.mjs .
 
-      # A Badge renders a div, so a dialog opened from one is mouse-only: no focus, no focus
-      # ring, and Enter does nothing. And a DialogContent that bounds its own height must clip
-      # and scroll in DialogBody, or the title scrolls away with the body on a long record.
+      # Dialogs open from focusable controls (a Badge is a div), and a height-bounded
+      # DialogContent scrolls in DialogBody so the title stays visible.
       - name: Dialog affordances
         run: node scripts/checks/check-dialog-affordances.mjs .
-      # A translucent tint behind saturated same-hue text is the app's most recognisable
-      # generated-UI signature. It was banned in prose and enforced by nothing, so it reached
-      # four of the nine Badge variants. It is also a WCAG failure: the amber one measures
-      # 2.73:1 on 12px semibold against a 4.5:1 floor. This also computes the ratio for every
-      # cva variant in both themes, which is what catches a "fix" that only darkens the text:
-      # doing that leaves warning at 4.30 and still failing.
+      # Bans translucent same-hue tints behind saturated text and computes the WCAG contrast
+      # ratio of every cva variant in both themes against the 4.5:1 floor.
       - name: Semantic colour and contrast
         run: node scripts/checks/check-semantic-colour.mjs .
 
-      # The default sidebar and accent are written down in five places, and they came apart:
-      # the CSS accent hex said #8b5cf6 while its own HSL triplet said #7c3bed, so the app
-      # painted one purple before hydration and another after, and the contrast guard above
-      # scored the colour the browser stops using. This holds the copies equal, converts each
-      # hex to check its own triplet, and measures the shipped pair.
+      # The default sidebar and accent colours are defined in several places. Keeps the copies
+      # equal, checks each hex against its HSL triplet, and measures the shipped pair.
       - name: Personalization defaults
         run: node scripts/checks/check-personalization-defaults.mjs .
 
-      # The branding editor auto-selected the alphabetically first organization while the sidebar
-      # read the caller's earliest membership, so an operator edited a customer's branding while
-      # watching their own and every change looked like it reverted. No QA account has the shape
-      # that reproduces it, so the browser spec would go green through the same regression.
+      # The branding editor must target the same organization the sidebar shows.
       - name: Organization branding target
         run: node scripts/checks/check-org-branding-target.mjs .
 
@@ -337,11 +274,8 @@ jobs:
       - name: Page headers stack on a phone
         run: node scripts/checks/check-page-header-stacks.mjs .
 
-      # An em dash joined the two halves of the stop dialog's warning, and the same character
-      # was in 83 other places across the console, the API layer and the README. tsc and
-      # eslint do not read English, so nothing saw it. Advisory for now: it reports and exits
-      # 0, because the placeholder glyph in table-text.tsx is a legitimate use of the same
-      # character and the rule that separates them is worth watching before it becomes a gate.
+      # Flags em dashes used as punctuation in copy. Advisory (exits 0): the placeholder glyph
+      # in table-text.tsx is a legitimate use of the same character.
       - name: Prose typography
         run: node scripts/checks/check-prose-typography.mjs .
 
@@ -360,15 +294,14 @@ jobs:
       - name: Session cookie echo
         run: node scripts/checks/check-session-cookie-echo.mjs .
 
-      # An invalid_grant ends the session and sends a deep link through sign-in; a timeout, a 5xx
-      # or a 429 cools down instead. Treating every failure as transient kept an expired token in
-      # the cookie and every socket ticket came back 401.
+      # invalid_grant ends the session and sends a deep link through sign-in; a timeout, 5xx or
+      # 429 cools down instead.
       - name: Auth refresh contract
         run: node scripts/checks/check-auth-refresh-contract.mjs .
 
-      # The terminal and console refuse after accept with a code and a reason token the page acts
-      # on; a close before accept reached the browser as a bare 1006. Holds the backend and
-      # frontend tables equal and runs the page's recovery decisions.
+      # Terminal and console refuse after accept, with a close code and reason token the page
+      # acts on (a close before accept reaches the browser as a bare 1006). Keeps the backend
+      # and frontend tables equal and runs the page's recovery decisions.
       - name: Terminal and console close contract
         run: node scripts/checks/check-ws-close-contract.mjs .
 
@@ -405,12 +338,11 @@ jobs:
       - name: Documentation index
         run: node scripts/checks/check-doc-index.mjs .
 
-      # The image picker's row list scrolled vertically in one box and horizontally in another,
-      # so its horizontal scrollbar was painted below the last row and only appeared once the
-      # list was scrolled all the way down. Every column to the right was unreachable at any
-      # other position. Table already owns a scroll container, so a second scrolling wrapper is
-      # what splits the axes. Clipping wrappers are deliberately still allowed: they cannot bury
-      # a scrollbar.
+      - name: Comment hygiene
+        run: node scripts/checks/check-comment-hygiene.mjs .
+
+      # Table owns its scroll container; a second scrolling wrapper splits the axes and buries
+      # the horizontal scrollbar. Clipping wrappers are allowed.
       - name: Table scroll containers
         run: node scripts/checks/check-table-scroll.mjs .
 
@@ -430,17 +362,15 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: npm ci
-      # Mirrors .githooks/commit-msg so CI enforces what the local hook does. Merge commits are
-      # ignored by @commitlint/config-conventional's own defaults.
+      # Same rules as .githooks/commit-msg. config-conventional ignores merge commits.
       - name: Lint commit messages
         working-directory: frontend
         run: npx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }}
 
-  # One job per Playwright project (viewport and theme), run in parallel. The whole suite in one job
-  # had grown to 29m23s against this 30 minute timeout; each project alone runs in about 6-8 minutes
-  # plus the build. Roles are chosen inside each test, so a project is the natural split.
-  # Pull requests run desktop-light only; a manual run with full_browser_matrix runs all four, and
-  # `make ci-local` runs all four by default. `inputs` is empty outside workflow_dispatch.
+  # One job per Playwright project (viewport and theme), run in parallel; each takes about 6-8
+  # minutes plus the build. Pull requests run desktop-light only; a manual run with
+  # full_browser_matrix, and `make ci-local`, run all four. `inputs` is empty outside
+  # workflow_dispatch.
   browser-e2e:
     name: Browser role and behavior QA (${{ matrix.project }})
     runs-on: ubuntu-latest
@@ -480,8 +410,8 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      # Keep browser QA outside the production dependency graph. The pinned runner is installed
-      # only for this disposable job and neither package manifest is rewritten.
+      # The pinned runner stays out of the production dependency graph; no manifest is
+      # rewritten.
       - name: Install pinned browser test runner
         working-directory: frontend
         run: npm install --prefix "$RUNNER_TEMP/orcastra-playwright" --no-save --no-package-lock @playwright/test@1.51.1
@@ -490,8 +420,8 @@ jobs:
         working-directory: frontend
         run: '"$RUNNER_TEMP/orcastra-playwright/node_modules/.bin/playwright" install --with-deps chromium'
 
-      # The suite creates encrypted local Auth.js sessions and rejects every unexpected API call
-      # or mutation. No deployment credential or live Orcastra service is available to this job.
+      # The suite mints local Auth.js sessions and fails on any unexpected API call; no live
+      # service or credential is involved.
       - name: Run role-scoped browser scenarios
         working-directory: frontend
         env:
