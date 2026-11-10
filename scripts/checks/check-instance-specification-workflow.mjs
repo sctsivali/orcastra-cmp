@@ -308,8 +308,7 @@ requireText(pendingRowsPath, pendingRows, [
   'p.jobStatus === "unknown"',
 ]);
 
-// The empty row carries no second create button (owner decision 2026-11-09); one that came back
-// would need the read-only gate again.
+// The empty row carries no second create button; one would need the read-only gate as well.
 const tablePath = "frontend/src/app/inventory/instances/components/instances-table.tsx";
 const table = read(tablePath);
 if (table.includes("Create Instance")) failures.push(`${tablePath} renders a second create button; the header's New Instance is the one`);

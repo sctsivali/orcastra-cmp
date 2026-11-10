@@ -102,7 +102,7 @@ async function installApiFixtures(page, role, options = {}) {
     metricsMode: "success",
     metricsCalls: [],
     detailCalls: 0,
-    // The Monitoring page's fleet instance list (2026-11-03): `true` answers it, "unavailable"
+    // The Monitoring page's fleet instance list: `true` answers it, "unavailable"
     // answers 503. Off by default so a page that must not read the fleet list still fails here.
     monitoringInstanceList: options.monitoringInstanceList || false,
     tenantEmpty: options.tenantEmpty === true,
@@ -301,11 +301,11 @@ async function installApiFixtures(page, role, options = {}) {
         task_journal_enabled: false,
       };
     } else if (path === "/system/vault-status") {
-      // The shell's Vault notice reads this on every page (issue #15); a healthy Vault shows nothing.
+      // The shell's Vault notice reads this on every page; a healthy Vault shows nothing.
       body = { state: "ok", checked_at: Date.now() / 1000, registry_source: "vault" };
     } else if (path === "/system/host-health") {
       // An Administrator's sidebar counts the dashboard's dependencies needing attention on every
-      // page (Host Health, 2026-10-27); a healthy report shows no count.
+      // page (Host Health); a healthy report shows no count.
       body = {
         checks: [],
         overall: "ok",
@@ -316,8 +316,8 @@ async function installApiFixtures(page, role, options = {}) {
         interval_seconds: 30,
       };
     } else if (path === "/system/release-status") {
-      // An Administrator's shell reads what the release manifest says about this version
-      // (2026-10-27); other roles never send it. Up to date here, so nothing shows.
+      // An Administrator's shell reads what the release manifest says about this version; other
+      // roles never send it. Up to date here, so nothing shows.
       body = {
         enabled: true,
         running_version: "1.0.0-RC4-hotfix3",
@@ -336,8 +336,8 @@ async function installApiFixtures(page, role, options = {}) {
         ...(options.releaseStatus || {}),
       };
     } else if (path === "/me/access") {
-      // Asked only by a Tenant session (issue #17), which a fixture actor can become mid-test by
-      // a downgrade; the fixture Tenant has access.
+      // Asked only by a Tenant session, which a fixture actor can become mid-test by a downgrade;
+      // the fixture Tenant has access.
       body = {
         email: `${role}@e2e.invalid`,
         role: "tenant",
@@ -346,10 +346,10 @@ async function installApiFixtures(page, role, options = {}) {
         tenant_access: { total_clusters: 1, total_rules: 1 },
       };
     } else if (path === "/tenant-access/orphan-rules") {
-      // Tenant Access lists the rules the audit found naming nothing (2026-10-27); none here.
+      // Tenant Access lists the rules the audit found naming nothing; none here.
       body = { rules: [], total: 0 };
     } else if (path === "/my-keys/last-used") {
-      // My Keys reads when each key last changed something (2026-10-27); no key has here.
+      // My Keys reads when each key last changed something; no key has here.
       body = { items: [] };
     } else if (path === "/instances/write-policy") {
       const host = url.searchParams.get("host");
@@ -593,10 +593,9 @@ function countRequests(state, path) {
  * A deep link the server refuses (auth.ts authorized()) is answered with a redirect home before
  * any page code loads.
  *
- * note: the redirect is asserted, not followed. `next start`, which serves these specs, hands the
+ * The redirect is asserted and not followed: `next start`, which serves these specs, hands the
  * middleware a Host of localhost, so a followed redirect leaves the 127.0.0.1 origin and its
- * session cookie. The standalone server that ships keeps the origin the request came on (checked
- * live on dev, 2026-11-06).
+ * session cookie. The standalone server that ships keeps the origin the request came on.
  */
 async function expectServerRedirectHome(page, path) {
   const response = await page.request.get(path, { maxRedirects: 0 });

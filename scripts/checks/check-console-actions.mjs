@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-// The console's guest actions (2026-10-27). Ctrl+Alt+Del never reached a guest: the console window
-// called the vendored global sendCtrlAltDel, which assigns an undeclared `sc` and throws, and the
-// full-page console called a method SpiceMainConn does not have. Both now send scancodes through
+// The console's guest actions. The vendored global sendCtrlAltDel assigns an undeclared `sc` and
+// throws, and SpiceMainConn has no such method, so both console surfaces send scancodes through
 // lib/spice/input.ts. This pins that, keeps the menu's combination ids in step with the ids the
 // backend accepts for the audit record, and checks a combination is always released.
 import assert from "node:assert/strict";

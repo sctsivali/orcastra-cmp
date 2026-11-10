@@ -2,7 +2,7 @@ const { test, expect } = require("@playwright/test");
 const { authenticate } = require("./support/fixtures.cjs");
 const { installInventoryHardeningFixtures } = require("./support/inventory-hardening-fixtures.cjs");
 
-// A cluster still reading past the backend's 15 s per-cluster wait (late_nodes, 2026-11-04) is not
+// A cluster still reading past the backend's 15 s per-cluster wait (late_nodes) is not
 // an outage: the backend finishes its read in the background, so the list says it is still loading
 // and asks again on its own a few seconds later, when the rows have usually landed.
 

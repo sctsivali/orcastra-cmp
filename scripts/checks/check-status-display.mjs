@@ -4,9 +4,9 @@
  * that spelling into operator-facing copy. The shared formatLabel helper owns unknown enum
  * fallback; small closed vocabularies may use typed metadata maps so label and tone stay paired.
  *
- * This is deliberately a focused registry rather than a broad `.status` ban. User-authored
- * names, endpoints and architecture values must not be title-cased, and JSX comparisons such as
- * `status === "active"` must continue to use the raw wire value.
+ * A focused registry rather than a broad `.status` ban: user-authored names, endpoints and
+ * architecture values must not be title-cased, and JSX comparisons such as
+ * `status === "active"` keep using the raw wire value.
  *
  * Run: node scripts/checks/check-status-display.mjs [repo-root]
  */
@@ -61,7 +61,7 @@ const checks = [
     ],
   },
   {
-    // The distribution card's instance list, extracted from monitoring-content.tsx.
+    // The distribution card's instance list, opened from monitoring-content.tsx.
     file: "frontend/src/app/inventory/monitoring/components/instance-distribution-dialog.tsx",
     required: [
       [/instanceStatusDisplay\(instance\.status\)/, "instance status fallback must use its display map"],

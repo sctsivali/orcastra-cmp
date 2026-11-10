@@ -279,8 +279,8 @@ test("Authoritative project removal clears a provisional target", async ({ page 
   await selectOption(page, dialog, "Cluster", "Core Cluster");
   await selectOption(page, dialog, "Project", "tenant-a");
   await selectOption(page, dialog, "Instance", "tenant-owned-vm");
-  // note: the authoritative list lands only once the provisional target is complete. A fixed 1s
-  // delay raced the three picks, and on a slow runner the instance list re-rendered under the click
+  // The authoritative list lands only once the provisional target is complete. A fixed delay
+  // would race the three picks, and on a slow runner the instance list re-renders under the click.
   releaseAuthoritativeProjects();
 
   await expect(

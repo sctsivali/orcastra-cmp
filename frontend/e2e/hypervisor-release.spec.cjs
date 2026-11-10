@@ -6,12 +6,12 @@ const {
 } = require("./support/inventory-hardening-fixtures.cjs");
 const { hypervisorRelease, platformNodes } = require("./support/api-fixture-data.cjs");
 
-// The version verdict on a cluster card comes from the backend, per release track (owner,
-// 2026-11-07: LXD 5.21.5 read "Latest" while 5.21/stable was at 5.21.9). The card also writes
-// host capacity as CPU threads and explains vCPU allocation and GPUs behind an (i) that opens on
-// hover, click, tap and the keyboard.
+// The version verdict on a cluster card comes from the backend, per release track (ex; LXD 5.21.5
+// is not "Latest" while 5.21/stable is at 5.21.9). The card also writes host capacity as CPU
+// threads and explains vCPU allocation and GPUs behind an (i) that opens on hover, click, tap and
+// the keyboard.
 //
-// note: every negative below has a positive control with the same locator in another test.
+// Every negative below has a positive control with the same locator in another test.
 
 const coreCard = (page) => page.locator('[data-slot="cluster-card"]').filter({ hasText: "Core Cluster" });
 
@@ -101,7 +101,7 @@ test("admin: a cluster behind its track offers the update, with the track's real
     "href",
     "https://github.com/canonical/lxd/releases",
   );
-  // none of the old hand-typed table survives
+  // no hand-typed release date appears
   await expect(dialog).not.toContainText("December 2025");
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);

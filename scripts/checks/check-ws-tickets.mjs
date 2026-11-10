@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // Structural guard: every WebSocket this app opens authenticates with a single-use ticket.
 //
-// A browser cannot set headers on an upgrade, so the sockets used to carry the access token in
-// their query string, where proxies, access logs and crash reports keep URLs. Each socket now
-// mints a ticket over the authenticated fetch right before it connects (lib/ws-ticket-api.ts),
-// and the vendored SPICE client gives each of its channel sockets its own ticket instead of
-// reusing the main socket's URL. This keeps a token from coming back into a socket URL, keeps
-// every opener on the ticket helper, and keeps the SPICE patch in place.
+// A browser cannot set headers on an upgrade, and an access token in the query string ends up
+// wherever proxies, access logs and crash reports keep URLs. Each socket mints a ticket over the
+// authenticated fetch right before it connects (lib/ws-ticket-api.ts), and the vendored SPICE
+// client gives each of its channel sockets its own ticket instead of reusing the main socket's
+// URL. This keeps tokens out of socket URLs, every opener on the ticket helper, and the SPICE
+// patch in place.
 //
 // Run: node scripts/checks/check-ws-tickets.mjs [repo-root]
 
@@ -48,8 +48,8 @@ const wsUrl = read('frontend/src/lib/ws-url.ts');
 const wsClose = read('frontend/src/lib/ws-close.ts');
 if (/getAccessToken|token=/.test(wsUrl)) failures.push('frontend/src/lib/ws-url.ts: must not read or send the access token');
 if (!/mintWsTicket\(request\)/.test(wsUrl)) failures.push('frontend/src/lib/ws-url.ts: socket URLs must carry a freshly minted ticket');
-// The close codes moved to lib/ws-close.ts (one table, compiled alone by check-ws-close-contract);
-// ws-url.ts re-exports it for the openers that already import it from there.
+// The close codes live in lib/ws-close.ts (one table, compiled alone by check-ws-close-contract);
+// ws-url.ts re-exports WS_CLOSE for the openers that import it from there.
 if (!/SESSION_ENDED: 4401/.test(wsClose) || !/ACCESS_REVOKED: 4403/.test(wsClose)) {
   failures.push('frontend/src/lib/ws-close.ts: the session-ended and access-revoked close codes must be exported');
 }
@@ -59,7 +59,7 @@ if (!/export \{ WS_CLOSE \} from "@\/lib\/ws-close"/.test(wsUrl)) {
 
 // Every interactive opener (a shell, a serial console, a SPICE display) reads its closes and its
 // refused tickets through lib/socket-recovery.ts, which classifies them with classifyClose. A
-// hand-written code list here is how a 4401 once read as "disconnected" with nothing recovering.
+// hand-written code list drifts from that table and misreads a close such as 4401.
 const recovery = read('frontend/src/lib/socket-recovery.ts');
 if (!/classifyClose\(/.test(recovery)) failures.push('frontend/src/lib/socket-recovery.ts: closes must go through classifyClose');
 for (const rel of ['frontend/src/lib/use-terminal-socket.ts', 'frontend/src/lib/spice/session.ts']) {
@@ -90,10 +90,8 @@ if (!/e\.code = code;/.test(spiceConn) || !/e\.reason = event_reason;/.test(spic
   failures.push('frontend/public/spice-html5/spiceconn.js: a channel error must carry its close code, reason and whether it opened');
 }
 
-// note: the floor guards against an opener moving somewhere this scan cannot see. It was 7 while
-// four components each built their own terminal socket; one hook (lib/use-terminal-socket.ts)
-// replaced them in the console overhaul (2026-10-30), with the monitoring, events and task feeds
-// and the SPICE session the rest.
+// The floor guards against an opener moving somewhere this scan cannot see: the terminal hook
+// (lib/use-terminal-socket.ts), the monitoring, events and task feeds, and the SPICE session.
 if (openers < 5) failures.push(`expected at least 5 socket openers, found ${openers}`);
 
 if (failures.length > 0) {

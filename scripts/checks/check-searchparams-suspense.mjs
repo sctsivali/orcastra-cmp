@@ -2,10 +2,8 @@
 // Structural guard: a component reading useSearchParams needs a Suspense boundary above it.
 //
 // useSearchParams opts a client component out of prerendering. Next then requires a boundary,
-// and without one `next build` fails on that route. Typecheck does not see it, so the failure
-// currently surfaces in CI at the Build step, minutes after a green local run.
-//
-// This is the same failure, caught in `make test-frontend` instead. Cheap signal, same rule.
+// and without one `next build` fails on that route. Typecheck does not see it, so this
+// catches it in `make test-frontend` before the CI Build step.
 //
 // Run: node scripts/checks/check-searchparams-suspense.mjs [repo-root]
 
@@ -19,8 +17,7 @@ const src = join(root, 'frontend', 'src');
 // Hooks that read the query string and therefore carry the same prerender bailout. Listed by
 // name rather than by import path so a re-export cannot slip past.
 const READERS = [/\buseSearchParams\s*\(/, /\buseTableFilters\s*\(/, /\buseSettingsSection\s*\(/];
-// note: both spellings are legitimate and both appear in this tree. A guard that recognises
-// only the one its author had in mind is the blind spot table-conventions.md warns about.
+// Both `<Suspense>` and `<React.Suspense>` appear in this tree.
 const BOUNDARY = /<(React\.)?Suspense[\s>]/;
 
 function* walk(dir) {

@@ -1,33 +1,14 @@
 #!/usr/bin/env node
 // Structural guard: the unreachable-nodes banner names a host only to a role that may see hosts.
 //
-// A fan-out list endpoint answers 200 with whatever it could collect and reports which clusters it
-// lost. UnreachableNodesBanner exists so an outage cannot read as an empty result, and it did that
-// by printing the cluster names inline. That is a diagnosis for an operator and a disclosure for a
-// tenant, who holds no cluster:read, is scoped to instances, and is told the fleet's node names on
-// no other surface in the console. /technologies is worse: it passes per-node `reasons`, which are
-// raw connection errors carrying hosts, ports and TLS detail.
-//
-// Nothing already in the repo could see it. check-unreachable-banner.mjs asks only whether the tag
-// is present on the page, which it is in both shapes. check-role-gates.mjs reads nav-config.tsx
-// against page.tsx and never opens components/ui. tsc and eslint do not read authorization. The
-// leak lived on nine tenant-reachable pages for as long as the banner did.
-//
-// This holds four things, each invisible from inside the file it checks:
-//
-//   1. the gate exists, is the role gate, and does not paint before the session resolves
-//   2. the component rendering on the ungated side CANNOT be handed a name: its props are exactly
-//      { noun, className }, so a leak needs a type change first
-//   3. the gate and the permission matrix agree. Role.PARTNER is a hierarchy floor and
-//      Permission.CLUSTER_READ is the thing being protected. They coincide today. If
-//      ROLE_PERMISSIONS ever grants a tenant cluster:read, or Partner loses it, or a fourth role
-//      lands between them, this fails instead of letting the two drift apart silently.
-//   4. no call site invents a second channel for a hostname
-//
-// Parser-free and dependency-free, for the reason check-jsx-stray-attrs.mjs gives: the CI guards
-// job runs checkout and setup-node and no `npm ci`.
-//
-// Zero, not a ratchet. There is no legitimate second shape.
+// Cluster names in UnreachableNodesBanner are a diagnosis for an operator and a disclosure for a
+// tenant, who holds no cluster:read and sees node names nowhere else; /technologies also passes
+// per-node `reasons` (raw connection errors with hosts, ports and TLS detail).
+// check-unreachable-banner.mjs only checks the tag is present and check-role-gates.mjs never opens
+// components/ui. Four rules, no baseline: (1) one role gate that paints nothing before the session
+// resolves; (2) the ungated renderer takes exactly { noun, className }; (3) the gate agrees with
+// ROLE_PERMISSIONS (Partner holds cluster:read, Tenant does not, no role between them); (4) no
+// call site invents a second channel for a hostname.
 //
 // Run: node scripts/checks/check-banner-role-gate.mjs [repo-root]
 
@@ -64,12 +45,9 @@ if (!/^"use client";$/m.test(code.split('\n').slice(0, 2).join('\n'))) {
   offenders.push('the banner calls a session hook but does not open with "use client"');
 }
 
-// important: bind the gate to the hook, not to the spelling of the hook. Asserting that the
-// source merely CONTAINS "usePermissions()" is satisfied by a comment naming it, and separately
-// by an import line, so the check passes while `hasRole` comes from somewhere else entirely.
-// Ablated: replacing the call with `= { isLoading: false, hasRole: () => true }` and leaving a
-// comment behind kept this green, on code that hands every tenant the operator copy. Match the
-// destructuring itself and require the two names the rules below depend on to come out of it.
+// important: match the destructuring of usePermissions() itself. A comment or an import that
+// mentions "usePermissions()" would pass a substring check while `hasRole` comes from somewhere
+// else. The two names the rules below depend on must come out of the call.
 const bind = executable.match(/const\s*\{([^}]*)\}\s*=\s*usePermissions\(\)\s*;/);
 if (!bind) {
   offenders.push(
@@ -113,8 +91,8 @@ if (ungated && executable.indexOf('<UnreachableNodesDetail') < ungated.index) {
   offenders.push('UnreachableNodesDetail renders above the role gate');
 }
 
-// With no session resolveRoles([]) answers [Role.TENANT], so painting during the first read shows
-// the tenant line to a partner for a frame and then swaps it. Absence is the only correct render.
+// With no session resolveRoles([]) answers [Role.TENANT], so painting during the first read would
+// show the tenant line to a partner for a frame. The banner renders nothing while loading.
 if (!/if\s*\(isLoading\)\s*return null;/.test(executable)) {
   offenders.push(
     'the banner does not `if (isLoading) return null;`. usePermissions resolves roles to ' +
@@ -124,8 +102,7 @@ if (!/if\s*\(isLoading\)\s*return null;/.test(executable)) {
 
 // --- 2. the ungated renderer cannot be handed a name -----------------------------------------
 //
-// Pinned by signature, not by scanning the body. A body scan says "no `nodes` today". A signature
-// says "no `nodes` without editing this line and this guard in the same commit".
+// Pinned by signature: a new prop such as `nodes` needs an edit to that line and to this guard.
 const notice = executable.match(/function UnreachableNodesNotice\(\s*\{[^}]*\}\s*:\s*\{([^}]*)\}\s*\)/);
 if (!notice) {
   offenders.push(
@@ -153,8 +130,8 @@ const noticeBody = executable.slice(
   executable.indexOf('function UnreachableNodesDetail'),
 );
 const noticeHoles = [...noticeBody.matchAll(/\$\{([^}]*)\}/g)].map((m) => m[1].trim());
-// note: partialNodes, partial and unreachable too. The banner takes two name lists since the
-// partially read clusters joined the unreachable ones in one card, and either is a channel.
+// The banner takes several name lists (unreachable, partially read and late clusters), and each
+// is a channel.
 if (noticeHoles.join(',') !== 'noun' || /\b(?:nodes|partialNodes|lateNodes|partial|late|unreachable|reasons)\b/.test(noticeBody)) {
   offenders.push('UnreachableNodesNotice prints something other than its noun');
 }
@@ -163,7 +140,7 @@ if (noticeHoles.join(',') !== 'noun' || /\b(?:nodes|partialNodes|lateNodes|parti
 
 /** The Set literal for one role inside ROLE_PERMISSIONS, paren-balanced from its key. */
 function permissionsOf(role) {
-  // important: anchor inside ROLE_PERMISSIONS. `[Role.PARTNER]:` appears first in
+  // Anchor inside ROLE_PERMISSIONS. `[Role.PARTNER]:` appears first in
   // ROLE_HIERARCHY, where it maps to a number, and reading that one finds no permissions at all
   // and reports the matrix as broken.
   const matrix = rbac.indexOf('ROLE_PERMISSIONS');
@@ -204,8 +181,8 @@ if (!partner || !tenant) {
   }
 }
 
-// A fourth role landing between Partner and Tenant would satisfy hasRole(Role.PARTNER) on a
-// reasoning nobody re-derived, and pass everything above.
+// A new role between Partner and Tenant would pass everything above without anyone re-deriving
+// the gate, so the Role enum is pinned.
 const roles = [...rbac.matchAll(/^\s{2}([A-Z]+)\s*=\s*"/gm)].map((m) => m[1]);
 if (roles.join(',') !== 'ADMIN,PARTNER,TENANT') {
   offenders.push(`the Role enum is now [${roles.join(', ')}]. Re-derive the banner gate before widening it.`);

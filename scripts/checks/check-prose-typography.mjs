@@ -2,34 +2,13 @@
 /**
  * Structural guard for dash typography in prose.
  *
- * The stop-instance confirm dialog shipped "Cuts power immediately — like pulling the plug",
- * and the same dash was in 83 other places: 58 more across frontend/src and backend/app, plus
- * 36 en dashes holding up the API route list in README.md. Nothing in the repo could see any
- * of it. tsc and eslint do not read English, and none of the sixteen structural guards looks
- * at punctuation.
+ * tsc and eslint do not read English, so nothing else catches an em dash, en dash or
+ * horizontal bar used as punctuation in frontend/src, backend/app or README.md. A dash is
+ * legal only as the entire string literal: the EMPTY_VALUE placeholder (lib/utils.ts,
+ * re-exported by components/ui/table-text.tsx) for a value the API did not return, which
+ * some call sites spell as the bare glyph.
  *
- * The rule is not "no U+2014 anywhere", because one use of the glyph is load-bearing:
- * EMPTY_VALUE in components/ui/table-text.tsx is the single placeholder for a value the API
- * did not return, chosen over five competing spellings, mirrored as an escaped "—" in
- * lib/utils.ts, and asserted by five Playwright specs with an anchored /^—$/. Six more call
- * sites hardcode the bare glyph. A blanket ban would have to list all of them, and the list
- * would rot.
- *
- * So the rule keys on shape instead of location: a dash is legal only when it is the ENTIRE
- * string literal. "—" is a placeholder. "a — b" is punctuation. That one distinction covers
- * every sanctioned site including the comment in table-text.tsx that quotes the glyph as
- * data, and it needs no allowlist to maintain.
- *
- * En dash and horizontal bar are banned on the same terms, so the obvious workaround closes
- * with the original rather than a commit later.
- *
- * Advisory by decision of the owner: it reports and exits 0. Flip HARD_FAIL to true to make
- * it a gate.
- *
- * Deliberately parser-free: the CI guards job runs with no `npm ci`, so importing typescript
- * from frontend/node_modules would fail there. Regex only.
- *
- * Modelled on scripts/checks/check-table-typography.mjs.
+ * Advisory: it reports and exits 0. Flip HARD_FAIL to true to make it a gate.
  */
 import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -38,10 +17,8 @@ const REPO = new URL("../..", import.meta.url).pathname;
 
 const HARD_FAIL = false;
 
-// note: a guard has to name the characters it bans, and the header above quotes the defect it
-// was written for, so this file cannot satisfy its own rule. That is why ROOTS below does not
-// include scripts/. The constants are escapes rather than literals so that at least the
-// operative code carries none.
+// This file has to name the characters it bans, so ROOTS below leaves out scripts/. The
+// constants are escapes so the operative code carries none.
 const EM_DASH = "\u2014";
 const EN_DASH = "\u2013";
 const HORIZONTAL_BAR = "\u2015";
@@ -60,8 +37,7 @@ const FILES = ["README.md"];
 
 const SKIP_DIRS = new Set(["node_modules", ".next", ".git", "__pycache__", "dist", "build"]);
 
-// A dash standing alone inside quotes is the empty-value placeholder, not punctuation.
-// Matches a dash alone between matching quotes, for any of the three characters.
+// The empty-value placeholder: any of the three characters alone between matching quotes.
 const STANDALONE = new RegExp(
   `(["'\`])[${EM_DASH}${EN_DASH}${HORIZONTAL_BAR}]\\1`,
   "g",

@@ -32,7 +32,7 @@ async function expectDomOrder(page, locators) {
 }
 
 test("Monitoring pause freezes automation while manual refresh and resume still work", async ({ page }, testInfo) => {
-  // Partner deliberately exercises REST fallback. Admin's monitoring WebSocket is a separate
+  // Partner exercises the REST fallback. Admin's monitoring WebSocket is a separate
   // transport contract; pause semantics must also hold when normal polling is active.
   await authenticate(page.context(), "partner");
   const api = await installApiFixtures(page, "partner", { monitoringInstanceList: true });
@@ -149,7 +149,7 @@ test("Admin pause closes the monitoring WebSocket and resume opens a new stream"
   await expectCleanHarness(api);
 });
 
-// The page reads the fleet instance list itself (2026-11-03), so a consumer row opens from the
+// The page reads the fleet instance list itself, so a consumer row opens from the
 // full record in that list instead of waiting for a detail read.
 function instanceListAnswered(page) {
   return page.waitForResponse((response) => new URL(response.url()).pathname.endsWith("/api/v1/instances"));
@@ -283,10 +283,10 @@ test("stopped Top Consumer checks once, then only at the slow cadence", async ({
   await expectCleanHarness(api);
 });
 
-// A Tenant monitors its own instances and the clusters' status only (owner decision
-// 2026-10-26). The backend sends every host figure as null and refuses it the host history, so
-// the page shows no utilization gauge, no history chart, no warnings tile and no host figure on
-// a cluster card, and never asks for the history.
+// A Tenant monitors its own instances and the clusters' status only. The backend sends every
+// host figure as null and refuses it the host history, so the page shows no utilization gauge,
+// no history chart, no warnings tile and no host figure on a cluster card, and never asks for
+// the history.
 test("tenant: Monitoring shows its instances and cluster status, no host figure", async ({ page }) => {
   const { monitoringDashboard } = require("./support/api-fixture-data.cjs");
   const HOST_FIGURES = [
@@ -389,7 +389,7 @@ test("an instance without limits says so instead of showing the host's size", as
 });
 
 // ---------------------------------------------------------------------------------------------
-// Gauges, pools, names and alarms (2026-10-29)
+// Gauges, pools, names and alarms
 // ---------------------------------------------------------------------------------------------
 
 const GIB = 1024 ** 3;
@@ -410,8 +410,7 @@ function offlineNode(name) {
   };
 }
 
-// Every cluster offline. The memory and storage gauges used to draw 0.0% over "0 B / 0 B" here
-// while the CPU gauge said Unavailable.
+// Every cluster offline. Every gauge says Unavailable, never 0.0% over "0 B / 0 B".
 function nothingReported() {
   const { monitoringDashboard } = require("./support/api-fixture-data.cjs");
   return {
@@ -546,7 +545,7 @@ test("alarm tiles speak the Warnings page's words and stay neutral at zero", asy
   for (const label of ["Critical", "High", "Warning", "Info"]) {
     const tile = alarms.getByRole("link", { name: new RegExp(`^0\\s*${label}$`) });
     await expect(tile).toBeVisible();
-    // the number is the first <p> in the tile, which the live harness reads
+    // the number is the first <p> in the tile, where external browser checks read it
     await expect(tile.locator("p").first()).toHaveText("0");
   }
   await expect(alarms).not.toContainText(/Major|Inactive|All systems operational|✓/);
@@ -571,7 +570,7 @@ test("Monitoring counts kernel findings in View All, as the dashboard does", asy
   await expectCleanHarness(api);
 });
 
-// The Instance Distribution list (2026-11-03): it reads the list the page already holds, never a
+// The Instance Distribution list reads the list the page already holds, never a
 // forced fleet read on open, follows what it was opened for, and Refresh is the one live read.
 function freshListReads(api) {
   return api.requests.filter((r) => r.path === "/instances" && /(^|[?&])fresh=true/.test(r.search)).length;

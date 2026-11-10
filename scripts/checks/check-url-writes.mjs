@@ -2,20 +2,14 @@
 // Structural guard: a same-path URL write from an interaction is a history write, not a
 // navigation.
 //
-// Filters, tabs and pickers keep their state in the query string. Written through
-// `router.replace(url, { scroll: false })` that is a navigation, and on Next 15.5 a same-path,
-// params-only navigation can take the aliased-prefetch path (a param-less prefetch entry for the
-// page alive, a loading.tsx on the segment), which never sets shouldScroll and lands the
-// refetched segment with the document scrolled to the top under the open popover. It also costs
-// an RSC round trip per keystroke. lib/url-state.ts wraps window.history.replaceState, which Next
-// patches to update usePathname and useSearchParams with no fetch and no scroll of its own.
-//
-// The line this holds:
-// - the filter engine writes only through lib/url-state;
-// - window.history.replaceState and pushState are called only inside lib/url-state;
-// - a same-path router.replace elsewhere is either a mount-time writer (the history patch is
-//   installed after hydration, so an effect in the hydration commit must stay on the router) named
-//   below with its reason, or a defect.
+// On Next 15.5 a same-path, params-only `router.replace(url, { scroll: false })` can take the
+// aliased-prefetch path (a param-less prefetch entry alive, a loading.tsx on the segment), which
+// never sets shouldScroll and lands the refetched segment scrolled to the top under the open
+// popover; it also costs an RSC round trip per keystroke. lib/url-state.ts wraps
+// window.history.replaceState, which Next patches to update usePathname and useSearchParams with
+// no fetch and no scroll. The filter engine and every history call go through lib/url-state; a
+// same-path router.replace elsewhere is a defect unless it is a mount-time writer named below
+// (the history patch is installed after hydration, so the hydration commit stays on the router).
 //
 // Run: node scripts/checks/check-url-writes.mjs [repo-root]
 
@@ -51,7 +45,7 @@ function* walk(dir) {
   }
 }
 
-// Comments describe the writes they replaced, so they are not calls.
+// Comments may quote these calls; only code is judged.
 function stripComments(text) {
   return text
     .replace(/\/\*[\s\S]*?\*\//g, '')

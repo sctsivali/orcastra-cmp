@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Every structural guard `make test-frontend` runs must also run in CI, and the other way round.
 //
-// The two lists are maintained by hand in two files. They drifted once: CI ran 39 guards and the
-// Makefile 40, so a regression the missing guard catches would pass CI and fail only on a laptop.
+// The two lists are maintained by hand in two files. A guard missing from CI lets a defect it
+// catches pass CI and fail only on a laptop.
 
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";

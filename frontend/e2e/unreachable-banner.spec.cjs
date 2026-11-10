@@ -107,8 +107,8 @@ for (const [role, sentence] of [
   });
 }
 
-// One card per list. The two reads used to stack as two banners, "2" in one and "1" in the other,
-// and neither said the list was short by three clusters.
+// One card per list. Two stacked banners, "2" in one and "1" in the other, would never say the
+// list is short by three clusters.
 test("admin: an unreachable and a partly read cluster share one banner", async ({ page, context }) => {
   await authenticate(context, "admin");
   await installInventoryHardeningFixtures(page, "admin");

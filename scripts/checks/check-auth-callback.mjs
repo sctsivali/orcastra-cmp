@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The page a sign-in returns to (issue #16). A signed-in visit to /auth/signin and the retry after
+// The page a sign-in returns to. A signed-in visit to /auth/signin and the retry after
 // a failed sign-in both follow a callbackUrl, so the parser that admits it is the open-redirect
 // boundary. This runs the real modules against the shapes browsers fold into another origin.
 import assert from "node:assert/strict";
@@ -44,7 +44,7 @@ for (const raw of [
   "/\t/evil.example", "/\n/evil.example", "\\/evil.example", "https://evil.example/x",
   "http://qa.invalid/x", "javascript:alert(1)", "/auth", "/auth/signin", "/auth/error?x=1",
   "/AUTH/signin", "/api", "/api/auth/signout", "/api/v1/nodes",
-  // dot segments folded after the origin check (security review, 2026-10-21)
+  // Dot segments that fold into another origin after the origin check.
   "/.//evil.com", "/..//evil.com", "/a/..//evil.com", "/%2e//evil.com", "/%2e%2e//evil.com",
   "/x/../\\evil.com", "/.\\/evil.com", "/.//\\evil.com",
 ]) {

@@ -582,8 +582,8 @@ test("copy of a running source explains the stop and a failed draft read can ret
 });
 
 test("a dir-pool source the target cannot bound waits for the operator to accept its size", async ({ page }) => {
-  // Owner decision 2026-10-29: Pandora's dir pool holds far more than any target has free, so a copy
-  // there is not refused; Start waits for an explicit acceptance of the unmeasured size.
+  // A dir pool can hold far more than any target has free, so a copy from one is not refused;
+  // Start waits until the operator explicitly accepts the unmeasured size.
   const plan = makePlan(
     {
       plan_id: "plan-unmeasured",
@@ -637,8 +637,8 @@ async function openNewMigration(page) {
 }
 
 test("a failed settings poll does not take away a good write verdict", async ({ page }) => {
-  // The owner saw "Execution is unavailable" while the deployment was fine: the first settings
-  // read answered, a later poll failed, and the wizard read that one failure as the verdict.
+  // The first settings read answers and later polls fail: the wizard keeps the good verdict
+  // until it is older than five minutes instead of reading one failure as "unavailable".
   test.setTimeout(120_000);
   await page.clock.install();
   await authenticate(page.context(), "partner");
@@ -973,7 +973,7 @@ test("a FastAPI validation error reads as a sentence naming the field, not as JS
 
 test("a job waiting on the operator is polled slowly, and a moving one every few seconds", async ({ page }) => {
   // A retained move waits up to 168 h, and every poll costs the server an identity-provider
-  // lookup. Real time on purpose: a fake clock fires the intervals faster than the fixture
+  // lookup. Uses real time: a fake clock fires the intervals faster than the fixture
   // answers, and the deduplicated reads would hide a fast poll.
   test.setTimeout(60_000);
   const waiting = makeJob({
@@ -1304,7 +1304,7 @@ test("job detail shows retention, offers Finalize and Roll Back, and keeps stale
 
 test("an Admin names the owner of an ambiguous default before preflight runs", async ({ page }) => {
   // `default` on a cluster several organizations hold names no owner, so the server asks an Admin
-  // which one owns the instance (RC5 follow-up FU-5). Nothing is preselected for them.
+  // which one owns the instance. Nothing is preselected for them.
   const candidates = [{ id: 7, slug: "globex", name: "Globex" }];
   await authenticate(page.context(), "admin");
   const api = await installMigrationFixtures(page, "admin", {

@@ -2,28 +2,15 @@
 /**
  * The terminal palette is defined once, and the two files that must spell it stay in agreement.
  *
- * Terminal and console chrome paints a fixed dark surface that does not follow the theme. Before
- * this guard, that surface existed as ~70 arbitrary Tailwind values (`bg-[#1a1b26]` and friends)
- * across eight files, plus four verbatim copies of the same 22-key xterm ITheme object. Retinting
- * it meant touching all of them, and missing one would have left a stray blue-grey panel on a
- * purple page that no typecheck or lint could see.
+ * Terminal and console chrome paints a fixed dark surface that does not follow the theme.
+ * xterm paints into a canvas and takes hex strings (TERMINAL_SURFACE in
+ * src/lib/terminal-theme.ts), while the chrome is Tailwind classes resolving --terminal-* HSL
+ * triplets (src/app/globals.css).
  *
- * It now lives in two places, and it has to, because they cannot share a representation: xterm
- * paints into a canvas and takes hex strings, while the surrounding chrome is Tailwind classes
- * resolving CSS variables. So:
- *
- *   src/app/globals.css     --terminal-* HSL triplets, consumed via tailwind.config.ts
- *   src/lib/terminal-theme.ts   TERMINAL_SURFACE hex, consumed by the four xterm call sites
- *
- * This checks three things:
- *   1. every --terminal-* token has a hex twin in TERMINAL_SURFACE, and they are the same colour
- *   2. TERMINAL_THEME.background and .cursorAccent are the surface, so the cursor cell does not
- *      cut a hole of the old colour into the new one
- *   3. no file has gone back to spelling a chrome colour as an arbitrary Tailwind value
- *
- * Rounding: an HSL triplet with one decimal and an 8-bit hex do not round-trip exactly in every
- * direction, so the comparison allows one 8-bit step per channel rather than demanding equality.
- * A genuine drift is a whole colour apart, never one step.
+ * Checks: (1) every token has a hex twin of the same colour, within one 8-bit step per channel
+ * because a one-decimal HSL triplet and a hex do not round-trip exactly;
+ * (2) TERMINAL_THEME.background and .cursorAccent are the surface, so the cursor cell does not
+ * cut a hole into it; (3) no file spells a chrome colour as a retired arbitrary Tailwind value.
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -41,8 +28,7 @@ const PAIRS = [
   ["border", "border"],
 ];
 
-// The literals this palette used to be spelled as. Anything reintroducing one of them is either a
-// missed call site or a fifth dark surface; both are the defect this guard exists for.
+// Retired chrome literals. Reintroducing one means a missed call site or a fifth dark surface.
 const RETIRED = ["#1a1b26", "#16161e", "#1f2335", "#292e42"];
 
 const hslToRgb = (h, s, l) => {
@@ -106,7 +92,7 @@ const walk = (dir) => {
     else if (/\.(tsx?|css)$/.test(name)) {
       const body = readFileSync(p, "utf8");
       body.split("\n").forEach((line, i) => {
-        // a comment may name the old palette to explain the history; a class may not use it
+        // A comment may name a retired literal; a class may not use it.
         if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
         for (const dead of RETIRED) {
           if (line.includes(`[${dead}]`)) {

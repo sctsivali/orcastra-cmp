@@ -2,11 +2,11 @@ const { test, expect } = require("@playwright/test");
 const { authenticate } = require("./support/fixtures.cjs");
 const { installNetworkFixtures } = require("./support/network-fixtures.cjs");
 
-// A page header held its title and its actions on one row at every width, so on a phone the primary
-// action ran off the right edge, where the page clips it and no scroll reaches it.
+// On a phone a page header's primary action must stay inside the viewport. Past the right edge the
+// page clips it and no scroll reaches it.
 
 test("the primary action of a page stays on screen", async ({ page }) => {
-  // note: a small phone on purpose. At the Pixel 7's 412 this button happens to end 1px inside.
+  // A small phone: at the Pixel 7's 412 px this button ends 1 px inside and would pass anyway.
   await page.setViewportSize({ width: 360, height: 800 });
   await authenticate(page.context(), "partner");
   await installNetworkFixtures(page, "partner", { allowCreate: true });

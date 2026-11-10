@@ -9,14 +9,13 @@ const {
 } = require("./support/fixtures.cjs");
 const { installSettingsFixtures, expectCleanSettingsHarness } = require("./support/settings-fixtures.cjs");
 
-// Card illustrations (components/illustrations): decoration that names a card's subject. These
-// specs hold what a reader cannot see in review: a scene is hidden from assistive technology and
-// takes no focus, sits in its own slot inside the card's padding without ever covering text, lines
-// up with the scenes beside it at one weight, paints its theme's tokens, does not move after it
-// lands, and disappears from the first byte of HTML when the organization hides it, with the card's
-// classic icon back and no gap. The choice lives only in Settings > Personalization and is off until
-// an organization or the deployment turns it on (owner decisions 2026-11-09); the theme menu offers
-// none.
+// Card illustrations (components/illustrations): decoration that names a card's subject. A scene is
+// hidden from assistive technology and takes no focus, sits in its own slot inside the card's
+// padding without covering text, lines up with the scenes beside it at one weight, paints its
+// theme's tokens, does not move after it lands, and is absent from the first byte of HTML when the
+// organization hides it, with the card's classic icon back and no gap. The choice lives only in
+// Settings > Personalization and is off until an organization or the deployment turns it on; the
+// theme menu offers none.
 
 const SCENE = '[data-slot="card-illustration"]';
 const FALLBACK = '[data-slot="illustration-fallback"]';
@@ -128,7 +127,7 @@ async function expectDecorative(page) {
 /**
  * Every visible scene sits in its own slot at least 12px inside its card (no bleed into the edge) and
  * covers no text in it: each text run's box (a Range over the text node, so a long label is measured
- * where it actually wraps) against the scene's box.
+ * where it wraps) against the scene's box.
  */
 async function expectFitted(page) {
   const problems = await page.locator(SCENE).evaluateAll((nodes) => nodes

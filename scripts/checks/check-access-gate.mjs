@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The access notice for a caller with no role (issue #17). The frontend decides "no role" from the
+// The access notice for a caller with no role. The frontend decides "no role" from the
 // session's groups and the backend refuses the same caller from the token's groups, so both must
 // read the same claim and map it with the same table, or one side blocks a user the other lets in.
 import assert from "node:assert/strict";
@@ -68,8 +68,8 @@ const gateHook = readFileSync(join(root, "frontend/src/hooks/use-access-gate.ts"
 assert.match(gateHook, /Boolean\(session\) && status !== "unauthenticated"/);
 assert.doesNotMatch(gateHook, /status === "authenticated"/);
 
-// A Tenant's pending verdict holds the shell back: rendering it let pages read the empty scope of a
-// Tenant with no access and those zeros stayed cached after access was granted.
+// A Tenant's pending verdict holds the shell back: rendering it would let pages read the empty
+// scope of a Tenant with no access, and those zeros would stay cached after access is granted.
 assert.match(gateHook, /else if \(isTenant && !knownVerdict && verdict\.isPending\) state = "checking"/);
 assert.match(gateHook, /removeQueries/, "reads made before a denial must not survive into the granted dashboard");
 assert.match(gateHook, /lastVerdictRef\.current\?\.scope === actorScope/, "Clear Browser Cache must not send a known Tenant back to the loader");

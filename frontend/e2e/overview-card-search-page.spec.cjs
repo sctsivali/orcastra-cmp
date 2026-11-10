@@ -5,15 +5,14 @@ const { fullInstance } = require("./support/api-fixture-data.cjs");
 
 // The Overview search finds a project through one of its instance names, and the project card
 // pages its instances five at a time without filtering them. Opened from that search, the card
-// starts on the page holding the instance; it used to start on page 1, where the seventh
-// instance of a busy project was not shown (RC5 acceptance, 2026-11-05).
+// starts on the page holding the instance, so the seventh instance of a busy project is shown.
 
 const project = (host, name) => ({ name, description: "", config: {}, used_by: [], host, tags: [] });
 const names = Array.from({ length: 7 }, (_, i) => `vm-${i + 1}`);
 
 async function installBusyProject(page, role) {
   const state = await installInventoryHardeningFixtures(page, role);
-  // note: registered after the inventory fixture, so these run first (Playwright matches routes
+  // Registered after the inventory fixture, so these run first (Playwright matches routes
   // in reverse registration order).
   await page.route("**/api/v1/projects", (route) => route.fulfill({ json: [
     { host: "cluster-a", projects: [project("cluster-a", "tenant-a")], total: 1, reachable: true, error: null },

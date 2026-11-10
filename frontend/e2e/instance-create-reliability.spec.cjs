@@ -495,8 +495,8 @@ test("an unknown create keeps exact reconciliation and offers actual-state refre
   await expectCleanHarness(api);
 });
 
-// A reload used to rebuild the row from sessionStorage, which holds no verdict, so it was also what
-// put a halted row back on its job. The in-place refresh has to do that part itself.
+// The row is refreshed in place, not rebuilt from sessionStorage (which holds no verdict), so the
+// refresh itself has to put a halted row back on its job.
 test("reloading the current state of a halted create follows its job again", async ({ page }) => {
   await authenticate(page.context(), "partner");
   const api = await installApiFixtures(page, "partner", { snapshotInstancePage: true });

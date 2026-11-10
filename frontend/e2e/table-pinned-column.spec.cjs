@@ -4,8 +4,8 @@ const { installInventoryHardeningFixtures } = require("./support/inventory-harde
 const { installTaskFixtures } = require("./support/task-fixtures.cjs");
 const { fullInstance } = require("./support/api-fixture-data.cjs");
 
-// Headless Chromium hides scrollbars unless told otherwise, which is how a table with no bounded
-// height shipped owning a 10 px vertical scrollbar: one pixel of the pinned cell's ground.
+// Headless Chromium hides scrollbars unless told otherwise, which would hide a table with no
+// bounded height owning a 10 px vertical scrollbar: one pixel of the pinned cell's ground.
 test.use({
   launchOptions: { ignoreDefaultArgs: ["--hide-scrollbars"] },
   viewport: { width: 1100, height: 800 },
@@ -58,7 +58,7 @@ test("the pinned column casts its shadow outward onto the rows under it", async 
   expect(atStart, "rows slide under the column, so it says so").not.toBe("none");
   expect(atStart, "an inset shadow paints inside the column and reads as recessed").not.toContain("inset");
 
-  // note: inside the poll, because the table can still grow a few pixels after the first paint,
+  // Inside the poll, because the table can still grow a few pixels after the first paint,
   // and then a single scroll stops short of the end and "middle" is the correct answer.
   await expect.poll(async () => {
     await container.evaluate((el) => { el.scrollLeft = el.scrollWidth; });

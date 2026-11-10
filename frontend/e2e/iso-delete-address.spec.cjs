@@ -1,10 +1,9 @@
 const { test, expect } = require("@playwright/test");
 const { authenticate, installApiFixtures } = require("./support/fixtures.cjs");
 
-// The ISO page deleted by (pool, type, name, host) alone, so an ISO in another project or on one
-// member of a per-member pool was addressed as `default`'s copy of that name: a 404, the wrong
-// volume, or the view-only refusal on a shared cluster (RC5 follow-up F-02, 2026-11-06). The
-// request now carries the row's own project and member.
+// An ISO delete carries the row's own project and member. Addressed by (pool, type, name, host)
+// alone, an ISO in another project or on one member of a per-member pool resolves to `default`'s
+// copy of that name: a 404, the wrong volume, or the view-only refusal on a shared cluster.
 
 const ISO = {
   name: "ubuntu-26.04-live.iso",

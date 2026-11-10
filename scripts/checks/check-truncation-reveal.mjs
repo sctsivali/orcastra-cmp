@@ -1,39 +1,18 @@
 #!/usr/bin/env node
 /**
- * A value the operator cannot read in full is a value the operator does not have.
+ * Fails when the UI shortens a value in a way the operator cannot read back in full.
  *
- * `truncateFingerprint` in lib/utils.ts returned `fingerprint.substring(0, 12) + "..."`, so 52
- * of an image fingerprint's 64 characters never reached the DOM and nothing anywhere in the app
- * could recover them. One of its four call sites fed the result into an accessible NAME, so the
- * aliases cell on /inventory/images announced "Show all 3 aliases on 1a4eed830630...".
+ * Hard bans: (1) a value cut in JavaScript for display, which never reaches the DOM; (1e) a
+ * silent cut of an id-shaped value; (2) a cut value inside an accessible name; (3) a title
+ * echoing its own text child; (5) a truncation helper exported from lib/; (6) a reveal around a
+ * child that clips itself. Ratcheted: (4) CSS truncation with no title, aria-label or reveal, and
+ * array previews. components/ui/overflow-text.tsx (a scalar) and overflow-cell.tsx (a
+ * collection) clip in CSS only, keep the whole value in the DOM, and put the reveal on a real
+ * button. Regex only, no parser, so the check runs without frontend/node_modules.
  *
- * Measured over frontend/src before this file existed:
- *
- *   17  expressions cutting a string and gluing "..." onto it by hand, in six mutually
- *       incompatible shapes: 0,8 plus dots, 0,12 plus dots, 0,15 plus dots plus a tail of 10,
- *       0,18 plus a tail of 10, and 0,18 plus a tail of 18
- *    6  cutting an id-shaped value and appending NOTHING, so the operator could not tell the
- *       value had been cut at all
- *    4  truncateFingerprint call sites
- *    2  truncating expressions passed into an accessible name
- *    3  elements whose title= repeated their own text child, so the reveal revealed nothing
- *   74  elements carrying truncate, text-ellipsis or line-clamp-N with no title, no aria-label
- *       and no reveal control anywhere above them
- *
- * The replacement is components/ui/overflow-text.tsx for a scalar and components/ui/
- * overflow-cell.tsx for a collection. Both clip in CSS only, which leaves the whole value in
- * the DOM for selection, find-in-page and assistive tech, and both put the sighted operator's
- * reveal on a real button.
- *
- * important: regex only, no parser. The CI `guards` job runs checkout plus setup-node and no
- * `npm ci`, so importing typescript from frontend/node_modules would crash it there while
- * passing locally. check-semantic-colour.mjs and check-jsx-stray-attrs.mjs record the same
- * constraint.
- *
- * important: run this AFTER check-jsx-stray-attrs.mjs. Rules 2 and 4 read aria-label and title
- * out of opening tags, and an attribute that has fallen below its own `>` is a text child, so
- * both rules would credit an element with a name it does not carry. That leak is what
- * check-icon-button-names.mjs already had to be re-ordered around.
+ * important: run this after check-jsx-stray-attrs.mjs. Rules 2 and 4 read aria-label and title
+ * out of opening tags; an attribute that has fallen below its own `>` is a text child, so both
+ * rules would credit an element with a name it does not carry.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, dirname } from 'node:path';
@@ -42,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 const root = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const src = join(root, 'frontend', 'src');
 
-// The primitives themselves clip on purpose: that is the mechanism, not the defect.
+// The reveal primitives clip by design and are exempt.
 const PRIMITIVES = new Set([
   'components/ui/overflow-text.tsx',
   'components/ui/overflow-cell.tsx',
@@ -55,25 +34,17 @@ const PRIMITIVES = new Set([
 // A reveal already owns anything inside one of these.
 const OWNERS = ['OverflowText', 'CopyableText', 'OverflowCell', 'Tooltip', 'TooltipTrigger'];
 
-// Ratchet: may fall, never rise. Recorded from this check's own output on the commit that
-// introduced it, not carried over from the pre-change count, because converting a site often
-// moves a tag between buckets rather than out of the population.
-//
-// A ratchet rather than a ban, and the reason is concrete rather than principled. Several of
-// the survivors are correct: components/loading-lottie.tsx clips a transient phase message,
-// which is not data and would be absurd behind a disclosure; components/sidebar/
-// session-menu-items.tsx clips a nav label whose full text is one click away and which lives
-// inside a Radix menu, where roving focus makes a nested button unreachable anyway;
-// components/ui/select.tsx carries Radix's own trigger contract, and removing it makes every
-// form row grow with its content. A hard ban here is a check that cannot pass, and a check that
-// cannot pass is a check somebody deletes.
+// Ratchet: may fall, never rise. Not a ban because several remaining sites are correct:
+// components/loading-lottie.tsx clips a transient phase message, which is not data;
+// components/sidebar/session-menu-items.tsx clips a nav label inside a Radix menu, where roving
+// focus makes a nested button unreachable; components/ui/select.tsx keeps Radix's trigger
+// contract, without which every form row grows with its content.
 const CSS_TRUNCATION_BASELINE = 31;
 
 // Array previews that show the first N and are not id-shaped, so rule 1e skips them. The four
-// that remain are all legitimate: avatar initials from a name and from an email, the 63
-// character LXD volume-name limit when deriving a suggested name, and the Used By kind
-// breakdown, which NAMES its remainder rather than dropping it. Ratcheted so the next silent
-// cap has to lower a number to land.
+// counted are legitimate: avatar initials from a name and from an email, the 63-character LXD
+// volume-name limit when deriving a suggested name, and the Used By kind breakdown, which names
+// its remainder. A new preview fails the check unless this baseline is raised.
 const ARRAY_PREVIEW_BASELINE = 4;
 
 function walk(dir, out = []) {
@@ -92,23 +63,14 @@ function walk(dir, out = []) {
 const lineOf = (code, index) => code.slice(0, index).split('\n').length;
 
 /**
- * Two levels of blanking, each with a different job, and keeping them separate is load-bearing.
+ * Two blanking levels; keep them separate. `blankComments` removes prose only, and every code
+ * rule runs on it, so an example inside a doc comment is not a defect. `blankLiterals` also
+ * empties string and template bodies and only decides where a JSX tag starts, so a heredoc in a
+ * template literal (`cat <<EOF | ...`) is not read as an opening tag that swallows the file.
  *
- * `blankComments` removes prose only. Every rule about code runs against this, because a
- * defect written in an example inside a doc comment is not a defect, and this file's own header
- * quotes the exact shapes it bans.
- *
- * `blankLiterals` additionally empties string and template bodies, and is used ONLY to decide
- * where a JSX tag STARTS. That is what stops a shell heredoc written inside a template literal
- * (`cat <<EOF | ...`) from being read as an opening tag whose body then swallows twelve thousand
- * characters of unrelated code, which is what two of this check's first-run findings were.
- *
- * important: do not run the string rules against the fully masked copy. `x.slice(0, 12) + "..."`
- * has its ellipsis inside a string, so masking it makes rule 1 blind to the exact shape this
- * whole check exists to ban. It was, for one commit.
- *
- * important: template `${...}` regions stay readable in both, because real JSX and real class
- * expressions live inside them.
+ * important: never run the string rules on the fully masked copy: `x.slice(0, 12) + "..."` keeps
+ * its ellipsis in a string, so rule 1 would go blind. Template `${...}` regions stay readable in
+ * both, because real JSX and class expressions live inside them.
  */
 const blanker = (code, alsoLiterals) => {
   const out = code.split('');
@@ -167,20 +129,13 @@ const blankComments = (code) => blanker(code, false);
 const blankLiterals = (code) => blanker(code, true);
 
 // A real JSX opening tag is short. A scan that runs past this is a `<` the masker did not
-// account for, and letting it stand would hand rule 4 a "tag" holding hundreds of lines.
-//
-// Measured rather than guessed: across frontend/src the longest ACCEPTED opening tag carrying a
-// truncating class is 185 characters, and the only three over-cap scans that contain one are a
-// shell heredoc written as `cat <<EOF` inside a template literal, twice, and a <Controller>
-// whose render prop swallowed the span three lines below it, which is counted on its own anyway.
+// account for, and letting it stand would hand rule 4 a "tag" holding hundreds of lines. The
+// longest accepted opening tag with a truncating class in frontend/src is about 185 characters.
 const MAX_TAG = 800;
 
 /**
- * A per-site waiver, on the same line or the one above. Per SITE, never per file: the file-wide
- * form is what made check-table-filters.mjs inert for eight columns at once.
- *
- * It exists so a deliberate exception is written down at the site rather than argued for by
- * weakening a regex until it stops seeing the whole shape.
+ * A per-site waiver comment, on the same line or the one above. Per site, never per file, so an
+ * exception is written down where it applies instead of weakening a regex.
  */
 function waived(code, index) {
   const before = code.slice(0, index).split('\n');
@@ -190,11 +145,11 @@ function waived(code, index) {
 }
 
 /**
- * Opening tags with their body, brace- and quote-aware. Generalised from check-semantic-colour
- * from a fixed element name to any of them.
+ * Opening tags with their body, brace- and quote-aware. Same approach as check-semantic-colour,
+ * for any element name.
  *
- * `masked` is used to decide WHERE a tag starts, and `code` to read what it contains, so a
- * className inside the tag is still readable while a `<` inside a string is not a tag.
+ * `masked` decides where a tag starts and `code` is read for what it contains, so a className
+ * inside the tag stays readable while a `<` inside a string is not a tag.
  */
 function openingTags(code, masked, blind) {
   const found = [];
@@ -265,16 +220,14 @@ const RULE1 = [
 const SILENT = /\b([A-Za-z_$][\w$]*(?:\s*\??\.\s*[\w$]+|\[[^\]]*\])*)\s*\??\.\s*(?:slice|substring)\s*\(\s*0\s*,\s*(\d{1,2})\s*\)/g;
 const IDISH = /(fingerprint|image|^id$|Id$|_id$|uuid|hash|sha|digest|token|secret|key)$/i;
 
-// Anything that cuts a collection to its first N. Not banned: some are correct. Counted, so a
-// new silent cap has to lower a baseline to land.
+// Anything that cuts a collection to its first N. Not banned, since some are correct; counted
+// against ARRAY_PREVIEW_BASELINE.
 const ARRAY_PREVIEW = /\.\s*slice\s*\(\s*0\s*,\s*(\d{1,2})\s*\)/g;
 
 const RULE2 = /(?:aria-label|title|ownerLabel|itemLabel|recordIdLabel|label)=\{[^}]*(?:\.slice\(|\.substring\(|\.substr\(|truncateFingerprint)/g;
 
-// An element whose title is the same identifier as its own text child. It adds nothing for any
-// caller, truncating or not, and it is how resource-bar.tsx came to echo a string its own caller
-// had already cut. Rule 1 meets this one from the opposite end without either knowing about the
-// other.
+// An element whose title is the same identifier as its own text child. The title reveals
+// nothing, and it hides that the element has no reveal at all.
 const RULE3 = /title=\{([A-Za-z_$][\w$.?]*)\}[^<>]*>\s*\{\1\}/g;
 
 const RULE5 = /^export\s+(?:async\s+)?(?:function|const)\s+((?:truncate|shorten|ellipsi|elide|abbrev|clip)[A-Za-z0-9_]*)/gm;
@@ -431,8 +384,8 @@ for (const file of walk(src)) {
   }
 
   // A truncating class assigned to a const and spread onto an element later is invisible to the
-  // tag scan above. It is where the primitives keep theirs, which is correct, but it is also
-  // where a call site could hide one, so the count is printed rather than assumed to be zero.
+  // tag scan above. The primitives keep theirs this way, but a call site could hide one too, so
+  // the count is printed.
   const tagRanges = tagList.map((t) => [t.index, t.index + t.tag.length]);
   for (const m of code.matchAll(/\b(?:truncate|text-ellipsis|line-clamp-\d+)\b/g)) {
     if (!tagRanges.some(([a, b]) => m.index >= a && m.index < b)) classesOutsideTags += 1;
@@ -535,8 +488,8 @@ if (arrayPreviews > ARRAY_PREVIEW_BASELINE) {
   offenders.push('array previews');
 }
 
-// A scan over nothing passes for the wrong reason, and a Tailwind upgrade is exactly what
-// silently breaks a class-name regex.
+// A scan over nothing passes for the wrong reason; a Tailwind upgrade can silently break a
+// class-name regex.
 if (tsxFiles < 150) offenders.push(`only ${tsxFiles} .tsx files scanned, expected at least 150`);
 if (truncatingTags < 30) {
   offenders.push(`only ${truncatingTags} truncating tags found, expected at least 30`);

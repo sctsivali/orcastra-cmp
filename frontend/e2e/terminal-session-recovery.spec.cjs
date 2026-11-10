@@ -1,11 +1,10 @@
 const { test, expect } = require("@playwright/test");
 const { BASE_URL, authenticate, installApiFixtures } = require("./support/fixtures.cjs");
 
-// An OrcaHub buyer opens /terminal/<id>?instance&host&project in a new tab. The terminal used to
-// refuse a stale ticket before accepting the socket, which the browser saw as a bare 1006, and a
-// session the IdP had ended still read as signed in, so the tab said "disconnected" and nothing
-// recovered. The socket now closes with a code the page acts on (lib/ws-close.ts), and the page
-// refreshes, signs in again, or stops and says why (lib/socket-recovery.ts).
+// An OrcaHub buyer opens /terminal/<id>?instance&host&project in a new tab. A stale ticket or a
+// session the IdP has ended must not leave the tab at "disconnected": the socket closes with a
+// code the page acts on (lib/ws-close.ts) instead of a bare 1006, and the page refreshes, signs
+// in again, or stops and says why (lib/socket-recovery.ts).
 
 const TERMINAL_PATH = "/terminal/e2e?instance=vm-a&host=cluster-a&project=default";
 const SESSION_USER = {

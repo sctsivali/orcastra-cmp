@@ -1,12 +1,11 @@
 #!/usr/bin/env node
-// The vendored spice-html5 patches that decide correctness, run for real (console overhaul,
-// 2026-10-30), plus the structural pieces the console engine relies on.
+// The vendored spice-html5 patches that decide correctness, run for real, plus the structural
+// pieces the console engine relies on.
 //
-// - wire.js reassembles a SPICE message from LXD's 32 KiB frames with one copy (pairwise merging
-//   re-copied the growing buffer per frame), and still processes a message completed by the
-//   remainder in the same call.
-// - utils.js encodes an extended key as e0 xx; it sent e0 xx plus a stray byte, and Print Screen
-//   sent a backtick.
+// - wire.js reassembles a SPICE message from LXD's 32 KiB frames with one copy, and still
+//   processes a message completed by the remainder in the same call.
+// - utils.js encodes an extended key as exactly e0 xx, with no trailing byte; Print Screen is
+//   e0 37.
 // - The console's own input engine owns the canvas (display.js external_input), only the focused
 //   console sends keys (no window-level forwarding), and no console reads the global
 //   spice_surface_<id> canvas by id (two consoles share that id).

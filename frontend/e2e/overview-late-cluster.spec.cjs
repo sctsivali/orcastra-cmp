@@ -3,8 +3,8 @@ const { authenticate } = require("./support/fixtures.cjs");
 const { installInventoryHardeningFixtures, expectCleanInventoryHarness } = require("./support/inventory-hardening-fixtures.cjs");
 const { fullInstance } = require("./support/api-fixture-data.cjs");
 
-// One cluster past the backend's 30 s inventory wall (2026-10-29: central-1). The instance list
-// answers with the other clusters and names the late one; the Overview no longer waits for it.
+// One cluster past the backend's 30 s inventory wall. The instance list answers with the other
+// clusters and names the late one; the Overview does not wait for it.
 
 const LATE = "cluster-b";
 const REASON = "unreachable: did not answer within 30s";
@@ -36,13 +36,13 @@ async function installLateCluster(page, role, options = {}) {
   let release = () => {};
   const held = new Promise((resolve) => { release = resolve; });
   const control = { held: true, release: () => { control.held = false; release(); }, instanceReads: 0 };
-  // note: registered after the inventory fixture, so these run first (Playwright matches routes
+  // Registered after the inventory fixture, so these run first (Playwright matches routes
   // in reverse registration order).
   await page.route("**/api/v1/projects", (route) => route.fulfill({ json: [
     { host: "cluster-a", projects: [project("cluster-a", "tenant-a")], total: 1, reachable: true, error: null },
     { host: LATE, projects: [project(LATE, "web")], total: 1, reachable: true, error: null },
   ] }));
-  // note: a regex, because the page's refetch carries a query string a glob would not match.
+  // A regex, because the page's refetch carries a query string a glob would not match.
   await page.route(/\/api\/v1\/instances(\?|$)/, async (route) => {
     control.instanceReads += 1;
     if (control.held) await held;
@@ -97,7 +97,7 @@ for (const role of ["admin", "partner"]) {
 
 test("admin: the Instances page gives the late cluster's reason", async ({ page, context }) => {
   await authenticate(context, "admin");
-  // The Instances page follows its clusters' events, which the harness allows by name.
+  // The Instances page follows its clusters' events, which instanceListPage admits.
   const { state, control } = await installLateCluster(page, "admin", { instanceListPage: true });
   control.release();
   await page.goto("/inventory/instances");

@@ -1,29 +1,12 @@
 #!/usr/bin/env node
-// Structural guard: the shipped personalization defaults are ONE colour each, and they are
-// legible.
+// Structural guard: the personalization defaults are one colour each, and they are legible.
 //
-// The default sidebar and accent are written down in five places, because the value has to be
-// available before React mounts (the CSS seeds), during the pre-paint script, in the client
-// bundle, in the settings picker, and to any user with no stored row (the backend). Nothing
-// held them together, and they came apart: --personalization-accent read #8b5cf6 while its own
-// --personalization-accent-h/s/l triplet read 262 83% 58%, which is #7c3bed. Both were live.
-// The hex painted .sidebar-active and the landing hero; the triplet is what globals.css binds
-// --primary and --ring to, so it painted every Button, Badge, switch, checkbox and focus ring
-// until hydration replaced it. Nobody noticed for the life of the feature, and
-// scripts/checks/check-semantic-colour.mjs quietly recorded a contrast baseline for the colour
-// the browser stops using.
-//
-// So this file does three things:
-//
-//   1. Reads every copy and fails when they disagree.
-//   2. Converts each hex itself and fails when a triplet does not describe its own hex. This is
-//      the rule that would have caught the defect above, and it is the reason the file exists.
-//   3. Measures the shipped pair. A default nobody can read is a defect whether or not the
-//      copies agree, and "check it by eye in both themes" is not a gate.
-//
-// Deliberately parser-free and dependency-free, like check-jsx-stray-attrs.mjs and
-// check-terminal-theme.mjs: the CI `guards` job runs checkout and setup-node and no `npm ci`,
-// so importing anything out of frontend/node_modules would fail there.
+// The defaults are written in each file of FILES, since each is read at its own moment: before
+// React mounts, in the pre-paint script, in the bundle, in the picker, and for a user with no
+// stored row. The hex paints .sidebar-active but globals.css binds --primary and --ring to the
+// h/s/l triplet, so a triplet that disagrees with its hex paints every Button, Badge and focus
+// ring another colour. Rule 1: every copy agrees. Rule 2: each triplet describes its own hex.
+// Rule 3: the default sidebar pair meets the contrast floor.
 //
 // Run: node scripts/checks/check-personalization-defaults.mjs [repo-root]
 
@@ -38,9 +21,8 @@ const FILES = {
   types: 'frontend/src/types/personalization.ts',
   provider: 'frontend/src/components/personalization-provider.tsx',
   layout: 'frontend/src/app/layout.tsx',
-  // important: this file and no other. #8b5cf6 is also a tag colour in frontend/src/types/api.ts,
-  // in the monitoring chart palette, and seeded into tag_prefixes by alembic revision 001. A
-  // guard that grepped the backend for the hex would report those as drift forever.
+  // This file only. The default hex also appears in alembic revisions and other backend
+  // modules, which a backend-wide grep would report as drift.
   backend: 'backend/app/routers/user_preferences.py',
 };
 
@@ -49,8 +31,8 @@ const offenders = [];
 const fail = (msg) => offenders.push(msg);
 
 // ---------------------------------------------------------------------------------------
-// Colour maths. Same rounding as hexToHSL in frontend/src/lib/color.ts, on purpose: a guard that rounds
-// differently from the code reports drift that does not exist.
+// Colour maths. Same rounding as hexToHSL in frontend/src/lib/color.ts, so rounding alone never
+// reports drift.
 // ---------------------------------------------------------------------------------------
 
 const rgb = (hex) => {
@@ -129,7 +111,7 @@ for (const [varBase, hex] of [
 }
 
 // The layered --primary/--ring fallback is only reached when the personalization binding is
-// invalid, but "only reached on failure" is not a reason for it to be a colour we never ship.
+// invalid; it has to be the default accent too.
 {
   const want = rgb(shipped.accent) ? hexToHsl(shipped.accent) : null;
   for (const token of ['primary', 'ring']) {
@@ -257,7 +239,7 @@ for (const [varBase, hex] of [
 }
 
 // ---------------------------------------------------------------------------------------
-// Rule 3: the shipped pair is legible
+// Rule 3: the default pair is legible
 // ---------------------------------------------------------------------------------------
 
 if (rgb(shipped.sidebarBg) && rgb(shipped.sidebarText)) {
@@ -265,8 +247,7 @@ if (rgb(shipped.sidebarBg) && rgb(shipped.sidebarText)) {
   const text = rgb(shipped.sidebarText);
   const accent = rgb(shipped.accent) ?? text;
 
-  // Alpha is stripped and composited rather than ignored: reading rgba() as if it were opaque
-  // is how a measurement flatters itself.
+  // Composite rgba() over the ground; reading it as opaque overstates the contrast.
   const alpha = /rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)[,\s/]+([\d.]+)\s*\)/.exec(
     shipped.sidebarMuted ?? '',
   );

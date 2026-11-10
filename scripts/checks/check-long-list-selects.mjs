@@ -2,16 +2,14 @@
 // Structural guard: a list that comes from an API with no upper bound is searchable.
 //
 // An enum the code declares (units, tri-states, a disk kind) is fine as a plain Radix Select.
-// A list of projects, pools, volumes, networks or organisations is not: on one fleet the
-// project picker on the create-instance form held more rows than the popover could show, and
-// the operator scrolled for the one they wanted. SearchableSelect (components/ui) renders a
-// search row once a list passes its threshold and stays as compact as a Select under it, so
-// there is no reason to hand a data-driven list to <Select>.
+// A list of projects, pools, volumes, networks or organisations can hold more rows than the
+// popover shows. SearchableSelect (components/ui) renders a search row once a list passes its
+// threshold and stays as compact as a Select under it.
 //
 // The shape test below flags a <SelectContent> whose body maps a data-looking identifier into
 // <SelectItem>. Every conversion is registered by the trigger id it carries so a spec can find
 // it; a file that still needs the plain shape is registered with the reason, and a registry
-// entry naming a file that no longer exists fails, so coverage cannot be claimed for nothing.
+// entry naming a missing file fails, so coverage cannot be claimed for nothing.
 //
 // Run: node scripts/checks/check-long-list-selects.mjs [repo-root]
 

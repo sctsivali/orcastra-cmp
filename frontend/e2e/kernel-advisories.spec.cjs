@@ -24,7 +24,7 @@ async function install(page, role, options = {}) {
 // previews the list, a click, tap or Enter opens every member's detail, and the alarm tile and
 // the Kernel CVEs tab count the same rows. A tenant never asks.
 //
-// note: every negative below has a positive control with the same locator in another test, so
+// Every negative below has a positive control with the same locator in another test, so
 // none of them can pass because the thing it names stopped rendering for everyone.
 
 const cveChip = (scope, cluster) =>

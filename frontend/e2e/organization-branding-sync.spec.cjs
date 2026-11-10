@@ -81,9 +81,9 @@ test("a response from an old organization is ignored when membership changes dur
   await expectCleanSettingsHarness(api);
 });
 
-// An Administrator without the partner role used to read its personal row as its whole branding.
-// The server now answers my-preferences with the deployment default for it, and a personal row
-// carries only the theme, so branding left in an old personal row is ignored.
+// For an Administrator without the partner role the server answers my-preferences with the
+// deployment default, and a personal row carries only the theme, so branding left in an older
+// personal row is ignored.
 test("an Administrator without Partner sees the deployment default, not a personal copy", async ({ page }) => {
   await authenticate(page.context(), "admin");
   const api = await installSettingsFixtures(page, "admin", { personal: { branding: { appName: "QA admin", footerText: "QA admin footer" } } });

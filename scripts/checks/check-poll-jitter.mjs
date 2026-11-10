@@ -3,9 +3,8 @@
 //
 // jitter() returns a different value on every call. Called in a render body, it hands TanStack
 // Query a new refetchInterval on every render, and the observer restarts its interval timer
-// whenever the interval changes. A page that re-renders more often than the interval therefore
-// never polls at all: the Overview re-renders on its 30 s instance poll, so its 180 s cluster poll
-// never fired. Seven hooks had it. The only safe call site is a lazy useState initialiser.
+// whenever the interval changes, so a page that re-renders more often than the interval never
+// polls. The only safe call site is a lazy useState initialiser.
 //
 // Run: node scripts/checks/check-poll-jitter.mjs [repo-root]
 

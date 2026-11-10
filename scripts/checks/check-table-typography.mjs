@@ -2,10 +2,9 @@
 /**
  * Structural guard for table cell typography.
  *
- * The console had 27 tables whose cells each invented their own size, weight, colour and
- * font family. The baseline now lives once on TableCell in components/ui/table.tsx, so a
- * call site should only ever add layout: weight on the identifier column, monospace,
- * alignment, width and responsive visibility.
+ * The cell baseline (size, weight, colour, font family) lives once on TableCell in
+ * components/ui/table.tsx, so a call site only adds layout: weight on the identifier column,
+ * monospace, alignment, width and responsive visibility.
  *
  * This flags any other class on a <TableCell> or <TableHead> with a literal className.
  * Cells whose className is a template literal or a cn(...) call are skipped and counted,
@@ -90,11 +89,9 @@ const byFile = new Map();
 for (const v of violations) byFile.set(v.file, (byFile.get(v.file) ?? 0) + 1);
 
 // --- rule 2: no arbitrary font sizes ------------------------------------------------
-// The cell check above only sees TableCell/TableHead classNames. It cannot see a
-// `text-[10px]` on a Badge nested inside a cell, which is how sixteen undersized chips
-// survived the first sweep. Arbitrary sizes are banned outright: they sit between two
-// steps of a scale that exists so sizes stay comparable, and below the readable floor
-// for text a user is expected to act on.
+// The cell check above only sees TableCell/TableHead classNames, not a `text-[10px]` on a
+// Badge nested inside a cell, so this scans every file. Arbitrary sizes sit between two steps
+// of the scale and below the readable floor for text a user acts on. Ratcheted below.
 const arbitrary = [];
 for (const file of walk(ROOT)) {
   const src = readFileSync(file, "utf8");
@@ -106,30 +103,14 @@ for (const file of walk(ROOT)) {
 }
 
 // --- rule 3: a ratchet on badges inside table bodies ---------------------------------
-// Status and Severity columns keep their Badge by an explicit product decision, so a hard
-// ban would fail on purpose-built code. A ratchet instead: the count may fall, never rise.
-// Raise BADGE_BASELINE only with a reason.
-// 17 to 16: the clusters page rendered the hypervisor type as a pill. Type is not Status or
-// Severity, so it was never one of the two exceptions this baseline exists to hold.
-// 16 to 17: the Installed add-ons list became a table, and its Status column carries the
-// installation's state. That is Status, so it is one of the two exceptions rather than a new
-// pill: the same value was already a Badge while the list was a feed, and converting the markup
-// is not a reason to start spelling it differently.
-// 17 to 15: the dead components/vm-table.tsx was deleted with its two status pills.
-// 15 to 16: the Synced Organizations table (components/integrations/synced-organizations-panel.tsx)
-// has an Owner State column, the owner key's status, so it is the Status exception. The badge is
-// what an administrator scans the list for: which organizations sit behind a key that stopped working.
+// Status and Severity columns keep their Badge, which a hard ban would reject. The count may
+// fall, never rise. Raise BADGE_BASELINE only for a Status or Severity column, ex; the Owner
+// State column in components/integrations/synced-organizations-panel.tsx.
 const BADGE_BASELINE = 15;
-// A ratchet, not a ban. The remaining occurrences live on chart, console and dialog-form
-// surfaces rather than in table cells: the on-screen keyboard's legends are laid out to a
-// fixed key size, and the monitoring charts pack labels into fixed gutters. Bumping those
-// needs a layout pass on those pages, which is its own change. May fall, never rise.
-// Lowered 75 -> 68. Seven text-[10px] cleared as a side effect of the value-reveal pass: the
-// tenant policy description and its Badge, the terminal tray host line, and four more that moved
-// onto the scale when their surrounding markup was rewritten. The rest still live on chart and
-// console surfaces laid out to fixed gutters, which need a layout pass rather than a find and
-// replace. May fall, never rise.
-// 68 to 67: the dead components/vm-table.tsx was deleted with its one arbitrary size.
+// The remaining arbitrary sizes live on chart, console and dialog-form surfaces rather than in
+// table cells: the on-screen keyboard's legends are laid out to a fixed key size, and the
+// monitoring charts pack labels into fixed gutters. Moving those onto the scale needs a layout
+// pass on those pages. May fall, never rise.
 const ARBITRARY_BASELINE = 41;
 let badgesInBodies = 0;
 for (const file of walk(ROOT)) {
@@ -141,20 +122,10 @@ for (const file of walk(ROOT)) {
 
 // --- rule 4: no click handler on a table cell ----------------------------------------
 // A td is not focusable, gets no focus ring, and is invisible to keyboard and switch users.
-// Wrap the text in TableLink instead, which renders a real button or anchor. This is a hard
-// ban rather than a ratchet: there is no case where a bare <TableCell onClick> is correct.
-//
-// <TableRow onClick> is the same defect one element up, and it hid behind this rule for a
-// while because the check only looked at cells. A tr is no more focusable than a td, so a
-// whole-row click is mouse-only too, and it is worse in one respect: the row usually carries
-// cursor-pointer, so it advertises an affordance that keyboard users cannot reach. The
-// warnings page shipped exactly that, and its card even told every reader to click a row.
-//
-// <TableHead onClick> is the third. It hid for longer and cost more: SortableTableHead put the
-// handler on the th, so column sorting was mouse-only in all 26 tables at once, and this rule
-// could not see it because it listed the two element names where the defect had been found
-// rather than every element that can carry it. The header now renders a real button inside the
-// th, with aria-sort on the th where the ARIA spec puts it.
+// Wrap the text in TableLink, which renders a real button or anchor. A hard ban rather than a
+// ratchet. <TableRow onClick> and <TableHead onClick> are the same defect: a tr or th is no more
+// focusable than a td. A sortable header renders a real button inside the th, with aria-sort on
+// the th where the ARIA spec puts it.
 const clickableCells = [];
 for (const file of walk(ROOT)) {
   const src = readFileSync(file, "utf8");
@@ -181,11 +152,7 @@ console.log(
     `   mouse-only rows and cells: ${clickableCells.length}`
 );
 
-// A ratchet rather than a ban. The remaining occurrences live on chart, console and
-// dialog-form surfaces, not in table cells: the on-screen keyboard's legends are laid out
-// to a fixed key size, and the monitoring charts pack labels into fixed gutters. Bumping
-// those needs a layout pass on those pages, which is its own change. The count may fall,
-// never rise. Lower ARBITRARY_BASELINE as they are cleared.
+// A ratchet: the count may fall, never rise. Lower ARBITRARY_BASELINE as sizes are cleared.
 if (arbitrary.length > ARBITRARY_BASELINE) {
   console.log(
     `\nArbitrary font sizes rose from ${ARBITRARY_BASELINE} to ${arbitrary.length}. ` +

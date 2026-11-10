@@ -2,9 +2,9 @@ const { test, expect } = require("@playwright/test");
 const { authenticate, capture, countRequests, expectNoHorizontalOverflow } = require("./support/fixtures.cjs");
 const { expectCleanSettingsHarness, installSettingsFixtures } = require("./support/settings-fixtures.cjs");
 
-// The release notice (2026-10-27): an Administrator is told when the running version is out of
-// date. End of life and a missing security fix cannot be dismissed; deprecated comes back after
-// seven days; a newer release stays hidden until the next one. Nobody else is ever asked.
+// The release notice tells an Administrator when the running version is out of date. End of
+// life and a missing security fix cannot be dismissed; deprecated comes back after seven days;
+// a newer release stays hidden until the next one. No other role asks for the release status.
 
 const DOCS = "https://docs.orcastra.io/en/latest/operations";
 const verdict = (level, reasons, extra = {}) => ({

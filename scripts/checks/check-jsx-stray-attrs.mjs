@@ -1,42 +1,16 @@
 #!/usr/bin/env node
 /**
- * A JSX attribute that ends up below the `>` of its own opening tag is not an attribute.
- * It is a text child, and JSX renders it verbatim.
+ * A JSX attribute below the `>` of its own opening tag is a text child, rendered verbatim:
  *
  *   <Button variant="ghost" size="icon" className="h-7 w-7">
  *   aria-label={`Project actions for ${project.name}`}
- *     <MoreVertical className="h-4 w-4" />
- *   </Button>
  *
- * That shipped. Every project card on /inventory drew the literal string
- * "aria-label=Project actions for <name>" across its title and pushed the host badge out
- * of the card, and the kebab trigger it was meant to name announced as a bare "button"
- * for three days. It arrived in c49df53, the commit whose entire purpose was to give that
- * button an accessible name.
+ * The button draws the literal text and stays unnamed. tsc and eslint accept it, and
+ * check-icon-button-names.mjs misses it: isIconOnly() needs exactly one self-closing child.
  *
- * Nothing already in the repo could see it:
- *
- *   tsc          a text child is valid JSX, so there is no type error
- *   eslint       likewise, no rule fires
- *   check-icon-button-names.mjs
- *                skips it. isIconOnly() requires the body to be exactly one
- *                self-closing element, and the stray text makes the body look like an
- *                ordinary labelled button, so the button is never even counted
- *
- * Hence this file. Deliberately parser-free: the CI `guards` job runs with no `npm ci`,
- * so importing typescript from frontend/node_modules would fail there.
- *
- * What it catches: a line that is nothing but attributes, sitting where a child belongs.
- * That is the copy-paste shape the defect actually took.
- *
- * What it does not catch: a leak written inline on the same line as the tag,
- * `<Button className="x"> aria-label={foo}`. Detecting that needs a real parser. The hole
- * is stated rather than papered over, in the register the other guards here use.
- *
- * Cross-checked once against a full TypeScript AST walk of the same tree, looking for
- * JsxText nodes shaped like an attribute. Both found dashboard.tsx:719 and nothing else.
- *
- * Zero, not a ratchet. The tree is clean and this shape is never intentional.
+ * Line-based, without a parser: it flags a line of nothing but attributes in child position,
+ * but not a leak on the tag's own line (`<Button className="x"> aria-label={foo}`).
+ * Zero findings allowed; there is no baseline.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';

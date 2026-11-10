@@ -3,8 +3,8 @@
  * Exercise the browser auth boundary without a live IdP.
  *
  * The runtime cases compile the production API client, replace only fetch, and drive direct
- * authenticated A -> B transitions. Structural assertions cover the React gate that cannot be
- * mounted in this repository because it intentionally has no frontend test runner.
+ * authenticated A -> B transitions. Structural assertions cover the React gate, which cannot be
+ * mounted here because the repository has no frontend test runner.
  *
  * Run: node scripts/checks/check-auth-transition-isolation.mjs [repo-root]
  */
@@ -133,8 +133,8 @@ assert.deepEqual(await Promise.all([firstSameActorRead, secondSameActorRead]), [
   { shared: true },
 ]);
 
-// A read asked for after a write must not join a GET that started before the write: that
-// handed a delete's own refetch the pre-delete list.
+// A read asked for after a write must not join a GET that started before the write, or a
+// delete's own refetch gets the pre-delete list.
 const preWriteRead = deferred();
 let writeEpochReads = 0;
 fetchImplementation = (call) => {
@@ -307,7 +307,7 @@ stopWatchingActor();
 
 // Break-glass lives outside the React tree, so exercise its actor epoch directly. A delayed
 // A request or grant must stay retired even when the identity cycles A -> B -> A, where comparing
-// only an actor label would otherwise suffer the classic ABA race.
+// only an actor label would hit the ABA race.
 function createTestZustandStore(initializer) {
   let state;
   const get = () => state;
@@ -465,10 +465,10 @@ const authSessionImporters = sourceFiles(join(root, "frontend/src"))
   .map((path) => path.slice(join(root, "frontend/src").length + 1));
 const hydrateReader = authSession.slice(authSession.indexOf("export async function readHydratableSession"));
 
-// The masked token round trip, run for real: masking is what keeps a bearer next to echoed
+// The masked token round trip against the real module. Masking keeps a bearer next to echoed
 // attacker text in a compressed document from leaking through its length (BREACH).
-// note: the frontend runs on Node 24 and in browsers, both with a global WebCrypto; the host's
-// Node 18 only exposes it as a module.
+// The frontend runs on Node 24 and in browsers, both with a global WebCrypto; the host's Node 18
+// only exposes it as a module.
 globalThis.crypto ??= (await import("node:crypto")).webcrypto;
 const hydratedSession = compileCommonJs("frontend/src/lib/hydrated-session.ts", {});
 {
@@ -559,7 +559,7 @@ const structuralChecks = [
     "a stale sign-out confirmation can clear a newer actor's bearer",
   ],
   [
-    // the write epoch keeps a post-write read from joining a GET that predates the write
+    // The write epoch keeps a post-write read from joining a GET that predates the write
     /const inflightKey = `\$\{authGeneration\}:\$\{_writeEpoch\}:\$\{endpoint\}`/.test(apiSource) &&
       /_inflightGets\.get\(inflightKey\)/.test(apiSource) &&
       /_inflightGets\.set\(inflightKey, request\)/.test(apiSource),

@@ -84,7 +84,7 @@ if (!readFileSync(join(src, GENERATOR), "utf8").includes("crypto.getRandomValues
 }
 if (scanned < 12) failures.push(`only ${scanned} files scanned; the panel moved and this check went blind`);
 
-// Behaviour, not only text: run the generator and the private-key test as shipped.
+// Run the real generator and private-key test, beyond scanning their text.
 const ts = createRequire(join(root, "frontend/package.json"))("typescript");
 function load(relativePath) {
   const output = ts.transpileModule(readFileSync(join(src, relativePath), "utf8"), {

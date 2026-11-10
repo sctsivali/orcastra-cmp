@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Middleware must not echo an unchanged session cookie. NextAuth appends the re-encoded session
-// to every middleware response; one that lands after a /api/auth/session refresh restored the
+// to every middleware response; one that lands after a /api/auth/session refresh restores the
 // older session (a rotated refresh token, or a background cooldown). This runs the real helper
-// with the real next-auth/jwt encoder and reader against cookies shaped like the live ones.
+// with the real next-auth/jwt encoder and reader against cookies shaped like real ones.
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import { readFileSync } from "node:fs";

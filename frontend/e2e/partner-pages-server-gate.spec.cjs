@@ -2,10 +2,9 @@ const { test, expect } = require("@playwright/test");
 const { authenticate, expectServerRedirectHome } = require("./support/fixtures.cjs");
 
 // Every page that gates itself to Partner in the browser is also refused on the server, so a
-// tenant deep link is redirected home before the page shell loads. The production RC4 hotfix line
-// redirected seven of these on the server and the dev line only two (found in the RC5 acceptance,
-// 2026-11-05). scripts/checks/check-role-gates.mjs keeps auth.ts and the pages in step; this
-// proves the running middleware does what the list says.
+// tenant deep link is redirected home before the page shell loads.
+// scripts/checks/check-role-gates.mjs keeps auth.ts and the pages in step; this proves the
+// running middleware does what the list says.
 const PARTNER_PAGES = [
   "/inventory/identities",
   "/inventory/groups",
@@ -38,8 +37,8 @@ test("a partner still gets every partner page", async ({ page }) => {
 });
 
 test("a Partner known by a role_ alias group gets every partner page too", async ({ page }) => {
-  // The server reads groups the way the page and the API do (types/rbac.ts): role_orcastra-partners
-  // is a Partner there. A local group list on the server called it a Tenant and sent it home.
+  // The server reads groups the way the page and the API do (types/rbac.ts), so
+  // role_orcastra-partners is a Partner there too.
   await authenticate(page.context(), "partner", { groups: ["role_orcastra-partners"] });
   for (const path of PARTNER_PAGES) {
     const response = await page.request.get(path, { maxRedirects: 0 });
@@ -49,8 +48,8 @@ test("a Partner known by a role_ alias group gets every partner page too", async
 
 test("a session with no role keeps its URL on a partner page, for the access gate to answer", async ({ page }) => {
   // The access gate shows the no-role notice on any page and keeps the address, so Check again
-  // lands where the person was going once a role is granted. The partner redirect is for a role
-  // below Partner, not for no role at all (found by the gate's own live spec, 2026-11-06).
+  // lands where the person was going once a role is granted. The partner redirect applies only
+  // to a role below Partner; an account with no role gets the gate.
   await authenticate(page.context(), "tenant", { groups: [] });
   for (const path of PARTNER_PAGES) {
     const response = await page.request.get(path, { maxRedirects: 0 });

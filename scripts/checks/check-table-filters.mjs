@@ -1,13 +1,9 @@
 #!/usr/bin/env node
 // Structural guard: every column an operator can see, an operator can filter by.
 //
-// The first version asked a weaker question, because the system could only answer a weaker
-// one: it treated a count column as legitimately exempt on the reasoning that "which has the
-// most" is answered by sorting. That stopped being true when number, date and text kinds
-// arrived, and the exemption then waived exactly the columns the rule now requires. Inverted.
-//
-// The defect behind all of this: 18 of 24 tables offered zero or one option in "Add filter",
-// on pages whose tables carry five to ten columns.
+// A column with a sort accessor also needs a facet, a filter, a search or a written waiver.
+// Sorting does not replace filtering: the number, date and text filter kinds cover count and
+// date columns too.
 //
 // Run: node scripts/checks/check-table-filters.mjs [repo-root]
 
@@ -20,7 +16,7 @@ const src = join(root, 'frontend', 'src');
 
 const RESERVED = ['q', 'sort', 'dir', 'show', 'tab'];
 
-/** Paths are relative to `frontend/src`, so the primitives live under this prefix, not `ui/`. */
+/** Paths are relative to `frontend/src`, so the primitives prefix starts at `components/`. */
 const UI_DIR = 'components/ui/';
 
 // Node and project are the dimensions the product is organised around, so a column that IS one
@@ -31,7 +27,7 @@ const PROJECT_FIELDS = new Set(['project', 'projects']);
 
 // Where the same spelling is the row's own identity rather than a dimension.
 // `clusters.cluster` is the row; `certificates.cluster` is the node it belongs to. No
-// name-based rule can tell those apart, which is exactly why `role` is declared, not inferred.
+// name-based rule can tell those apart, so `role` is declared rather than inferred.
 const ROLE_EXEMPT = new Map([
   ['app/inventory/clusters/page.tsx', 'a cluster row IS the node'],
   ['app/inventory/clustering/members/page.tsx', 'server_name is a host inside the selected cluster; node is the reserved selector'],
@@ -41,24 +37,14 @@ const ROLE_EXEMPT = new Map([
 /** Non-pinned facets rendered at rest. Node and project are structural and unbudgeted. */
 const MAX_RESTING_FACETS = 2;
 
-// Terminal find-bars, create-form pickers, the tag popover. Not table toolbars.
-// Was 5 until the API key cluster picker (components/cluster-access-selector.tsx) adopted
-// SearchInput, which it should have used from the start: it is the write-side twin of the
-// cluster-access panel and had hand-rolled the same control one file away.
-// The four left are cluster-location-dialog, console/iso-manager-panel, groups/edit-group-dialog
-// and tag-manager.
-// Ratchet: may fall, never rise.
+// Hand-rolled search inputs outside table toolbars (find-bars, create-form pickers, the tag
+// popover): cluster-location-dialog, console/iso-manager-panel, groups/edit-group-dialog and
+// tag-manager. Ratchet: may fall, never rise.
 const HANDROLLED_SEARCH_BASELINE = 4;
 
-// important: every rule below keys off `defineTable`, so a table that renders TableBody
-// directly is not exempt from the contract, it is invisible to the check. Four files are in
-// that state today. Counting them keeps the headline number from reading as "every table in
-// the app".
-//
-// Fell from six when the Snapshots page moved its table body into a component beside its own
-// defineTable. That was forced rather than chosen: extracting the body and leaving the
-// definition behind would have made it seven and failed the build. Fell to four when the dead
-// components/vm-table.tsx was deleted.
+// Every rule below keys off `defineTable`, so a table that renders TableBody directly is
+// invisible to the check. Counting those keeps the summary from reading as "every table in the
+// app". A table body moved into its own component must take its defineTable with it.
 // Ratchet: may fall, never rise.
 const UNMANAGED_TABLE_BASELINE = 4;
 
@@ -94,11 +80,9 @@ function readTables(code) {
 
     const block = code.slice(columnsAt, end);
     const columns = [];
-    // note: splitting on `field:` puts everything BEFORE a column's field name into the
-    // PREVIOUS column's chunk, and a waiver comment is naturally written above `field:`. The
-    // per-column waiver therefore never matched its own column; it was the file-wide fallback
-    // that made my-keys pass, and removing that fallback is what exposed this. `lead` is the
-    // text from the brace that opens this column up to its field name.
+    // Splitting on `field:` puts everything before a column's field name into the previous
+    // chunk, and a waiver comment sits above `field:`. `lead` is the text from the brace that
+    // opens this column up to its field name, so the waiver matches its own column.
     const parts = block.split(/field:\s*"/);
     for (let i = 1; i < parts.length; i += 1) {
       const part = parts[i];
@@ -108,9 +92,7 @@ function readTables(code) {
       const field = part.slice(0, part.indexOf('"'));
       const body = lead + part.slice(part.indexOf('"') + 1);
       const label = (body.match(/label:\s*"([^"]*)"/) ?? [])[1] ?? '';
-      // note: not /\n\s*facet:/. A column written on one line has no newline before its flags,
-      // and a guard that only recognises the formatting its author had in mind is the blind
-      // spot table-conventions.md warns about. This file has hit it three times.
+      // Word boundaries rather than /\n\s*facet:/, so a one-line column still matches.
       columns.push({
         field,
         label,
@@ -163,11 +145,8 @@ for (const file of walk(src)) {
     }
   }
 
-  // A table the contract never reached. `components/ui/` holds the primitives it is built from,
-  // and a wrapper primitive that renders TableBody itself is not an unmanaged table.
-  // note: the prefix is `components/ui/`, not `ui/`. relPosix is relative to `frontend/src`, so
-  // every path here starts at `app/` or `components/`. The first version of this guard tested
-  // `ui/` and was inert, passing only because no primitive rendered a TableBody at the time.
+  // A table outside the contract. A primitive under `components/ui/` that renders TableBody
+  // itself is not an unmanaged table; relPosix starts at `app/` or `components/`, hence UI_DIR.
   if (!relPosix.startsWith(UI_DIR) && /<TableBody\b/.test(code) && !/defineTable</.test(code)) {
     unmanaged += 1;
     unmanagedFiles.push(rel);
@@ -189,15 +168,10 @@ for (const file of walk(src)) {
         offenders.push(`${rel}: column "${column.field}" collides with a reserved query key`);
       }
 
-      // Rule 0: `fromSort()` derives the filter FROM the sort accessor, so a column using it
-      // must declare one. table-filter.ts:398 throws when it does not, at module scope, which
-      // means the whole importing module dies rather than one cell. A shared component took
-      // six inventory pages to "Failed to load page" this way: zero rows, zero requests.
-      //
-      // important: a hard ban, never a ratchet. The runtime treats it as unconditionally
-      // fatal, so there is no legitimate existing case to grandfather. tsc cannot see it
-      // either, because both properties are individually well-typed and only their
-      // combination is invalid, which is exactly the class this file exists to catch.
+      // Rule 0: `fromSort()` derives the filter from the sort accessor, so a column using it
+      // must declare one. resolveDeclaration in lib/table-filter.ts throws at module scope when
+      // it does not, which takes down every page importing the table. tsc cannot see it: both
+      // properties are well-typed on their own. A hard ban, never a ratchet.
       if (column.usesFromSort && !column.hasSort) {
         offenders.push(
           `${rel}: column "${column.field}" uses fromSort() but declares no sort accessor. ` +
@@ -207,11 +181,8 @@ for (const file of walk(src)) {
 
       // Rule 1: a rendered column is filterable, searchable, or carries a written waiver.
       //
-      // important: the waiver is per COLUMN. It used to also accept a `// filter-coverage:`
-      // comment anywhere in the file, which meant the note on groups/page.tsx explaining why
-      // that table has no project dimension silently exempted all eight of its columns from
-      // this rule. A waiver for a column that does not exist cannot trip this rule anyway, so
-      // the file-wide form bought nothing and disabled the check wholesale.
+      // important: the waiver is per column. A file-wide `// filter-coverage:` would silently
+      // exempt every column in the file.
       if (column.hasSort && !filterable && !column.hasSearch && !column.waived) {
         offenders.push(
           `${rel}: column "${column.field}" has a sort accessor but no facet, filter or search`,

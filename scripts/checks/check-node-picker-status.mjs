@@ -2,17 +2,14 @@
 // Structural guard: a control that asks an operator to choose a cluster must say whether that
 // cluster is answering.
 //
-// The vocabulary, the dot and the consequence line all live in lib/cluster-status.ts,
-// components/ui/searchable-select.tsx and components/ui/node-status-notice.tsx. What keeps going
-// wrong is coverage, and it takes two shapes. Four pickers were never wired to the hook and kept
-// a plain Select over bare names, two of them dropping the clusters that were not answering. Then
-// a fifth called useNodePickerOptions, so a guard that only looked for the call was satisfied,
-// and rendered the result through a plain Select that printed the display name and nothing else.
+// The vocabulary, the dot and the consequence line live in lib/cluster-status.ts,
+// components/ui/searchable-select.tsx and components/ui/node-status-notice.tsx. This checks
+// coverage: a picker with a plain Select over bare names, or one that calls useNodePickerOptions
+// but renders the result through a plain Select, prints names with no status.
 //
-// Neither shape is visible from inside one file, which is why it is checked here rather than
-// reviewed. Every picker is registered below with how it resolves status; a 'hook' picker must
-// also hand the hook's options to SearchableSelect, and a create form must render the
-// NodeStatusNotice that says creating on an offline cluster will fail.
+// Every picker is registered below with how it resolves status. A 'hook' picker must hand the
+// hook's options to SearchableSelect, and a create form must render the NodeStatusNotice that
+// says creating on an offline cluster will fail.
 //
 // Run: node scripts/checks/check-node-picker-status.mjs [repo-root]
 
@@ -37,7 +34,7 @@ const PICKERS = new Map([
     hookSource: 'components/instance-create/use-base-inventory.ts',
     optionsAlias: 'nodeOptions',
   }],
-  // exported, mounted by no route; covered statically only
+  // Exported, mounted by no route; covered statically only.
   ['components/vm-create-form.tsx', { kind: 'hook', notice: true }],
   ['components/project-create-form.tsx', { kind: 'hook', notice: true }],
   ['components/networks/network-create-dialog.tsx', { kind: 'hook', notice: true }],
@@ -46,22 +43,17 @@ const PICKERS = new Map([
   ['components/image-upload-dialog.tsx', { kind: 'hook', notice: true }],
   ['components/iso-upload-dialog.tsx', { kind: 'hook', notice: true }],
   ['components/groups/create-group-dialog.tsx', { kind: 'hook', notice: true }],
-  // The Generate Key dialog moved out of the page into its own component (2026-10-27).
   ['app/my-keys/components/create-key-dialog.tsx', { kind: 'hook', notice: true }],
   ['app/inventory/snapshots/components/take-snapshot-dialog.tsx', { kind: 'hook', notice: true }],
-  // Access Policies and Tenant Access share this one rule editor since 2026-11-03.
+  // Shared by the Access Policies and Tenant Access editors.
   ['components/access-policies/rule-editor.tsx', { kind: 'meta', notice: false }],
   ['app/inventory/clustering/members/page.tsx', { kind: 'meta', notice: false }],
   ['components/monitoring/node-filter-select.tsx', { kind: 'meta', notice: false }],
-  // Closed. /api/v1/integrations/available-clusters now sends status, reason and checked_at, so
-  // the component resolves it like every other picker instead of offering bare names. It is a
-  // checkbox list of clusters an API key may reach, not a single choice, so no SearchableSelect.
+  // /api/v1/integrations/available-clusters sends status, reason and checked_at. A checkbox list
+  // of the clusters an API key may reach, so no SearchableSelect.
   ['components/cluster-access-selector.tsx', { kind: 'meta', notice: false, list: true }],
-  // note: this one slipped the check for its whole life by being split across two files. The page
-  // called useNodePickerOptions but rendered no Select, and the picker rendered a Select whose
-  // options arrived as a prop named `nodeOptions`, so neither half matched both halves of the
-  // shape test. Splitting a picker across a component boundary is a way past this guard, which
-  // is worth knowing about the guard. A scope picker, so no create notice.
+  // A scope picker, so no create notice. A picker split across a component boundary (the hook in
+  // one file, the Select in another) matches neither half of the shape test, so keep both here.
   ['app/inventory/snapshots/components/snapshot-scope-picker.tsx', { kind: 'hook', notice: false }],
 ]);
 
@@ -186,8 +178,7 @@ function checkHookPicker(rel, body, entry, failures) {
 }
 
 function checkMetaPicker(rel, body, entry, failures) {
-  // note: word-boundary, not includes(). A first cut used includes() and a probe that renamed
-  // the call to clusterStatusMetaX still passed, because the old name is a prefix of the new.
+  // Word boundary: includes() would also accept a renamed `clusterStatusMetaX`.
   if (!/\bclusterStatusMeta\b/.test(body)) {
     failures.push(
       `${rel}: registered as 'meta' but does not use clusterStatusMeta. ` +
@@ -236,7 +227,7 @@ for (const full of files) {
   }
 }
 
-// A registry entry naming a file that no longer exists is a stale claim of coverage.
+// A registry entry whose file is missing is a stale claim of coverage.
 for (const rel of [...PICKERS.keys(), ...NOT_A_PICKER.keys()]) {
   if (!seen.has(rel)) {
     failures.push(`${rel}: registered here but not found under frontend/src. Stale entry.`);

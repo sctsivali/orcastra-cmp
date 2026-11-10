@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Structural security guard: tenant-visible surfaces must not mount the privileged node
-// inventory query. The backend remains authoritative, but a UI that knowingly calls a 403
-// endpoint leaks intent, produces broken dialogs, and can regress as soon as a role gate moves.
+// inventory query. The backend stays authoritative, but a UI that calls a 403 endpoint renders
+// broken dialogs and exposes inventory as soon as a role gate moves.
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // Structural guard: a backend that names its dead clusters is useless if the page drops the label.
 //
-// Eleven routers report unreachable_nodes so an outage cannot read as an empty result. Twice now
-// the two halves drifted apart. networks.py shipped the field without seeding it, and lxd_server.py
-// and lxd_warnings.py seeded it while their pages never rendered the banner, so the operator saw a
-// shorter list and nothing explaining why. Neither gap was visible from inside one file.
+// Routers report unreachable_nodes so an outage cannot read as an empty result. The field and the
+// banner live in different files, so either half can drift unseen: a router that reports the field
+// without seeding it, or a page that never renders the banner and shows a shorter list with
+// nothing explaining why.
 //
 // The backend half is ratcheted in backend/tests/test_fresh_bypass_is_wired.py. This is the front
 // half: every router that reports the field must map to a page, and every mapped page must render
@@ -57,7 +57,7 @@ for (const router of reporting) {
       offenders.push(`${page} is mapped from ${router} but does not exist`);
       continue;
     }
-    // the JSX tag, not the bare name: an import alone renders nothing
+    // The JSX tag, not the bare name: an import alone renders nothing.
     const source = readFileSync(path, 'utf8');
     if (!source.includes('<UnreachableNodesBanner')) {
       offenders.push(`${page} drops the unreachable_nodes that ${router} reports`);
@@ -92,10 +92,8 @@ const DECLARATION = /^(?:export\s+(?:default\s+)?)?(?:async\s+)?(?:function\b|co
 
 // Show Details is the whole diagnosis: a banner with no reasons lists bare names under it.
 //
-// One banner per list, too. Pages used to stack one banner for the unreachable clusters and one
-// for the partly read ones, and the Overview one for projects and one for instances, so an
-// operator read "5" and "1" in two cards and was never told it was 6 clusters. The banner takes
-// partialNodes now; a second tag in the same component is that stack coming back.
+// One banner per list: unreachable and partly read clusters go to the same banner (partialNodes),
+// so the operator reads one total. A second tag in the same component splits that count.
 let banners = 0;
 for (const file of walk(join(root, 'frontend', 'src'))) {
   if (file.endsWith('unreachable-nodes-banner.tsx')) continue;

@@ -48,8 +48,8 @@ for (const key of routeFiles) {
 }
 
 // The one write URL lives in tasksAPI: kill one operation, from the Sessions and task views.
-// note: kill-all is gone from the browser. Closing a console closes its own sockets, which ends
-// its own operations; kill-all cancelled every websocket operation on the instance.
+// The browser never calls kill-all: closing a console closes its own sockets, which ends its
+// own operations, while kill-all cancels every websocket operation on the instance.
 if (calls !== 1) {
   offenders.push(`expected 1 centralized console cancellation URL builder, found ${calls}`);
 }

@@ -2,31 +2,14 @@
 // Structural guard: semantic colour comes from a token, and a status chip is solid.
 //
 // The shape this bans is `bg-<hue>-500/15` behind `text-<hue>-600`: a translucent tint of a
-// palette step with a saturated step of the SAME hue written on top of it. It is the most
-// recognisable generated-UI signature in this app, it spread by copy-paste rather than by
-// decision, and documentation/ui/frontend-design-language.md has banned it in prose since the
-// anti-slop pass. Prose was all there was, which is why it reached four of the nine variants
-// of Badge itself: the component the doc pointed people at was an example of the defect.
+// palette step with a saturated step of the same hue on top. It spreads by copy-paste and misses
+// the 4.5:1 floor at the Badge's 12px semibold over --card in light mode (success 3.15, warning
+// 2.73, error 3.82). Darkening the text a step still leaves warning at 4.30, so Rule 3 measures
+// contrast: a ban stops the shape, and only a measurement stops another failing one.
 //
-// It is also a WCAG failure, not only a taste one. Composited over --card in light mode, at
-// the 12px semibold the Badge base class asks for, so the 4.5:1 floor applies and not 3:1:
-//
-//   success  bg-emerald-500/15 + text-emerald-600   3.15:1
-//   warning  bg-amber-500/15   + text-amber-600     2.73:1
-//   error    bg-red-500/15     + text-red-600       3.82:1
-//
-// Rule 3 measures that, because the obvious fix is not one. Darkening every text a palette
-// step takes success to 4.57 and error to 5.12 and leaves warning at 4.30, so a half-fix that
-// reads as a fix still ships a failure. A ban stops the shape. Only a measurement stops the
-// shape being replaced by a different failing one.
-//
-// Deliberately parser-free and dependency-free. The CI `guards` job runs checkout and
-// setup-node and no `npm ci`, so importing typescript or tailwindcss/colors from
-// frontend/node_modules would fail there. Same rationale as check-jsx-stray-attrs.mjs. The
-// consequence is that the palette hexes below are a copy rather than a read. Tailwind is
-// pinned at ^3.4.1 and the v3 default palette is frozen, so the copy cannot drift, and a
-// hue-step this file does not carry is reported rather than skipped: skipping is how a scan
-// reads zero for the wrong reason.
+// The palette hexes below are a copy, so the guard needs no Tailwind import. Tailwind is pinned at
+// ^3.4.1 and the v3 default palette is frozen, so the copy cannot drift; a hue-step this file does
+// not carry is reported rather than skipped.
 //
 // Run: node scripts/checks/check-semantic-colour.mjs [repo-root]
 
@@ -42,8 +25,7 @@ const src = join(root, 'frontend', 'src');
 // ---------------------------------------------------------------------------------------
 
 // The Cluster submenu, as defined by components/sidebar/nav-config.tsx, plus the certificates
-// child route. Every raw palette class in this tree was cleared, so the ban below can be
-// absolute here without grandfathering anything.
+// child route. This tree holds no raw palette class, so the ban below is absolute here.
 const CLEARED = [
   'app/inventory/clusters/',
   'app/inventory/clustering/',
@@ -51,13 +33,11 @@ const CLEARED = [
   'app/inventory/operations/',
   'app/inventory/warnings/',
   // The member resource dialog renders inside app/inventory/clustering/ but lives under
-  // components/, so the route prefixes above never reached it. It carried a four-step
-  // utilisation ramp in raw palette steps the whole time this ban was described as absolute.
+  // components/, outside the route prefixes above.
   'components/member-resources/',
-  // The task dock is new and starts clean: Badge tones and --status-* dots only.
+  // The task dock: Badge tones and --status-* dots only.
   'components/task-panel/',
-  // Settings > Dashboard Host: its utilisation bars are the shared UsageBar ramp, not the
-  // green-to-red palette steps they started as.
+  // Settings > Dashboard Host: its utilisation bars use the shared UsageBar ramp.
   'components/system-resources/',
 ];
 
@@ -69,16 +49,15 @@ const CHROME = [/^app\/console\//, /^app\/terminal\//, /^components\/console\//,
 
 // Rendered by nothing, so nothing in it can reach an operator. Counting it would mean
 // either a permanently failing check or a baseline that hides real regressions behind dead
-// code. Same reasoning as check-icon-button-names.mjs. (vm-table.tsx was deleted.)
+// code. Same reasoning as check-icon-button-names.mjs.
 const DEAD = new Set(['components/tag-manager-legacy.tsx']);
 
 // ---------------------------------------------------------------------------------------
 // Baselines
 // ---------------------------------------------------------------------------------------
 
-// The tint-plus-saturated-text pairing everywhere outside the cleared tree. This is what stops
-// the pattern spreading into the surfaces the Cluster submenu change deliberately left alone.
-// Ratchet: may fall, never rise. At zero since the 2026-10-29 sweep.
+// The tint-plus-saturated-text pairing everywhere outside the cleared tree.
+// Ratchet: may fall, never rise.
 const TINT_PAIR_BASELINE = 0;
 
 // A <Badge> naming its own foreground colour at the call site. Badge exists so a chip's colour
@@ -89,16 +68,11 @@ const BADGE_OVERRIDE_BASELINE = 0;
 
 // --- counted blind spots ----------------------------------------------------------------
 //
-// important: every rule here reads class strings out of the source. Three shapes put the same
-// colour somewhere a class string is not. Counting them keeps the headline from reading as
-// "every tinted pill in the app", which is the lesson recorded in
-// documentation/ui/table-conventions.md: a guard that inspects only the element you thought of
-// misses the same defect one level deeper.
+// Every rule here reads class strings out of the source. Three shapes put the same colour
+// somewhere a class string is not, so they are counted and reported rather than left unseen.
 
-// A tint computed at runtime, `style={{ backgroundColor: `${color}15` }}`. The last live site was
-// the tag chip in components/tag-manager.tsx. Its colour is data (getTagColor derives it from the
-// tag's prefix), so it now lives in a square swatch beside neutral text (components/tag-chips.tsx)
-// instead of tinting the chip under same-hue text that measured near 2:1.
+// A tint computed at runtime, `style={{ backgroundColor: `${color}15` }}`. Colour that is data
+// (ex; a tag's) goes in a square swatch beside neutral text, as in components/tag-chips.tsx.
 // Ratchet: may fall, never rise.
 const COMPUTED_TINT_BASELINE = 0;
 
@@ -107,24 +81,21 @@ const COMPUTED_TINT_BASELINE = 0;
 // Ratchet: may fall, never rise.
 const SPLIT_KEY_BASELINE = 0;
 
-// An at-rest tint with no same-string palette foreground. Most are correct: an alert container
-// whose prose inherits --foreground and whose icon alone is amber is the sanctioned shape, and
-// a proximity rule would fire on the reference implementation. This is the population a genuine
-// cross-line pair could hide inside.
-// Ratchet: may fall, never rise. At zero since the 2026-10-29 sweep moved the last alert
-// containers onto a token border and a toned icon, and the chrome hovers onto bg-terminal-raised.
+// An at-rest tint with no same-string palette foreground. It can be correct (an alert container
+// whose prose inherits --foreground and whose icon alone is toned), but a tint paired with a
+// foreground on another line hides here.
+// Ratchet: may fall, never rise.
 const UNPAIRED_TINT_BASELINE = 0;
 
 // --- measured contrast failures ---------------------------------------------------------
 //
-// Every entry is a pair rule 3 measures and a written reason it is still here. Checked in BOTH
-// directions: a pair that got worse fails, a pair not listed that fails at all fails, and a
-// listed pair that now PASSES also fails, so the map cannot go stale claiming a defect somebody
-// already fixed.
+// Each entry is a pair rule 3 measures, with the reason it is still here. Checked in both
+// directions: a pair that moved fails, an unlisted failing pair fails, and a listed pair that
+// now passes fails, so the map cannot go stale.
 const KNOWN_CONTRAST_FAILURES = new Map([
   // Numbers are the worse of --card and --background, which is what the rule scores.
-  // A token change, not a call-site change. --destructive at 0 84.2% 60.2% is too light to
-  // carry white, and moving it moves every destructive Button and confirm dialog at once.
+  // --destructive at 0 84.2% 60.2% is too light to carry white. The fix is a token change, and
+  // it moves every destructive Button and confirm dialog at once.
   ['badge#destructive#light', 3.61],
   ['button#destructive#light', 3.61],
   // The same token read the other way round: text-destructive on a plain surface. The token fix
@@ -136,40 +107,17 @@ const KNOWN_CONTRAST_FAILURES = new Map([
   ['button#success#light', 3.33],
   ['button#warning#light', 2.13],
   ['button#warning#dark', 3.29],
-  // The muted badge used to sit here at 3.79. It was recorded as an app-wide typography
-  // decision rather than a badge one, and that decision was taken: --muted-foreground moved
-  // from 47% to 42% so it clears AA on --card, --background and --muted alike. Retired rather
-  // than relaxed, which is why the entry is gone instead of renumbered.
   // --- the --primary family -----------------------------------------------------------
   //
-  // Five entries, and four of them are new here without anything on screen having got worse.
-  // They were invisible rather than absent. globals.css seeded --personalization-accent as
-  // #8b5cf6 while its own -h/-s/-l triplet read 262 83% 58%, which is #7c3bed, and the reader
-  // below takes the triplet. So this file scored #7c3bed: a colour the browser paints only
-  // until React mounts and then discards. #8b5cf6, the one an operator actually looks at,
-  // measured 4.23 for the solid pairs and 3.85 for the light link the whole time. Making the
-  // seed self-consistent is what surfaced them; scripts/checks/check-personalization-defaults.mjs
-  // is what stops the two halves separating again.
-  //
-  // The accent is now #8467e4, the sidebar ground's own hue at the luminance where one value
-  // serving both themes is equidistant from AA on a light and a dark surface. Every number
-  // below moves by less than 0.1 against what shipped before it.
-  //
-  // All five are carried for the reason the link variant always was: --primary is the
-  // user-configurable personalization accent and the picker has no contrast clamp, so any
-  // value chosen here is one an operator can overwrite the same afternoon. Darkening the token
-  // does not retire them, and it cannot: white-on-accent wants a dark accent, accent-on-dark
-  // wants a light one, and the two requirements cross. What retires them is splitting the
-  // brand hex into roles, a solid fill and a separately clamped text colour, the way Radix
-  // Colors separates step 9 from step 11. That is a token-system change across ~35 call sites
-  // and belongs in its own pass, recorded in documentation/ui/personalization-defaults.md.
+  // --primary is the user-configurable accent and the picker has no contrast clamp. Darkening
+  // the token cannot retire these: white-on-accent wants a dark accent, accent-on-dark a light
+  // one. Retiring them means splitting the brand hex into a solid fill and a separately clamped
+  // text colour (Radix Colors step 9 versus step 11), a token-system change across ~35 call sites.
   ['badge#default#light', 4.17],
   ['badge#default#dark', 4.17],
   ['button#default#light', 4.17],
   ['button#default#dark', 4.17],
   ['button#link#light', 3.78],
-  // 4.18, not the 3.07 recorded before, and the difference is the seed defect above rather
-  // than a change in what an operator sees: #8b5cf6 measured 4.11 here.
   ['button#link#dark', 4.18],
 ]);
 
@@ -184,7 +132,7 @@ const HUES = [
 ];
 const HUE = `(?:${HUES.join('|')})`;
 
-// Tailwind v3.4 defaults for the steps this tree actually spells.
+// Tailwind v3.4 defaults for the steps this tree spells.
 const PALETTE = {
   'emerald-400': '#34d399', 'emerald-500': '#10b981', 'emerald-600': '#059669', 'emerald-700': '#047857',
   'green-400': '#4ade80', 'green-500': '#22c55e', 'green-600': '#16a34a', 'green-700': '#15803d',
@@ -269,11 +217,9 @@ const dark = tokenBlock(css, '.dark');
 if (!light || !dark) offenders.push('globals.css: could not read the :root or .dark token block');
 
 // important: the :root block inside @layer base is not the last word on --primary. globals.css
-// rebinds --primary and --ring from the personalization accent in an UNLAYERED :root, and an
-// unlayered rule beats a layered one at equal specificity. That override therefore wins in BOTH
-// themes, which makes the .dark value dead. Reading the layered value would give the wrong
-// dark-mode number for every --primary pair, and that is the pair with the widest blast radius
-// because the accent is user-configurable with no contrast clamp.
+// binds --primary and --ring to the personalization accent in an unlayered :root, which beats a
+// layered rule in both themes (.dark declares no --primary at all). Reading the layered value
+// would score every --primary pair against a colour the browser does not paint.
 const accent = (() => {
   const h = css.match(/--personalization-accent-h:\s*([0-9.]+)/);
   const s = css.match(/--personalization-accent-s:\s*([0-9.]+)%/);
@@ -342,10 +288,9 @@ function* walk(dir) {
 }
 
 // At rest means no state or breakpoint modifier. `dark:` is the one modifier that counts,
-// because `dark:text-emerald-400` is half of the pattern rather than a hover affordance.
-// Anchoring this way excludes hover:, focus:, group-hover:, data-[...]: and sm:/md:/lg: in one
-// stroke, which is what keeps `hover:bg-primary/90` out of every rule below with no exception
-// list: opacity on a solid surface for a hover state is the correct idiom.
+// because `dark:text-emerald-400` is half of the pattern. The anchoring excludes hover:, focus:,
+// group-hover:, data-[...]: and sm:/md:/lg:, so `hover:bg-primary/90` (opacity on a solid
+// surface, the correct hover idiom) needs no exception list.
 const TINT = new RegExp(`(?:^|\\s)(?:dark:)?bg-${HUE}-\\d{2,3}/\\d{1,3}(?=\\s|$)`);
 const PALETTE_FG = new RegExp(`(?:^|\\s)(?:dark:)?text-${HUE}-\\d{2,3}(?=\\s|$)`);
 const PALETTE_ANY = new RegExp(
@@ -355,22 +300,17 @@ const PALETTE_ANY = new RegExp(
 const PALETTE_FG_IN_TAG = new RegExp(`(?:^|[\\s"\`{(])(?:dark:)?text-${HUE}-\\d{2,3}(?=[\\s"\`)},]|$)`, 'g');
 
 // A Tailwind arbitrary value carrying a literal colour, ex; `bg-[#1a1b26]`, `dark:text-[#c0caf5]`.
-//
-// Every rule above is shaped like hue-plus-step, so an arbitrary hex slips past all of them: it is
-// neither a palette step to ban nor a token to measure, and no counter moves when one appears.
-// That is a hole, not a permission. It stays closed by naming the utilities that take a colour, so
-// a sizing arbitrary (`w-[var(--radix-...)]`, `text-[10px]`, `max-h-[85vh]`) is untouched.
+// The rules above match hue-plus-step and would miss it. Only utilities that take a colour are
+// named, so a sizing arbitrary (`w-[var(--radix-...)]`, `text-[10px]`, `max-h-[85vh]`) is
+// untouched.
 const ARBITRARY_COLOUR = new RegExp(
   `(?:^|[\\s"\`{(])(?:[a-z-]+:)?(?:bg|text|border|ring|fill|stroke|from|to|via|decoration|outline|shadow|accent|caret|divide|placeholder)-\\[#[0-9a-fA-F]{3,8}\\]`,
   'g',
 );
 
-// The one file allowed to paint a fixed surface outside the chrome trees.
-//
-// A snippet is destined for a shell or a config file, so CodeBlock paints it as terminal output
-// rather than as themed app surface. It reuses the xterm surface and green this app already ships
-// rather than inventing a third dark surface, and it carries the reasoning in its own header. It
-// is listed here by exact path so the exemption cannot spread by directory.
+// The one file allowed to paint a fixed surface outside the chrome trees. A snippet is destined
+// for a shell or a config file, so CodeBlock paints it as terminal output on the xterm surface.
+// Listed by exact path so the exemption cannot spread by directory.
 const FIXED_SURFACE = new Set(['components/ui/code-block.tsx']);
 
 /** Every class string in a file: quoted literals plus each literal chunk of a template. */
@@ -411,8 +351,8 @@ function tags(code, name) {
 const lineOf = (code, index) => code.slice(0, index).split('\n').length;
 
 /**
- * A per-site waiver, on the same line or the one above. Per SITE, never per file: a file-wide
- * form is what made an earlier guard inert for eight columns at once.
+ * A per-site waiver, on the same line or the one above. Never per file: a file-wide waiver
+ * would also cover every later site in that file.
  */
 function waived(code, index) {
   const before = code.slice(0, index).split('\n');
@@ -443,9 +383,8 @@ for (const file of walk(src)) {
 
   // --- Rule 1: no raw palette at all inside the cleared tree --------------------------
   //
-  // important: a hard ban, never a ratchet. The Cluster submenu change cleared every one of
-  // these to zero, so there is no legitimate existing case to grandfather, and one surviving
-  // example is what feeds the next copy-paste. That is the documented spread mechanism.
+  // A hard ban, never a ratchet: the tree holds none, and one surviving example is what the
+  // next copy-paste starts from.
   if (isCleared) {
     PALETTE_ANY.lastIndex = 0;
     let m;
@@ -460,10 +399,9 @@ for (const file of walk(src)) {
 
   // --- Rule 1b: no arbitrary colour hex outside the fixed-surface trees ---------------
   //
-  // A hard ban for the same reason Rule 1 is one: a census over frontend/src found zero of these
-  // outside the chrome trees, so there is nothing to grandfather and no baseline to drift. The
-  // chrome trees and CodeBlock paint a fixed surface on purpose and say so in place; everywhere
-  // else a colour comes from a token, and a hex is how a screen quietly stops following the theme.
+  // A hard ban like Rule 1: there are none outside the chrome trees. Only the chrome trees and
+  // FIXED_SURFACE paint a fixed surface; everywhere else a colour comes from a token, and a hex
+  // stops following the theme.
   if (!isChrome && !isDead && !FIXED_SURFACE.has(rel)) {
     ARBITRARY_COLOUR.lastIndex = 0;
     let a;
@@ -511,9 +449,8 @@ for (const file of walk(src)) {
 // Rule 3: measure every variant of every cva primitive, in both themes
 // ---------------------------------------------------------------------------------------
 //
-// Rules 1 and 2 stop the SHAPE. This stops the shape being replaced by a different failing
-// one, and it reaches what no ban can: `bg-warning text-warning-foreground` carries no tint
-// and no palette step and measures 2.13:1.
+// Rules 1 and 2 stop the shape. This also reaches what no ban can: `bg-warning
+// text-warning-foreground` carries no tint and no palette step and measures 2.13:1.
 
 /** Split a cva file into [baseClassString, Map<variantName, classString>]. */
 function readVariants(code) {
@@ -570,11 +507,9 @@ for (const [name, path] of CVAS) {
   for (const [variant, classes] of variants) {
     const list = classes.split(/\s+/).filter(Boolean);
     for (const theme of ['light', 'dark']) {
-      // important: in dark mode a `dark:` utility OVERRIDES its unmodified twin, so the
-      // resolved list has to prefer it. Taking the first match instead measures the light
-      // foreground against the dark backdrop, which invents failures that do not render. The
-      // first version of this file did exactly that and reported badge "info" at 3.33:1 in
-      // dark, where it actually measures 6.77:1.
+      // In dark mode a `dark:` utility overrides its unmodified twin, so the resolved list has
+      // to prefer it. Taking the first match measures the light foreground against the dark
+      // backdrop and reports failures that do not render.
       const rest = [];
       for (const c of list) {
         if (c.startsWith('dark:')) {
@@ -597,9 +532,8 @@ for (const [name, path] of CVAS) {
       const fg = resolve('text', fgClass.slice(5), theme, where);
       if (!fg) continue;
 
-      // Both surfaces a chip actually sits on, scored on the worse of the two. A chip that
-      // clears its floor on --card and fails on --background has still failed, and --background
-      // is the darker of the two in light mode.
+      // Both surfaces a chip sits on, scored on the worse of the two. --background is the
+      // darker of the two in light mode.
       let worst = Infinity;
       let worstSurface = null;
       for (const surfaceName of ['card', 'background']) {
@@ -632,12 +566,9 @@ for (const [name, path] of CVAS) {
             `${floor}:1 floor its own base classes require.`,
         );
       } else if (Math.abs(worst - known) > 0.05) {
-        // important: the comparison is two-sided, not "must not get worse". A one-sided rule
-        // accepts the half-fix, and the half-fix is the thing this rule exists to reject:
-        // darkening every tinted badge text one palette step moves warning from 2.61 to 4.30,
-        // which is an improvement and still a failure. Anything between the recorded number
-        // and the floor would then pass silently under a number nobody re-measured. Moving a
-        // carried failure means either finishing it, or recording where it actually landed.
+        // The comparison is two-sided. A one-sided rule would let a half-fix (warning
+        // darkened to 4.30, better and still failing) pass under a stale recorded number. A
+        // moved failure is either finished or re-recorded where it landed.
         const direction = worst < known ? 'fell from' : 'moved off';
         offenders.push(
           `${where} ${direction} its recorded ${known}:1 to ${worst.toFixed(2)}:1 on --${worstSurface} in ` +
@@ -649,8 +580,8 @@ for (const [name, path] of CVAS) {
   }
 }
 
-// The other direction: a recorded failure that now passes everywhere is a stale entry, and a
-// stale entry is a claim this file makes about the product that is no longer true.
+// The other direction: a recorded failure that passes everywhere, or is not measured at all,
+// is a stale entry.
 for (const key of KNOWN_CONTRAST_FAILURES.keys()) {
   const rows = measured.filter((m) => m.key === key);
   if (!rows.length) {

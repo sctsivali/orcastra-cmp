@@ -105,8 +105,8 @@ for (const role of ["admin", "partner"]) {
 }
 
 // A pool is shared by every party on its cluster, so its driver, state and capacity are the
-// provider's (owner decision 2026-10-26). A Tenant sees which pools exist and what uses them,
-// and its page never asks for the capacity read the backend refuses it.
+// provider's. A Tenant sees which pools exist and what uses them, and its page never asks for
+// the capacity read the backend refuses it.
 test("tenant: storage pools list names and usage, no driver, status or capacity", async ({ page, context }) => {
   await authenticate(context, "tenant");
   const state = await installInventoryHardeningFixtures(page, "tenant");

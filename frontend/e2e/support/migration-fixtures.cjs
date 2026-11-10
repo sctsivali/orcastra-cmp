@@ -1,7 +1,7 @@
 const { expect } = require("@playwright/test");
 const { expectCleanHarness, installApiFixtures } = require("./fixtures.cjs");
 
-// note: plans, jobs and settings come from a golden file the backend generates from its real
+// Plans, jobs and settings come from a golden file the backend generates from its real
 // presenters (backend/tests/test_migration_e2e_contract.py), so these fixtures cannot drift
 // from the shape the server sends.
 const CONTRACT = require("./migration-contract.json");

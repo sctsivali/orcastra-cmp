@@ -8,9 +8,9 @@ const {
 } = require("./support/fixtures.cjs");
 const catalog = require("../src/lib/regions/catalog.json");
 
-// A cluster registered in a country abroad is shown as the whole country, because nobody knows
-// the site inside it at registration. It used to be a pin on the capital, which claimed a place.
-// Indonesian regencies and an API client's own site keep their pins.
+// A cluster registered in a country abroad is shown as the whole country, because the site inside
+// it is unknown at registration and a pin on the capital would claim a place. Indonesian
+// regencies and an API client's own site keep their pins.
 
 const OUTLINES = "/geo/country-areas.v1.json";
 const byId = new Map(catalog.regions.map((entry) => [entry.id, entry]));
@@ -59,7 +59,7 @@ const FLEET = [
   region("c-sg", ["offline"]),
   region("c-ru", ["online"]),
   region("c-va", ["online"]),
-  // saved while country entries still named the capital, before the backfill reaches it
+  // a legacy row whose country entry names the capital, not yet reached by the backfill
   region("c-gb", ["online"], { city: "London", latitude: 51.5074, longitude: -0.1278 }),
   // an API client's own site abroad is a real place, so it stays a pin
   region("us-east-dc1", ["online"], {
@@ -104,7 +104,7 @@ function markedRegions(page) {
 async function pointOnOutline(page, code) {
   // elementFromPoint only sees the viewport, and on a phone the map sits below the stat tiles
   await page.locator(".leaflet-container").scrollIntoViewIfNeeded();
-  // note: the path joins the DOM before the SVG renderer draws it, as a 0x0 box, so wait for a
+  // the path joins the DOM before the SVG renderer draws it, as a 0x0 box, so wait for a
   // drawn outline that has stopped moving; a point read off a moving map misses on the click
   await expect.poll(() => outlineWidth(page, code), { timeout: 8_000 }).toBeGreaterThan(0);
   await settledWidth(page, code);
@@ -117,7 +117,7 @@ async function pointOnOutline(page, code) {
           const frame = document.querySelector(".leaflet-container").getBoundingClientRect();
           if (!path) return null;
           const box = path.getBoundingClientRect();
-          // note: elementFromPoint hit-tests an interactive SVG path on its painted fill, so a point it
+          // elementFromPoint hit-tests an interactive SVG path on its painted fill, so a point it
           // resolves to the path is inside the outline and not under a chip; no geometry API needed
           for (let fy = 0.5; fy < 1; fy += 0.04) {
             for (const sy of [1, -1]) {

@@ -2,9 +2,9 @@
 /**
  * Operator-facing vocabulary contract for the console and its API descriptions.
  *
- * Wire names such as node, host, and location remain untouched. This guard targets phrases
+ * Wire names such as node, host, and location are out of scope. This guard targets phrases
  * that can be painted as copy, while allowing hardware terms such as NUMA Node and true host
- * surfaces. It is intentionally parser-free so the CI guards job needs no frontend install.
+ * surfaces. Parser-free, so it runs without a frontend install.
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -50,7 +50,7 @@ const forbidden = [
   [/\b(?:CPU [Cc]ores?|Max CPU|Logical CPUs?|Total Threads|Unallocated Threads)\b/g, "distinguish vCPU allocation from CPU threads or physical cores"],
   // "Unallocated CPU Threads" is host capacity, the right term; "Unallocated CPU" alone is not.
   [/\b(?:CPU count|CPU Quota|Unallocated CPU(?! [Tt]hreads?\b)|CPU over-commit)\b/g, "use vCPU for virtual allocation"],
-  // Owner, 2026-11-07: "hardware threads" read as jargon to anyone who knows their server as a CPU.
+  // "Hardware threads" reads as jargon to anyone who knows their server as a CPU.
   [/\b[Hh]ardware [Tt]hreads?\b/g, 'say "CPU threads" for host capacity'],
   [/\b(?:Register|Select|Search|Loading|Offline|Inactive|Total|Target|Reporting) Nodes?\b/gi, 'call a registered endpoint a "Cluster"'],
   [/\b(?:No|All) nodes?\b/gi, 'call registered endpoints "clusters"'],
@@ -74,7 +74,7 @@ const requiredContracts = [
   ["app/inventory/monitoring/monitoring-content.tsx", 'formatBytes(data.memoryUsedBytes)', "monitoring memory uses the one size formatter"],
   ["app/inventory/monitoring/monitoring-content.tsx", 'formatNetworkRate(', "monitoring rate uses the network formatter"],
   ["app/inventory/monitoring/monitoring-content.tsx", "CPU Usage", "utilization is CPU usage"],
-  // The utilization gauges moved out of monitoring-content.tsx; the contract moved with them.
+  // The utilization gauges live in their own card.
   ["app/inventory/monitoring/components/resource-utilization-card.tsx", 'label="CPU Usage"', "the utilization gauge is CPU usage"],
   ["app/inventory/monitoring/components/resource-utilization-card.tsx", 'formatBytes(stats.used_memory_bytes)', "the memory gauge uses the one size formatter"],
   ["components/regions/regions-page.tsx", "CPU Threads", "region capacity uses CPU threads"],

@@ -105,7 +105,7 @@ test("partner: Regions keeps the fleet hardware tiles and the per-cluster figure
   await expect(card).toContainText("64 CPU threads");
   await card.locator("[aria-expanded]").first().click();
   await expect(card).toContainText("3 instances");
-  // The node's type is shown as the product writes it (formatHypervisorType), not as the API sends it.
+  // The node's type is shown through formatHypervisorType instead of the raw API value.
   await expect(card).toContainText("MicroCloud");
   await expectCleanHarness(api);
 });

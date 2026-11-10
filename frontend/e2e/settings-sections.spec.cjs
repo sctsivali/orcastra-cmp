@@ -3,8 +3,8 @@ const { authenticate, capture, expectNoHorizontalOverflow } = require("./support
 const { installSettingsFixtures, expectCleanSettingsHarness } = require("./support/settings-fixtures.cjs");
 
 // Settings > Integrations and Settings > User Groups open on a section switcher (?section=)
-// instead of stacking every panel, which buried Synced Organizations, Desktop Control and
-// Assigned Users under a long list (2026-11-03).
+// instead of stacking every panel, which would bury Synced Organizations, Desktop Control and
+// Assigned Users under a long list.
 
 const USERS = [
   { user_email: "alice@example.com", role: "tenant", organizations: [{ id: 3, name: "Acme", slug: "acme", role: "tenant" }] },
@@ -26,8 +26,8 @@ for (const role of ["admin", "partner"]) {
 
     const nav = "Integrations sections";
     await expect(sectionLink(page, nav, "Desktop Control")).toHaveAttribute("aria-current", "true");
-    // Every section is on screen at every width: a horizontal scroller once hid the third one
-    // entirely on a phone, which is the discoverability this switcher exists for.
+    // Every section is on screen at every width; a horizontal scroller would hide the third one
+    // on a phone.
     for (const label of ["API Keys", "Synced Organizations", "Desktop Control"]) {
       await expect(sectionLink(page, nav, label)).toBeInViewport({ ratio: 1 });
     }
@@ -128,8 +128,8 @@ test("Back closes a dialog that the hidden section opened", async ({ page }) => 
 });
 
 test("an administrator can assign a role in a local organization", async ({ page }) => {
-  // The organization list's default leaves local organizations out, so an organization made in the
-  // console could never get a partner row (2026-11-05). The dialog asks for both and marks local.
+  // The organization list's default leaves local organizations out. The dialog asks for both and
+  // marks local ones, so an organization made in the console can get a partner row.
   await authenticate(page.context(), "admin");
   const api = await installSettingsFixtures(page, "admin", { reads });
   const local = { id: 480, name: "QA Console Lab", slug: "qa-console-lab", description: null, source: "local",

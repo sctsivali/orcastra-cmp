@@ -1,23 +1,18 @@
 #!/usr/bin/env node
 // Structural guard: every link into a filtered list is built by lib/inventory-links.ts, and
-// every key that registry writes is one the target page reads.
+// every key that registry writes is one the target page reads. A filter lives in the URL as
+// `<table id>.<field>=<facet value>`; a hand-written link can name the wrong table, carry the
+// display name where the filter compares the id, or encode the value differently, and the
+// target list then shows no matches over rows it holds.
 //
-// The defect behind it: a filter lives in the URL as `<table id>.<field>=<facet value>`, and a
-// link hand-written at the source page spelled the key for the wrong table, carried the display
-// name where the accessor compares the id, or encoded the value differently from the filter
-// engine. Each shipped at least once, and each read as "No X matches the current filters" on a
-// list that plainly had the rows once the chip was removed.
-//
-// Four rules:
-//   A. no `/inventory/<x>?...` or `/inventory/<x>/${...}` string literal outside the registry
-//      (a `/create` prefill is a form seed, not a list filter, and is exempt);
-//   B. no `?q=` / `&q=` literal outside the registry, `q` being the search key;
-//   C. each manifest key resolves on the target route's sources: a namespaced facet needs a
-//      defineTable with that `id` carrying that `field`, a bare facet needs a table without an
-//      id carrying it, a reserved key needs `reservedParams` or a `searchParams.get`;
-//   D. a scan that parsed fewer than ten targets or walked no files fails, so a reformatted
+//   A. no `/inventory/<x>?...` or `/inventory/<x>/${...}` literal outside the registry
+//      (a `/create` prefill is a form seed and exempt);
+//   B. no `?q=` / `&q=` (search key) literal outside the registry;
+//   C. each manifest key resolves on the target route: a namespaced facet in a defineTable with
+//      that `id` and `field`, a bare facet in a table without an id, a reserved key in
+//      `reservedParams` or a `searchParams.get`;
+//   D. fewer than ten parsed targets, or no walked files, fails the scan, so a reformatted
 //      manifest cannot pass by being invisible.
-//
 // Run: node scripts/checks/check-inventory-links.mjs [repo-root]
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';

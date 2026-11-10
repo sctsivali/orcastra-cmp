@@ -340,7 +340,7 @@ for (const key of [deleteFleetKey, deleteVmKey]) {
   const tombRollback = await optimisticallyRemoveExactInstance(tombClient, doomedId);
   assert.deepEqual(tombClient.getQueryData(fleetKey).vms.map((vm) => vm.name), ["keeper"]);
 
-  // while the DELETE runs: a lifecycle read, a poll and a fleet read all still see the row
+  // While the DELETE runs: a lifecycle read, a poll and a fleet read all still see the row
   const runningRead = readClock();
   assert.equal(isHiddenByPendingDelete(tombClient, doomedId, runningRead), true);
   assert.equal(
@@ -364,7 +364,7 @@ for (const key of [deleteFleetKey, deleteVmKey]) {
     "a fleet read during the delete must not publish the row",
   );
 
-  // the DELETE answered: a read that began earlier is still pre-delete, a later one is truth
+  // The DELETE answered: a read that began earlier is still pre-delete, a later one is current.
   const beforeSettle = readClock() - 1;
   settleInstanceDelete(tombClient, doomedId);
   assert.equal(isHiddenByPendingDelete(tombClient, doomedId, beforeSettle), true);
@@ -377,7 +377,7 @@ for (const key of [deleteFleetKey, deleteVmKey]) {
     "a same-name instance created after the delete answered must show",
   );
 
-  // a failed delete gives the row back and stops hiding it
+  // A failed delete gives the row back and stops hiding it.
   const failedId = { actorScope: actorA, host: "cluster-a", project: "p1", name: "keeper" };
   const failedRollback = await optimisticallyRemoveExactInstance(tombClient, failedId);
   restoreExactInstanceRollback(tombClient, failedRollback);
@@ -406,7 +406,7 @@ for (const key of [deleteFleetKey, deleteVmKey]) {
   noteInstanceCreatedEvent(eventClient, goneId);
   assert.equal(isHiddenByPendingDelete(eventClient, goneId, readClock()), false, "a same-name create shows");
 
-  // a failed second delete of the same identity does not clear the first delete's entry
+  // A failed second delete of the same identity does not clear the first delete's entry.
   const ownerId = { actorScope: actorA, host: "cluster-a", project: "p1", name: "owned" };
   eventClient.setQueryData(["instances", actorA, "*", "*"], response([row("cluster-a", "p1", "owned", "Running")]));
   await optimisticallyRemoveExactInstance(eventClient, ownerId);
@@ -419,7 +419,7 @@ for (const key of [deleteFleetKey, deleteVmKey]) {
     "only the delete that owns the entry may clear it",
   );
 
-  // an event that changes nothing cancels no read in flight
+  // An event that changes nothing cancels no read in flight.
   const quietClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
   const same = row("cluster-a", "p1", "steady", "Running");
   quietClient.setQueryData(["instances", actorA, "*", "*"], response([same]));
@@ -458,7 +458,7 @@ for (const key of [deleteFleetKey, deleteVmKey]) {
   const unsubscribe = observer.subscribe(() => undefined);
   await new Promise((resolveTurn) => setTimeout(resolveTurn, 10));
   assert.equal(reads, 1);
-  // the refetch a delete's reconcile asks for, still in flight when an event lands
+  // The refetch a delete's reconcile asks for, still in flight when an event lands.
   void observer.refetch();
   await new Promise((resolveTurn) => setImmediate(resolveTurn));
   assert.equal(reads, 2);
@@ -488,8 +488,8 @@ for (const key of [deleteFleetKey, deleteVmKey]) {
 }
 
 // A fleet reconcile cancels list reads before and after its own read. It leaves a list with no data
-// yet alone on the first pass: cancelling that read left the Instances page on its full-page loader
-// until the fleet read answered, which is the slowest cluster's answer (up to the 30 s wall).
+// yet alone on the first pass: cancelling that read would hold the Instances page on its full-page
+// loader until the fleet read answers, which is the slowest cluster's answer (up to the 30 s wall).
 {
   const firstClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: Infinity } },

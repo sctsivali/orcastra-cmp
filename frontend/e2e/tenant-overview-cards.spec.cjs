@@ -37,7 +37,7 @@ for (const [path, heading] of [["/inventory/images", "Images"], ["/inventory/iso
       total: 0, volumes: [], nodes: ["cluster-a"], unreachable_nodes: [],
     } }));
     const refused = [];
-    // note: answered the way the API answers this role, so a page that asks still renders.
+    // Answered the way the API answers this role, so a page that asks still renders.
     await page.route("**/api/v1/nodes/names", (route) => {
       refused.push(route.request().url());
       return route.fulfill({ status: 403, json: { detail: "Requires partner role" } });

@@ -2,8 +2,8 @@ const { test, expect } = require("@playwright/test");
 const { authenticate, installApiFixtures } = require("./support/fixtures.cjs");
 
 // LXD accepts an exec on a VM without its agent and then drops the sockets, so the proxy can say
-// "ready" and close a moment later. Each such session used to reset the backoff, which meant one
-// exec a second for as long as the page stayed open (2026-10-30, Proxmox and Windows guests).
+// "ready" and close a moment later. Such a session must not reset the backoff, or the page would
+// run one exec a second for as long as it stayed open.
 
 const CONSOLE_URL =
   "/console/e2e?instance=vm-a&host=cluster-a&project=default&type=virtual-machine&tab=text&continuation=1";

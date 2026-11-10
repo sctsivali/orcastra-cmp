@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Structural guard for the Technologies role split. Runtime authorization remains a backend
-// responsibility; this catches the UI regressions that would remount privileged node inventory
-// for a Tenant or turn the category openers back into non-keyboard card click handlers.
+// Structural guard for the Technologies role split. Runtime authorization stays in the
+// backend; this catches UI regressions that would mount privileged node inventory for a
+// Tenant or make the category openers non-keyboard card click handlers.
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

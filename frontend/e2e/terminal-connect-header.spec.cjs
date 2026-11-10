@@ -1,9 +1,9 @@
 const { test, expect } = require("@playwright/test");
 const { authenticate, installApiFixtures } = require("./support/fixtures.cjs");
 
-// The connect header is a box the operator asked to keep, and it used to go crooked: its width came
-// from string length, it was written into the stream, and xterm re-wraps old lines on narrowing.
-// So it is a DOM box over blank rows now, and these scenarios are the ways that could still break.
+// The connect header is a DOM box over blank rows. Written into the stream it would go crooked: its
+// width would come from string length, and xterm re-wraps old lines on narrowing. These scenarios
+// are the ways the box could still break.
 
 const SESSION = "f33efef3-75a2-4cdf-80b4-c27d64222ad0";
 const LONG_NAME = "a".repeat(63);
@@ -60,7 +60,7 @@ function bufferLines(page) {
     if (!host) return [];
     const { buffer } = host.__xterm;
     const lines = [];
-    // note: a row the window wrapped belongs to the line before it, or a phone reads the session id
+    // A row the window wrapped belongs to the line before it, or a phone reads the session id
     // as two lines.
     for (let i = 0; i < buffer.active.length; i += 1) {
       const row = buffer.active.getLine(i);

@@ -1,10 +1,9 @@
 const { test, expect } = require("@playwright/test");
 const { authenticate, expectNoHorizontalOverflow, installApiFixtures } = require("./support/fixtures.cjs");
 
-// Three cards side by side leave a phone about 90px each, less than a rate and its icon need, so the
-// figure ran under the icon and broke onto two lines. The strips then set their figures three ways:
-// Geist Mono at lg beside the body face at 2xl and sm. Every figure is now the house stat value, with
-// its icon in the label row above it, so it has the whole card and never meets the icon.
+// Three cards side by side leave a phone about 90px each, less than a rate and its icon need. Every
+// figure is the house stat value in the body face, with its icon in the label row above it, so it
+// has the whole card width, stays on one line and never meets the icon.
 
 const LONG_AUDIT = {
   logs: [

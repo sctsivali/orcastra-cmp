@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // A page header stacks on a phone.
 //
-// Fifteen pages held their title and actions on one row at every width. On a 390px phone the primary
-// action ran past the right edge, where the layout clips it and no scroll reaches it, and a length
-// check on the page could not see that: the document itself does not overflow.
+// A title and actions held on one row at every width push the primary action past the right edge
+// of a 390px phone, where the layout clips it and no scroll reaches it. The document itself does
+// not overflow, so a page-width check cannot see it.
 //
 // Run: node scripts/checks/check-page-header-stacks.mjs [repo-root]
 

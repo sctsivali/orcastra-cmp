@@ -55,7 +55,7 @@ for (const role of ["admin", "partner"]) {
       expect(await sessionIdentity(page)).toEqual({ id: actorBefore.id, groups: ["role_tenant"] });
       await expect(page.getByRole("button", { name: "Clear Shared Backend Cache", exact: true })).toHaveCount(0);
 
-      // Cache refetch after the downgrade must not revive queries owned by the old panel.
+      // Cache refetch after the downgrade must not revive queries owned by the panel it removed.
       await page.getByRole("button", { name: "Clear Browser Cache", exact: true }).click();
       await expect(page.getByRole("status").filter({ hasText: "Browser cache cleared." })).toBeVisible();
       // Observe beyond the 1s query retry and Dashboard Host's 5s poll. Neither may

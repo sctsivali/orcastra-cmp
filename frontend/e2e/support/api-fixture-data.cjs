@@ -249,7 +249,7 @@ function tenantSpecifications({ empty = false } = {}) {
             name: "tenant-owned-vm",
             host: "cluster-a",
             project: "tenant-a",
-            // Lowercase on purpose. The controlled display label must remain Title Case.
+            // Lowercase as the API sends it; the display label must still render in Title Case.
             status: "running",
             type: "virtual-machine",
             architecture: "x86_64",
@@ -338,7 +338,7 @@ function instanceMetrics(call, instanceStatus = "Running") {
     pid: 1234,
     cpu_sample_status: calculating ? "calculating" : "ready",
     unavailable_sections: [],
-    // note: an old server timestamp on purpose. Freshness is the browser's receive time, so a
+    // An old server timestamp: freshness is the browser's receive time, so a
     // server clock behind the browser must not mark a reading that just arrived as stale.
     timestamp: calculating ? iso(-20_000) : iso(),
   };

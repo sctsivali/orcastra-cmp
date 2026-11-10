@@ -2,9 +2,8 @@
 // pure logic static analysis cannot see. Not a guard itself: check-guard-parity only counts
 // files run as `node scripts/checks/<name>.mjs`.
 //
-// The file must stay alias-free with no runtime imports. Copying it out before compiling makes
-// "standalone" literal: an alias or an app import fails here rather than silently resolving
-// through the app's config.
+// The file must stay alias-free with no runtime imports. It is copied out before compiling,
+// so an alias or an app import fails here instead of resolving through the app's config.
 
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -21,22 +20,17 @@ export async function compileStandalone(root, libFile, label) {
   const frontend = join(root, 'frontend');
   const out = mkdtempSync(join(tmpdir(), `${label}-`));
   const cleanup = () => rmSync(out, { recursive: true, force: true });
-  // note: tsc emits ESM, and node treats a bare .js in a directory with no package.json as
-  // CommonJS. Without this the import fails with "Unexpected token 'export'".
+  // tsc emits ESM, and node treats a bare .js in a directory with no package.json as CommonJS.
+  // Without this the import fails with "Unexpected token 'export'".
   writeFileSync(join(out, 'package.json'), '{"type":"module"}');
 
   // important: `npx tsc` is not the TypeScript compiler. `tsc` is a separate, unrelated
-  // package on npm, and npx fetches it whenever the workspace has no local binary. That is
-  // exactly the Structural guards job, which is checkout plus setup-node with no install by
-  // design, so the filter-url guard failed with "This is not the tsc command you are looking
-  // for" on every run from ef847d1 onward. It passed locally the whole time because
-  // frontend/node_modules/.bin/tsc exists there.
+  // package on npm, and npx fetches it whenever the workspace has no local binary ("This is
+  // not the tsc command you are looking for").
   //
   // The fallback is pinned to the major the app declares (package.json asks for ^5.3.3). An
-  // unpinned `npx -p typescript` fetches whatever is newest, and the first attempt at this fix
-  // failed in CI on error TS5112 while passing locally on the repo's 5.9. Compile the guard
-  // with the same major the product compiles with, or the guard is testing a different
-  // compiler than the one that ships the code.
+  // unpinned `npx -p typescript` fetches whatever is newest, which can fail (TS5112) where 5.x
+  // passes; the guard must test the compiler that ships the code.
   const localTsc = resolve(frontend, 'node_modules', '.bin', 'tsc');
   const localTypeScript = resolve(frontend, 'node_modules', 'typescript', 'lib', 'typescript.js');
   const [cmd, leadingArgs] = existsSync(localTsc)
@@ -46,7 +40,7 @@ export async function compileStandalone(root, libFile, label) {
   // important: compile from the temp directory, not from frontend/. TS5112 rejects naming a
   // file on the command line while a tsconfig.json sits in the working directory, and
   // frontend/ has one. `--ignoreConfig`, which the error text suggests, is not an option on
-  // 5.x (TS5023), so moving the file is the fix that works on the pinned major.
+  // 5.x (TS5023).
   const name = basename(libFile);
   copyFileSync(resolve(frontend, 'src', 'lib', libFile), join(out, name));
 
@@ -54,7 +48,7 @@ export async function compileStandalone(root, libFile, label) {
     if (existsSync(localTypeScript)) {
       // Some hardened runners allow the current Node process but deny child-process creation.
       // Use the same installed compiler in-process so the guard still performs a real strict
-      // typecheck and emit. CI checkouts without dependencies retain the pinned npx fallback.
+      // typecheck and emit. Checkouts without dependencies use the pinned npx fallback.
       const require = createRequire(import.meta.url);
       const ts = require(localTypeScript);
       const options = {

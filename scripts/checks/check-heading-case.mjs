@@ -1,51 +1,15 @@
 #!/usr/bin/env node
 /**
- * One product, two casing conventions, and no way to tell which slot you were in.
+ * Casing contract for titles and for empty and error states.
  *
- * /technologies rendered `Fleet totals` as an <h2> directly above a card whose title was
- * `CPU Resources` and whose rows were labelled `Total Cores` and `Memory per Node`, then
- * `Hardware by node` directly above rows labelled `CPU topology`, `Base clock` and
- * `Physical cores`. `Logical CPUs` sat one line above `Physical cores` in the same grid.
- * The owner saw the seam before anyone else did.
+ *   Title Case   anything that names a thing: the ELEMENTS and PROPS slots and a column `label:`.
+ *   sentence     empty and error states, even in a title slot: `No Clusters Registered` is as
+ *                wrong as `Hardware by node`.
  *
- * The rule the repo already followed at the top, and now follows all the way down:
- *
- *   Title Case   anything that NAMES a thing: h1-h4, CardTitle, DialogTitle,
- *                AlertDialogTitle, SheetTitle, TabsTrigger, TableHead, DetailSection
- *                title, DetailField, Field and Row label, StatCard title, and a column
- *                `label:`.
- *   sentence     anything that SAYS something. Empty and error states are sentences even
- *                when they occupy one of the slots above, so they are checked the other
- *                way round: `No Clusters Registered` is as wrong as `Hardware by node`.
- *
- * Both directions matter. The previous audit
- * (documentation/ui/heading-and-copy-conventions.md) found the empty states split 19 to 2
- * with three files carrying both spellings, and one of them, clustering/members/page.tsx,
- * shipped `No Members Found` and `No members found` six lines apart.
- *
- * Nothing in the repo could see any of it. tsc and eslint do not read English, and none of
- * the twelve structural guards looks at string content.
- *
- * Deliberately parser-free: the CI `guards` job runs with no `npm ci`, so importing
- * typescript from frontend/node_modules would fail there. Regex only.
- *
- * What it does not catch, stated rather than papered over:
- *
- *   interpolated titles   `Delete Instance &quot;{name}&quot;?` and
- *                         `Cards on This Node ({n})` hold a JSX expression, so the child
- *                         regex skips them. That half is covered at the DOM instead, by
- *                         /root/qa-orcastra/tests/heading-case.spec.ts, which reads what the
- *                         browser paints and so sees the interpolated result.
- *   indirected titles     hardware-aggregate.tsx builds its cards as object literals and
- *                         renders `{category.title}`. The literal is checked by the
- *                         `label:` rule; a `title:` key is not, because ~200 of them are
- *                         toast titles, which are sentences.
- *   `label:` beginning    a digit is skipped, because select option values share the exact
- *                         shape of a column definition (`{ value, label }`) and
- *                         "15 minutes" is data, not a heading.
- *
- * Zero, not a ratchet, in both directions. The tree is clean and neither shape is ever
- * intentional.
+ * Not caught: a title holding a JSX expression (`Cards on This Node ({n})`), which only a DOM
+ * check sees; a `title:` object key, because most are toast titles, which are sentences; a
+ * `label:` starting with a digit, because select options share the column shape and "15 minutes"
+ * is data. Both directions allow zero findings; there is no baseline.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -57,8 +21,7 @@ import { fileURLToPath } from 'node:url';
 const root = process.argv[2] || join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const src = join(root, 'frontend', 'src');
 
-// Lower case in the middle of a title is correct for these. Matches the owner's own
-// example, "Hardware by Node".
+// Lower case in the middle of a title is correct for these, as in "Hardware by Node".
 const SMALL = new Set([
   'a', 'an', 'the',
   'and', 'but', 'or', 'nor', 'for', 'yet', 'so',
@@ -67,13 +30,11 @@ const SMALL = new Set([
 ]);
 
 // An empty or error state, whichever element renders it. These are sentences: they explain
-// a situation rather than name a section. "Something" earns its place because
-// app/error.tsx is the root error boundary and "Something went wrong" is the whole message.
+// a situation rather than name a section. "Something" covers app/error.tsx, the root error
+// boundary, whose whole message is "Something went wrong".
 const EMPTY_LEAD = /^(No|Not|Nothing|None|Loading|Could|Cannot|Failed|Unable|Nobody|Something)\b/;
 
-// Rendered by nothing: counting dead code hides real regressions behind it. vm-create-form.tsx
-// even renders <h1>Create New Project</h1> inside what is meant to be an instance form.
-// (vm-table.tsx, once listed here for the same reason, was deleted.)
+// Files rendered by nothing: counting dead code hides real regressions behind it.
 const EXEMPT_FILES = new Map([
   ['components/vm-create-form.tsx', 'rendered by nothing, and its h1 names the wrong entity'],
 ]);
@@ -86,16 +47,15 @@ const SPELLINGS = new Map([
 ]);
 
 const ELEMENTS = ['h1', 'h2', 'h3', 'h4', 'CardTitle', 'DialogTitle', 'AlertDialogTitle', 'SheetTitle', 'TabsTrigger', 'TableHead'];
-// Tolerates a leading icon sibling, which is how three of these titles are written.
+// Tolerates a leading icon sibling, which some titles carry.
 const elementRe = (name) =>
   new RegExp(`<${name}\\b[^>]*>((?:\\s*<[^>]*/>\\s*)*)\\s*([A-Za-z][^<>{}\\n]{1,80}?)\\s*</${name}>`, 'g');
 
 // Field and Row are the local label-and-value wrappers of a detail panel: network detail, the node
 // panels, the GPU card, release status and connection details. Same slot as DetailField.
 const PROPS = [['DetailSection', 'title'], ['DetailField', 'label'], ['StatCard', 'title'], ['Field', 'label'], ['Row', 'label']];
-// `[^<]` rather than `[^>]`: an attribute value may itself hold a `>`, and network-acls/page.tsx
-// writes `colSpan={nodes.length > 0 ? 7 : 6}` above its title. A `>`-bounded body stopped there
-// and the empty state went unchecked. `<` still bounds it, so the match cannot cross into a
+// `[^<]` rather than `[^>]`: an attribute value may itself hold a `>`, as in
+// `colSpan={nodes.length > 0 ? 7 : 6}`. `<` still bounds it, so the match cannot cross into a
 // child tag and credit this component with some other element's title.
 const propRe = (comp, prop) => new RegExp(`<${comp}\\b[^<]{0,600}?\\b${prop}="([^"]{2,90})"`, 'g');
 
@@ -126,8 +86,8 @@ function badTitleWord(s) {
   return null;
 }
 
-// An initialism, including a pluralised one. "ACLs", "ISOs" and "CPUs" are single upper case
-// tokens carrying a lower case plural, not Title Case words.
+// An initialism, including a pluralised one: "ACLs", "ISOs" and "CPUs" are upper case tokens
+// with a lower case plural.
 function isAcronym(w) {
   if (/^vCPUs?$/.test(w)) return true;
   if (w === w.toUpperCase()) return true;
@@ -179,9 +139,8 @@ for (const file of walk(src)) {
   {
     LABEL.lastIndex = 0;
     let m;
-    // emptySlot is false here on purpose. A bare `label:` is not necessarily a heading, and
-    // hooks/use-loading-progress.ts names its steps "Initializing", "Fetching VMs",
-    // "Loading Nodes": a coherent Title Case set of step names, not an empty state.
+    // emptySlot is false: a bare `label:` is not necessarily a heading, and step names such
+    // as "Loading Nodes" (hooks/use-loading-progress.ts) are names, so they stay Title Case.
     while ((m = LABEL.exec(code))) found.push({ kind: 'label:', s: m[1], i: m.index, titleSlot: true, emptySlot: false });
   }
 

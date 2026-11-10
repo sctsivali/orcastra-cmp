@@ -1,27 +1,15 @@
 #!/usr/bin/env node
-// Structural guard: every Node or Cluster cell renders components/ui/node-link.tsx, and that
-// component is the only cell-level caller of inventoryLinks.clusters.
+// Structural guard: every Node or Cluster cell renders components/ui/node-link.tsx, which owns
+// the role-gated link into Clusters, and that component is the only cell-level caller of
+// inventoryLinks.clusters.
 //
-// The defect behind it: three tables linked the node cell into Clusters, one of them with the
-// Partner gate and two without (a Tenant clicking the link landed on the welcome page), while
-// twenty other tables and detail fields printed the same id as dead text. Nothing static said
-// which was right, so every new table re-decided. Now one component owns the decision and this
-// check refuses a Node column that does not go through it.
-//
-// Four rules:
-//   1. per feature directory (a trailing /components folded into its route), the number of
-//      declared Node/Cluster columns (`facetSpec: { role: "node" }`, `SortableTableHead
-//      label="Node|Cluster|Clusters"`, `<TableHead>Node|Cluster|Clusters</TableHead>`), minus
-//      the columns carrying a `node-link: exempt <reason>` marker, must not exceed the number
-//      of `<NodeLink` uses in that directory;
-//   2. `inventoryLinks.clusters(` appears only in the component and in the allow-list below;
-//   3. the component exists and reads both the role and the registry;
-//   4. a scan that found fewer than MIN_DECLARED columns or walked no files fails, so a
-//      reformatted tree cannot pass by being invisible.
-//
-// Regex over stripped source, like every sibling. A NodeLink dropped into the wrong column of
-// the right directory satisfies the count; the Playwright spec node-link-cells covers that
-// behaviourally.
+// Per feature directory (a trailing /components folded into its route), the declared Node and
+// Cluster columns minus those marked `node-link: exempt <reason>` must not exceed the `<NodeLink`
+// count. `inventoryLinks.clusters(` appears only in the component and the allow-list below, and
+// the component must read both the role and the registry. Fewer than MIN_DECLARED columns, or no
+// files walked, fails, so a reformatted tree cannot pass unseen. Regex over comment-stripped
+// source: a NodeLink in the wrong column of the right directory still passes the count;
+// frontend/e2e/node-link-cells.spec.ts covers that.
 //
 // Run: node scripts/checks/check-node-link.mjs [repo-root]
 
@@ -32,11 +20,9 @@ import { fileURLToPath } from 'node:url';
 const root = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const src = join(root, 'frontend', 'src');
 const COMPONENT = 'components/ui/node-link.tsx';
-// 18 -> 26 when the task dock landed its Tasks and Cluster Log tables, each with a Node column,
-// on top of the 24 the tree already declared.
 const MIN_DECLARED = 26;
 
-// A Clusters link that is a page-level action, not a cell. Each entry needs a reason.
+// Page-level Clusters links that are not table cells, each with a reason.
 const ALLOWED_CLUSTERS_CALLERS = new Map([
   [
     'app/inventory/warnings/components/warning-detail-dialog.tsx',
@@ -50,7 +36,7 @@ const SORTABLE_HEAD_RE = new RegExp(`<SortableTableHead\\b[^>]*\\blabel="${HEADE
 const TABLE_HEAD_RE = new RegExp(`<TableHead\\b[^>]*>\\s*${HEADER_LABEL}\\s*</TableHead>`, 'g');
 const NODE_LINK_RE = /<NodeLink\b/g;
 const CLUSTERS_CALL_RE = /inventoryLinks\.clusters\(/g;
-// The reason may not run into the comment terminator, so `exempt */} <TableHead ...` is not a reason.
+// The reason must not run into the comment terminator: `exempt */} <TableHead ...` is not one.
 const EXEMPT_RE = /node-link:\s*exempt\s+((?:(?!\*\/)[^\n]){15,})/g;
 
 function* walk(dir) {
@@ -61,14 +47,14 @@ function* walk(dir) {
   }
 }
 
-/** Source with comments removed, so a rule in a comment cannot trip the guard. */
+/** Source with comments removed, so text inside a comment cannot trip the guard. */
 function stripComments(code) {
   return code
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 }
 
-/** The feature directory a file belongs to: its route, with components/ folded in. */
+/** Feature directory of a file: its route, with components/ folded in. */
 function groupOf(rel) {
   let dir = dirname(rel);
   if (dir.endsWith('/components')) dir = dirname(dir);
@@ -112,10 +98,8 @@ for (const file of walk(src)) {
 }
 
 for (const [key, group] of groups) {
-  // A table declares its column once in defineTable and once as a header, and the two can sit
-  // in different files of one feature directory (the definition on the page, the header in a
-  // components/ table). Take the larger of the two sums per directory, so neither a header-only
-  // nor a facet-only table is missed and a split table is not counted twice.
+  // A column is declared in defineTable and again as a header, possibly in different files of the
+  // same directory. Taking the larger sum counts a split table once and misses neither kind.
   group.declared = Math.max(0, Math.max(group.roles, group.headers) - group.exempt);
   declaredTotal += group.declared;
   usedTotal += group.used;

@@ -1,8 +1,8 @@
 const { test, expect } = require("@playwright/test");
 const { authenticate, installApiFixtures } = require("./support/fixtures.cjs");
 
-// One size standard on every screen, and the thing that makes it risky: a field that shows 8.59 GB
-// for a limit stored as 8GiB must not write 8590000000 when nobody touched it.
+// One size standard on every screen. The risk: a field that shows 8.59 GB for a limit stored as
+// 8GiB must not write 8590000000 when the field was left untouched.
 
 const gib = 1024 ** 3;
 

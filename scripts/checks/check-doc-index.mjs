@@ -2,22 +2,14 @@
 /**
  * The documentation index must list every document, and say the right thing about each.
  *
- * The block in documentation/README.md carried 8 of 43 documents while the line above it read
- * "Keep this current as documents are added". That is a discipline, and disciplines fail
- * exactly when someone is busy shipping. Every other invariant in this repo that mattered
- * ended up as a script in this directory; this is that script.
+ * Rules, all derived from the index block in documentation/README.md:
+ *   1. Every .md under documentation/, except README.md, TEMPLATE.md and adr/ (which keeps
+ *      its own index under its own markers), appears exactly once.
+ *   2. Each row's Status matches the document's frontmatter, so a Draft cannot be
+ *      listed as Active.
+ *   3. Rows are grouped by folder then sorted by name, so a diff reader can check rule 1.
  *
- * Three rules, all derivable from the block itself so there is nothing to keep in sync here:
- *
- *   1. Every .md under documentation/, except the two templates, the two READMEs and adr/,
- *      appears exactly once. adr/ keeps its own index under its own markers.
- *   2. Each row's Status matches the document's own frontmatter, so a Draft cannot be listed
- *      as Active.
- *   3. Rows are grouped by folder then sorted by name, which is what makes rule 1 checkable
- *      by a human reading the diff rather than only by this script.
- *
- * note: documentation/ is gitignored, so this runs against the working tree and is the only
- * thing that will ever look at it. It has no CI to fall back on.
+ * documentation/ is gitignored, so this runs on the working tree only and passes without it.
  */
 
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';

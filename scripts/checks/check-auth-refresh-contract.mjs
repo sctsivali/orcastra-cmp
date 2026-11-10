@@ -1,20 +1,16 @@
 #!/usr/bin/env node
 // What a failed token refresh means, and what the session does about it.
 //
-// Authentik deletes a refresh token with the session it belongs to and rotates it on every grant,
-// so `invalid_grant` means the token is gone for good. auth.ts used to treat every failure as
-// transient: it kept the expired access token, retried every minute, and middleware still read the
-// cookie as signed in, so a deep link rendered and every socket ticket came back 401 "Token has
-// expired". This runs the real lib/auth-refresh.ts and auth.ts against a fake IdP and holds:
-//
-// - invalid_grant ends the session (RefreshTokenRevoked, no refresh token, no further grant), and
-//   middleware sends an ended session through sign-in, back to the same page;
-// - a timeout, a network failure, a 5xx or a 429 cools down and retries (RefreshAccessTokenError);
-// - concurrent refreshes of one token make one grant, and a read with the spent token inside the
-//   replay window takes the result instead of a second grant;
-// - a forced refresh (a socket's ticket refused) runs at most once per 30 s per session;
-// - no log line carries token material.
-// check-token-rotation.mjs covers the rotation registry itself.
+// Authentik rotates the refresh token on every grant and deletes it with its session, so
+// `invalid_grant` is final; treating it as transient keeps a dead access token behind a signed-in
+// cookie and every socket ticket answers 401. This runs the real lib/auth-refresh.ts and auth.ts
+// against a fake IdP and holds: invalid_grant ends the session (RefreshTokenRevoked, no refresh
+// token, no further grant) and middleware routes it through sign-in back to the same page; a
+// timeout, network failure, 5xx or 429 cools down and retries (RefreshAccessTokenError);
+// concurrent refreshes of one token make one grant, and a spent-token read inside the replay
+// window takes that result; a forced refresh (a socket's ticket refused) runs at most once per
+// 30 s per session; no log line carries token material. check-token-rotation.mjs covers the
+// rotation registry.
 //
 // Run: node scripts/checks/check-auth-refresh-contract.mjs [repo-root]
 
@@ -103,7 +99,7 @@ const json = (status, body) => new Response(JSON.stringify(body), { status });
   const { client } = idpClient((_form, init) => new Promise((_resolve, reject) => {
     init.signal.addEventListener('abort', () => reject(init.signal.reason));
   }), { timeoutMs: 30 });
-  // note: AbortSignal.timeout's timer does not hold the event loop open; this one does.
+  // AbortSignal.timeout's timer does not hold the event loop open; this one does.
   const keepAlive = setTimeout(() => {}, 5_000);
   assert.deepEqual(await client.grant('rt-0'), { ok: false, kind: 'transient' });
   clearTimeout(keepAlive);

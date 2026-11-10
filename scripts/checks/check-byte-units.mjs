@@ -2,10 +2,10 @@
 /**
  * Guard the console's byte contract: one standard, the GB family, on every screen.
  *
- * One disk used to read 10GiB in a column and 10.74 GB on its meter, because memory and limits were
- * binary and storage was decimal. documentation/ui/byte-units.md has the decision. Binary labels
- * survive only where they are wire format: parsers that read what LXD stores. Keeping this
- * parser-free lets the CI guards job run before frontend dependencies are installed.
+ * Mixing binary memory and limits with decimal storage makes one disk read 10GiB in a column and
+ * 10.74 GB on its meter. Binary labels survive only where they are wire format: parsers that read
+ * what LXD stores. Keeping this parser-free lets the CI guards job run before frontend dependencies
+ * are installed.
  */
 
 import assert from "node:assert/strict";
@@ -234,8 +234,7 @@ for (const format of [numeric.formatFrequency, numeric.formatLinkSpeed, numeric.
   for (const value of [NaN, Infinity, -Infinity, -1, null, undefined]) assert.equal(format(value), "\u2014");
 }
 assert.equal(numeric.formatCpuTime(0), "0s");
-// A single time is glued and a compound keeps its two largest units (frontend-design-language.md).
-// The Sessions tables read "0m 5s" and "8h 46m 10s" before this formatter was shared.
+// A single time is glued and a compound keeps its two largest units, never "0m 5s" or "8h 46m 10s".
 for (const [seconds, text] of [[0, "0s"], [0.4, "0s"], [5, "5s"], [125, "2m 5s"], [31570, "8h 46m"], [4330000, "50d 2h"]]) {
   assert.equal(numeric.formatElapsed(seconds), text);
 }

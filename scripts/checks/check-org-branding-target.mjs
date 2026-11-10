@@ -1,32 +1,13 @@
 #!/usr/bin/env node
 // Structural guard: the organization branding editor targets the organization the session
-// actually renders, and organization ids are strings by the time they reach a picker.
+// renders, and organization ids are strings by the time they reach a picker.
 //
-// Both halves are defects that shipped.
-//
-// The first: components/org-personalization-settings.tsx auto-selected the first entry of
-// GET /organizations. The backend orders that list by name, and for an Admin it is every active
-// organization, so "the first one" was whichever customer sorted alphabetically first. The
-// sidebar resolves its organization somewhere else entirely, through _get_primary_org_id, which
-// is the caller's earliest membership. Two rules for "your organization" that agree for most
-// accounts and silently disagree for anyone who can see more than one. An operator edited
-// ALIMRUGI's branding while watching Sivali Cloud Technology's: every change looked like it
-// reverted, and a customer's colours were overwritten by somebody who never chose them.
-//
-// The second: OrgResponse.id is an int and the frontend type said string, so the component held
-// a raw number in a `string` state and handed it to a Radix Select, which matches by value
-// against String(id) on each item. An organization was selected and the trigger rendered
-// "Select organization".
-//
-// Why a structural guard rather than a browser test. The Playwright spec
-// (/root/qa-orcastra/tests/org-branding-targets-your-org.spec.ts) asserts the invariant against
-// real accounts, but it can only catch a regression on an account whose primary organization is
-// not the alphabetically first one it can list, and no QA account has that shape today. So the
-// spec would go green through the exact regression it describes. This file gates the line
-// instead, which is the part that cannot be arranged away by test data.
-//
-// Deliberately parser-free and dependency-free, like the other guards here: the CI `guards` job
-// runs checkout and setup-node and no `npm ci`.
+// GET /organizations is ordered by name and, for an Admin, lists every active organization. The
+// sidebar resolves the caller's organization on the server (services/branding/subject.py, read
+// through GET /organizations/my-preferences). An editor that defaults to the first list entry
+// edits another organization's branding for anyone who can see more than one. A browser test
+// only sees that on an account whose organization is not the first one it can list, so the
+// source is checked here.
 //
 // Run: node scripts/checks/check-org-branding-target.mjs [repo-root]
 
@@ -59,8 +40,8 @@ if (!/getMyOrgPreferences\s*\(/.test(src)) {
   );
 }
 
-// Rule 2: nothing seeds the selected organization straight out of an ordered list. This is the
-// exact shape that shipped: `const firstId = orgList[0].id; setOrgId(firstId);`
+// Rule 2: nothing seeds the selected organization straight out of an ordered list, ex;
+// `const firstId = orgList[0].id; setOrgId(firstId);`
 lines.forEach((line, i) => {
   const n = i + 1;
   if (/setOrgId\s*\(\s*[A-Za-z_$][\w$]*\s*\[\s*0\s*\]/.test(line)) {
@@ -93,9 +74,7 @@ if (mapsRawId) {
 
 // Rule 4: the editor tells the operator which organization it is about to rewrite, and whether
 // that organization is theirs. is_member is what separates the two for an Admin.
-// important: a property READ, not the identifier anywhere. Matching bare `is_member` passed on
-// the explanatory comment three lines above the code, which is a guard reporting green because
-// somebody described the rule rather than followed it.
+// Match a property read: a bare `is_member` also matches a comment that describes the rule.
 if (!/\.is_member\b/.test(src)) {
   offenders.push(
     `${REL}: does not read is_member. Without it the editor cannot tell an operator that they ` +

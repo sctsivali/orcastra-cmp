@@ -2,7 +2,7 @@
 // Structural guard for create-form request staging and cancellable refresh reads.
 //
 // These invariants span React intent state, React Query, and the fetch transport. A typecheck
-// cannot detect an optional inventory query becoming eager again or two consumers sharing an
+// cannot detect an optional inventory query becoming eager or two consumers sharing an
 // abortable GET, so keep the contract explicit here.
 
 import assert from "node:assert/strict";

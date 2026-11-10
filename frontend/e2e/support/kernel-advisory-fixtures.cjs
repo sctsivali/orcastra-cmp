@@ -30,7 +30,7 @@ const PWN_ESCAPE = {
 const REBOOT = "Only a reboot into a fixed kernel clears this; an installed kernel that is not running does not.";
 
 const FINDINGS = {
-  // Ubuntu's record on 2026-10-28: linux on jammy has the fix in -proposed
+  // an Ubuntu record where linux on jammy has the fix in -proposed
   exposed: {
     advisory_id: "CVE-2026-99999",
     state: "exposed",
@@ -98,7 +98,7 @@ function host(member, { clustered = false, kernel, os = "22.04", findings: raw }
 
 const HOSTS = {
   patched: () => [host("cluster-a", { kernel: "6.12.113", findings: [FINDINGS.patched] })],
-  // a real Ubuntu 22.04 host on 2026-10-19 (no Ubuntu fix published)
+  // an Ubuntu 22.04 host with no Ubuntu fix published
   exposed: () => [host("cluster-a", { kernel: "5.15.0-185-generic", findings: [FINDINGS.exposed] })],
   // a vendor kernel (Jetson tegra) whose version string cannot prove a backport
   unconfirmed: () => [host("cluster-a", { kernel: "5.15.148-tegra", findings: [FINDINGS.unverified] })],

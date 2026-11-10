@@ -3,23 +3,15 @@
  * Ratchet: an icon-only button must carry its own accessible name.
  *
  * A `<Button>` whose children are all icons renders as a bare `button` in the
- * accessibility tree unless the element itself names it. Wrapping it in a Radix
- * `Tooltip` does not fix this: the tooltip contributes `aria-describedby` when it opens,
- * which is a description, not a name. A screen reader announces "button" and nothing else.
+ * accessibility tree unless the element itself names it. A Radix `Tooltip` contributes
+ * `aria-describedby` when it opens, which describes the button without naming it, so a
+ * screen reader announces "button" and nothing else.
  *
- * Measured in the live app before this file existed, as admin:
+ * `title` counts as a name because the accname algorithm falls back to it, but it is the
+ * weakest option: a permission-dependent title such as "No operate permission" never says
+ * which action the button is. Prefer `aria-label`.
  *
- *   /inventory              56 buttons, 22 with no accessible name, all `MoreVertical`
- *   /inventory/instances   139 buttons,  4 with none, the pagination chevrons
- *
- * `title` counts as a name here because the accname algorithm falls back to it, but it is
- * the weakest option and it is what caused the instances-row defect: that title was
- * permission-dependent, so five buttons announced "No operate permission" and never said
- * which action they were. Prefer `aria-label`. The check accepts `title` so it stays a
- * naming rule rather than an attribute-style rule.
- *
- * Baseline rather than zero, because the count is what it is today and a ratchet that
- * cannot pass is a ratchet somebody deletes. It may fall and never rise.
+ * The count may fall and never rise.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -29,42 +21,11 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const src = join(root, 'frontend', 'src');
 
-// What is left after this pass. The surfaces already cleared are the ones an operator
-// meets first: the dashboard project menus, the shared table pagination, the instance row
-// actions on both the dashboard and the instances page, and every kebab menu in the app.
-//
-// The remainder is concentrated in the console and terminal surface, where a toolbar is
-// almost entirely icons, plus the monitoring chart controls. Those want their own pass
-// with the keyboard, not a bulk attribute edit, because several are toggles whose name
-// should change with state rather than sit still.
-//
-// Lower it when you fix one. It may fall and never rise.
-//
-// 55 -> 54: the back button on the Create Project form. The dashboard project kebab, which
-// the comment above already counted as cleared, was in fact invisible to this check the
-// whole time: its aria-label had landed below the opening tag as a text child, so the body
-// was not one self-closing element and isIconOnly() skipped it. Fixing that leak did not
-// move the number, it only made the button countable. See check-jsx-stray-attrs.mjs.
-// Lowered 54 -> 50 when both trays gained names. The four were the restore and close buttons on
-// the terminal and console trays, which is the shape this check exists for: their Tooltip supplied
-// a description and never a name, so a screen reader announced "button" four times while the only
-// thing identifying which session they acted on was a clipped label beside them.
-// Lowered 50 -> 48 when the certificate renewal modal moved onto the shared CodeBlock. Its two
-// copy buttons were bare Copy glyphs pinned over a Textarea; CodeBlock's carries a visible label
-// and an aria-label naming what it copies, which matters most here because the two sat adjacent
-// and copied different things, the command and the PEM.
-// Lowered 48 -> 46 when the terminal and console back controls were named. Those two are the only
-// navigational control on their pages, because MainLayout hides the sidebar, header and footer on
-// both prefixes, so an unnamed arrow was the entire way out for anyone who could not see it.
-// Lowered 46 -> 45 when the certificate row's cancel-renewal control was named. It sat beside a
-// Verify button on the same row and discarded a pending certificate, so "button" was not enough.
-// Lowered 45 -> 44 when the console toolbar's power buttons were named (2026-10-27).
-// Lowered 44 -> 19 when the access policy, tenant access and user group controls were named
-// (2026-11-03): rule removal, policy edit and delete, revoke confirm and cancel, user removal.
+// Lower this when you fix one. A toggle whose name should change with state wants a pass with
+// the keyboard rather than a bulk attribute edit.
 const BASELINE = 19;
 
-// Empty since the dead components/vm-table.tsx was deleted; kept so a future dead file has a
-// documented place to go rather than a baseline bump.
+// A dead file that nothing imports goes here rather than into a baseline bump.
 const EXEMPT_FILES = new Set([]);
 
 function* walk(dir) {
@@ -126,22 +87,11 @@ function buttons(code) {
 /**
  * Is the body exactly one self-closing element and nothing else?
  *
- * Deliberately narrow. Two broader attempts were tried and both were wrong in the
- * direction that makes a ratchet worthless:
- *
- *   dropping whole `{...}` expressions      127 hits, 101 of them false, because
- *                                           `{isPending ? <Loader2 /> : "Refresh"}` is
- *                                           the house pending-button idiom
- *   then also accepting quoted literals      84 hits, still false on bare JSX text, so
- *                                           the sign-in button reading "Signing in..."
- *                                           inside a ternary was reported as nameless
- *
- * Detecting rendered text from source is a parser's job, not a regex's. This shape needs
- * no text detection at all: one self-closing element is unambiguously an icon and nothing
- * else, which is exactly the defect measured in the browser (kebab menus and pagination
- * chevrons). A button whose icon sits inside a ternary is not caught here. That is a known
- * hole, accepted on purpose, because a check nobody trusts gets deleted and this one can
- * be trusted absolutely.
+ * Kept narrow. Broader shapes, such as dropping `{...}` expressions, report the house
+ * pending-button idiom `{isPending ? <Loader2 /> : "Refresh"}` and bare JSX text as nameless,
+ * and detecting rendered text from source needs a parser. One self-closing element is
+ * unambiguously an icon. A button whose icon sits inside a ternary is not caught; that hole
+ * is accepted to keep the check free of false positives.
  */
 function isIconOnly(body) {
   return /^<[A-Z][A-Za-z0-9]*(\s[^>]*?)?\/>$/.test(body.trim());

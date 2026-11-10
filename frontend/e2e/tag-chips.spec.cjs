@@ -6,8 +6,7 @@ const {
 } = require("./support/inventory-hardening-fixtures.cjs");
 
 // Tag chips are neutral category chips: the muted fill and text, the tag's category hue only in a
-// square swatch. The Tags facet and the add-tag prefixes are real toggle buttons a keyboard
-// reaches, where they used to be clickable divs.
+// square swatch. The Tags facet and the add-tag prefixes are toggle buttons a keyboard reaches.
 
 const TAGS = ["loc_jakarta", "env_production", "plain-tag"];
 const coreCard = (page) => page.locator('[data-slot="cluster-card"]').filter({ hasText: "Core Cluster" });

@@ -2,22 +2,14 @@
 /**
  * Structural guard: a number a reader compares is not set in monospace.
  *
- * The Sessions page set its total time and its transfer rates in Geist Mono, its counts in the
- * body face, at three sizes in one strip, while every other stat tile and every other table set
- * sizes, rates, counts and durations in the body face. Monospace is for identifiers (ids, hashes,
- * fingerprints, keys, paths, raw config); tabular figures (`tabular-nums`) are what keep digits
- * aligned without changing the face. documentation/ui/table-conventions.md, "The typography
- * contract".
+ * Monospace is for identifiers (ids, hashes, fingerprints, keys, paths, raw config). Sizes,
+ * rates, counts and durations use the body face; `tabular-nums` keeps their digits aligned.
  *
- * Two rules, both over JSX with a literal className:
- *   1. `font-mono` together with a display size (`text-lg` and up) is a headline number or
- *      label in monospace. Nothing in the console needs one.
- *   2. `font-mono` on an element whose content calls one of the shared number formatters below.
- *      The content is read up to the element's first closing tag of the same name, so a value
- *      two levels inside a mono wrapper of the same tag name can be missed. Template-literal and
- *      cn(...) classNames are skipped and counted, so that blind spot shows in the output.
- *
- * Modelled on scripts/checks/check-table-typography.mjs.
+ * Over JSX with a literal className, it flags `font-mono` with a display size (`text-lg` and up),
+ * and `font-mono` on an element whose content calls a NUMBER_FORMATTERS function. Content is read
+ * up to the first closing tag of the same name, so a value two levels inside a same-named mono
+ * wrapper can be missed. Template-literal and cn(...) classNames are skipped and counted, so that
+ * blind spot shows in the output.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// Token refresh against an IdP that rotates refresh tokens like Authentik 2025.10 does by default:
+// Token refresh against an IdP that rotates refresh tokens, as Authentik 2025.10 does by default:
 // a grant commits the rotation (revokes the old token, issues a new one) before it answers, and a
 // revoked token presented again answers invalid_grant and counts as a SUSPICIOUS_REQUEST. This
 // runs the real auth.ts, lib/auth-refresh.ts, lib/refresh-grants.ts and middleware.ts against that
-// IdP. Unless a case says otherwise, no refresh token may ever be presented twice. An invalid_grant
-// ends the session (RefreshTokenRevoked); only a failure that says nothing about the token cools
-// down and retries (check-auth-refresh-contract.mjs holds that split).
+// IdP. Unless a case says otherwise, no refresh token is presented twice. An invalid_grant ends
+// the session (RefreshTokenRevoked); only a failure that says nothing about the token cools down
+// and retries (check-auth-refresh-contract.mjs holds that split).
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -215,9 +215,9 @@ try {
     assert.equal(idp.suspicious, 0);
   }
 
-  // Past the cap the answer is lost. The IdP has committed the rotation, so this session ends: the
-  // documented residual. The timeout itself says nothing about the token and cools down; the retry
-  // after it is refused with invalid_grant, which ends the session instead of cooling down again.
+  // Past the cap the answer is lost. The IdP has committed the rotation, so this session ends (a
+  // known limitation). The timeout says nothing about the token and cools down; the retry after it
+  // is refused with invalid_grant, which ends the session instead of cooling down again.
   {
     resetIdp();
     idp.latencyMs = 25_000;
@@ -318,7 +318,7 @@ try {
     assert.equal(idp.suspicious, 0);
 
     // A sign-out that lands while the grant is hashing its new token: the new token is not
-    // linked, and it is revoked at the IdP because nobody will hold it.
+    // linked and is revoked at the IdP, since no session will hold it.
     resetIdp();
     const racing = world();
     let reached;
@@ -350,7 +350,7 @@ try {
     await sleepReal(450); // the first retry, scaled from 30 s
     assert.ok(idp.revokedBySignOut.includes("rt-1"), "the revocation was not retried");
 
-    // An IdP without a revocation endpoint is reported, not silently skipped.
+    // Sign-out against an IdP without a revocation endpoint logs that it advertises none.
     resetIdp();
     idp.advertiseRevocation = false;
     const silent = world();

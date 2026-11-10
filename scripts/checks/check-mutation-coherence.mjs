@@ -2,8 +2,8 @@
 /**
  * Fail closed when a frontend API write has no declared cache/terminal contract.
  *
- * This is intentionally structural. The project has no frontend unit runner, while this guard
- * can still cover every direct API member call and every exported mutation hook in CI.
+ * Structural, because the project has no frontend unit runner; it still covers every direct API
+ * member call and every exported mutation hook in CI.
  */
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -229,8 +229,8 @@ const WRITER_IMPLEMENTATION_PATHS = new Set(
   writerInventory.writers.map((writer) => writer.path),
 );
 
-// Runtime self-test: transport semantics must expose writers even when their names do not use
-// the old mutation-prefix convention. It also proves aliases converge on one implementation.
+// Runtime self-test: transport semantics must expose writers even when their names carry no
+// mutation prefix. It also proves aliases converge on one implementation.
 const inventorySelfTest = discoverApiWritersFromSources([
   {
     path: "mutation-inventory-self-test.ts",
@@ -534,9 +534,9 @@ function reconciliationScope(node, sourceFile) {
         ts.isCallExpression(parent) &&
         parent.expression.getText(sourceFile) === "dispatchActorMutation" &&
         parent.arguments.some((argument) => argument === current);
-      // This wrapper is deliberately transparent to coherence: its only job is to prevent
-      // dispatch after an actor boundary. Reconciliation lives in the enclosing mutation
-      // function and must still be present there.
+      // This wrapper is transparent to coherence: it only prevents dispatch after an actor
+      // boundary. Reconciliation lives in the enclosing mutation function and must still be
+      // present there.
       if (!isActorMutationThunk) nearestFunction = current;
     }
     current = current.parent;
@@ -821,9 +821,9 @@ for (const contract of [
     path: "frontend/src/lib/instance-files/transfer-pump.ts",
     markers: ["queue.length = 0;", "if (!isWaiting(transfer.id)) return;"],
   },
-  // A console closes only its own sockets, which ends its own LXD operations. Closing a window,
-  // leaving the page or popping out used to call kill-all-sessions, which cancelled every
-  // websocket operation on the instance, other people's shells and consoles included.
+  // A console closes only its own sockets, which ends its own LXD operations. kill-all-sessions
+  // cancels every websocket operation on the instance, other people's shells and consoles
+  // included, so closing a window, leaving the page or popping out must never call it.
   {
     path: "frontend/src/app/console/[id]/page.tsx",
     markers: ["<ConsoleWorkspace"],
@@ -858,7 +858,7 @@ const personalizationProvider = readFileSync(
   join(root, "frontend/src/components/personalization/use-personalization-mutations.ts"),
   "utf8",
 );
-// The personal row holds only the theme now, so the one write is saveToAPI (no delete path).
+// The personal row holds only the theme, so the one write is saveToAPI (no delete path).
 const personalizationSaveStart = personalizationProvider.indexOf("const saveToAPI");
 const personalizationSaveEnd = personalizationProvider.indexOf("const persistTheme");
 const personalizationSaveScope = personalizationProvider.slice(
@@ -1040,7 +1040,7 @@ for (const snippet of [
   "TERMINAL_INSTANCE_OPERATION.has(status)",
   "reconcileInstanceFleet(queryClient, scopeKey, { fresh: true })",
   "result.operation_id",
-  // The snapshot follow reads through the initiator route, not /operations/{id} (round 5).
+  // The snapshot follow reads through the initiator route rather than /operations/{id}.
   "api.snapshots.operation(",
   "copyOperationVerdict(operation)",
   'verdict === "success" || verdict === "failure" || verdict === "partial"',
@@ -1122,9 +1122,8 @@ if (!breakGlassPanel.includes('reconcileMutationImpact(queryClient, "break-glass
 }
 
 // important: an invalidated query refetches on its next mount only when refetchOnMount is not
-// false. The QueryClient default was false, so every list a mutation invalidated while it was
-// off screen came back with its pre-write body (a deleted instance, a new project missing from
-// the Overview). Opting a query out needs a stated reason here.
+// false. With false, a list a mutation invalidated while it was off screen comes back with its
+// pre-write body, such as a deleted instance. Opting a query out needs a stated reason here.
 const REFETCH_ON_MOUNT_FALSE_ALLOWED = {
   "frontend/src/lib/query-config.ts": "ON_DEMAND_CONFIG is enabled: false; its callers fetch by hand",
 };

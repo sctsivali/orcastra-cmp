@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 // Branding is resolved on the server (backend services/branding/): an account sees its
 // organization's own row, filled from the organization that sold to it, filled from the
-// deployment default. Item 4 of 2026-10-27 shipped because three surfaces disagreed with that:
-// an Administrator read its personal row as its whole branding, the sign-in page and the tab
-// never showed any branding at all, and the editor previewed whatever organization it was
-// editing in the operator's own sidebar. This pins each surface to the one model.
+// deployment default. This pins each surface to that one model: an Administrator reads the same
+// path as every other role, the sign-in page and the tab carry branding, and the editor never
+// previews another organization in the operator's own sidebar.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";

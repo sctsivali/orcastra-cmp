@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 // The close contract between the interactive sockets and the pages that open them.
 //
-// A terminal or console refused before accept() reached the browser as a bare 1006, so a deep
-// link opened in a new tab said "disconnected" and nothing recovered. The backend now accepts and
-// closes with a code and a reason token (backend/app/core/ws_close.py, plus the relay's own endings
-// in services/interactive_relay.py), and the page decides from them (frontend/src/lib/ws-close.ts,
-// lib/socket-recovery.ts). Two hand-kept tables drift, so this reads both sides and holds them
-// equal, then runs the page's decisions: what each close means, the backoff, and what a refused
-// ticket or a close leads to.
+// A terminal or console refused before accept() reaches the browser as a bare 1006 that says
+// nothing, so the backend accepts and closes with a code and a reason token
+// (backend/app/core/ws_close.py, plus the relay's own endings in services/interactive_relay.py),
+// and the page decides from them (frontend/src/lib/ws-close.ts, lib/socket-recovery.ts). Two
+// hand-kept tables drift, so this reads both sides and holds them equal, then runs the page's
+// decisions: what each close means, the backoff, and what a refused ticket or a close leads to.
 //
 // Run: node scripts/checks/check-ws-close-contract.mjs [repo-root]
 
@@ -52,7 +51,7 @@ for (const entry of reasonsBlock.matchAll(/^\s{4}([A-Z_]+): \(([\s\S]*?)\),$/gm)
 }
 assert.ok(Object.keys(backendReasons).length >= 5, 'could not read REASONS from ws_close.py');
 
-// Every token the backend actually closes with is in the table.
+// Every token the backend closes with is in the table.
 const used = new Set();
 for (const rel of [
   'backend/app/core/ws_auth.py', 'backend/app/routers/terminal.py', 'backend/app/routers/console.py',

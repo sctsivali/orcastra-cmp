@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// The Vault notice (issue #15). A sealed Vault made the dashboard read as a deployment with no
-// clusters. The backend now answers one 503 {error: vault_unavailable}; this pins that the console
-// names it, mounts the notice on every page below the access gate, and stops counting a failed
-// read as zero on the two overview pages.
+// The Vault notice. A sealed Vault would make the dashboard read as a deployment with no clusters,
+// so the backend answers one 503 {error: vault_unavailable}; this pins that the console names it,
+// mounts the notice on every page below the access gate, and does not count a failed read as zero
+// on the two overview pages.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";

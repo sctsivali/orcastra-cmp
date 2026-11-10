@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // The paid term behind a Tenant's access (backend core/tenant_term.py). After OrcaHub's term ends
 // the Tenant's instances are view only, and after the retention window the access is gone. This
-// pins that the console says so instead of leaving a disabled Start button as the only clue: the
-// notice is mounted on every page inside the shell, it adds no request of its own, its copy names
-// no date it was not given, and an instance row says read only without opening its menu.
+// pins that the console says so: the notice is mounted on every page inside the shell, it adds no
+// request of its own, its copy names no date it was not given, and an instance row says read only
+// without opening its menu.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";

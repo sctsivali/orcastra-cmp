@@ -1,12 +1,9 @@
 #!/usr/bin/env node
 // One date format, and every call site on it.
 //
-// Five formats grew here: 30/10/2026, 22:55:00 beside Oct 30, 2026, 10:55 PM beside 30 Oct 2026 and
-// the browser's own locale, sometimes two of them in one row. The zone label makes one mistake
-// worse than it was: an API timestamp with no offset is UTC, and read as local it would now print a
-// wrong time with a confident label on it.
-//
-// This runs the real helpers under each zone an operator sits in, then holds the tree to them.
+// An API timestamp with no offset is UTC; read as local time it would print a wrong time under a
+// zone label. This runs the real helpers under each zone an operator sits in, then holds the tree
+// to them.
 //
 // Run: node scripts/checks/check-date-format.mjs [repo-root]
 

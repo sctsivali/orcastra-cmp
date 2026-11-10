@@ -3,11 +3,9 @@
 //
 // The nav config is the single place that says which destinations belong to which role, and
 // filterGroups drops the ones the operator cannot have. Hiding a link is not a gate: the route
-// is still reachable by typing the URL, by a bookmark, or by browser history. Five of the seven
-// partner destinations called useRequireRole and two did not, so a tenant deep-linking to
-// /inventory/identities got the page shell and a wall of 403s instead of a redirect. Nothing
-// caught it, because each page reads correctly on its own and the discrepancy only exists
-// between them.
+// is still reachable by URL, bookmark or history, and a page without useRequireRole renders its
+// shell and a wall of 403s instead of redirecting. Each page reads correctly on its own, so the
+// discrepancy only shows across files.
 //
 // The backend is the real enforcement (require_partner on the routers, and the authorized()
 // callback). This is the UI half: the two must not disagree about who may see a page.
@@ -30,14 +28,14 @@ const GATED = new Map([
   ['admin', 'Role.ADMIN'],
 ]);
 
-// Routes whose page is deliberately ungated, with the reason. Anything not listed must gate.
+// Routes whose page is ungated by design, with the reason. Anything not listed must gate.
 const UNGATED_BY_DESIGN = new Map();
 
 const source = readFileSync(navConfig, 'utf8');
 
 // A group literal opens at two-space indent and its `role:` covers every item inside it. An
-// item may also carry its own. Reset at each group, or a gated group leaks onto the ungated one
-// that follows it, which reads as a much stricter product than the one that ships.
+// item may also carry its own. Reset at each group, or a gated group's role leaks onto the
+// ungated group that follows it.
 const required = new Map();
 let groupRole = null;
 for (const line of source.split('\n')) {
@@ -74,9 +72,7 @@ if (required.size < 7) {
 }
 
 // The server half: every page that gates itself in the browser is also refused by the
-// authorized() callback in auth.ts, so a tenant deep link never mounts the page shell. The
-// production RC4 hotfix line redirected seven partner pages on the server and the dev line only
-// two, and nothing compared the lists (found in the RC5 acceptance, 2026-11-05).
+// authorized() callback in auth.ts, so a tenant deep link never mounts the page shell.
 const authSource = readFileSync(join(src, 'auth.ts'), 'utf8');
 const serverPaths = (name) => {
   const block = authSource.match(new RegExp(`const ${name} = \\[([\\s\\S]*?)\\];`));
@@ -106,7 +102,7 @@ for (const page of pages) {
   const route = `/${relative(appDir, dirname(page)).split(sep).filter((s) => !/^\(.*\)$/.test(s)).join('/')}`;
   for (const [role, list] of SERVER_LISTS) {
     // Any argument list: useRequireRole(Role.PARTNER, "/") gates the page just the same. The gate
-    // lives in the page file itself (house rule, see inventory/identities/page.tsx).
+    // lives in the page file itself, as in inventory/identities/page.tsx.
     if (!new RegExp(`useRequireRole\\(\\s*Role\\.${role}\\b`).test(body)) continue;
     const paths = serverPaths(list);
     if (!paths) {
@@ -119,7 +115,7 @@ for (const page of pages) {
     }
   }
 }
-// Fifteen today (2026-11-05); fewer means pages left the scan, not that the gate got simpler.
+// Fewer than this means pages fell out of the scan.
 if (serverChecked < 15) {
   offenders.push(`only ${serverChecked} role-gated pages found under app/; expected at least 15`);
 }

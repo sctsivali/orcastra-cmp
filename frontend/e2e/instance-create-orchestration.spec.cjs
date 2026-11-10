@@ -13,7 +13,7 @@ const INITIAL_ALLOWED_PATHS = new Set([
   "/organizations/my-preferences",
   "/organizations/my-preferences/version",
   "/system/settings",
-  // The shell's Vault notice (issue #15), read on every page like /system/settings.
+  // The shell's Vault notice, read on every page like /system/settings.
   "/system/vault-status",
   // Asked by an Administrator's sidebar count only; other roles never send it.
   "/system/host-health",

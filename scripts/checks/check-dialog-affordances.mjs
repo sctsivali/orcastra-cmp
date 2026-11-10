@@ -1,23 +1,17 @@
 #!/usr/bin/env node
 /**
- * Two rules about how a dialog is opened and how it scrolls.
+ * Two rules about how a dialog is opened and how it scrolls. Both are ratchets: each count may
+ * fall and never rise.
  *
- * RULE 1, hard ban: a dialog must not be opened from a `<Badge onClick>`.
- * `Badge` renders a `div` (components/ui/badge.tsx), so it takes no focus, gets no focus
- * ring, and Enter does nothing. It looks interactive to a mouse and is invisible to a
- * keyboard, which is the same defect `check-table-typography.mjs` already bans for
- * `<TableCell onClick>` and `<TableRow onClick>`, one element further out. Use `TableLink`,
- * which renders a real button or anchor and carries its affordance at rest.
+ * Rule 1: a dialog must not be opened from a `<Badge onClick>`. `Badge` renders a `div`
+ * (components/ui/badge.tsx), so it takes no focus, gets no focus ring, and Enter does nothing.
+ * `check-table-typography.mjs` bans the same defect for `<TableCell onClick>` and
+ * `<TableRow onClick>`. Use `TableLink`, which renders a real button or anchor.
  *
- * RULE 2, ratchet: a `DialogContent` that bounds its height must scroll in `DialogBody`.
- * The recipe is `max-h-... flex flex-col overflow-hidden` on the content plus a `DialogBody`
- * inside it. Put `overflow-y-auto` on the content instead and the header scrolls away with
- * the body, so on a long record the operator loses the title telling them what they are
- * looking at. `components/ui/clickable-badge.tsx` had the correct shape and the dialog it
- * sat next to did not, in the same feature, which is how easy this is to get wrong.
- *
- * A ratchet rather than a ban for rule 2, because the remaining offenders are large dialogs
- * that each want their own pass. It may fall and never rise.
+ * Rule 2: a `DialogContent` that bounds its height must scroll in `DialogBody`, with
+ * `max-h-... flex flex-col overflow-hidden` on the content. With `overflow-y-auto` on the content
+ * the header scrolls away with the body and a long record loses its title. The remaining
+ * offenders are large dialogs that each want their own pass.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -27,29 +21,16 @@ import { fileURLToPath } from 'node:url';
 const root = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const src = join(root, 'frontend', 'src');
 
-// What is left after this pass. Four of the five were the tag manager's filter and prefix
-// toggles; they are real buttons with aria-pressed now (components/tag-chips.tsx TagToggle). The
-// one left is tag-manager-legacy.tsx, which nothing imports.
-//
-// The sixth was the dashboard project card. This note used to say the badge there sat beside "a
-// real chevron button that already does the same thing", which was not true: the chevron was a
-// bare div with an onClick, so neither affordance took focus and the expanded instance list was
-// unreachable without a mouse. Both are now one real button carrying aria-expanded.
-// Lower it when you fix one.
+// The one remaining Badge onClick is in tag-manager-legacy.tsx, which nothing imports.
+// Lower this when you fix one.
 const BADGE_ONCLICK_BASELINE = 1;
 
-// Dialogs still bounding their own height and scrolling their own content, so their titles
-// scroll away. Each is a large file that wants its own pass. It was 8, then 7 when
-// instance-monitoring-modal was replaced, then 6 when the warnings page's inline dialog
-// moved into a shared component, then 5 when the two groups modals merged into one. That is
-// what a falling ratchet is supposed to look like.
-// node-detail-modal was converted with the live-stats work: it now uses DialogBody so the
-// cluster name and its data-age line stay pinned while a long storage list scrolls.
-// Lower it when you convert one to DialogBody.
+// Dialogs that still bound their own height and scroll their own content, so their titles
+// scroll away. Each is a large file that wants its own pass.
+// Lower this when you convert one to DialogBody.
 const DIALOG_SCROLL_BASELINE = 5;
 
-// Empty since the dead components/vm-table.tsx was deleted. Same reasoning as
-// check-icon-button-names.mjs for anything that lands here later.
+// A dead file that nothing imports goes here rather than into a baseline bump.
 const EXEMPT_FILES = new Set([]);
 
 function* walk(dir) {

@@ -3,13 +3,9 @@
 //
 // The disabled prop on a submit button is driven by React state (isPending, isSubmitting,
 // submitting). State only reaches the DOM on the next render, so two clicks inside one tick both
-// pass the check and both fire. react-hook-form does not close this: handleSubmit has no
-// re-entry guard and awaits its resolver before calling the handler, which widens the window.
-// TanStack Query's mutate has no guard either.
-//
-// This was not theoretical. instance-create-form provisioned two instances from one double
-// click, and network-create-form was caught by a Playwright assertion doing the same. Six forms
-// now carry the guard; this stops the seventh shipping without one.
+// pass the check and both fire, ex; two instances provisioned from one double click.
+// react-hook-form's handleSubmit has no re-entry guard and awaits its resolver before calling
+// the handler, which widens the window. TanStack Query's mutate has no guard either.
 //
 // Run: node scripts/checks/check-submit-guards.mjs [repo-root]
 

@@ -2,15 +2,8 @@
 // Structural guard: nothing in the console or terminal surface may reload the document.
 //
 // A document reload anywhere in this surface ends every live console and terminal session the
-// page holds, not just the panel that failed. A retry button that reloads to recover one dead
-// panel therefore takes out the rest of the workspace with it.
-//
-// Two of these shipped and were removed: the console window's retry and the ISO panel's. The
-// comment left behind at components/console/console-window.tsx explains why the fetch is re-run
-// instead. Nothing stops the next one being added, which is what this is for.
-//
-// A retry re-runs the request. A reconnect tears down and rebuilds the socket. Neither needs the
-// document.
+// page holds, including the ones that did not fail. A retry re-runs the request and a reconnect
+// rebuilds the socket; components/console/console-window.tsx shows the shape.
 //
 // Run: node scripts/checks/check-no-console-reload.mjs [repo-root]
 
@@ -31,7 +24,7 @@ const AREAS = [
   join('app', 'terminal'),
 ];
 
-// A reload written into a comment is documentation of its own removal, not a call.
+// A reload after `//` on the same line is a comment and does not count.
 const CALL = /(?<!\/\/.*)(?:window\.)?location\s*\.\s*reload\s*\(/;
 
 function* walk(dir) {

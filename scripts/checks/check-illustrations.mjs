@@ -2,28 +2,17 @@
 /**
  * Structural guard: card illustrations stay one system, stay decoration, and stay hideable.
  *
- * The scenes under frontend/src/components/illustrations/ were drawn so they would not read as
- * generated artwork: one palette, flat tonal faces, one canvas, no glow. Each of those is a
- * property a later edit can lose without any visible error, so each is held here.
- *
- *   1. Colour lives in illustrations.css and nowhere else in the kit. A TSX file under the kit
- *      carries no colour literal and no fill or stroke attribute; primitives emit class names.
- *      check-semantic-colour.mjs does not see SVG attributes, which is why this rule exists.
- *   2. Every fill and stroke in illustrations.css reads an --illo-* token (or none), and every
- *      token is declared for both themes, so a scene cannot be right in one theme and missing
- *      in the other.
+ *   1. Colour lives only in illustrations.css; kit TSX has no colour literal and no fill or stroke
+ *      attribute (check-semantic-colour.mjs does not see SVG attributes).
+ *   2. Every fill and stroke there reads an --illo-* token (or none), declared for both themes.
  *   3. Flat: no gradient, filter, blur or SVG animation anywhere in the kit.
- *   4. One svg root. Only illustration-frame.tsx renders <svg>, and it is aria-hidden,
- *      not focusable and carries data-slot="card-illustration", which the hide rule targets.
- *      Every exported scene renders through IllustrationFrame with a measured `view` crop, so its
- *      silhouette covers the same share of the frame on the same ground line as every other
- *      scene, instead of floating in an unused canvas.
- *   5. Hideable: the hide rule and the fallback rule exist, and the root layout renders
- *      data-illustrations from the first byte.
- *   6. Scenes are not icons: outside the kit, a scene is never the content of a Button, a
- *      table cell or a menu item, and it is imported from its scenes/<domain> file, never
- *      from an index that would ship every scene to every route.
- *   7. No dead scene: every exported scene is used by the product.
+ *   4. Only illustration-frame.tsx renders <svg>: aria-hidden, not focusable, with the
+ *      data-slot="card-illustration" the hide rule targets. Every scene renders through it with a
+ *      measured `view` crop, so silhouettes share one scale and ground line.
+ *   5. Hideable: the hide and fallback rules exist and the root layout renders data-illustrations.
+ *   6. Outside the kit a scene is never the content of a Button, table cell or menu item, and is
+ *      imported from its scenes/<domain> file (an index would ship every scene to every route).
+ *   7. Every exported scene is used.
  *
  * Usage: node scripts/checks/check-illustrations.mjs [repo-root]
  */

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
  * Guard the instance detail split: Overview is static row detail, while Metrics owns live reads.
- * The Monitoring chart is the one exception because its top-consumer row is deliberately partial
- * and must opt into hydration, unless the cached instance list already holds the full record. This check keeps that exception explicit and prevents a future
- * cleanup from restoring an eager detail request for every dialog opening.
+ * The Monitoring chart is the one exception: its top-consumer row is partial, so it opts into
+ * hydration unless the cached instance list already holds the full record. This keeps that
+ * exception explicit and keeps a dialog opening from making an eager detail request.
  *
  * Run: node scripts/checks/check-instance-live-metrics.mjs [repo-root]
  */
@@ -26,7 +26,7 @@ const files = {
   types: "frontend/src/types/api.ts",
   stream: "frontend/src/hooks/use-instance-stream.ts",
   sidebar: "frontend/src/components/sidebar/nav-config.tsx",
-  // The one rule editor Access Policies and Tenant Access share (2026-11-03).
+  // The one rule editor Access Policies and Tenant Access share.
   ruleEditor: "frontend/src/components/access-policies/rule-editor.tsx",
   pendingCreates: "frontend/src/lib/pending-creates.ts",
   createForm: "frontend/src/components/instance-create-form.tsx",
@@ -115,9 +115,9 @@ const checks = [
     "live Metrics, Top Consumer hydration, or its VM list is not isolated by actor scope",
   ],
   [
-    // 2026-11-03: the distribution list reads the actor-scoped shared instance list (patched by
-    // the event stream, cleared by mutations) instead of forcing a live fleet read on every click.
-    // The live read is the dialog's Refresh, on demand, and the list follows the cluster filter.
+    // The distribution list reads the actor-scoped shared instance list (patched by the event
+    // stream, cleared by mutations) instead of forcing a live fleet read on every click. The live
+    // read is the dialog's Refresh, on demand, and the list follows the cluster filter.
     !/queryKeys\.vmsFor\(|vmAPI\.list\(|\["vms",/.test(bodies.monitoring) &&
       !/fresh: true/.test(bodies.monitoring) &&
       /useInstances\(undefined, \{\s*enabled: monitoringUiIsCurrent && \(!isPaused \|\| instanceDialogOpen\)/.test(bodies.monitoring) &&

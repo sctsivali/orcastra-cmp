@@ -53,7 +53,7 @@ const CASES = [
     'http://[fd00::11]:9000/if/user/#/settings'],
 ];
 
-// note: documentation addresses (RFC 5737, RFC 2606), never a real deployment's.
+// Documentation addresses (RFC 5737, RFC 2606), never a real deployment's.
 const SIGN_IN = 'http://192.0.2.10:2025/auth/signin';
 const RETURN = 'post_logout_redirect_uri=http%3A%2F%2F192.0.2.10%3A2025%2Fauth%2Fsignin';
 const END_SESSION_CASES = [

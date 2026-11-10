@@ -1,13 +1,10 @@
 #!/usr/bin/env node
 // Structural guard: text that did not come from the PTY reaches xterm through terminalSafe.
 //
-// xterm executes what it is given. An instance name comes from the URL and the server echoes it in
-// a refusal, so one interpolated string in a write call is a way to clear an operator's screen,
-// paint a fake prompt or plant a hyperlink. PTY bytes are the one thing that belongs there raw, and
-// they arrive as a Uint8Array. Every write is read, not only the template literals: a mutation test
-// passed `term.write(reason)` straight through the first version of this guard.
-//
-// Parser-free and dependency-free, for the reason check-jsx-stray-attrs.mjs gives.
+// xterm executes the control sequences it is given. An instance name comes from the URL and the
+// server echoes it in a refusal, so one interpolated string in a write call can clear an operator's
+// screen, paint a fake prompt or plant a hyperlink. Only PTY bytes, which arrive as a Uint8Array,
+// belong there raw. Every write call is checked, including a bare `term.write(reason)`.
 //
 // Run: node scripts/checks/check-terminal-output.mjs [repo-root]
 
@@ -21,7 +18,8 @@ const src = join(root, 'frontend', 'src');
 
 // A whole first argument that may reach xterm as it is: PTY bytes and fixed escape sequences.
 const RAW_ARGUMENTS = new Set(['chunk', 'END_DEAD_PROGRAM', 'LEAVE_ALT_SCREEN', '"\\r\\n".repeat(BOX_ROWS)']);
-// Module constants that hold only colour codes, and a session id held to its allowlist above the call.
+// Colour-code constants, the session id (held to its allowlist before the call) and the banner's
+// `heading` and `line` (checked below).
 const SAFE_NAMES = new Set(['DIM', 'GREEN', 'RESET', 'color', 'sessionId', 'heading', 'line']);
 // What terminalSafe must strip: C0, ESC, DEL, C1 and CSI, then the format characters that reorder text.
 const MUST_STRIP = '\x00\x07\x1b\x7f\x80\x9b\x9f\u061c\u200e\u200f\u2028\u2029\u202a\u202e\u2066\u2069';

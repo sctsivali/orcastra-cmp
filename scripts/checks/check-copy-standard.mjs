@@ -1,13 +1,9 @@
 #!/usr/bin/env node
-// One spelling per idea, for the small things nobody writes down.
+// One spelling per idea in user-visible copy: the ellipsis, a missing value, plurals, toast titles,
+// grouped numbers that must not follow the browser locale, and time units. Each rule holds at zero.
 //
-// A census of user-visible strings found three spellings of an ellipsis, four of a missing value,
-// "1 clusters" on a table and "Showing 1 to 1 of 1 entries" on every pager, a bare "Error" toast
-// beside "Could not delete cluster", and a grouped number that changed with the browser's locale.
-// None of it reads as a bug in review, which is why it grew. Each rule holds at zero.
-//
-// Comments are stripped first: what is asserted is what ships. Parser-free and dependency-free, for
-// the reason check-jsx-stray-attrs.mjs gives.
+// Comments are stripped first, so only executable code is asserted. Parser-free and dependency-free,
+// for the reason check-jsx-stray-attrs.mjs gives.
 //
 // Run: node scripts/checks/check-copy-standard.mjs [repo-root]
 
@@ -29,9 +25,9 @@ const RULES = [
   [/(?:\b\d+(?:\.\d+)?|\}) (?:ms|s|min|sec|secs)\b(?=[\s.,;:)"'`<]|$)/, 'a single time is glued: 30s, 120ms'],
   [/ • /, 'the separator is a middle dot'],
   [/\be\.g\.[, ]/, 'write "for example" in product copy'],
-  // SPICE is the wire protocol under the VM display, not what an operator opens. Identifiers such as
-  // SpiceSession and the lowercase package and stored values (spice-vdagent, spice-graphics) do
-  // not match; lib/spice/ is the protocol client itself.
+  // Operators open the graphical console; SPICE is only the wire protocol under it. Identifiers
+  // such as SpiceSession and the lowercase package and stored values (spice-vdagent,
+  // spice-graphics) do not match; lib/spice/ is the protocol client itself.
   [/\b(?:SPICE|Spice)\b(?!-)/, 'say graphical console: SPICE is the wire protocol, not what the operator opens'],
   [/\bbg-(?:warning|destructive)\/\d+\b[^"]*\bborder\b|\bborder-(?:warning|destructive)\/\d+\b[^"]*\bbg-(?:warning|destructive)\/\d+\b/, 'use Alert, DialogSubmitError or PartialReadNotice instead of a hand-rolled box'],
 ];

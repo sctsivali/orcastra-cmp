@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// The release notice (2026-10-27): an Administrator is told when the running version is out of
-// date, from the backend's last read of the public release manifest (services/release_check/).
-// This pins the parts a refactor could quietly break: only Administrators ever ask, the notice
-// sits in the shell below the Vault notice, a critical verdict can never be dismissed, links
-// leave in a new tab without an opener, and the hermetic browser fixtures answer the read.
+// The release notice tells an Administrator when the running version is out of date, from the
+// backend's last read of the public release manifest (services/release_check/). This pins the
+// parts a refactor could break: only Administrators ask, the notice sits in the shell below
+// the Vault notice, a critical verdict can never be dismissed, links open in a new tab without
+// an opener, and the hermetic browser fixtures answer the read.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";

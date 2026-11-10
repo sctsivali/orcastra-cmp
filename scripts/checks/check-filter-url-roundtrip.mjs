@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // Round-trip guard for the filter query-string codec.
 //
-// A filter that serialises into a shared link and parses back into something else is the worst
-// failure this system can have: the URL looks right, the table is wrong, and nothing errors.
-// Static analysis cannot see it, so this compiles the codec standalone and exercises it.
+// A filter that serialises into a shared link and parses back into something else shows the
+// wrong table under a correct-looking URL, and nothing errors. Static analysis cannot see it, so
+// this compiles the codec standalone and exercises it.
 //
-// frontend/src/lib/filter-url.ts is written alias-free with no runtime imports precisely so
-// this can compile it on its own without pulling the whole app graph in.
+// frontend/src/lib/filter-url.ts is alias-free with no runtime imports so this can compile it on
+// its own without pulling the whole app graph in.
 //
 // Run: node scripts/checks/check-filter-url-roundtrip.mjs [repo-root]
 
@@ -125,10 +125,8 @@ check('text predicate: only-empty', matchesText('', { query: '', empty: 'only' }
 check('text predicate: inactive matches everything', matchesText(null, INACTIVE_TEXT));
 
 // ---------------------------------------------------------------- enum facets
-// note: these call the shipped serialiseFacet/parseFacet. An earlier version of this block
-// re-implemented the encoding inline with a bare encodeURIComponent, so it agreed with itself
-// while the real function was missing the tilde escape. A guard that tests its own copy of the
-// code under test is not a guard.
+// These call the real serialiseFacet/parseFacet. A copy of the encoding here would agree with
+// itself and miss a defect in the real function, such as a missing tilde escape.
 const ENUM_VALUES = ['nuc2', 'bridge', 'Created', 'virtual-machine', 'x86_64', 'zfs', 'default',
                      'cust-suka-hati-84426622', 'SCT-OPS', 'critical',
                      // The adversarial half: separator, sigils, escapes and the sentinel itself.

@@ -1,5 +1,5 @@
-// Shared by the guards that read JSX and call arguments. Parser-free and dependency-free, for the
-// reason check-jsx-stray-attrs.mjs gives: the CI guards job runs checkout and setup-node, no npm ci.
+// Shared by the guards that read JSX and call arguments. Parser-free and dependency-free, so those
+// guards run without a frontend install.
 
 const PAIRS = { '(': ')', '[': ']', '{': '}' };
 

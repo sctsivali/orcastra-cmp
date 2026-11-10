@@ -170,14 +170,14 @@ for (const file of [
 }
 
 // react-query runs a shared query with whichever observer's options it holds, so every observer of
-// the API key list must carry the same no-retry-on-503 rule. One without it retried an admin's 503.
+// the API key list must carry the same no-retry-on-503 rule, or one without it retries a 503.
 assert.equal(retryUnlessUnavailable(0, new TestAPIError("x", 503, "Vault is not configured")), false);
 assert.equal(retryUnlessUnavailable(0, new TestAPIError("x", 502, "upstream")), true);
 assert.equal(retryUnlessUnavailable(2, new TestAPIError("x", 502, "upstream")), false);
 for (const file of [
   "frontend/src/components/integrations-settings.tsx",
   "frontend/src/components/integrations/synced-organizations-panel.tsx",
-  // the tab shell reads the same list for the count on its section switcher (2026-11-03)
+  // The tab shell reads the same list for the count on its section switcher.
   "frontend/src/components/integrations/integrations-sections.tsx",
 ]) {
   const source = readFileSync(join(root, file), "utf8");
@@ -185,8 +185,8 @@ for (const file of [
   assert.ok(source.includes("retry: retryUnlessUnavailable"), `${file} must pass retryUnlessUnavailable`);
 }
 
-// A 401 that reaches a page is a session the console could not renew, not a permission. It sits
-// next to the re-login banner, so it must not read as "you are not allowed" (2026-10-23).
+// A 401 that reaches a page is a session the console could not renew. It sits next to the
+// re-login banner, so it must not read as "you are not allowed".
 assert.deepEqual(describeReadError(new TestAPIError("Unauthorized", 401, "Not authenticated")), {
   kind: "unauthenticated",
   reason: "your session is no longer valid; sign in again to continue",
