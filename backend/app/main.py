@@ -582,6 +582,14 @@ async def lifespan(app: FastAPI):
     except Exception as renewal_err:
         logger.error("Could not start the Vault token renewal: %s", renewal_err, exc_info=True)
 
+    # Cluster certificate expiry events: one worker (Redis lease) every six hours.
+    try:
+        from app.services import cert_expiry_events
+
+        cert_expiry_events.start()
+    except Exception as expiry_err:
+        logger.error("Could not start the certificate expiry events: %s", expiry_err, exc_info=True)
+
     # Host Health: one worker (Redis lease) re-checks Vault, logging, the IdP, Postgres, Redis and
     # disk every HOST_HEALTH_INTERVAL_SECONDS.
     try:
@@ -794,6 +802,11 @@ async def lifespan(app: FastAPI):
     try:
         from app.services import vault_token_renewal
         await vault_token_renewal.stop()
+    except Exception:
+        pass
+    try:
+        from app.services import cert_expiry_events
+        await cert_expiry_events.stop()
     except Exception:
         pass
     try:

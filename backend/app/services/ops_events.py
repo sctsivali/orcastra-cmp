@@ -225,6 +225,13 @@ def resolve(code: str, *, cluster_id: Optional[str] = None, facts: Optional[Mapp
     return True
 
 
+def clear(code: str, *, cluster_id: Optional[str] = None) -> None:
+    """Forget a firing state without reporting it, when a successor event takes over (an expiring
+    certificate that has now expired): the successor's own resolution is the one reported."""
+    _event(code, cluster_id)
+    _swap(_state_key(code, cluster_id), "resolved")
+
+
 def record(code: str, *, cluster_id: Optional[str] = None, facts: Optional[Mapping[str, Any]] = None) -> None:
     """Report a history-only event (it has no resolved state), every time."""
     event = _event(code, cluster_id)

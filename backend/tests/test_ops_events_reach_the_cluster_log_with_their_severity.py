@@ -156,3 +156,19 @@ def test_every_catalogue_code_has_an_audit_category_and_a_description():
         action = ops_events.action_for(code)
         assert ACTION_CATEGORIES.get(action) == EventCategory.OPERATIONS, action
         assert action in ACTION_DESCRIPTIONS, action
+
+
+def test_an_expired_certificate_renewed_reports_one_recovery(captured):
+    facts = {"cluster": "qa-c1", "not_after": "2026-11-11", "days": 0}
+    ops_events.fire("cluster.certificate_expiring", cluster_id="qa-c1", facts=facts)
+    ops_events.clear("cluster.certificate_expiring", cluster_id="qa-c1")
+    ops_events.fire("cluster.certificate_expired", cluster_id="qa-c1", facts=facts)
+    renewed = {"cluster": "qa-c1", "not_after": "2026-12-11", "days": 30}
+    assert ops_events.resolve("cluster.certificate_expiring", cluster_id="qa-c1", facts=renewed) is False
+    assert ops_events.resolve("cluster.certificate_expired", cluster_id="qa-c1", facts=renewed) is True
+    states = [(r["action"], r["details"]["state"]) for r in captured]
+    assert states == [
+        ("system.cluster.certificate_expiring", "firing"),
+        ("system.cluster.certificate_expired", "firing"),
+        ("system.cluster.certificate_expired", "resolved"),
+    ]
