@@ -172,3 +172,21 @@ def test_an_expired_certificate_renewed_reports_one_recovery(captured):
         ("system.cluster.certificate_expired", "firing"),
         ("system.cluster.certificate_expired", "resolved"),
     ]
+
+
+def test_the_request_that_noticed_the_change_is_not_its_actor(captured):
+    """A tenant's status poll may be what notices a refused token. The event is the system's, so a
+    tenant never becomes its actor, which would show it the deployment event (own host-less rows)."""
+    import contextvars
+
+    from app.core.request_context import RequestContext, set_request_context
+
+    def as_tenant():
+        set_request_context(RequestContext(user_id="tenant@example.test", user_role="tenant", user_groups=["role_tenant"]))
+        ops_events.fire("vault.token_refused")
+
+    contextvars.copy_context().run(as_tenant)
+    (record,) = captured
+    assert record["actor"]["user_id"] is None and record["actor"]["role"] is None
+    row = record_to_log_row(record)
+    assert row["actor_email"] is None and row["cluster_id"] is None

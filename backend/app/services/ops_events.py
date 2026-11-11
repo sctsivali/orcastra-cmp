@@ -15,6 +15,7 @@ the same change.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import threading
 import time
@@ -178,7 +179,11 @@ def _emit(event: OpsEvent, state: str, severity: str, cluster_id: Optional[str],
     details.update({k: v for k, v in facts.items() if v is not None})
     now = time.time()
     try:
-        get_activity_logger().log_activity(
+        # important: written outside the caller's request context. The request that happened to
+        # notice the change (any role's status poll) is not its actor, and a row with no cluster is
+        # shown to its own actor (core/task_scope.py), so a tenant would see a deployment event.
+        contextvars.Context().run(
+            get_activity_logger().log_activity,
             action=action_for(event.code),
             target_type="cluster" if cluster_id else "deployment",
             target_id=cluster_id or "dashboard",
