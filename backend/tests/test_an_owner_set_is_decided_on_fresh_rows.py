@@ -47,13 +47,13 @@ def enrolled(world: Dict[str, Any]) -> Dict[str, Any]:  # noqa: F811
 
 @pytest.fixture
 def three(co_owned: Dict[str, Any]) -> Dict[str, Any]:  # noqa: F811
-    """acme-cloud and fossgo are each owned by PLAIN (primary), CO and THIRD, all able."""
+    """acme-cloud and globex are each owned by PLAIN (primary), CO and THIRD, all able."""
     co_owned["vault"].store[_FakeVault._path(THIRD, "metadata")] = able_metadata(THIRD)
     return co_owned
 
 
 async def _co_own_all(owned: Dict[str, Any]) -> None:
-    for org_id in (owned["acme"], owned["fossgo"]):
+    for org_id in (owned["acme"], owned["globex"]):
         await co_own(owned["db"], org_id, CO)
         await co_own(owned["db"], org_id, THIRD)
 
@@ -99,7 +99,7 @@ async def test_a_second_end_decides_on_the_primary_the_first_one_moved(
     second = await send(ADMIN, other, "POST", f"{KEYS}/{CO}/revoke")
     assert first[0].status_code == 200, first[0].text
     assert second.status_code == 200, second.text
-    for org_id in (three["acme"], three["fossgo"]):
+    for org_id in (three["acme"], three["globex"]):
         assert await owner_key_ids(db, org_id) == [THIRD]
         assert primary(db, org_id) == THIRD
     await assert_owner_invariants(db)

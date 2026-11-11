@@ -41,11 +41,11 @@ const VOCABULARY = {
 
 const PROVISIONING_WOULD_STOP = {
   error: "provisioning_would_stop", action: "capabilities", capability: "tenant.provision",
-  message: "This key owns 2 OrcaHub organizations (fossgo and 1 you cannot see). Withdrawing its tenant.provision "
+  message: "This key owns 2 OrcaHub organizations (globex and 1 you cannot see). Withdrawing its tenant.provision "
     + "capability stops provisioning buyer dashboard access for them: an order completed in OrcaHub no longer gives "
     + "its buyer access here. Their sync and member updates continue. Confirm to withdraw it anyway.",
   consequence: "Provisioning buyer dashboard access for these organizations stops. Their sync and member updates continue.",
-  api_key_id: "oak_hub_new", organization_count: 2, organization_slugs: ["fossgo"], hidden_organization_count: 1,
+  api_key_id: "oak_hub_new", organization_count: 2, organization_slugs: ["globex"], hidden_organization_count: 1,
   proceed: "Send the same request with force set to true to withdraw it anyway.",
 };
 
@@ -63,7 +63,7 @@ function world(role) {
         owned_organization_hidden_count: admin ? 0 : 1,
       }),
       key("oak_hub_new", "Hub Connection", {
-        owned_organization_count: 2, owned_organization_slugs: admin ? ["buyer-co", "fossgo"] : ["fossgo"],
+        owned_organization_count: 2, owned_organization_slugs: admin ? ["buyer-co", "globex"] : ["globex"],
         owned_organization_hidden_count: admin ? 0 : 1,
       }),
       key("oak_expiring", "Expiring Key", { expires_at: SOON, expiry_state: "expiring" }),
@@ -74,11 +74,11 @@ function world(role) {
       ? [
           org(1, "acme-cloud", "oak_hub_old", "Hub Old", "revoked", { cluster_ids: ["c1", "c2"] }),
           org(2, "buyer-co", "oak_hub_new", "Hub Connection", "active"),
-          org(3, "fossgo", "oak_hub_new", "Hub Connection", "active"),
+          org(3, "globex", "oak_hub_new", "Hub Connection", "active"),
         ]
       : [
           org(1, "acme-cloud", "oak_hub_old", "Hub Old", "revoked"),
-          org(3, "fossgo", "oak_hub_new", "Hub Connection", "active"),
+          org(3, "globex", "oak_hub_new", "Hub Connection", "active"),
           // A tenant row lists the organization; its owner key is shown only to its partners.
           org(4, "buyer-two", "oak_hub_new", null, null, { owner_key_expiry_state: null }),
         ],
@@ -200,7 +200,7 @@ test("an admin sees what each key owns and moves a frozen organization", async (
   const explain = page.getByRole("alertdialog");
   await expect(explain.getByRole("heading", { name: "Transfer Ownership First" })).toBeVisible();
   await expect(explain).toContainText(
-    "This key owns 2 OrcaHub organizations (buyer-co, fossgo). Revoking it would leave them with an owner",
+    "This key owns 2 OrcaHub organizations (buyer-co, globex). Revoking it would leave them with an owner",
   );
   await expect(explain.getByRole("button", { name: "Revoke" })).toHaveCount(0);
   await explain.getByRole("button", { name: "Open Synced Organizations" }).click();
@@ -252,7 +252,7 @@ test("a partner reads ownership and cannot transfer", async ({ page }, testInfo)
   await expect(hub.getByText("+1 you cannot see", { exact: true })).toBeVisible();
   await hub.getByRole("button", { name: "Delete" }).click();
   const explain = page.getByRole("alertdialog");
-  await expect(explain).toContainText("(fossgo and 1 you cannot see)");
+  await expect(explain).toContainText("(globex and 1 you cannot see)");
   await expect(explain).toContainText("Ask an administrator to transfer them to another active key first");
   await expect(explain.getByRole("button", { name: "Open Synced Organizations" })).toHaveCount(0);
   await explain.getByRole("button", { name: "Close" }).click();
@@ -287,7 +287,7 @@ test("withdrawing tenant.provision from an owner key says what stops and goes th
   await expect(warning).toContainText(
     "Provisioning buyer dashboard access for these organizations stops. Their sync and member updates continue.",
   );
-  await expect(warning).toContainText("(fossgo and 1 you cannot see)");
+  await expect(warning).toContainText("(globex and 1 you cannot see)");
   await expect(dialog.getByRole("button", { name: "Save Capabilities" })).toHaveCount(0);
   expect(state.capabilityPuts).toEqual([
     { keyId: "oak_hub_new", body: { capabilities: ["inventory.read", "org.sync"], force: false } },
@@ -337,8 +337,8 @@ test("rotating a secret needs the key's name typed first", async ({ page }, test
 test("an admin manages an organization's owner keys", async ({ page }, testInfo) => {
   await authenticate(page.context(), "admin");
   const { settings, state } = await installOwnership(page, "admin");
-  const fossgo = state.orgs.find((o) => o.slug === "fossgo");
-  fossgo.owner_keys = [
+  const globex = state.orgs.find((o) => o.slug === "globex");
+  globex.owner_keys = [
     { api_key_id: "oak_hub_new", name: "Hub Connection", state: "active", expires_at: null, is_primary: true,
       added_at: null, added_via: "claim" },
   ];
@@ -352,7 +352,7 @@ test("an admin manages an organization's owner keys", async ({ page }, testInfo)
   await openSyncedOrganizations(page);
 
   const panel = page.locator("#synced-organizations");
-  await panel.getByRole("button", { name: "Actions for fossgo" }).click();
+  await panel.getByRole("button", { name: "Actions for globex" }).click();
   await page.getByRole("menuitem", { name: "Owner Keys" }).click();
   const dialog = page.getByRole("dialog", { name: "Owner Keys" });
   await expect(dialog.getByText("Primary", { exact: true })).toBeVisible();

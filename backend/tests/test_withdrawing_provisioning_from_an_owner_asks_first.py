@@ -43,7 +43,7 @@ ROUTE = f"{KEYS}/{PLAIN}/capabilities"
 
 @pytest.fixture
 def owner(owned: Dict[str, Any]) -> Dict[str, Any]:  # noqa: F811
-    """PLAIN holds every OrcaHub capability and owns acme-cloud and fossgo; PARTNER is in acme-cloud."""
+    """PLAIN holds every OrcaHub capability and owns acme-cloud and globex; PARTNER is in acme-cloud."""
     store(owned, PLAIN, {**plain_metadata(), "capabilities": list(FULL)})
     ids = dict(owned["db"].sync.query(Organization.slug, Organization.id).all())
     return {**owned, "ids": ids}
@@ -65,7 +65,7 @@ async def test_withdrawing_it_without_force_answers_what_would_stop(owner: Dict[
     assert (detail["organization_count"], detail["organization_slugs"], detail["hidden_organization_count"]) == (
         2, ["acme-cloud"], 1,
     )
-    assert "fossgo" not in response.text, "a partner was told the slug of an organization it cannot see"
+    assert "globex" not in response.text, "a partner was told the slug of an organization it cannot see"
     assert detail["message"] == (
         "This key owns 2 OrcaHub organizations (acme-cloud and 1 you cannot see). Withdrawing its "
         "tenant.provision capability stops provisioning buyer dashboard access for them: an order completed "
@@ -91,7 +91,7 @@ async def test_with_force_it_goes_through_and_is_recorded_as_forced(owner: Dict[
     details = record["details"]
     assert details["forced"] is True and details["capabilities_withdrawn"] == ["tenant.provision"]
     ids = owner["ids"]
-    expected = sorted([ids["acme-cloud"], ids["fossgo"]]) if who == "admin" else [ids["acme-cloud"]]
+    expected = sorted([ids["acme-cloud"], ids["globex"]]) if who == "admin" else [ids["acme-cloud"]]
     assert sorted(details["owned_organization_ids"]) == expected
     assert (details["owned_organization_count"], details["owned_organization_hidden_count"]) == (
         2, 0 if who == "admin" else 1,

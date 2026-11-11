@@ -39,7 +39,7 @@ from tests.test_the_add_on_key_rules_hold_through_the_key_routes import (
 )
 
 ADMIN_REVOKE = (
-    "This key owns 2 OrcaHub organizations (acme-cloud, fossgo). Revoking it would leave them with an "
+    "This key owns 2 OrcaHub organizations (acme-cloud, globex). Revoking it would leave them with an "
     "owner no other key can replace, so their sync, member updates and provisioning would stop. "
     "Transfer them to another active key first, or delete them. To stop a leaked secret now, rotate "
     "the secret instead: the key ID and its organizations stay."
@@ -55,10 +55,10 @@ def own(db: Any, key_id: str, slug: str, *, source: str = "orcahub", active: boo
 
 @pytest.fixture
 def owned(keys: Dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any]:  # noqa: F811
-    """PLAIN owns acme-cloud and fossgo. The partner belongs to acme-cloud only."""
+    """PLAIN owns acme-cloud and globex. The partner belongs to acme-cloud only."""
     db = installations((ADDON, None))
     acme = own(db, PLAIN, "acme-cloud")
-    own(db, PLAIN, "fossgo")
+    own(db, PLAIN, "globex")
     db.add(OrganizationMember(organization_id=acme, user_email=PARTNER.email, role="partner"))
     db.sync.commit()
     locks: List[str] = []
@@ -105,13 +105,13 @@ async def test_an_admin_cannot_end_an_owner_key(
     assert detail == {
         "error": "key_owns_organizations", "action": action,
         "message": ADMIN_REVOKE if action == "revoke" else ADMIN_REVOKE.replace("Revoking it", "Deleting it"),
-        "api_key_id": PLAIN, "organization_count": 2, "organization_slugs": ["acme-cloud", "fossgo"],
+        "api_key_id": PLAIN, "organization_count": 2, "organization_slugs": ["acme-cloud", "globex"],
         "hidden_organization_count": 0, "remedies": ["transfer_owner", "delete_organization", "rotate_secret"],
     }
     nothing_changed(owned)
     record = denial(owned)
     assert (record["action"], record["target_id"]) == (audited, PLAIN)
-    assert record["details"]["owned_organization_slugs"] == ["acme-cloud", "fossgo"]
+    assert record["details"]["owned_organization_slugs"] == ["acme-cloud", "globex"]
     assert record["details"]["owned_organization_count"] == 2
     assert record["details"]["owned_organization_hidden_count"] == 0
     assert owned["locks"] == [PLAIN]
@@ -128,7 +128,7 @@ async def test_a_partner_sees_only_the_organizations_it_belongs_to(
     assert (detail["organization_count"], detail["organization_slugs"], detail["hidden_organization_count"]) == (
         2, ["acme-cloud"], 1,
     )
-    assert "fossgo" not in response.text, "a partner was told the slug of an organization it cannot see"
+    assert "globex" not in response.text, "a partner was told the slug of an organization it cannot see"
     assert "(acme-cloud and 1 you cannot see)" in detail["message"]
     assert "Ask an administrator to transfer them" in detail["message"]
     nothing_changed(owned)
@@ -136,11 +136,11 @@ async def test_a_partner_sees_only_the_organizations_it_belongs_to(
     record = denial(owned)
     assert (record["details"]["owned_organization_slugs"], record["details"]["owned_organization_count"],
             record["details"]["owned_organization_hidden_count"]) == (["acme-cloud"], 2, 1)
-    assert "fossgo" not in repr(record)
+    assert "globex" not in repr(record)
 
 
 async def test_one_organization_reads_in_the_singular(owned: Dict[str, Any]) -> None:
-    owned["db"].sync.query(Organization).filter(Organization.slug == "fossgo").delete()
+    owned["db"].sync.query(Organization).filter(Organization.slug == "globex").delete()
     owned["db"].sync.commit()
     owned["scope"](ADMIN)
     detail = (await send(ADMIN, owned["db"], "POST", f"{KEYS}/{PLAIN}/revoke")).json()["detail"]
@@ -286,7 +286,7 @@ async def test_an_add_on_owner_is_told_to_suspend_the_add_on(owned: Dict[str, An
 async def test_the_key_list_names_what_each_key_owns(owned: Dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     docs = [plain_metadata(), addon_metadata()]
     monkeypatch.setattr(integrations, "list_api_keys_from_vault", lambda _v: [dict(d) for d in docs])
-    for user, slugs, hidden in ((ADMIN, ["acme-cloud", "fossgo"], 0), (PARTNER, ["acme-cloud"], 1)):
+    for user, slugs, hidden in ((ADMIN, ["acme-cloud", "globex"], 0), (PARTNER, ["acme-cloud"], 1)):
         owned["scope"](user)
         response = await send(user, owned["db"], "GET", f"{KEYS}?fresh=true")
         assert response.status_code == 200, response.text

@@ -50,7 +50,7 @@ async def test_ending_a_key_answers_409_and_writes_nothing(
     method: str, suffix: str, body: Any, target: str, error: type,
 ) -> None:
     db = co_owned["db"]
-    for org_id in (co_owned["acme"], co_owned["fossgo"]):
+    for org_id in (co_owned["acme"], co_owned["globex"]):
         await co_own(db, org_id, CO)
     monkeypatch.setattr(integration_key_ownership, target, _raise(error))
     response = await send(ADMIN, db, method, f"{KEYS}/{PLAIN}{suffix}", body)

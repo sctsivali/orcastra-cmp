@@ -42,17 +42,17 @@ def able_metadata(key_id: str, **over: Any) -> Dict[str, Any]:
 
 @pytest.fixture
 def co_owned(keys: Dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any]:  # noqa: F811
-    """PLAIN owns acme-cloud (primary) with CO as an able co-owner, and owns fossgo alone."""
+    """PLAIN owns acme-cloud (primary) with CO as an able co-owner, and owns globex alone."""
     db = installations((ADDON, None))
     acme = own(db, PLAIN, "acme-cloud")
-    fossgo = own(db, PLAIN, "fossgo")
+    globex = own(db, PLAIN, "globex")
     keys["vault"].store[_FakeVault._path(PLAIN, "metadata")] = able_metadata(PLAIN)
     keys["vault"].store[_FakeVault._path(CO, "metadata")] = able_metadata(CO)
     keys["vault"].store[_FakeVault._path(CO, "secret")] = dict(keys["vault"].store[_FakeVault._path(PLAIN, "secret")])
     records = _RecordingLogger()
     monkeypatch.setattr(activity_logger_module, "get_activity_logger", lambda: records)
     keys["scope"](ADMIN)
-    return {**keys, "db": db, "acme": acme, "fossgo": fossgo, "owner_log": records}
+    return {**keys, "db": db, "acme": acme, "globex": globex, "owner_log": records}
 
 
 async def co_own(db: Any, org_id: int, key_id: str) -> None:
@@ -80,11 +80,11 @@ async def test_a_co_owned_primary_ends_and_the_co_owner_takes_over(
 ) -> None:
     db = co_owned["db"]
     await co_own(db, co_owned["acme"], CO)
-    # fossgo has PLAIN alone, so give it a co-owner too or the end is refused there
-    await co_own(db, co_owned["fossgo"], CO)
+    # globex has PLAIN alone, so give it a co-owner too or the end is refused there
+    await co_own(db, co_owned["globex"], CO)
     response = await send(ADMIN, db, method, f"{KEYS}/{PLAIN}{suffix}")
     assert response.status_code == 200, response.text
-    for org_id in (co_owned["acme"], co_owned["fossgo"]):
+    for org_id in (co_owned["acme"], co_owned["globex"]):
         assert await owner_key_ids(db, org_id) == [CO]
         assert primary(db, org_id) == CO
     assert actions(co_owned) == ["integration.organization.owner.remove"] * 2
@@ -101,7 +101,7 @@ async def test_the_sole_owned_organization_still_refuses(co_owned: Dict[str, Any
     response = await send(ADMIN, db, "POST", f"{KEYS}/{PLAIN}/revoke")
     assert response.status_code == 409, response.text
     detail = response.json()["detail"]
-    assert (detail["organization_count"], detail["organization_slugs"]) == (1, ["fossgo"])
+    assert (detail["organization_count"], detail["organization_slugs"]) == (1, ["globex"])
     assert detail["remedies"] == ["transfer_owner", "delete_organization", "rotate_secret"]
     assert await owner_key_ids(db, co_owned["acme"]) == [PLAIN, CO], "nothing moved"
     assert co_owned["vault"].writes == []
@@ -115,7 +115,7 @@ async def test_with_multi_owner_on_the_refusal_offers_a_co_owner(
     await co_own(db, co_owned["acme"], CO)
     detail = (await send(ADMIN, db, "POST", f"{KEYS}/{PLAIN}/revoke")).json()["detail"]
     assert detail["remedies"][-1] == "add_owner_key" and detail["co_owned_organization_count"] == 1
-    assert detail["message"].startswith("This key is the only able owner of 1 OrcaHub organization (fossgo).")
+    assert detail["message"].startswith("This key is the only able owner of 1 OrcaHub organization (globex).")
     assert "co-owner" in detail["message"]
 
 
@@ -127,7 +127,7 @@ async def test_with_multi_owner_on_the_refusal_offers_a_co_owner(
 async def test_a_co_owner_that_cannot_sync_does_not_count(co_owned: Dict[str, Any], co_owner: Dict[str, Any]) -> None:
     db = co_owned["db"]
     await co_own(db, co_owned["acme"], CO)
-    await co_own(db, co_owned["fossgo"], CO)
+    await co_own(db, co_owned["globex"], CO)
     co_owned["vault"].store[_FakeVault._path(CO, "metadata")] = co_owner
     response = await send(ADMIN, db, "POST", f"{KEYS}/{PLAIN}/revoke")
     assert response.status_code == 409
@@ -137,7 +137,7 @@ async def test_a_co_owner_that_cannot_sync_does_not_count(co_owned: Dict[str, An
 async def test_an_unreadable_co_owner_ends_nothing(co_owned: Dict[str, Any]) -> None:
     db = co_owned["db"]
     await co_own(db, co_owned["acme"], CO)
-    await co_own(db, co_owned["fossgo"], CO)
+    await co_own(db, co_owned["globex"], CO)
     del co_owned["vault"].store[_FakeVault._path(CO, "metadata")]
     response = await send(ADMIN, db, "POST", f"{KEYS}/{PLAIN}/revoke")
     assert (response.status_code, response.json()["detail"]) == (503, OWNERSHIP_UNKNOWN_DETAIL)
@@ -147,12 +147,12 @@ async def test_an_unreadable_co_owner_ends_nothing(co_owned: Dict[str, Any]) -> 
 async def test_withdrawing_org_sync_keeps_the_key_but_moves_the_primary(co_owned: Dict[str, Any]) -> None:
     db = co_owned["db"]
     await co_own(db, co_owned["acme"], CO)
-    await co_own(db, co_owned["fossgo"], CO)
+    await co_own(db, co_owned["globex"], CO)
     response = await send(ADMIN, db, "PUT", f"{KEYS}/{PLAIN}/capabilities",
                           {"capabilities": ["inventory.read", "tenant.provision"]})
     assert response.status_code == 200, response.text
     assert await owner_key_ids(db, co_owned["acme"]) == [PLAIN, CO]
-    assert primary(db, co_owned["acme"]) == CO and primary(db, co_owned["fossgo"]) == CO
+    assert primary(db, co_owned["acme"]) == CO and primary(db, co_owned["globex"]) == CO
     assert actions(co_owned) == ["integration.organization.owner.primary"] * 2
     await assert_owner_invariants(db)
 
@@ -160,13 +160,13 @@ async def test_withdrawing_org_sync_keeps_the_key_but_moves_the_primary(co_owned
 async def test_two_revokes_of_a_two_key_set_cannot_both_pass(co_owned: Dict[str, Any]) -> None:
     db = co_owned["db"]
     await co_own(db, co_owned["acme"], CO)
-    await co_own(db, co_owned["fossgo"], CO)
+    await co_own(db, co_owned["globex"], CO)
     first, second = await asyncio.gather(
         send(ADMIN, db, "POST", f"{KEYS}/{PLAIN}/revoke"),
         send(ADMIN, db, "POST", f"{KEYS}/{CO}/revoke"),
     )
     assert sorted([first.status_code, second.status_code]) == [200, 409]
-    for org_id in (co_owned["acme"], co_owned["fossgo"]):
+    for org_id in (co_owned["acme"], co_owned["globex"]):
         assert len(await owner_key_ids(db, org_id)) == 1
     await assert_owner_invariants(db)
 
