@@ -110,7 +110,22 @@ def source_for(record: Mapping[str, Any]) -> str:
     return "dashboard"
 
 
+# An operational event (services/ops_events.py) states its own severity in its details.
+_OPS_SEVERITY = {"critical": "error", "warning": "warning", "info": "info"}
+
+
+def _is_ops_event(record: Mapping[str, Any]) -> bool:
+    action = record.get("action")
+    return isinstance(action, str) and action.startswith("system.") and isinstance(record.get("details"), Mapping) \
+        and "event_code" in record["details"]
+
+
 def severity_for(record: Mapping[str, Any]) -> str:
+    if _is_ops_event(record):
+        details = record["details"]
+        if details.get("state") == "resolved":
+            return "info"
+        return _OPS_SEVERITY.get(str(details.get("severity")), "info")
     result = record.get("result")
     if result == "failure":
         return "error"
@@ -146,6 +161,13 @@ def _resource_type(target: Mapping[str, Any]) -> Optional[str]:
 
 
 def _message(record: Mapping[str, Any], action: str, target: Mapping[str, Any]) -> str:
+    details = record.get("details")
+    if _is_ops_event(record) or (action == "host_health.transition" and isinstance(details, Mapping)):
+        # The Cluster Log shows the message alone, so the summary and the fix travel in it.
+        summary = _text(details.get("summary")) if isinstance(details, Mapping) else None
+        if summary:
+            fix = _text(details.get("fix"))
+            return sanitize_error(f"{summary} Fix: {fix}" if fix else summary, limit=_MESSAGE_LIMIT)
     verb = ACTION_DESCRIPTIONS.get(action) or humanise_action(action)
     subject = _text(target.get("id"))
     message = f"{verb} {subject}" if subject else verb

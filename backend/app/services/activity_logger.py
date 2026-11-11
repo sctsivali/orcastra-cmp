@@ -50,17 +50,25 @@ class ActivityLogger:
         target_organization_resolution: Optional[str] = None,
         actor_user_id: Optional[str] = None,
         event_id: Optional[str] = None,
+        severity: Optional[str] = None,
     ) -> str:
-        """Write one audit record and return its event id. A failure is always high severity."""
+        """Write one audit record and return its event id. A failure is always high severity.
+
+        `severity` (low, medium, high, critical) overrides the catalogue's for a record that knows
+        its own, such as an operational event.
+        """
         event_id = event_id or generate_event_id()
         
         ctx = get_request_context()
         request_id = ctx.request_id if ctx else get_request_id()
         
         category = ACTION_CATEGORIES.get(action, EventCategory.LXD_INFRA)
+        explicit = severity
         severity = EventSeverity.HIGH if action in HIGH_SEVERITY_ACTIONS else EventSeverity.MEDIUM
         if result == "failure":
             severity = EventSeverity.HIGH
+        if explicit is not None:
+            severity = EventSeverity(explicit)
         
         actor = ctx.get_actor() if ctx else {
             "user_id": None,

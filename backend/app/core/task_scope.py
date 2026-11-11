@@ -112,7 +112,18 @@ def _acl_condition(model: Any, acl: Mapping[str, Any]) -> Any:
     return or_(*branches)
 
 
-def _scope_conditions(model: Any) -> List[Any]:
+def _system_cluster_row(model: Any) -> Any:
+    # An operational event about a whole cluster (services/ops_events.py: a certificate about to
+    # lapse) concerns every partner on it, whatever project bound they hold.
+    return and_(model.resource_type == "cluster", model.action.like("system.%"))
+
+
+def _is_system_cluster_row(row: Mapping[str, Any]) -> bool:
+    action = row.get("action")
+    return row.get("resource_type") == "cluster" and isinstance(action, str) and action.startswith("system.")
+
+
+def _scope_conditions(model: Any, *, system_cluster_rows: bool = False) -> List[Any]:
     conditions: List[Any] = []
     allowed = get_current_allowed_clusters()
     if allowed is not None:
@@ -121,12 +132,10 @@ def _scope_conditions(model: Any) -> List[Any]:
         for cluster_id in clusters:
             projects = visible_projects_for(cluster_id)
             if projects is not None:
-                conditions.append(
-                    or_(
-                        model.cluster_id != cluster_id,
-                        _bound_project(model).in_(sorted(projects)),
-                    )
-                )
+                branches = [model.cluster_id != cluster_id, _bound_project(model).in_(sorted(projects))]
+                if system_cluster_rows:
+                    branches.append(_system_cluster_row(model))
+                conditions.append(or_(*branches))
     acl = get_tenant_acl()
     if acl is not None:
         conditions.append(_acl_condition(model, acl))
@@ -155,7 +164,7 @@ def log_conditions(model: Any, *, caller_email: Optional[str]) -> List[Any]:
     if get_current_allowed_clusters() is None:
         return []
     not_a_key_row = or_(model.resource_type.is_(None), model.resource_type.notin_(KEY_RESOURCE_TYPES))
-    scoped = and_(not_a_key_row, *_scope_conditions(model))
+    scoped = and_(not_a_key_row, *_scope_conditions(model, system_cluster_rows=True))
     if not caller_email:
         return [scoped]
     own_hostless = and_(model.cluster_id.is_(None), model.actor_email == caller_email, not_a_key_row)
@@ -163,12 +172,15 @@ def log_conditions(model: Any, *, caller_email: Optional[str]) -> List[Any]:
     return [or_(scoped, own_hostless, own_key_row)]
 
 
-def _row_in_scope(row: Mapping[str, Any]) -> bool:
+def _row_in_scope(row: Mapping[str, Any], *, system_cluster_rows: bool = False) -> bool:
     """The Python twin of `_scope_conditions` for one row."""
     cluster_id = row.get("cluster_id")
     allowed = get_current_allowed_clusters()
     if allowed is not None and cluster_id not in allowed:
         return False
+    if system_cluster_rows and _is_system_cluster_row(row):
+        # Past the cluster set, not the project bound; a tenant never sees a cluster row.
+        return not tenant_acl_active()
     project = row.get("project") or "default"
     resource_type = row.get("resource_type")
     resource_name = row.get("resource_name")
@@ -201,7 +213,7 @@ def log_is_visible(row: Mapping[str, Any], *, caller_email: Optional[str]) -> bo
         return bool(caller_email and actor) and str(actor).lower() == caller_email.lower()
     if row.get("cluster_id") is None:
         return bool(caller_email) and row.get("actor_email") == caller_email
-    return _row_in_scope(row)
+    return _row_in_scope(row, system_cluster_rows=True)
 
 
 def disconnected_for_caller(states: Iterable[Mapping[str, Any]]) -> List[str]:

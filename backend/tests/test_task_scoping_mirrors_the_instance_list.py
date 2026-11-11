@@ -35,8 +35,23 @@ NAMES = ("web-01", "db-01", "cust-a", "cust-b", "br0", None)
 
 COLUMNS = (
     "id", "seq", "kind", "cluster_id", "project", "resource_type", "resource_name",
-    "operation_id", "status", "actor_email", "created_at", "updated_at",
+    "operation_id", "status", "actor_email", "created_at", "updated_at", "action",
 )
+
+# Cluster-wide log rows. An operational event (action system.*) about a cluster reaches every
+# partner on it past the project bound; any other cluster row keeps the bound.
+SYSTEM_ROWS = [
+    {
+        "id": f"cluster-{cluster}-{project or 'none'}-{'system' if system else 'stream'}",
+        "seq": 950 + index,
+        "cluster": cluster,
+        "project": project,
+        "action": "system.cluster.certificate_expiring" if system else "cluster.event_stream.lost",
+    }
+    for index, (cluster, project, system) in enumerate(
+        itertools.product(CLUSTERS, (None, "cust-c"), (True, False))
+    )
+]
 
 
 def _corpus() -> List[Dict[str, Any]]:
@@ -59,6 +74,7 @@ def _corpus() -> List[Dict[str, Any]]:
                 "actor_email": "ops@example.test" if index % 3 else "other@example.test",
                 "created_at": "2026-09-19T00:00:00+00:00",
                 "updated_at": "2026-09-19T00:00:00+00:00",
+                "action": "instance.update",
             }
         )
     assert len(rows) == 200
@@ -94,6 +110,14 @@ def engine():
                 {"id": "hostless-mine", "seq": 900, "rtype": "api_key", "name": "k1", "actor": "ops@example.test"},
                 {"id": "hostless-theirs", "seq": 901, "rtype": "endpoint", "name": "/x", "actor": "other@example.test"},
             ],
+        )
+        conn.execute(
+            text(
+                "INSERT INTO cluster_log (id, seq, kind, cluster_id, project, resource_type, "
+                "resource_name, status, actor_email, action) VALUES (:id, :seq, 'audit', :cluster, "
+                ":project, 'cluster', :cluster, 'success', NULL, :action)"
+            ),
+            SYSTEM_ROWS,
         )
     return engine
 
@@ -232,7 +256,7 @@ def test_a_project_row_with_no_resource_name_is_judged_by_its_project() -> None:
         return {
             "id": row_id, "seq": 1, "kind": "lifecycle", "cluster_id": cluster, "project": project,
             "resource_type": "project", "resource_name": None, "operation_id": None,
-            "status": None, "actor_email": None, "created_at": None, "updated_at": None,
+            "status": None, "actor_email": None, "created_at": None, "updated_at": None, "action": None,
         }
 
     rows = [
@@ -269,10 +293,13 @@ def test_no_grant_means_no_rows(engine, name: str) -> None:
 
 
 def _log_reference(row: Dict[str, Any], caller: Optional[str]) -> bool:
-    if org_scope.get_current_allowed_clusters() is None:
+    allowed = org_scope.get_current_allowed_clusters()
+    if allowed is None:
         return True
     if row["cluster_id"] is None:
         return bool(caller) and row["actor_email"] == caller
+    if row.get("resource_type") == "cluster" and str(row.get("action") or "").startswith("system."):
+        return row["cluster_id"] in allowed and not tenant_acl_active()
     return _reference(row)
 
 
@@ -291,7 +318,26 @@ def _log_rows(engine) -> List[Dict[str, Any]]:
                 "resource_name": "k1", "actor_email": found[row_id][1],
             }
         )
+    for system in SYSTEM_ROWS:
+        rows.append(
+            {
+                "id": system["id"], "cluster_id": system["cluster"], "project": system["project"],
+                "resource_type": "cluster", "resource_name": system["cluster"], "actor_email": None,
+                "action": system["action"],
+            }
+        )
     return rows
+
+
+def test_a_cluster_event_reaches_every_partner_on_the_cluster_past_the_project_bound(engine) -> None:
+    rows = _log_rows(engine)
+    seen = _under("partner_bound", lambda: {r["id"] for r in rows if task_scope.log_is_visible(r, caller_email=None)})
+    assert "cluster-nuc2-cust-c-system" in seen, "outside the bound, still the partner's cluster"
+    assert "cluster-nuc2-cust-c-stream" not in seen, "any other cluster row keeps the bound"
+    assert "cluster-c3-none-system" not in seen, "a cluster the partner does not hold stays hidden"
+    for tenant in ("tenant_wildcard", "tenant_instance"):
+        tenant_seen = _under(tenant, lambda: {r["id"] for r in rows if task_scope.log_is_visible(r, caller_email=None)})
+        assert not {r["id"] for r in SYSTEM_ROWS} & tenant_seen, f"{tenant} never sees a cluster row"
 
 
 @pytest.mark.parametrize("name", sorted(CONTEXTS))

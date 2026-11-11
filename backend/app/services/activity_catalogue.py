@@ -16,6 +16,8 @@ class EventCategory(str, Enum):
     ADMIN = "admin"
     SETTINGS = "settings"
     VAULT = "vault"
+    # The dashboard reporting a fault in what it depends on (services/ops_events.py).
+    OPERATIONS = "operations"
 
 
 class EventSeverity(str, Enum):
@@ -280,6 +282,13 @@ ACTION_CATEGORIES = {
     "system.release_check.run": EventCategory.ADMIN,
     # An Administrator reading Ubuntu's kernel CVE records now (routers/security_advisories.py)
     "system.kernel_cve_check.run": EventCategory.ADMIN,
+    # Operational events (services/ops_events.py), one per catalogue code.
+    "system.vault.token_refused": EventCategory.OPERATIONS,
+    "system.vault.token_expiring": EventCategory.OPERATIONS,
+    "system.vault.token_renewal_failed": EventCategory.OPERATIONS,
+    "system.vault.token_renewed": EventCategory.OPERATIONS,
+    "system.cluster.certificate_expiring": EventCategory.OPERATIONS,
+    "system.cluster.certificate_expired": EventCategory.OPERATIONS,
 }
 
 # High severity actions
