@@ -956,9 +956,22 @@ Ensure your client certificates are properly configured.
     # credentials still work.
     cors_origins = settings.get_cors_origins()
 
+    # important: with AUTH_ENABLED=false every caller is an Administrator (core/rbac.py). That is a
+    # development switch, so production refuses it the same way it refuses wildcard CORS.
+    if not settings.auth_enabled and not is_debug:
+        import logging as _logging
+        _logging.getLogger(__name__).error(
+            "SECURITY: AUTH_ENABLED=false is not allowed in production (DEBUG=false): every caller "
+            "would act as an Administrator. Refusing to start."
+        )
+        raise RuntimeError(
+            "AUTH_ENABLED=false is forbidden in production. Set DEBUG=true for development or "
+            "configure the identity provider and set AUTH_ENABLED=true."
+        )
+
     # important: wildcard CORS with credentials leaks credentials to any origin, so it is
-    # refused unless DEBUG=true.
-    if cors_origins == ["*"] and not is_debug:
+    # refused unless DEBUG=true, alone or next to other origins.
+    if "*" in cors_origins and not is_debug:
         import logging as _logging
         _logging.getLogger(__name__).error(
             "SECURITY: CORS_ORIGINS='*' is not allowed in production (DEBUG=false). "
