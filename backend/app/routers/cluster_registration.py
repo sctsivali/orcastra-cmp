@@ -935,7 +935,7 @@ def _cluster_info_blocking(
             cluster_type=None,
             status=ClusterStatus.ERROR,
             has_certificate=False,
-            error_message=_ROW_UNREADABLE,
+            error_message=_row_unreadable_message(e),
         )
 
 
@@ -950,6 +950,23 @@ _ROW_UNFINISHED = "The status check did not finish in time. Refresh to try again
 # How long a cluster list read stays fresh (see the build below).
 _LIST_FRESH_SECONDS = 30
 _ROW_UNREADABLE = "This cluster's record could not be read. The server log has the detail."
+_ROW_TOKEN_REFUSED = (
+    "The secret store (Vault) refuses the dashboard's token, so this cluster's record cannot be "
+    "read. An administrator must replace the token."
+)
+_ROW_VAULT_UNAVAILABLE = (
+    "The secret store (Vault) cannot be read right now, so this cluster's record is unavailable."
+)
+
+
+def _row_unreadable_message(exc: BaseException) -> str:
+    """The row's own words for why its record could not be read; never the exception text."""
+    from app.core import vault_token
+
+    if not vault_token.store_failed(exc):
+        return _ROW_UNREADABLE
+    last = vault_token.peek()
+    return _ROW_TOKEN_REFUSED if last is not None and last.state == "refused" else _ROW_VAULT_UNAVAILABLE
 
 
 async def _get_cluster_info_async(

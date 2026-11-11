@@ -161,6 +161,15 @@ class LXDService:
             # cluster offline at once, and the breaker would then suppress the retries.
             raise
         except Exception as e:
+            from app.core import vault_token
+
+            if vault_token.store_failed(e):
+                # important: Vault could not serve this cluster's credentials (sealed, down, or
+                # refusing the dashboard's token) and the cluster was never contacted. Recorded
+                # as a cluster failure it would trip every cluster at once, and the breaker would
+                # hold them down after Vault recovers. The Vault notice reports the outage.
+                logger.warning(f"Cluster {cluster_id} credentials could not be read from Vault: {e}")
+                return False
             # WARNING rather than ERROR: an offline cluster is expected, and the breaker
             # records it.
             logger.warning(f"Failed to connect cluster {cluster_id}: {e}")
