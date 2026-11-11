@@ -12,7 +12,9 @@ import { useVaultStatus } from "@/hooks/use-vault-status";
 // wrong, on every page, and clears on its own when Vault answers again. It is a notice rather
 // than a lock: whatever still works keeps working, and nothing is hidden from an operator.
 
-const ADMIN_COPY: Record<NonNullable<ReturnType<typeof useVaultStatus>["state"]>, { title: string; body: ReactNode }> = {
+type NoticeCopy = { title: string; body: ReactNode };
+
+const ADMIN_COPY: Record<NonNullable<ReturnType<typeof useVaultStatus>["state"]>, NoticeCopy> = {
   sealed: {
     title: "Vault is sealed",
     body: (
@@ -32,15 +34,32 @@ const ADMIN_COPY: Record<NonNullable<ReturnType<typeof useVaultStatus>["state"]>
     title: "Vault is unreachable",
     body: "The backend cannot reach Vault, so cluster data cannot be read and lists may be empty or out of date.",
   },
+  token_refused: {
+    title: "Vault rejects the dashboard's token",
+    body: (
+      <>
+        The token in <span className="font-mono text-foreground">VAULT_TOKEN</span> expired or was revoked, so
+        cluster data, certificates and API keys cannot be read. Create a periodic token on the Vault host, put it in{" "}
+        <span className="font-mono text-foreground">VAULT_TOKEN</span> and recreate the backend container; the
+        dashboard renews it from then on.
+      </>
+    ),
+  },
   unavailable: {
     title: "Cluster registry unreadable",
     body: "Vault answered, but the cluster registry could not be read. Check that the backend token may list the clusters path.",
   },
 };
 
-const OPERATOR_COPY = {
+const OPERATOR_COPY: NoticeCopy = {
   title: "Secret store unavailable",
   body: "Cluster data may be missing or out of date. Contact your administrator.",
+};
+
+// A state this build does not know yet (a newer backend) still shows a notice, never a crash.
+const UNKNOWN_ADMIN_COPY: NoticeCopy = {
+  title: "Secret store unavailable",
+  body: "Vault cannot serve the dashboard right now, so cluster data may be missing or out of date.",
 };
 
 export function VaultNotice() {
@@ -49,7 +68,7 @@ export function VaultNotice() {
   const [unsealOpen, setUnsealOpen] = useState(false);
   if (!state) return null;
 
-  const { title, body } = isAdmin ? ADMIN_COPY[state] : OPERATOR_COPY;
+  const { title, body } = isAdmin ? (ADMIN_COPY[state] ?? UNKNOWN_ADMIN_COPY) : OPERATOR_COPY;
   const reason = isAdmin ? status?.detail?.reason ?? status?.detail?.registry_error : null;
 
   return (

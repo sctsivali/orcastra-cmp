@@ -21,7 +21,7 @@ import urllib3
 # LXD clusters serve self-signed certificates, so unverified HTTPS requests are expected.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-from app.core import build_identity, vault_probe, vault_status
+from app.core import build_identity, vault_probe, vault_status, vault_token
 from app.core.config import get_settings
 from app.core.logging_config import setup_logging
 from app.middleware import (
@@ -572,6 +572,16 @@ async def lifespan(app: FastAPI):
     except Exception as hv_release_err:
         logger.error("Could not start the hypervisor release check: %s", hv_release_err, exc_info=True)
 
+    # The backend's own Vault token: one worker (Redis lease) renews it before it lapses, and every
+    # worker reports a refused token as an operational event.
+    try:
+        from app.services import vault_token_renewal
+
+        vault_token_renewal.start()
+        logger.info("Vault token renewal started (enabled=%s)", settings.vault_token_renew_enabled)
+    except Exception as renewal_err:
+        logger.error("Could not start the Vault token renewal: %s", renewal_err, exc_info=True)
+
     # Host Health: one worker (Redis lease) re-checks Vault, logging, the IdP, Postgres, Redis and
     # disk every HOST_HEALTH_INTERVAL_SECONDS.
     try:
@@ -779,6 +789,11 @@ async def lifespan(app: FastAPI):
     try:
         from app.services.host_health import stop_host_health_loop
         await stop_host_health_loop()
+    except Exception:
+        pass
+    try:
+        from app.services import vault_token_renewal
+        await vault_token_renewal.stop()
     except Exception:
         pass
     try:
@@ -1285,6 +1300,12 @@ Ensure your client certificates are properly configured.
         last_probe = vault_probe.peek()
         vault["probe"] = (
             {"state": last_probe.state, "checked_at": last_probe.checked_at} if last_probe else None
+        )
+        # The token probe's last answer, its state only (never the lifetime). "refused" is the
+        # outage a sealed-Vault check misses: Vault healthy, the dashboard's token expired.
+        last_token = vault_token.peek()
+        vault["token"] = (
+            {"state": last_token.state, "checked_at": last_token.checked_at} if last_token else None
         )
         if vault.get("registry_readable") is False:
             if vault.get("registry_source") == "last_known":

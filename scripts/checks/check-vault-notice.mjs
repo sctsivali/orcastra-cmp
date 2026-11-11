@@ -49,6 +49,14 @@ assert.match(hook, /hasMappedRole\(groups\)/, "a caller with no role must not po
 assert.match(hook, /!query\.isError/, "a failed status read must not raise the notice");
 assert.match(hook, /Boolean\(session\) && status !== "unauthenticated"/, "the notice must not blink on a session refresh");
 
+assert.match(hook, /data\.state === "token_refused"/, "a refused token is the token's own answer and shows on the first read");
+
+const noticeSource = readFileSync(join(root, "frontend/src/components/vault-notice.tsx"), "utf8");
+assert.match(noticeSource, /^  token_refused: \{$/m, "a refused backend token has its own Administrator copy");
+assert.match(noticeSource, /ADMIN_COPY\[state\] \?\? UNKNOWN_ADMIN_COPY/, "a state this build does not know renders a fallback, not a crash");
+const api = readFileSync(join(root, "frontend/src/lib/vault-status-api.ts"), "utf8");
+assert.match(api, /\| "token_refused"/, "the status type names token_refused");
+
 const home = readFileSync(join(root, "frontend/src/app/page.tsx"), "utf8");
 for (const value of ["animatedTotalNodes", "animatedTotalVMs", "animatedRunningVMs", "animatedTotalProjects"]) {
   assert.match(home, new RegExp(`Failed \\? EMPTY_VALUE : ${value}`), `${value} renders 0 for a failed read`);

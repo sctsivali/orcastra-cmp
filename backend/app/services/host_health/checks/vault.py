@@ -7,13 +7,12 @@ whether the address is one node of an HA cluster, and when the dashboard's own t
 
 from __future__ import annotations
 
-import threading
 import time
-from typing import List, Optional, Tuple
+from typing import List
 
 import requests
 
-from app.core import vault_probe
+from app.core import vault_probe, vault_token
 from app.core.vault_probe import SealFacts
 from app.services import vault_unseal
 from app.services.host_health.context import CheckContext
@@ -26,50 +25,40 @@ _TIMEOUT = (2.0, 3.0)
 TOKEN_LOOKUP_EVERY = 300.0
 TOKEN_WARN_SECONDS = 7 * 24 * 3600
 
-_token_lock = threading.Lock()
-# (looked up at, facts) per process: the token's TTL moves slowly, Vault need not be asked each pass.
-_token_cache: Optional[Tuple[float, dict]] = None
-
 _SUMMARIES = {
     "sealed": "Vault is sealed. Cluster access and certificates are unavailable until it is unsealed.",
     "uninitialized": "Vault is not initialized. The dashboard cannot read or store any cluster credentials.",
     "unreachable": "The dashboard cannot reach Vault. Cluster access and certificates are unavailable.",
+    "token_refused": (
+        "Vault rejects the dashboard's token: it expired or was revoked. Cluster access, "
+        "certificates and API keys are unavailable until it is replaced."
+    ),
     "unavailable": "Vault is unsealed but refuses the dashboard's cluster registry read.",
 }
 _REMEDIATION = {
     "sealed": "Unseal Vault: enter the threshold number of key shares here, or run `vault operator unseal` on the Vault host.",
     "uninitialized": "Initialize Vault with the installer (it creates the unseal keys), then restore the dashboard's token.",
     "unreachable": "Check that Vault is running and that VAULT_ADDR is reachable from the backend container.",
+    "token_refused": (
+        "Create a periodic token on the Vault host (`vault token create -orphan -policy=orcastra-policy "
+        "-period=720h`), put it in VAULT_TOKEN and recreate the backend container. The dashboard "
+        "renews a periodic token itself from then on."
+    ),
     "unavailable": "Check that VAULT_TOKEN is valid and its policy allows the cluster registry path (VAULT_CLUSTERS_PATH).",
 }
 
 
-def _token_facts(addr: str, token: str, now: float) -> dict:
-    """{"ttl", "renewable", "root", "readable"}; never the token, never Vault's error text."""
-    global _token_cache
-    with _token_lock:
-        if _token_cache is not None and now - _token_cache[0] < TOKEN_LOOKUP_EVERY:
-            return _token_cache[1]
-    facts: dict = {"readable": False}
-    try:
-        response = requests.get(
-            f"{addr.rstrip('/')}/v1/auth/token/lookup-self",
-            headers={"X-Vault-Token": token}, timeout=_TIMEOUT, allow_redirects=False,
-        )
-        if response.status_code == 200:
-            data = (response.json() or {}).get("data") or {}
-            policies = data.get("policies") or []
-            facts = {
-                "readable": True,
-                "ttl": data.get("ttl") if isinstance(data.get("ttl"), int) else None,
-                "renewable": bool(data.get("renewable")),
-                "root": "root" in policies,
-            }
-    except (requests.RequestException, ValueError, AttributeError):
-        facts = {"readable": False}
-    with _token_lock:
-        _token_cache = (now, facts)
-    return facts
+def _token_facts(settings) -> dict:
+    """{"state", "ttl", "renewable", "root", "readable"} from the shared token probe
+    (core/vault_token.py); never the token, never Vault's error text."""
+    token = vault_token.status(max_age=TOKEN_LOOKUP_EVERY, settings=settings)
+    return {
+        "state": token.state,
+        "readable": token.state == "ok",
+        "ttl": token.ttl_seconds,
+        "renewable": bool(token.renewable),
+        "root": token.is_root,
+    }
 
 
 def _leader(addr: str) -> dict:
@@ -139,7 +128,7 @@ def check(ctx: CheckContext) -> CheckResult:
         remediation = _REMEDIATION[health.state]
 
     if health.state == "ok" and settings.vault_token:
-        token = _token_facts(addr, settings.vault_token, ctx.now)
+        token = _token_facts(settings)
         if token.get("readable"):
             ttl = token.get("ttl")
             facts.append(fact("Token Expiry", "never" if not ttl else f"in {duration(ttl)}"))
@@ -155,8 +144,15 @@ def check(ctx: CheckContext) -> CheckResult:
                     "Renew the token (`vault token renew`) or issue a new one and update VAULT_TOKEN "
                     "before it lapses; when it does, every cluster becomes unreachable."
                 )
+        elif token.get("state") == "unsupported":
+            facts.append(fact("Token Expiry", "not readable: the token lacks Vault's default policy"))
+            advisories.append(
+                "The dashboard's token cannot look itself up, so its expiry cannot be watched or renewed "
+                "automatically. Issue it with Vault's default policy (the default unless "
+                "-no-default-policy was used)."
+            )
         else:
-            facts.append(fact("Token Expiry", "not readable with this token's policy"))
+            facts.append(fact("Token Expiry", "not readable right now (Vault did not answer the lookup)"))
 
     actions = []
     allowed, reason = vault_unseal.availability(settings, probe)
@@ -174,6 +170,4 @@ def check(ctx: CheckContext) -> CheckResult:
 
 def reset() -> None:
     """Test hook."""
-    global _token_cache
-    with _token_lock:
-        _token_cache = None
+    vault_token.reset(listeners=False)

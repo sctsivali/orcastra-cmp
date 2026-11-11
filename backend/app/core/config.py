@@ -676,6 +676,21 @@ class Settings(BaseSettings):
         alias="VAULT_TOKEN",
         description="Vault authentication token"
     )
+    vault_token_renew_enabled: bool = Field(
+        default=True,
+        alias="VAULT_TOKEN_RENEW_ENABLED",
+        description=(
+            "Renew VAULT_TOKEN from the backend (one worker, under a Redis lease) before it lapses. "
+            "A periodic token stays valid for as long as the dashboard runs."
+        ),
+    )
+    vault_token_renew_check_seconds: int = Field(
+        default=3600,
+        ge=60,
+        le=86400,
+        alias="VAULT_TOKEN_RENEW_CHECK_SECONDS",
+        description="How often the token's lifetime is checked; a short-lived token is checked sooner.",
+    )
     vault_pki_role: str = Field(
         default="lxd",
         alias="VAULT_PKI_ROLE",

@@ -23,8 +23,9 @@ const isDegraded = (state: VaultState | undefined): state is NoticeState =>
  *
  * important: shows only on an answer. Loading and a failed read of the status itself show
  * nothing, because "the status could not be read" is not "Vault is sealed". Sealed and
- * uninitialized are Vault's own words and show on the first read; unreachable and unavailable
- * can be a single dropped request, so they show on the second consecutive one.
+ * uninitialized are Vault's own words, and token_refused is the token's own lookup, so they show
+ * on the first read; unreachable and unavailable can be a single dropped request, so they show on
+ * the second consecutive one.
  */
 export function useVaultStatus() {
   const { data: session, status } = useSession();
@@ -92,7 +93,8 @@ export function useVaultStatus() {
 
   let visible: NoticeState | null = null;
   if (enabled && data && !query.isError && isDegraded(data.state)) {
-    const confirmed = data.state === "sealed" || data.state === "uninitialized" || streak >= 2;
+    const confirmed =
+      data.state === "sealed" || data.state === "uninitialized" || data.state === "token_refused" || streak >= 2;
     visible = confirmed ? data.state : null;
   }
 
