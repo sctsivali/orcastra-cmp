@@ -31,8 +31,9 @@ services:
     restart: always
     # important: loopback only. Redis has no password, and on a public interface anyone could
     # read and write sessions, tickets and cached authorization state.
+    # REDIS_PORT is [host_ip:]port, as in docker-compose.prod.yml and the installers.
     ports:
-      - "127.0.0.1:${REDIS_PORT:-6381}:6379"
+      - "${REDIS_PORT:-127.0.0.1:6381}:6379"
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     networks:
       - orcastra-dashboard
