@@ -4,9 +4,9 @@
 # The gate before a direct push. Guard list, toolchain versions and the browser job's environment
 # are read from ci.yml, so a step added there runs here too.
 #
-#   scripts/ci-local.sh [stage...]   commits guards backend frontend e2e (default: all, in that order)
+#   scripts/ci-local.sh [stage...]   commits secrets guards backend frontend e2e (default: all, in that order)
 #   E2E_PROJECTS="desktop-light"     Playwright projects (default: all four, like a full manual run)
-#   CI_LOCAL_BASE=github/dev         lint the messages of CI_LOCAL_BASE..HEAD (default: the upstream)
+#   CI_LOCAL_BASE=github/dev         lint and secret-scan CI_LOCAL_BASE..HEAD (default: the upstream)
 #   CI_LOCAL_LOG_DIR=path            one log per step (default: under $TMPDIR, printed at the end)
 #   CI_LOCAL_POSTGRES=skip           skip the throwaway journal database (it needs docker)
 #   CI_LOCAL_PARALLEL=1              run the backend stage alongside the Node stages, as CI runs its jobs
@@ -20,7 +20,7 @@ cd "$ROOT" || exit 2
 WF=.github/workflows/ci.yml
 CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/orcastra-ci-local
 LOG=${CI_LOCAL_LOG_DIR:-${TMPDIR:-/tmp}/orcastra-ci-local/$(git rev-parse --short HEAD)}
-STAGES=" ${*:-commits guards backend frontend e2e} "
+STAGES=" ${*:-commits secrets guards backend frontend e2e} "
 PROJECTS=${E2E_PROJECTS:-desktop-light mobile-dark desktop-dark mobile-light}
 failed=0
 STEP_LOG=
@@ -28,8 +28,8 @@ PG_CONTAINER=
 BACKEND_PID=
 for stage in $STAGES; do
   case $stage in
-    commits | guards | backend | frontend | e2e) ;;
-    *) echo "unknown stage '$stage' (commits guards backend frontend e2e)" >&2; exit 2 ;;
+    commits | secrets | guards | backend | frontend | e2e) ;;
+    *) echo "unknown stage '$stage' (commits secrets guards backend frontend e2e)" >&2; exit 2 ;;
   esac
 done
 
@@ -149,6 +149,43 @@ stage_commits() {
   fi
 }
 
+# The gitleaks release CI pins (version and checksum come from ci.yml), installed into the cache
+# when the binary on PATH is another version.
+use_gitleaks() {
+  local want sum arch dir tarball
+  want=$(wf "GITLEAKS_VERSION: '([0-9.]+)'")
+  [ "$(gitleaks version 2> /dev/null)" = "$want" ] && return 0
+  case $(uname -m) in
+    x86_64 | amd64) arch=x64; sum=$(wf "GITLEAKS_SHA256_X64: '([0-9a-f]{64})'") ;;
+    aarch64 | arm64) arch=arm64; sum=$(wf "GITLEAKS_SHA256_ARM64: '([0-9a-f]{64})'") ;;
+    *) note "FAIL  no gitleaks $want build for $(uname -m)"; return 1 ;;
+  esac
+  dir="$CACHE/gitleaks-$want-$arch"
+  if [ ! -x "$dir/gitleaks" ]; then
+    tarball="gitleaks_${want}_linux_$arch.tar.gz"
+    note "installing gitleaks $want, the version CI uses, into $CACHE"
+    if ! (mkdir -p "$dir" && cd "$dir" \
+      && curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v$want/$tarball" -o "$tarball" \
+      && printf '%s  %s\n' "$sum" "$tarball" | sum256 -c - > /dev/null \
+      && tar -xzf "$tarball" gitleaks && rm -f "$tarball"); then
+      note "FAIL  could not install gitleaks $want"
+      return 1
+    fi
+  fi
+  export PATH="$dir:$PATH"
+}
+
+# Scans commits, never the working tree: the tree holds the real .env.
+stage_secrets() {
+  local base=${CI_LOCAL_BASE:-$(git rev-parse -q --verify '@{u}' 2> /dev/null)} range=--all
+  use_gitleaks || { failed=$((failed + 1)); return 1; }
+  if [ -n "$base" ]; then
+    [ "$(git rev-list --count "$base..HEAD")" = 0 ] && { note "SKIP  secret scan (nothing ahead of $base)"; return 0; }
+    range="$(git rev-parse "$base")..HEAD"
+  fi
+  step "secret scan (${base:+$base..}HEAD)" . gitleaks git --redact --no-banner --log-level=warn --log-opts="$range" .
+}
+
 stage_guards() {
   local cmd name n=0 bad=0
   while read -r cmd; do
@@ -256,15 +293,16 @@ node_ok=1
 if selected commits || selected guards || selected frontend || selected e2e; then
   { use_node && frontend_deps; } || node_ok=0
 fi
-for stage in commits guards backend frontend e2e; do
+for stage in commits secrets guards backend frontend e2e; do
   selected "$stage" || continue
-  if [ "$stage" != backend ] && [ "$node_ok" != 1 ]; then
+  if [ "$stage" != backend ] && [ "$stage" != secrets ] && [ "$node_ok" != 1 ]; then
     failed=$((failed + 1))
     note "FAIL  $stage (the Node toolchain or frontend dependencies are not ready)"
     continue
   fi
   case $stage in
     commits) stage_commits ;;
+    secrets) stage_secrets ;;
     guards) stage_guards ;;
     backend) [ "$parallel" = 1 ] || { use_python && stage_backend; } ;;
     frontend) stage_frontend ;;

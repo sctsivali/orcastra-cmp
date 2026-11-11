@@ -1,0 +1,7 @@
+# Secret scan rules for gitleaks 8.x: the upstream default rule set. Reviewed false positives are
+# listed by fingerprint in .gitleaksignore, never allowlisted by path, so a real secret added to a
+# fixture file is still caught.
+title = "orcastra-dashboard"
+
+[extend]
+useDefault = true

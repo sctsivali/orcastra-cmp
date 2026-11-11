@@ -1,0 +1,26 @@
+# Reviewed gitleaks findings that are not secrets (commit:file:rule:line).
+# Each was checked by hand on 11/11/2026. Add a line only after the same review.
+
+# generic-api-key: fixture identifiers, base64 test strings, index pattern ids and constant names
+fb80d948c0f8527cf688e9daf64b83ed157ca4a0:backend/app/routers/integrations.py:generic-api-key:2090
+f606d42da4a0228a9f4b3be9e053e894aca7c217:backend/app/routers/integrations.py:generic-api-key:2090
+471056c42885ecc32c5fd32ee73620e49bf5e82a:backend/app/routers/integrations.py:generic-api-key:1866
+b5198e4bcb0054139a5e982416b1c64460727c17:backend/tests/test_refresh_organizations_is_scoped_and_quiet.py:generic-api-key:147
+e3df70b3228ad0a27ccfce56dce40bb55aeb4eae:backend/tests/test_refresh_organizations_is_scoped_and_quiet.py:generic-api-key:153
+45c31ec8b837c7ebf67db2572f2150151c8c75f3:backend/tests/test_vault_unseal_from_the_console.py:generic-api-key:23
+45c31ec8b837c7ebf67db2572f2150151c8c75f3:backend/tests/test_vault_unseal_from_the_console.py:generic-api-key:24
+caa7cb9ca5e0455e522a27579e896df9494c60d6:scripts/qa-hardening/phase_b_idp_bootstrap.py:generic-api-key:72
+b9c6bf08ee8a7d779b6e094902d5853e4847a293:scripts/qa-hardening/phase_b_idp_bootstrap.py:generic-api-key:72
+caa7cb9ca5e0455e522a27579e896df9494c60d6:scripts/qa-hardening/phase_b_vault_bootstrap_test.py:generic-api-key:25
+b9c6bf08ee8a7d779b6e094902d5853e4847a293:scripts/qa-hardening/phase_b_vault_bootstrap_test.py:generic-api-key:25
+1e49406ba205faacc980006040e49faae96e1005:scripts/setup_opensearch_dashboards.sh:generic-api-key:44
+
+# jwt: unsigned test JWTs with throwaway signatures
+e7aa1e1e18fb82b981c297add1cceb7835abc528:backend/tests/test_a_credential_never_reaches_a_log_line.py:jwt:19
+c7f7d6b459d6c44e360fa2d878ec328c8fc11a1c:scripts/checks/check-auth-transition-isolation.mjs:jwt:453
+
+# private-key: PEM blocks that are truncated or say 'not a real key', used to test key parsing and leak guards
+10e4ca583a7abd560c933893855963584edea250:backend/tests/test_a_public_key_is_parsed_strictly.py:private-key:53
+a02fbd39f5b75985ed55b82d46723857b4fe573f:backend/tests/test_cert_files_do_not_accumulate.py:private-key:38
+7c0578f2fbf972c10a4788d3c0e68dc0714ae9cb:scripts/checks/check-guest-credentials-secrets.mjs:private-key:125
+7c0578f2fbf972c10a4788d3c0e68dc0714ae9cb:scripts/checks/check-guest-credentials-secrets.mjs:private-key:126
