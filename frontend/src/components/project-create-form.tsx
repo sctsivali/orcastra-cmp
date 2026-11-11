@@ -91,6 +91,7 @@ export function ProjectCreateForm() {
     handleSubmit,
     watch,
     setValue,
+    getValues,
     formState: { errors },
   } = useForm<ProjectCreateFormData>({
     resolver: zodResolver(projectCreateSchema),
@@ -109,6 +110,12 @@ export function ProjectCreateForm() {
       maxStorageUnit: defaultFormUnit,
     },
   });
+
+  // The account's units can arrive after the form opens; a limit nobody typed yet follows them.
+  React.useEffect(() => {
+    if (!getValues("maxRamValue")) setValue("maxRamUnit", defaultFormUnit);
+    if (!getValues("maxStorageValue")) setValue("maxStorageUnit", defaultFormUnit);
+  }, [defaultFormUnit, getValues, setValue]);
 
   const selectedHost = watch("host");
   // Incus gives a project its own networks only through OVN and refuses the project otherwise,

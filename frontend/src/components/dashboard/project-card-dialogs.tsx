@@ -30,7 +30,7 @@ import {
   SelectValue } from "@/components/ui/select";
 import { isProjectDeleteUnknown, useDeleteProject, useUpdateProject } from "@/hooks/use-lxd";
 import { toast } from "@/hooks/use-toast";
-import { FORM_SIZE_UNITS, formUnitSystem, type FormSizeUnit } from "@/lib/byte-units";
+import { FORM_SIZE_UNITS, formUnitSystem, isFormSizeUnit, type FormSizeUnit } from "@/lib/byte-units";
 import { useByteFormat, useByteUnitsRef } from "@/hooks/use-byte-format";
 import { byteFormat } from "@/lib/byte-format";
 import { ProjectInfo } from "@/types";
@@ -304,7 +304,8 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
                 className="flex-1"
               />
               <Select value={editMaxRamUnit} onValueChange={(v) => {
-                setEditMaxRamUnit(v as FormSizeUnit);
+                if (!isFormSizeUnit(v)) return;
+                setEditMaxRamUnit(v);
                 setEditMaxRamSource(null);
                 setRamLimitDirty(true);
               }}>
@@ -347,7 +348,8 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
                 className="flex-1"
               />
               <Select value={editMaxStorageUnit} onValueChange={(v) => {
-                setEditMaxStorageUnit(v as FormSizeUnit);
+                if (!isFormSizeUnit(v)) return;
+                setEditMaxStorageUnit(v);
                 setEditMaxStorageSource(null);
                 setStorageLimitDirty(true);
               }}>

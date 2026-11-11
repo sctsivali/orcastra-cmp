@@ -28,7 +28,9 @@ function oneUnit(units: ByteUnitSystem): string {
 
 /** The account's own choice of byte units. Every role that reaches Settings sees it. */
 export function ByteUnitsSettings() {
-  const { byteUnits, updateByteUnits, isSaving } = usePersonalization();
+  const { byteUnits, updateByteUnits, isSaving, isLoading } = usePersonalization();
+  // Until the account's own choice is read, a click could not be saved: the radios wait for it.
+  const busy = isSaving || isLoading;
 
   return (
     <Card>
@@ -48,7 +50,7 @@ export function ByteUnitsSettings() {
                 className={cn(
                   "flex cursor-pointer items-start gap-2 rounded-md border p-3 font-normal",
                   checked && "border-primary",
-                  isSaving && "cursor-not-allowed opacity-60",
+                  busy && "cursor-not-allowed opacity-60",
                 )}
               >
                 <input
@@ -57,7 +59,7 @@ export function ByteUnitsSettings() {
                   value={units}
                   className="mt-1"
                   checked={checked}
-                  disabled={isSaving}
+                  disabled={busy}
                   onChange={() => updateByteUnits(units)}
                 />
                 <span className="min-w-0 space-y-0.5">

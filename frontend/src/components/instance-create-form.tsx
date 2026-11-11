@@ -1,8 +1,8 @@
 "use client";
 
 import { formatVcpuCount, EMPTY_VALUE, formatInstanceType, plural } from "@/lib/utils";
-import { FORM_SIZE_UNITS, formUnitSystem } from "@/lib/byte-units";
-import { useByteFormat } from "@/hooks/use-byte-format";
+import { FORM_SIZE_UNITS, formUnitSystem, isFormSizeUnit } from "@/lib/byte-units";
+import { useByteFormat, useByteUnitsRef } from "@/hooks/use-byte-format";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { useSearchParams } from "next/navigation";
@@ -20,6 +20,7 @@ import {
 import { useCreateSeedValidation } from "@/components/instance-create/use-seed-validation";
 import {
   ADVANCED_DEFAULTS,
+  followAccountUnits,
   instanceCreateFormDefaults,
   isPositiveInteger,
   type AdvancedKey,
@@ -191,13 +192,15 @@ function InstanceCreateFormContent() {
   const searchParams = useSearchParams();
   const seedRef = useRef(readCreateSeed(searchParams));
   const byteFormat = useByteFormat();
-  // The size fields keep the units the form opened with (a fresh ref, not useByteUnitsRef, which
-  // follows the account): the actor reset below starts over in those same units.
-  const unitsRef = useRef(byteFormat.units);
+  const unitsRef = useByteUnitsRef();
   const [form, setForm] = useState<FormState>(() => ({
     ...instanceCreateFormDefaults(unitsRef.current),
     ...seedRef.current,
   }));
+  // The account's units can arrive after the form opens; fields nobody typed in follow them.
+  useEffect(() => {
+    setForm((current) => followAccountUnits(current, byteFormat.units));
+  }, [byteFormat.units]);
   const {
     localImages: localImageIntent,
     remoteImages: remoteImageIntent,
@@ -1835,7 +1838,9 @@ function InstanceCreateFormContent() {
                   />
                   <Select
                     value={form.memoryUnit}
-                    onValueChange={(v) => updateField("memoryUnit", v)}
+                    // Radix's hidden native select inside a form can report "" when the list and the
+                    // value change together; "" is no unit.
+                    onValueChange={(v) => isFormSizeUnit(v) && updateField("memoryUnit", v)}
                   >
                     <SelectTrigger className="w-24">
                       <SelectValue />
@@ -2011,7 +2016,7 @@ function InstanceCreateFormContent() {
                   />
                   <Select
                     value={form.storageUnit}
-                    onValueChange={(v) => updateField("storageUnit", v)}
+                    onValueChange={(v) => isFormSizeUnit(v) && updateField("storageUnit", v)}
                   >
                     <SelectTrigger className="w-24">
                       <SelectValue />

@@ -88,6 +88,28 @@ export const DEFAULT_INSTANCE_CREATE_FORM: InstanceCreateFormState = {
   tags: [],
 };
 
+// The unit each system starts a size field in.
+const STARTING_UNITS: string[] = [defaultFormUnit("decimal"), defaultFormUnit("binary")];
+
+/**
+ * Size fields still at their untouched defaults move to the account's units, which can arrive after
+ * the form (a missing or stale hint cookie). A field the operator typed in keeps what it has.
+ * Returns the same object when nothing moves, so it is safe in a state updater.
+ */
+export function followAccountUnits(form: InstanceCreateFormState, units: ByteUnitSystem): InstanceCreateFormState {
+  const unit = defaultFormUnit(units);
+  const untouched = (value: string, current: string, initial: string) =>
+    value === initial && current !== unit && STARTING_UNITS.includes(current);
+  const memory = untouched(form.memoryValue, form.memoryUnit, DEFAULT_INSTANCE_CREATE_FORM.memoryValue);
+  const storage = untouched(form.storageValue, form.storageUnit, DEFAULT_INSTANCE_CREATE_FORM.storageValue);
+  if (!memory && !storage) return form;
+  return {
+    ...form,
+    ...(memory ? { memoryUnit: unit } : {}),
+    ...(storage ? { storageUnit: unit } : {}),
+  };
+}
+
 /** A fresh form whose size fields start in the account's units: 1 GB and 10 GB, or 1 GiB and 10 GiB. */
 export function instanceCreateFormDefaults(units: ByteUnitSystem = DEFAULT_BYTE_UNITS): InstanceCreateFormState {
   const unit = defaultFormUnit(units);

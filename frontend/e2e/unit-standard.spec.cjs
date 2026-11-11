@@ -132,3 +132,43 @@ test.describe("an account that reads binary", () => {
     expect(sent).not.toContain("decimal");
   });
 });
+
+test.describe("a binary account whose units arrive after the form", () => {
+  // No hint cookie, as on a new device: the form renders before the account's choice is read.
+  test("the instance create fields move to GiB until someone types in them", async ({ page, context }) => {
+    await authenticate(context, "admin");
+    await installApiFixtures(page, "admin", { snapshotInstancePage: true, instanceCreatePage: true, byteUnits: "binary" });
+    await page.goto("/inventory/instances/create");
+    const memory = page.locator("#create-memory");
+    const unit = memory.locator("xpath=following-sibling::button[@role='combobox'][1]");
+    await expect(memory).toHaveValue("1");
+    await expect(unit).toHaveText("GiB");
+  });
+
+  test("the project create limits move to GiB, and a typed one keeps its unit", async ({ page, context }) => {
+    await authenticate(context, "admin");
+    await installApiFixtures(page, "admin", { byteUnits: "binary" });
+    await page.route(/\/api\/v1\/nodes\/names/, (route) => route.fulfill({ json: ["cluster-a"] }));
+    await page.route(/\/api\/v1\/nodes\/[^/]+\/resources/, (route) => route.fulfill({ json: {
+      cpu_total: 12, cpu_available: 12, memory_total: 64 * gib, memory_available: 60 * gib,
+      storage_total: 400 * gib, storage_available: 300 * gib,
+    } }));
+    let posted = null;
+    await page.route(/\/api\/v1\/projects(\?|$)/, (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      posted = route.request().postDataJSON();
+      return route.fulfill({ status: 201, json: { success: true, message: "created", project: { name: posted.name } } });
+    });
+    await page.goto("/create");
+    await page.getByLabel("Project Name").fill("qa-binary-limits");
+    await page.getByRole("combobox").filter({ hasText: /Select a cluster/ }).click();
+    await page.getByRole("option").first().click();
+    await expect(page.getByText(/Memory: [\d.]+ GiB available/)).toBeVisible();
+    await page.getByLabel("Max vCPUs *").fill("2");
+    await page.getByLabel("Max Memory *").fill("8");
+    await page.getByLabel("Max Storage *").fill("100");
+    await page.getByRole("button", { name: "Create Project", exact: true }).click();
+    await expect.poll(() => posted?.max_ram).toBe("8GiB");
+    expect(posted.max_storage).toBe("100GiB");
+  });
+});

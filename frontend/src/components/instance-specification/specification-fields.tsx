@@ -1,4 +1,4 @@
-import { FORM_SIZE_UNITS, formUnitSystem, type FormSizeUnit } from "@/lib/byte-units";
+import { FORM_SIZE_UNITS, formUnitSystem, isFormSizeUnit } from "@/lib/byte-units";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -48,7 +48,7 @@ function SizeField({ id, label, draft, onChange, disabled, error, help }: SizeFi
         />
         <Select
           value={draft.unit}
-          onValueChange={(unit) => onChange({ ...draft, unit: unit as FormSizeUnit })}
+          onValueChange={(unit) => isFormSizeUnit(unit) && onChange({ ...draft, unit })}
           disabled={disabled}
         >
           <SelectTrigger aria-label={`${label} unit`}>
