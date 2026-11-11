@@ -112,13 +112,19 @@ _STRUCTURED_5XX: Dict[int, Dict[str, str]] = {
             "The identity provider could not be reached to verify this sign-in. Retry shortly."
         ),
         "vault_unavailable": (
-            "Cluster data cannot be read because the secret store (Vault) is sealed or unavailable."
+            "Cluster data cannot be read because the secret store (Vault) is sealed, unavailable "
+            "or refusing the dashboard's token."
         ),
         # routers/integrations.py: API keys live in Vault too, so a sealed Vault is neither an
         # invalid key nor an empty key list.
         "api_key_store_unavailable": (
-            "API keys cannot be read or written because the secret store (Vault) is sealed or "
-            "unavailable."
+            "API keys cannot be read or written because the secret store (Vault) is sealed, "
+            "unavailable or refusing the dashboard's token."
+        ),
+        # routers/my_keys.py: the same for issued LXD keys.
+        "key_store_unavailable": (
+            "Keys cannot be read because the secret store (Vault) is sealed, unavailable or "
+            "refusing the dashboard's token."
         ),
         # Host Health's unseal (routers/host_health.py): the dialog tells "nothing was sent" apart
         # from "sent, not confirmed", so the operator knows whether to check progress first.

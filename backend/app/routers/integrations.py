@@ -1078,24 +1078,12 @@ API_KEY_STORE_UNAVAILABLE = "api_key_store_unavailable"
 
 
 def _vault_did_not_answer(exc: BaseException) -> bool:
-    """True when Vault failed as a store (sealed, down, unreachable), never for "not there".
+    """True when Vault failed as a store (sealed, down, unreachable, or refusing the dashboard's
+    own token), never for "not there". A 404 is a missing key and a 403 the policy explains is a
+    refusal reported as it is (core/vault_token.py decides which 403 is which)."""
+    from app.core import vault_token
 
-    Only Vault and transport errors count. A 404 is a missing key, a 4xx is a refusal reported as
-    it is, and anything else is a server fault that stays a 500.
-    """
-    from app.core.vault_client import VaultClientError
-
-    if not isinstance(exc, (VaultClientError, requests.RequestException)):
-        return False
-    status = getattr(exc, "status_code", None)
-    if status is None:
-        status = getattr(getattr(exc, "response", None), "status_code", None)
-    if status is None and isinstance(exc, VaultClientError):
-        # important: no status and no transport error behind it is the client refusing the path
-        # before any request (an empty or dot segment in a caller's key id). Counted as an outage,
-        # anyone could fake the 503 with `X-API-Key-ID: ..`.
-        return isinstance(exc.__cause__ or exc.__context__, requests.RequestException)
-    return status is None or status >= 500
+    return vault_token.store_failed(exc)
 
 
 def _key_store_unavailable() -> HTTPException:
@@ -1111,8 +1099,8 @@ def _key_store_unavailable() -> HTTPException:
         detail={
             "error": API_KEY_STORE_UNAVAILABLE,
             "message": (
-                "API keys cannot be read or written because the secret store (Vault) is sealed "
-                "or unavailable. Try again once Vault is unsealed."
+                "API keys cannot be read or written because the secret store (Vault) is sealed, "
+                "unavailable or refusing the dashboard's token. Try again once Vault answers."
             ),
         },
         headers={"Retry-After": str(RETRY_AFTER_SECONDS), "Cache-Control": "no-store"},
@@ -1247,7 +1235,9 @@ def list_api_keys_from_vault(vault_client) -> List[Dict[str, Any]]:
                 # serve while it answered the LIST. Vault going away part way (sealed, or no
                 # answer at all) is not a shorter list.
                 status = getattr(e, "status_code", None)
-                if _vault_did_not_answer(e) and status in (None, 503):
+                # 403 counts only when the dashboard's own token is refused (_vault_did_not_answer
+                # says so): then every remaining document would fail the same way.
+                if _vault_did_not_answer(e) and status in (None, 403, 503):
                     raise
                 logger.error(f"API key {key_id} could not be read and is left out of the list: {e}")
                 continue

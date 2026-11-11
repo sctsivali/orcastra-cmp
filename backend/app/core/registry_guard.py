@@ -18,8 +18,8 @@ from app.core import vault_status
 
 VAULT_UNAVAILABLE = "vault_unavailable"
 VAULT_UNAVAILABLE_MESSAGE = (
-    "Cluster data cannot be read because the secret store (Vault) is sealed or unavailable. "
-    "It returns once Vault is unsealed."
+    "Cluster data cannot be read because the secret store (Vault) is sealed, unavailable or "
+    "refusing the dashboard's token. It returns once Vault answers."
 )
 RETRY_AFTER_SECONDS = 15
 

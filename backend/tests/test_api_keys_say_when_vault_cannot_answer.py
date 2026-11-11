@@ -154,3 +154,88 @@ def test_the_public_validate_endpoint_says_unavailable_not_invalid(monkeypatch: 
     with pytest.raises(HTTPException) as caught:
         asyncio.run(integrations.validate_api_key_endpoint(request))
     assert caught.value.status_code == 503
+
+
+# A refused (expired or revoked) dashboard token: Vault answers 403 to every read while it is
+# unsealed and healthy. That is an outage, and only the token's own lookup may say so; a 403 the
+# policy explains stays what it was, or a caller could fake the outage.
+
+from types import SimpleNamespace  # noqa: E402
+
+from app.core import vault_token  # noqa: E402
+
+
+@pytest.fixture
+def token_state(monkeypatch: pytest.MonkeyPatch):
+    state = {"value": "refused"}
+    monkeypatch.setattr(
+        vault_token, "status",
+        lambda *, max_age=None: SimpleNamespace(state=state["value"]),
+    )
+    return state
+
+
+def test_a_key_read_with_a_refused_token_is_503_not_invalid(token_state) -> None:
+    with pytest.raises(HTTPException) as caught:
+        integrations.get_api_key_from_vault(_Vault(read_status=403), "oak_one")
+    assert caught.value.status_code == 503
+    assert _code(caught) == UNAVAILABLE
+    assert "refusing the dashboard's token" in caught.value.detail["message"]
+
+
+def test_a_403_the_policy_explains_is_still_not_found(token_state) -> None:
+    token_state["value"] = "ok"
+    with pytest.raises(HTTPException) as caught:
+        integrations.get_api_key_from_vault(_Vault(read_status=403), "oak_one")
+    assert caught.value.status_code == 404
+
+
+def test_a_token_vault_cannot_vouch_for_is_an_outage(token_state) -> None:
+    token_state["value"] = "unknown"
+    with pytest.raises(HTTPException) as caught:
+        integrations.get_api_key_from_vault(_Vault(read_status=403), "oak_one")
+    assert caught.value.status_code == 503
+
+
+def test_the_key_list_with_a_refused_token_is_503_never_empty(token_state) -> None:
+    with pytest.raises(HTTPException) as caught:
+        integrations.list_api_keys_from_vault(_Vault(list_status=403))
+    assert caught.value.status_code == 503
+
+
+def test_the_key_list_stops_when_its_documents_are_refused(token_state) -> None:
+    with pytest.raises(HTTPException) as caught:
+        integrations.list_api_keys_from_vault(_Vault(read_status=403))
+    assert caught.value.status_code == 503
+
+
+def test_a_list_the_policy_refuses_is_still_empty_with_a_live_token(token_state) -> None:
+    token_state["value"] = "ok"
+    assert integrations.list_api_keys_from_vault(_Vault(list_status=403)) == []
+
+
+def test_a_mint_with_a_refused_token_is_503(token_state) -> None:
+    vault = _Vault(put_error=VaultClientError("Vault KV put failed", status_code=403))
+    with pytest.raises(HTTPException) as caught:
+        integrations.save_api_key_to_vault(vault, "oak_new", {"id": "oak_new"}, "hash")
+    assert caught.value.status_code == 503
+
+
+def test_the_public_validate_endpoint_with_a_refused_token_is_503(token_state, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: _Vault(read_status=403))
+    request = integrations.APIKeyValidateRequest(api_key_id="oak_one", api_key_secret="oas_x")
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(integrations.validate_api_key_endpoint(request))
+    assert caught.value.status_code == 503
+
+
+def test_a_dot_segment_key_id_cannot_fake_the_outage_with_a_refused_token(token_state) -> None:
+    class _Refusing(_Vault):
+        def vault_read(self, path: str, use_cache: bool = True) -> Dict[str, Any]:
+            raise VaultClientError(f"Refusing Vault path with a traversal or empty segment: {path!r}")
+
+    with pytest.raises(HTTPException) as caught:
+        integrations.get_api_key_from_vault(_Refusing(), "..")
+    assert caught.value.status_code == 404

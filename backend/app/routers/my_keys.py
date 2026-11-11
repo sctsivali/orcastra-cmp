@@ -128,13 +128,43 @@ def get_vault_keys_client():
     return get_vault_client(settings.vault_addr, settings.vault_token)
 
 
-def read_key_roster(vault_client) -> Tuple[List[Dict[str, Any]], bool]:
+KEY_STORE_UNAVAILABLE = "key_store_unavailable"
+
+
+def key_store_unavailable() -> HTTPException:
+    """The 503 for a key read Vault could not serve: sealed, down, or refusing the dashboard's own
+    token. A missing key stays a 404, and an outage must not read as one (or as no keys)."""
+    from app.core.registry_guard import RETRY_AFTER_SECONDS
+
+    return HTTPException(
+        status_code=503,
+        detail={
+            "error": KEY_STORE_UNAVAILABLE,
+            "message": (
+                "Keys cannot be read because the secret store (Vault) is sealed, unavailable or "
+                "refusing the dashboard's token. Try again once Vault answers."
+            ),
+        },
+        headers={"Retry-After": str(RETRY_AFTER_SECONDS), "Cache-Control": "no-store"},
+    )
+
+
+def _roster_store_failed(status_code: Optional[int]) -> bool:
+    from app.core import vault_token
+
+    return status_code is not None and (status_code >= 500 or status_code == 429 or vault_token.refusal_explains(status_code))
+
+
+def read_key_roster(vault_client, *, raise_on_store_failure: bool = False) -> Tuple[List[Dict[str, Any]], bool]:
     """Read every key's metadata from Vault, and say whether the read was complete.
 
     important: display tolerates a partial roster, but the orphaned-group cleanup deletes every
     group the roster does not name, so it must tell "no keys" from "could not read the keys". A
-    missing path (404) is an empty roster and counts as complete.
+    missing path (404) is an empty roster and counts as complete. With `raise_on_store_failure`
+    (the list route) a store that failed answers 503 instead of an empty roster.
     """
+    from app.core import vault_token
+
     try:
         # List keys in Vault - for KV v2, metadata path is secret/metadata/<path>
         list_url = f"{vault_client.vault_addr}/v1/secret/metadata/{VAULT_KEYS_PATH}"
@@ -150,6 +180,8 @@ def read_key_roster(vault_client) -> Tuple[List[Dict[str, Any]], bool]:
 
         if response.status_code != 200:
             logger.error(f"Failed to list keys from Vault: HTTP {response.status_code}")
+            if raise_on_store_failure and _roster_store_failed(response.status_code):
+                raise key_store_unavailable()
             return [], False
 
         keys_list = response.json().get("data", {}).get("keys", [])
@@ -172,14 +204,19 @@ def read_key_roster(vault_client) -> Tuple[List[Dict[str, Any]], bool]:
                 complete = False
 
         return all_keys, complete
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error listing keys from Vault: {e}")
+        if raise_on_store_failure and vault_token.store_failed(e):
+            raise key_store_unavailable() from e
         return [], False
 
 
 def list_keys_from_vault(vault_client) -> List[Dict[str, Any]]:
-    """List all keys metadata from Vault, best effort (see read_key_roster)."""
-    keys, _complete = read_key_roster(vault_client)
+    """List all keys metadata from Vault, best effort (see read_key_roster), but never an empty list
+    for a store that failed."""
+    keys, _complete = read_key_roster(vault_client, raise_on_store_failure=True)
     return keys
 
 
@@ -212,6 +249,10 @@ def get_key_from_vault(vault_client, key_id: str) -> tuple[bytes, bytes]:
         return cert_pem, key_pem
     except Exception as e:
         logger.error(f"Failed to get key from Vault: {e}")
+        from app.core import vault_token
+
+        if vault_token.store_failed(e):
+            raise key_store_unavailable() from e
         raise HTTPException(status_code=404, detail="Key not found in secure storage")
 
 
@@ -333,7 +374,13 @@ def _authorize_key(vault_client, key_id: str, caller_email: Optional[str]) -> Di
     """
     try:
         metadata = vault_client.vault_read(f"secret/data/{VAULT_KEYS_PATH}/{key_id}/metadata")
-    except Exception:
+    except Exception as exc:
+        from app.core import vault_token
+
+        # A store that failed is refused for every id alike, so the 503 says nothing about
+        # whether this one exists.
+        if vault_token.store_failed(exc):
+            raise key_store_unavailable() from exc
         metadata = None
     if not metadata:
         # The same 404 for a missing record, so an out-of-scope id cannot be told from a
