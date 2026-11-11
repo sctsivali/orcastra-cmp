@@ -80,7 +80,7 @@ def test_the_sign_in_page_is_told_the_deployments_choice() -> None:
     assert _public({"theme": "dark"})["illustrations"] is None
 
 
-# No per-account choice: the personal row stays the theme alone.
+# No per-account choice: the personal row holds the theme and byte units, never illustrations.
 
 
 async def test_an_account_cannot_store_its_own_choice() -> None:
@@ -88,7 +88,7 @@ async def test_an_account_cannot_store_its_own_choice() -> None:
     with pytest.raises(HTTPException) as refused:
         await routes.update_user_preferences({"illustrations": "hide"}, Response(), db=db, user=ME)
 
-    assert refused.value.status_code == 422, "only the theme is stored per user"
+    assert refused.value.status_code == 422, "illustrations are not a personal choice"
     assert await _row(db) is None
 
 

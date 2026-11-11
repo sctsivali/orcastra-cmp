@@ -1,8 +1,9 @@
-"""User preferences: each user's theme (light, dark or system), and the branding editor's image proxy.
+"""User preferences: each user's theme (light, dark or system) and byte units (decimal or binary),
+and the branding editor's image proxy.
 
 Branding is not per user. It belongs to an organization, its provider or the deployment
-(services/branding/), and a personal row keeps only the theme. Rows are keyed by the OIDC subject
-of the validated token.
+(services/branding/), and a personal row keeps only the theme and the byte units. Rows are keyed by
+the OIDC subject of the validated token.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -136,21 +137,43 @@ def get_default_settings() -> Dict[str, Any]:
             "autoTextColor": True,
         },
         "theme": "system",
+        "byteUnits": DEFAULT_BYTE_UNITS,
         "lastModified": None,
     }
 
 
 THEMES = ("light", "dark", "system")
+BYTE_UNIT_SYSTEMS = ("decimal", "binary")
+DEFAULT_BYTE_UNITS = "decimal"
+# The keys a personal row may hold, each a single choice that null clears.
+PERSONAL_CHOICES = {"theme": THEMES, "byteUnits": BYTE_UNIT_SYSTEMS}
 
 
 def _personal_view(user_prefs: UserPreferences) -> Dict[str, Any]:
-    """The defaults with this user's theme laid over them. lastModified marks that a theme was chosen."""
+    """The defaults with this user's choices laid over them. lastModified marks that a theme was chosen."""
     settings = get_default_settings()
     saved = user_prefs.settings or {}
     if saved.get("theme") in THEMES:
         settings["theme"] = saved["theme"]
         settings["lastModified"] = saved.get("lastModified") or user_prefs.updated_at.isoformat()
+    if saved.get("byteUnits") in BYTE_UNIT_SYSTEMS:
+        settings["byteUnits"] = saved["byteUnits"]
     return settings
+
+
+def _requested_choices(body: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    """The known choices in a write, each checked; 422 when there is none or one is not allowed."""
+    choices = {key: body[key] for key in PERSONAL_CHOICES if key in body}
+    if not choices:
+        raise HTTPException(
+            status_code=422,
+            detail="Only the theme and byte units are stored per user; send {\"theme\": ...} or {\"byteUnits\": ...}.",
+        )
+    for key, value in choices.items():
+        allowed = PERSONAL_CHOICES[key]
+        if value is not None and not (isinstance(value, str) and value in allowed):
+            raise HTTPException(status_code=422, detail=f"{key} must be one of {', '.join(allowed)}, or null")
+    return choices
 
 
 # important: identity comes from the validated JWT principal, never from a request
@@ -211,8 +234,11 @@ async def get_user_preferences(
 @router.put(
     "",
     response_model=Dict[str, Any],
-    summary="Set or clear the user's theme",
-    description="Stores the authenticated user's theme (light, dark or system); null clears it. Branding is per organization.",
+    summary="Set or clear the user's theme or byte units",
+    description=(
+        "Stores the authenticated user's theme (light, dark or system) and byte units (decimal or binary). "
+        "Send either or both; null clears a choice. Branding is per organization."
+    ),
 )
 async def update_user_preferences(
     settings: Dict[str, Any],
@@ -223,15 +249,12 @@ async def update_user_preferences(
 ) -> Dict[str, Any]:
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, private"
     x_user_id, x_user_email = current_identity(user)
-    # important: only the theme is kept. Branding belongs to an organization or to the deployment
-    # (services/branding/); a personal copy would be handed to everyone in the owner's
-    # organization. `theme: null` clears the choice, so the organization's default theme applies.
-    # Other keys a client sends are ignored; keys already stored stay in place for a rollback.
-    if "theme" not in settings:
-        raise HTTPException(status_code=422, detail="Only the theme is stored per user; send {\"theme\": ...}.")
-    theme = settings.get("theme")
-    if theme is not None and theme not in THEMES:
-        raise HTTPException(status_code=422, detail=f"theme must be one of {', '.join(THEMES)}, or null")
+    # important: only the theme and the byte units are kept. Branding belongs to an organization or
+    # to the deployment (services/branding/); a personal copy would be handed to everyone in the
+    # owner's organization. `theme: null` clears the choice, so the organization's default theme
+    # applies. lastModified is the theme's own mark and only a theme write sets it. Other keys a
+    # client sends are ignored; keys already stored stay in place for a rollback.
+    choices = _requested_choices(settings)
 
     try:
         result = await db.execute(
@@ -239,12 +262,18 @@ async def update_user_preferences(
         )
         user_prefs = result.scalar_one_or_none()
         stored = dict(user_prefs.settings or {}) if user_prefs else {}
-        if theme is None:
-            stored.pop("theme", None)
-            stored.pop("lastModified", None)
-        else:
-            stored["theme"] = theme
-            stored["lastModified"] = datetime.now(timezone.utc).isoformat()
+        if "theme" in choices:
+            if choices["theme"] is None:
+                stored.pop("theme", None)
+                stored.pop("lastModified", None)
+            else:
+                stored["theme"] = choices["theme"]
+                stored["lastModified"] = datetime.now(timezone.utc).isoformat()
+        if "byteUnits" in choices:
+            if choices["byteUnits"] is None:
+                stored.pop("byteUnits", None)
+            else:
+                stored["byteUnits"] = choices["byteUnits"]
 
         if user_prefs and not stored:
             await db.delete(user_prefs)

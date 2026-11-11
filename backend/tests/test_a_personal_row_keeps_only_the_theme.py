@@ -1,8 +1,9 @@
-"""A user's own row holds the theme they chose and nothing else (routers/user_preferences.py).
+"""A user's own row holds the theme they chose and no branding (routers/user_preferences.py).
 
 Branding lives per organization and per deployment. A personal copy of it would reach everyone in
 the owner's organization through the organization fallback, so the personal row says light, dark
-or system, or nothing.
+or system, or nothing. The one other personal choice, byte units, has its own tests in
+test_a_personal_row_keeps_the_byte_units_choice.py.
 """
 
 from __future__ import annotations
