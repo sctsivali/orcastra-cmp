@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import threading
+from collections import OrderedDict
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Mapping
@@ -132,19 +133,19 @@ class LogDeduplicationFilter(logging.Filter):
     """Suppresses repeats of an app log message within a time window.
 
     A message seen again (same logger, level and text) inside the window is dropped. The first
-    occurrence after the window expires carries ``dedup_count``, the number seen in the window
-    that ended. Access and audit records pass through; OpenSearch deduplicates them by event_id
-    or request_id.
+    occurrence after a window ends carries ``dedup_count``, the number seen in that window, every
+    time, not only after the first. At most ``max_keys`` distinct messages are tracked, oldest
+    first out, so a stream of distinct lines cannot grow the filter without bound. Access and
+    audit records pass through; OpenSearch deduplicates them by event_id or request_id.
     """
 
-    def __init__(self, window_seconds: float = 60.0, name: str = ""):
+    def __init__(self, window_seconds: float = 60.0, name: str = "", max_keys: int = 4096):
         super().__init__(name)
         self._window = window_seconds
+        self._max_keys = max_keys
         self._lock = threading.Lock()
-        # key = (logger_name, levelno, message)
-        self._counts: Dict[tuple, int] = {}
-        self._first_seen: Dict[tuple, float] = {}
-        self._flushed: Dict[tuple, bool] = {}
+        # (logger_name, levelno, message) -> [window started at, lines suppressed in it]
+        self._windows: "OrderedDict[tuple, list]" = OrderedDict()
 
     def filter(self, record: logging.LogRecord) -> bool:
         if hasattr(record, "access_log_data") or hasattr(record, "audit_log_data"):
@@ -154,46 +155,30 @@ class LogDeduplicationFilter(logging.Filter):
         now = time.time()
 
         with self._lock:
-            if key in self._first_seen:
-                elapsed = now - self._first_seen[key]
-                if elapsed >= self._window:
-                    count = self._counts.get(key, 1)
-                    if count > 1 and not self._flushed.get(key, False):
-                        record.dedup_count = count
-                    self._counts[key] = 1
-                    self._first_seen[key] = now
-                    self._flushed[key] = True
-                    return True
+            entry = self._windows.get(key)
+            if entry is not None and now - entry[0] < self._window:
+                entry[1] += 1
+                return False
+            if entry is not None and entry[1] > 0:
+                record.dedup_count = entry[1] + 1
+            self._windows[key] = [now, 0]
+            self._windows.move_to_end(key)
+            while len(self._windows) > self._max_keys:
+                self._windows.popitem(last=False)
+            return True
 
-                self._counts[key] = self._counts.get(key, 0) + 1
-                count = self._counts[key]
-
-                if count == 1:
-                    self._flushed[key] = False
-                    return True
-                elif count == 2:
-                    return False
-                else:
-                    return False
-            else:
-                self._counts[key] = 1
-                self._first_seen[key] = now
-                self._flushed[key] = False
-                return True
+    def tracked(self) -> int:
+        """How many distinct messages are being tracked. For tests and diagnostics."""
+        with self._lock:
+            return len(self._windows)
 
     def flush_pending(self) -> None:
         """Log a summary line for every run still suppressed. Call on shutdown."""
         with self._lock:
-            for key, count in list(self._counts.items()):
-                if count > 1 and not self._flushed.get(key, False):
-                    logger_name, levelno, message = key
-                    _logger = logging.getLogger(logger_name)
-                    summary = f"[repeated {count}x in {self._window}s] {message}"
-                    _logger.log(levelno, summary)
-                    self._flushed[key] = True
-            self._counts.clear()
-            self._first_seen.clear()
-            self._flushed.clear()
+            pending = [(key, entry[1] + 1) for key, entry in self._windows.items() if entry[1] > 0]
+            self._windows.clear()
+        for (logger_name, levelno, message), count in pending:
+            logging.getLogger(logger_name).log(levelno, f"[repeated {count}x in {self._window}s] {message}")
 
 
 class QuerySecretFilter(logging.Filter):
