@@ -18,7 +18,13 @@ class EncryptionError(Exception):
 
 class DataEncryption:
     """Encrypts and decrypts sensitive values with Fernet (AES-128 in CBC mode)."""
-    
+
+    # Where the key came from: "provided", "vault", "environment" or "derived". With
+    # vault_unreadable, Vault was configured but could not be read when this worker started, so
+    # this worker may hold a different key than its siblings that read Vault (Host Health says so).
+    key_source: str = "provided"
+    vault_unreadable: bool = False
+
     def __init__(self, encryption_key: Optional[str] = None):
         """Use ``encryption_key`` (a base64 Fernet key), or resolve one with _get_or_create_key."""
         if encryption_key:
@@ -42,7 +48,14 @@ class DataEncryption:
         """
         vault_key = self._try_get_key_from_vault()
         if vault_key:
+            self.key_source = "vault"
             return vault_key
+        if self.vault_unreadable:
+            logger.warning(
+                "The Redis encryption key could not be read from Vault when this worker started; "
+                "it falls back to REDIS_ENCRYPTION_KEY or SECRET_KEY. Workers that read the Vault key "
+                "cannot read what this one caches until they all restart with Vault answering."
+            )
         
         env_key = os.environ.get('REDIS_ENCRYPTION_KEY')
         if env_key:
@@ -50,6 +63,7 @@ class DataEncryption:
                 key = env_key.encode() if isinstance(env_key, str) else env_key
                 Fernet(key)  # Raises on an invalid key.
                 logger.info("Using encryption key from environment")
+                self.key_source = "environment"
                 return key
             except Exception as e:
                 logger.warning(f"Invalid REDIS_ENCRYPTION_KEY in environment: {e}")
@@ -75,6 +89,7 @@ class DataEncryption:
             iterations=600000,
         )
         key = base64.urlsafe_b64encode(kdf.derive(secret.encode()))
+        self.key_source = "derived"
         
         logger.warning(
             "Derived encryption key from SECRET_KEY. "
@@ -133,6 +148,9 @@ class DataEncryption:
             return key
             
         except Exception as e:
+            # Vault was configured and did not answer with a key or a 404: this worker is about to
+            # use a fallback key its siblings may not share.
+            self.vault_unreadable = True
             logger.debug(f"Could not fetch encryption key from Vault: {e}")
             return None
     
@@ -190,6 +208,13 @@ class DataEncryption:
 
 
 _encryption_instance: Optional[DataEncryption] = None
+
+
+def encryption_state() -> Optional[dict]:
+    """{"key_source", "vault_unreadable"} of this worker's key, or None before first use."""
+    if _encryption_instance is None:
+        return None
+    return {"key_source": _encryption_instance.key_source, "vault_unreadable": _encryption_instance.vault_unreadable}
 
 
 def get_encryption() -> DataEncryption:

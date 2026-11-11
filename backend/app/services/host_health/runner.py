@@ -14,7 +14,9 @@ from typing import Awaitable, Callable, List
 
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.error_sanitizer import sanitize_error
-from app.services.host_health.checks import cache, database, identity, logging as logging_check, storage, vault
+from app.services.host_health.checks import (
+    cache, configuration, database, identity, logging as logging_check, storage, vault,
+)
 from app.services.host_health.context import CheckContext
 from app.services.host_health.models import CheckResult
 
@@ -31,6 +33,7 @@ _BLOCKING = (
 _AFTER = (
     ("cache", cache.LABEL, cache.check, 10.0),
     ("storage", storage.LABEL, storage.check, 10.0),
+    ("configuration", configuration.LABEL, configuration.check, 5.0),
 )
 
 

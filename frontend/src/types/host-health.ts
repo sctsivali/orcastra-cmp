@@ -1,5 +1,5 @@
 /** GET /system/host-health: the dashboard's own dependencies (Administrators only). */
-export type HostCheckId = "vault" | "logging" | "identity" | "database" | "cache" | "storage";
+export type HostCheckId = "vault" | "logging" | "identity" | "database" | "cache" | "storage" | "configuration";
 export type HostCheckStatus = "ok" | "degraded" | "down" | "unknown" | "not_configured";
 export type HostCheckSeverity = "critical" | "warning" | "info";
 

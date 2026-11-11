@@ -1,6 +1,6 @@
 import type { BadgeTone } from "@/components/ui/badge";
 import type { HostCheckId, HostCheckStatus } from "@/types/host-health";
-import { Database, Fingerprint, HardDrive, KeyRound, ScrollText, Zap, type LucideIcon } from "lucide-react";
+import { Database, Fingerprint, HardDrive, KeyRound, ScrollText, ShieldCheck, Zap, type LucideIcon } from "lucide-react";
 
 /** Label and tone stay paired: one closed vocabulary, never the raw wire value on screen. */
 export const HOST_STATUS: Record<HostCheckStatus, { label: string; tone: BadgeTone | "muted" }> = {
@@ -18,6 +18,7 @@ export const HOST_CHECK_ICON: Record<HostCheckId, LucideIcon> = {
   database: Database,
   cache: Zap,
   storage: HardDrive,
+  configuration: ShieldCheck,
 };
 
 export const NEEDS_ATTENTION: ReadonlySet<HostCheckStatus> = new Set(["down", "degraded", "unknown"]);

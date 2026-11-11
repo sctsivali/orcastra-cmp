@@ -17,6 +17,7 @@ import { VaultNotice } from "@/components/vault-notice";
 import { TenantTermNotice } from "@/components/tenant-term-notice";
 import { DocumentBranding } from "@/components/branding/document-branding";
 import { ReleaseNotice } from "@/components/release/release-notice";
+import { SecretsNotice } from "@/components/host-health/secrets-notice";
 import { FooterReleaseHint } from "@/components/release/footer-release-hint";
 import { useAccessGate } from "@/hooks/use-access-gate";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -120,6 +121,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
         {!isFullPageTerminalOrConsole && <VaultNotice />}
         {/* Administrators: the running version is out of date (end of life, security, deprecated, newer) */}
         {!isFullPageTerminalOrConsole && <ReleaseNotice />}
+        {!isFullPageTerminalOrConsole && <SecretsNotice />}
         {/* A Tenant's paid term: read-only or ending projects, said on every page */}
         {!isFullPageTerminalOrConsole && <TenantTermNotice summary={access.tenantAccess} />}
         <main

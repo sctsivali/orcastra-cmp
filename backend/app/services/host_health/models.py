@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from app.core.units import DECIMAL, render_sized
 
-CheckId = Literal["vault", "logging", "identity", "database", "cache", "storage"]
+CheckId = Literal["vault", "logging", "identity", "database", "cache", "storage", "configuration"]
 CheckStatus = Literal["ok", "degraded", "down", "unknown", "not_configured"]
 Severity = Literal["critical", "warning", "info"]
 CheckAction = Literal["unseal_vault"]

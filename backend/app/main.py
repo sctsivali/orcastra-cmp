@@ -572,6 +572,15 @@ async def lifespan(app: FastAPI):
     except Exception as hv_release_err:
         logger.error("Could not start the hypervisor release check: %s", hv_release_err, exc_info=True)
 
+    # Template placeholders and short secrets: reported by name at every start (and in Host
+    # Health), never refused, because a new SECRET_KEY invalidates every API key.
+    try:
+        from app.core import secret_hygiene
+
+        secret_hygiene.report_at_startup()
+    except Exception as hygiene_err:
+        logger.error("Could not check the deployment's secrets: %s", hygiene_err, exc_info=True)
+
     # The backend's own Vault token: one worker (Redis lease) renews it before it lapses, and every
     # worker reports a refused token as an operational event.
     try:
