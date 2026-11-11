@@ -28,7 +28,7 @@ def _user(email: str = OWNER) -> AuthenticatedUser:
 
 
 class _Vault:
-    def vault_read(self, path: str):
+    def vault_read(self, path: str, use_cache: bool = True):
         key_id = path.split("/")[-2]
         if key_id == "key_a":
             return {"id": "key_a", "node": "nuc2", "owner_email": OWNER, "name": "ops", "project": "default"}

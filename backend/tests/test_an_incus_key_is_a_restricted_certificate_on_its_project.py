@@ -394,7 +394,7 @@ async def test_a_key_the_cluster_did_not_revoke_keeps_its_record(monkeypatch):
               "trust_name": issued.trust_name, "project": "tenant-web", "auth_level": "standard",
               "owner_email": "p@example.test"}
     deleted: list = []
-    vault = SimpleNamespace(vault_read=lambda path: record, vault_delete=lambda path: deleted.append(path))
+    vault = SimpleNamespace(vault_read=lambda path, use_cache=True: record, vault_delete=lambda path: deleted.append(path))
     monkeypatch.setattr(my_keys, "get_vault_keys_client", lambda: vault)
     service = SimpleNamespace(connection_manager=SimpleNamespace(get_client=lambda node: _Incus(store)))
     user = AuthenticatedUser(user_id="role_partner:p@example.test", email="p@example.test", groups=["role_partner"])
@@ -422,7 +422,7 @@ async def _delete(monkeypatch, store, service):
               "trust_name": ci.incus_trust_name("key_1"), "project": "tenant-web", "auth_level": "standard",
               "owner_email": "p@example.test"}
     deleted: list = []
-    vault = SimpleNamespace(vault_read=lambda path: record, vault_delete=lambda path: deleted.append(path))
+    vault = SimpleNamespace(vault_read=lambda path, use_cache=True: record, vault_delete=lambda path: deleted.append(path))
     monkeypatch.setattr(my_keys, "get_vault_keys_client", lambda: vault)
 
     async def _noop(*_a, **_k):
