@@ -112,15 +112,21 @@ def _acl_condition(model: Any, acl: Mapping[str, Any]) -> Any:
     return or_(*branches)
 
 
+def _ops_event_actions() -> frozenset:
+    from app.services.activity_catalogue import OPS_EVENT_ACTIONS
+
+    return OPS_EVENT_ACTIONS
+
+
 def _system_cluster_row(model: Any) -> Any:
     # An operational event about a whole cluster (services/ops_events.py: a certificate about to
-    # lapse) concerns every partner on it, whatever project bound they hold.
-    return and_(model.resource_type == "cluster", model.action.like("system.%"))
+    # lapse) concerns every partner on it, whatever project bound they hold. An explicit list, so
+    # no other `system.*` writer widens a partner's view by accident.
+    return and_(model.resource_type == "cluster", model.action.in_(sorted(_ops_event_actions())))
 
 
 def _is_system_cluster_row(row: Mapping[str, Any]) -> bool:
-    action = row.get("action")
-    return row.get("resource_type") == "cluster" and isinstance(action, str) and action.startswith("system.")
+    return row.get("resource_type") == "cluster" and row.get("action") in _ops_event_actions()
 
 
 def _scope_conditions(model: Any, *, system_cluster_rows: bool = False) -> List[Any]:

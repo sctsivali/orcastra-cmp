@@ -291,6 +291,12 @@ ACTION_CATEGORIES = {
     "system.cluster.certificate_expired": EventCategory.OPERATIONS,
 }
 
+# The operational event actions (services/ops_events.py). core/task_scope.py lets exactly these,
+# on a cluster row, past a partner's project bound.
+OPS_EVENT_ACTIONS = frozenset(
+    action for action, category in ACTION_CATEGORIES.items() if category == EventCategory.OPERATIONS
+)
+
 # High severity actions
 HIGH_SEVERITY_ACTIONS = {
     # Each brings Vault one step closer to releasing every secret it holds.

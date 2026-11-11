@@ -27,6 +27,7 @@ from app.core import org_scope  # noqa: E402
 from app.core import task_scope  # noqa: E402
 from app.core.tenant_visibility import tenant_acl_active, tenant_may_see_project  # noqa: E402
 from app.models.task_journal_models import ClusterLog, TaskJournal  # noqa: E402
+from app.services.activity_catalogue import OPS_EVENT_ACTIONS  # noqa: E402
 
 CLUSTERS = ("nuc1", "nuc2", "c3")
 PROJECTS = ("default", "cust-a", "cust-b", "cust-c")
@@ -42,14 +43,19 @@ COLUMNS = (
 # partner on it past the project bound; any other cluster row keeps the bound.
 SYSTEM_ROWS = [
     {
-        "id": f"cluster-{cluster}-{project or 'none'}-{'system' if system else 'stream'}",
+        "id": f"cluster-{cluster}-{project or 'none'}-{kind}",
         "seq": 950 + index,
         "cluster": cluster,
         "project": project,
-        "action": "system.cluster.certificate_expiring" if system else "cluster.event_stream.lost",
+        "action": {
+            "system": "system.cluster.certificate_expiring",
+            "stream": "cluster.event_stream.lost",
+            # A system action that is not an operational event keeps the bound too.
+            "other": "system.release_check.run",
+        }[kind],
     }
-    for index, (cluster, project, system) in enumerate(
-        itertools.product(CLUSTERS, (None, "cust-c"), (True, False))
+    for index, (cluster, project, kind) in enumerate(
+        itertools.product(CLUSTERS, (None, "cust-c"), ("system", "stream", "other"))
     )
 ]
 
@@ -298,7 +304,7 @@ def _log_reference(row: Dict[str, Any], caller: Optional[str]) -> bool:
         return True
     if row["cluster_id"] is None:
         return bool(caller) and row["actor_email"] == caller
-    if row.get("resource_type") == "cluster" and str(row.get("action") or "").startswith("system."):
+    if row.get("resource_type") == "cluster" and row.get("action") in OPS_EVENT_ACTIONS:
         return row["cluster_id"] in allowed and not tenant_acl_active()
     return _reference(row)
 
@@ -334,6 +340,7 @@ def test_a_cluster_event_reaches_every_partner_on_the_cluster_past_the_project_b
     seen = _under("partner_bound", lambda: {r["id"] for r in rows if task_scope.log_is_visible(r, caller_email=None)})
     assert "cluster-nuc2-cust-c-system" in seen, "outside the bound, still the partner's cluster"
     assert "cluster-nuc2-cust-c-stream" not in seen, "any other cluster row keeps the bound"
+    assert "cluster-nuc2-cust-c-other" not in seen, "so does a system action that is not an operational event"
     assert "cluster-c3-none-system" not in seen, "a cluster the partner does not hold stays hidden"
     for tenant in ("tenant_wildcard", "tenant_instance"):
         tenant_seen = _under(tenant, lambda: {r["id"] for r in rows if task_scope.log_is_visible(r, caller_email=None)})
