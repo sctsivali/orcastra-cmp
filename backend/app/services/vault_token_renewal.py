@@ -150,7 +150,10 @@ def run_once(*, settings=None, now: Optional[float] = None) -> float:
 def _on_token_change(before, after) -> None:
     if after.state == "refused":
         ops_events.fire("vault.token_refused")
-    elif after.state == "ok" and before is not None and before.state == "refused":
+    elif after.state == "ok":
+        # Also on a process's first answer: the usual fix is a new VAULT_TOKEN and a recreated
+        # backend, which starts with no memory of the refusal. The shared event state says whether
+        # it was firing, so the recovery is reported once and a healthy start reports nothing.
         ops_events.resolve("vault.token_refused")
 
 

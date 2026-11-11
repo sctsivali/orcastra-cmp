@@ -162,10 +162,33 @@ def test_a_refused_token_is_never_renewed(vault, events):
 
 
 def test_the_probe_transition_reports_the_refused_token_and_its_recovery(events):
-    renewal._on_token_change(None, vault_token.TokenStatus("ok", 1.0))
     renewal._on_token_change(vault_token.TokenStatus("ok", 1.0), vault_token.TokenStatus("refused", 2.0))
     renewal._on_token_change(vault_token.TokenStatus("refused", 2.0), vault_token.TokenStatus("ok", 3.0))
     assert [(e[0], e[1]) for e in events] == [("fire", "vault.token_refused"), ("resolve", "vault.token_refused")]
+
+
+def test_a_recreated_backend_reports_the_recovery_of_a_refusal_it_never_saw(monkeypatch):
+    """The fix for a refused token is a new token and a recreated backend: its first answer is ok
+    with nothing before it. The shared state still knows the event was firing, so it resolves once."""
+    from app.services import ops_events
+
+    shared = {}
+
+    class _Redis:
+        def set(self, key, value, ex=None, get=False):
+            previous = shared.get(key)
+            shared[key] = value
+            return previous.encode() if previous is not None else None
+
+    emitted = []
+    monkeypatch.setattr(ops_events, "_redis", lambda: _Redis())
+    monkeypatch.setattr(ops_events, "_emit", lambda event, state, severity, cluster_id, facts: emitted.append(state))
+    ops_events.reset()
+    renewal._on_token_change(None, vault_token.TokenStatus("refused", 1.0))  # the old backend
+    ops_events.reset()  # the recreated backend's own memory is empty
+    renewal._on_token_change(None, vault_token.TokenStatus("ok", 2.0))
+    renewal._on_token_change(None, vault_token.TokenStatus("ok", 3.0))  # another worker starting
+    assert emitted == ["firing", "resolved"]
 
 
 def test_a_short_period_is_checked_well_before_it_lapses(vault, events):
