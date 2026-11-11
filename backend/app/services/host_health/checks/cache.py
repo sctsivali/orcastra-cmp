@@ -10,8 +10,8 @@ import time
 from typing import List
 
 from app.services.host_health.context import CheckContext
-from app.services.host_health.format import host_of, size
-from app.services.host_health.models import CheckResult, HealthFact, fact
+from app.services.host_health.format import host_of
+from app.services.host_health.models import CheckResult, HealthFact, fact, sized_fact
 
 LABEL = "Cache (Redis)"
 MEMORY_WARN_RATIO = 0.9
@@ -46,7 +46,8 @@ def check(ctx: CheckContext) -> CheckResult:
     used = memory.get("used_memory")
     limit = memory.get("maxmemory") or 0
     facts += [fact("Version", server.get("redis_version")), fact("Response Time", f"{latency}ms"),
-              fact("Memory Used", size(used) + (f" of {size(limit)}" if limit else " (no limit set)"))]
+              sized_fact("Memory Used", "{used} of {limit}" if limit else "{used} (no limit set)",
+                         used=used if isinstance(used, (int, float)) else None, limit=limit or None)]
     if limit and isinstance(used, (int, float)) and used / limit >= MEMORY_WARN_RATIO:
         return CheckResult(id="cache", label=LABEL, status="degraded", severity="warning", checked_at=ctx.now,
                            summary=f"Redis is using {used / limit:.0%} of its memory limit; it will start evicting keys.",

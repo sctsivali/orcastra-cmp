@@ -6,9 +6,11 @@ token, a password, a URL carrying credentials, or anything a request body suppli
 
 from __future__ import annotations
 
-from typing import List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
+
+from app.core.units import DECIMAL, render_sized
 
 CheckId = Literal["vault", "logging", "identity", "database", "cache", "storage"]
 CheckStatus = Literal["ok", "degraded", "down", "unknown", "not_configured"]
@@ -23,6 +25,10 @@ NEEDS_ATTENTION = frozenset({"down", "degraded", "unknown"})
 class HealthFact(BaseModel):
     label: str
     value: Union[str, int, float, bool, None] = None
+    # A fact that names sizes is collected once and read by many, so it keeps its template and byte
+    # counts and each reader gets the sizes in their own units (localized). Not served.
+    template: Optional[str] = None
+    sizes: Optional[Dict[str, Optional[float]]] = None
 
 
 class CheckResult(BaseModel):
@@ -57,6 +63,23 @@ class HostHealthReport(BaseModel):
 
 def fact(label: str, value: Union[str, int, float, bool, None]) -> HealthFact:
     return HealthFact(label=label, value=value)
+
+
+def sized_fact(label: str, template: str, **sizes: Optional[float]) -> HealthFact:
+    """A fact whose ``{name}`` slots are sizes. Its stored value is decimal, whoever ran the pass."""
+    return HealthFact(label=label, value=render_sized(template, sizes, DECIMAL), template=template, sizes=sizes)
+
+
+def localized(report: "HostHealthReport") -> "HostHealthReport":
+    """The report as this reader sees it: sizes in their units, and no template in what is served."""
+    served = report.model_copy(deep=True)
+    for check in served.checks:
+        for item in check.facts:
+            if item.template is not None:
+                item.value = render_sized(item.template, item.sizes or {})
+            item.template = None
+            item.sizes = None
+    return served
 
 
 def overall_of(checks: List[CheckResult]) -> CheckStatus:

@@ -11,7 +11,7 @@ from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
 from app.core.lxd_path import safe_segment
-from app.core.units import format_size
+from app.core.units import DECIMAL as DECIMAL_UNITS, render_sized
 from app.services.lxd import mobility
 from app.services.lxd.project_usage import parse_lxd_size
 
@@ -81,7 +81,7 @@ class PreflightResult:
     downtime: str
     capabilities: dict[str, Any] = field(default_factory=dict)
     resources: list[dict[str, Any]] = field(default_factory=list)
-    blockers: list[dict[str, str]] = field(default_factory=list)
+    blockers: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[dict[str, str]] = field(default_factory=list)
     # In-memory target contracts by source instance name. Never persisted or serialized:
     # they carry raw config values that only the planner's policy checks may read.
@@ -95,6 +95,24 @@ class PreflightResult:
         self.blockers.append(
             {"code": code, "message": _bounded(message), "remediation": _bounded(remediation)}
         )
+
+    def block_sized(
+        self,
+        code: str,
+        template: str,
+        sizes: dict[str, int],
+        texts: dict[str, str],
+        remediation: str = "",
+    ) -> None:
+        """A blocker that names sizes. The message is decimal, so the approval hash does not depend
+        on who asked; ``sized`` keeps what the plan view needs to print it in the reader's units."""
+        message = render_sized(template, sizes, DECIMAL_UNITS, texts=texts)
+        self.blockers.append({
+            "code": code,
+            "message": _bounded(message),
+            "remediation": _bounded(remediation),
+            "sized": {"template": template, "sizes": sizes, "texts": texts},
+        })
 
     def warn(self, code: str, message: str, remediation: str = "") -> None:
         self.warnings.append(
@@ -578,17 +596,21 @@ def _check_capacity(
                 "choose a pool with more room.",
             )
         elif measured + bound > free:
-            message = f"Target pool '{target_pool}' has insufficient measured free space."
             if bound:
-                message = (
-                    f"Target pool '{target_pool}' has {format_size(free)} free, and the measured part of the "
-                    f"transfer alone needs {format_size(measured)}."
+                result.block_sized(
+                    "target_pool_insufficient_capacity",
+                    "Target pool '{pool}' has {free} free, and the measured part of the transfer "
+                    "alone needs {needed}.",
+                    {"free": free, "needed": measured},
+                    {"pool": target_pool},
+                    "Free capacity or choose another mapped pool.",
                 )
-            result.block(
-                "target_pool_insufficient_capacity",
-                message,
-                "Free capacity or choose another mapped pool.",
-            )
+            else:
+                result.block(
+                    "target_pool_insufficient_capacity",
+                    f"Target pool '{target_pool}' has insufficient measured free space.",
+                    "Free capacity or choose another mapped pool.",
+                )
 
 
 # Drivers that report no per-volume usage without project quotas: LXD answers 0 for every volume on

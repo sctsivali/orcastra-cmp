@@ -10,8 +10,7 @@ import time
 from typing import List
 
 from app.services.host_health.context import CheckContext
-from app.services.host_health.format import size
-from app.services.host_health.models import CheckResult, HealthFact, fact
+from app.services.host_health.models import CheckResult, HealthFact, fact, sized_fact
 
 LABEL = "Disk Space"
 HOST_WARN_PCT = 85.0
@@ -30,7 +29,7 @@ def check(ctx: CheckContext) -> CheckResult:
     filesystems = [fs for fs in host_filesystems() if fs.fstype not in ("tmpfs", "devtmpfs", "overlay")]
     worst = max(filesystems, key=lambda fs: fs.percent, default=None)
     for fs in sorted(filesystems, key=lambda fs: -fs.percent):
-        facts.append(fact(f"Host Disk {fs.device}", f"{fs.percent:.1f}% used, {size(fs.free)} free"))
+        facts.append(sized_fact(f"Host Disk {fs.device}", f"{fs.percent:.1f}% used, {{free}} free", free=fs.free))
     if worst is not None and worst.percent >= HOST_CRITICAL_PCT:
         status, severity = "down", "critical"
         summary = f"The host disk is {worst.percent:.0f}% full. Database writes and log buffering will fail."
@@ -45,9 +44,10 @@ def check(ctx: CheckContext) -> CheckResult:
     scratch = describe_usage()
     if scratch.get("available"):
         percent = float(scratch.get("percent_used") or 0)
-        facts.append(fact(
+        facts.append(sized_fact(
             "Certificate Scratch Space",
-            f"{percent:.1f}% used of {size(float(scratch.get('total_mib') or 0) * 1024 * 1024)}",
+            f"{percent:.1f}% used of {{total}}",
+            total=float(scratch.get("total_mib") or 0) * 1024 * 1024,
         ))
         if percent >= SCRATCH_CRITICAL_PCT:
             status, severity = "down", "critical"

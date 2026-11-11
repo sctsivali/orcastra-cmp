@@ -24,7 +24,7 @@ from app.core.dependencies import AuthenticatedUser, require_admin
 from app.core.json_body import body_spec, read_json_body
 from app.core.vault_probe import SealFacts, SealProbe
 from app.services import host_health, vault_unseal
-from app.services.host_health.models import HostHealthReport
+from app.services.host_health.models import HostHealthReport, localized
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +134,7 @@ def _audit(action: str, result: str, details: Dict[str, object], error_code: Opt
 async def get_host_health(response: Response, fresh: bool = False):
     """The dashboard's dependencies. `fresh` runs every check now instead of serving the last pass."""
     response.headers["Cache-Control"] = "no-store"
-    return await host_health.get_report(fresh=fresh)
+    return localized(await host_health.get_report(fresh=fresh))
 
 
 @router.get("/vault/seal-status", response_model=SealStatusResponse)

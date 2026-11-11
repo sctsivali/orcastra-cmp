@@ -1,11 +1,9 @@
-"""Plain wording for durations, sizes and addresses in Host Health facts."""
+"""Plain wording for durations and addresses in Host Health facts. Sizes are models.sized_fact."""
 
 from __future__ import annotations
 
 from typing import Optional
 from urllib.parse import urlparse
-
-from app.core.units import format_size
 
 
 def duration(seconds: Optional[float]) -> str:
@@ -21,10 +19,6 @@ def duration(seconds: Optional[float]) -> str:
     if hours < 48:
         return f"{hours}h"
     return f"{hours // 24} days"
-
-
-def size(num_bytes: Optional[float]) -> str:
-    return "unknown" if num_bytes is None else format_size(num_bytes)
 
 
 def count(value: Optional[int]) -> str:

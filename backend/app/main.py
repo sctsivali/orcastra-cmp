@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.error_sanitizer import public_server_detail, reference_for, sanitize_error
+from app.middleware.byte_units import ByteUnitsMiddleware
 from app.middleware.stream_cut import StreamCutMiddleware
 from app.middleware.security import apply_security_headers
 import uvicorn
@@ -991,6 +992,10 @@ Ensure your client certificates are properly configured.
         version=settings.app_version or "0.0.0"
     )
     
+    # The reader's byte units for size text the server writes (core/units.py). Exception handlers
+    # run inside it, so a refusal's sizes follow the reader too.
+    app.add_middleware(ByteUnitsMiddleware)
+
     # Request IDs. Added after the access log so it wraps it and the ID exists when the access
     # log runs (the last middleware added is the outermost).
     app.add_middleware(RequestIdMiddleware)

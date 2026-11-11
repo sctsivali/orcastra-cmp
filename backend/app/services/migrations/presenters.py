@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.units import render_sized
 from app.models.migration_models import MigrationAuditOutbox, MigrationJob, MigrationPlan
 from app.models.migration_schemas import (
     MigrationActionName,
@@ -18,6 +19,7 @@ from app.models.migration_schemas import (
 )
 
 from . import repository
+from .preflight import _bounded
 from .security import sanitize_error, sanitize_payload
 
 
@@ -29,6 +31,17 @@ def _endpoint(row: Any, side: str) -> MigrationEndpointRef:
         member=getattr(row, f"{side}_member"),
         cluster_fingerprint=getattr(row, f"{side}_cluster_fingerprint"),
     )
+
+
+def _issue(issue: dict[str, Any]) -> MigrationIssue:
+    """A stored issue as this reader sees it: a sized one prints its sizes in the reader's units."""
+    shown = {key: value for key, value in issue.items() if key != "sized"}
+    sized = issue.get("sized")
+    if isinstance(sized, dict) and isinstance(sized.get("template"), str):
+        sizes = {k: v for k, v in (sized.get("sizes") or {}).items() if isinstance(v, (int, float))}
+        texts = {k: v for k, v in (sized.get("texts") or {}).items() if isinstance(v, str)}
+        shown["message"] = _bounded(render_sized(sized["template"], sizes, texts=texts))
+    return MigrationIssue.model_validate(shown)
 
 
 def plan_response(row: MigrationPlan) -> MigrationPlanResponse:
@@ -53,8 +66,8 @@ def plan_response(row: MigrationPlan) -> MigrationPlanResponse:
         capabilities=preflight.get("capabilities") or [],
         resources=preflight.get("resources") or [],
         mappings=MigrationMappings.model_validate(request.get("mappings") or {}),
-        blockers=[MigrationIssue.model_validate(issue) for issue in preflight.get("blockers") or []],
-        warnings=[MigrationIssue.model_validate(issue) for issue in preflight.get("warnings") or []],
+        blockers=[_issue(issue) for issue in preflight.get("blockers") or []],
+        warnings=[_issue(issue) for issue in preflight.get("warnings") or []],
         rollback_contract=sanitize_payload(preflight.get("rollback_contract") or {}),
         expires_at=row.expires_at,
         created_at=row.created_at,
