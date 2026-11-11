@@ -1,9 +1,9 @@
 """Cluster certificate expiry as operational events, so a partner hears of it before the cluster
 refuses the dashboard.
 
-The Warnings page computes expiry when someone opens it; nothing told anyone ahead of time, and a
-lapsed certificate took a partner's cluster offline three times (orca-operations record of
-30/09/2026). Every six hours one worker (Redis lease) reads each registered cluster's client
+The Warnings page computes expiry when someone opens it, so nothing warns ahead of time, and a
+lapsed certificate makes the cluster refuse the dashboard until someone repairs trust on a host.
+Every six hours one worker (Redis lease) reads each registered cluster's client
 certificate and raises `cluster.certificate_expiring` (warning within 14 days, critical within
 3) or `cluster.certificate_expired`, resolved once the certificate is renewed. Cluster events
 reach the partners on that cluster (core/task_scope.py).

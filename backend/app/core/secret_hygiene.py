@@ -1,10 +1,10 @@
-"""Secrets a deployment is still running with from the template, or too short to trust.
+"""Template placeholders and secrets too short to trust, reported by variable name.
 
-The env template ships `replace_me_*` placeholders, and nothing refused them: a deployment could run
-with a SECRET_KEY anyone can read in the public repository, which signs API key hashes, WebSocket
+The env template ships `replace_me_*` placeholders. A deployment that keeps one runs with a
+SECRET_KEY anyone can read in the public repository, and it signs API key hashes, WebSocket
 tickets and the fallback Redis encryption key. Rotating SECRET_KEY invalidates every API key, so
-this does not refuse to start (owner decision 11/11/2026); it reports, at boot and in Host Health,
-which variable to fix. Only names and the kind of problem are ever reported, never a value.
+this never refuses to start: it reports, at boot and in Host Health, which variable to fix. Only
+names and the kind of problem are reported, never a value.
 """
 
 from __future__ import annotations

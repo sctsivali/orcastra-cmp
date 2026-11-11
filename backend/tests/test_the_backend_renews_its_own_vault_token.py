@@ -118,7 +118,7 @@ def test_a_token_at_its_maximum_lifetime_warns_with_the_date(vault, events):
     renewal.run_once(settings=_settings(), now=NOW)
     (fired,) = _fired(events, "vault.token_expiring")
     assert fired[2]["why"] == "at its maximum lifetime"
-    assert fired[2]["expire_time"] == "2027-01-17 08:00 UTC"  # NOW is 2027-01-15 08:00 UTC, plus the 2-day lease
+    assert fired[2]["expire_time"] == "2027-01-17 08:00 UTC"  # NOW plus the two-day lease
 
 
 def test_a_token_that_cannot_be_renewed_warns_without_trying(vault, events):
