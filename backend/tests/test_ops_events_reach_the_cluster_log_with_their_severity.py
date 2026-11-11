@@ -190,3 +190,20 @@ def test_the_request_that_noticed_the_change_is_not_its_actor(captured):
     assert record["actor"]["user_id"] is None and record["actor"]["role"] is None
     row = record_to_log_row(record)
     assert row["actor_email"] is None and row["cluster_id"] is None
+
+
+def test_a_fault_that_returns_within_minutes_is_reported_again_with_redis(captured, monkeypatch):
+    shared = _Redis()
+    monkeypatch.setattr(ops_events, "_redis", lambda: shared)
+    ops_events.fire("vault.token_refused")
+    ops_events.resolve("vault.token_refused")
+    ops_events.fire("vault.token_refused")
+    ids = [r["event_id"] for r in captured]
+    assert [r["details"]["state"] for r in captured] == ["firing", "resolved", "firing"]
+    assert len(set(ids)) == 3, "the second firing must not collapse into the first"
+
+
+def test_two_renewals_minutes_apart_are_two_events(captured):
+    ops_events.record("vault.token_renewed", facts={"lease": "3 minutes"})
+    ops_events.record("vault.token_renewed", facts={"lease": "3 minutes"})
+    assert captured[0]["event_id"] != captured[1]["event_id"]

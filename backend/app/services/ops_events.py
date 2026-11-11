@@ -7,10 +7,10 @@ OpenSearch, in `orcastra-audit-*` (filter `action: system.*` or `category: opera
 record carries a plain summary, the fix, and a link to the public guide.
 
 A transition is reported once across workers. The current state of each event is swapped
-atomically in Redis (SET ... GET), so only the worker that changed it reports. The event id is
-derived from the transition and a ten-minute bucket, so with Redis down the journal (unique
-event_id) and OpenSearch (event_id is the document id) still collapse two workers' reports of
-the same change.
+atomically in Redis (SET ... GET), so only the worker that changed it reports, under a fresh event
+id. With Redis down every worker keeps its own state, so the event id is derived from the
+transition and a ten-minute bucket instead, and the journal (unique event_id) and OpenSearch
+(event_id is the document id) collapse two workers' reports of the same change.
 """
 
 from __future__ import annotations
@@ -126,8 +126,8 @@ def _redis() -> Any:
         return None
 
 
-def _swap(key: str, value: str) -> Optional[str]:
-    """Store `value` and return what was there: atomic across workers when Redis answers."""
+def _swap(key: str, value: str) -> tuple[Optional[str], bool]:
+    """Store `value`; return what was there and whether Redis (shared by every worker) answered."""
     client = _redis()
     if client is not None:
         try:
@@ -136,13 +136,13 @@ def _swap(key: str, value: str) -> Optional[str]:
                 previous = previous.decode()
             with _local_lock:
                 _local_state[key] = value
-            return previous
+            return previous, True
         except Exception:  # noqa: BLE001 - fall back to this process's own memory
             logger.debug("ops event state could not be swapped in Redis", exc_info=True)
     with _local_lock:
         previous = _local_state.get(key)
         _local_state[key] = value
-    return previous
+    return previous, False
 
 
 class _Facts(dict):
@@ -162,7 +162,8 @@ def _event_id(code: str, cluster_id: Optional[str], state: str, now: float) -> s
     return str(uuid.uuid5(_EVENT_NAMESPACE, f"{code}|{cluster_id or '-'}|{state}|{bucket}"))
 
 
-def _emit(event: OpsEvent, state: str, severity: str, cluster_id: Optional[str], facts: Mapping[str, Any]) -> None:
+def _emit(event: OpsEvent, state: str, severity: str, cluster_id: Optional[str], facts: Mapping[str, Any],
+          *, shared: bool = True) -> None:
     from app.services.activity_logger import get_activity_logger
 
     firing = state in ("firing", "recorded")
@@ -191,7 +192,10 @@ def _emit(event: OpsEvent, state: str, severity: str, cluster_id: Optional[str],
             result="success",
             details=details,
             severity=_AUDIT_SEVERITY[severity] if firing else "low",
-            event_id=_event_id(event.code, cluster_id, f"{state}:{severity}", now),
+            # important: a fresh id whenever one worker alone reported the change, so a fault that
+            # returns within the bucket, or a history event recorded twice, is never collapsed into
+            # the earlier one. The derived id only stands in for Redis.
+            event_id=str(uuid.uuid4()) if shared else _event_id(event.code, cluster_id, f"{state}:{severity}", now),
         )
     except Exception:  # noqa: BLE001 - reporting a fault must never become one
         logger.warning("Could not record operational event %s", event.code, exc_info=True)
@@ -214,19 +218,20 @@ def fire(code: str, *, cluster_id: Optional[str] = None, severity: Optional[Seve
     """Report that a fault holds. Reported once per change of state or severity; True if reported."""
     event = _event(code, cluster_id)
     level = severity or event.severity
-    if _swap(_state_key(code, cluster_id), f"firing:{level}") == f"firing:{level}":
+    previous, shared = _swap(_state_key(code, cluster_id), f"firing:{level}")
+    if previous == f"firing:{level}":
         return False
-    _emit(event, "firing", level, cluster_id, facts or {})
+    _emit(event, "firing", level, cluster_id, facts or {}, shared=shared)
     return True
 
 
 def resolve(code: str, *, cluster_id: Optional[str] = None, facts: Optional[Mapping[str, Any]] = None) -> bool:
     """Report that a fault cleared, if it was firing. True if reported."""
     event = _event(code, cluster_id)
-    previous = _swap(_state_key(code, cluster_id), "resolved")
+    previous, shared = _swap(_state_key(code, cluster_id), "resolved")
     if previous is None or not previous.startswith("firing"):
         return False
-    _emit(event, "resolved", "info", cluster_id, facts or {})
+    _emit(event, "resolved", "info", cluster_id, facts or {}, shared=shared)
     return True
 
 
@@ -240,7 +245,8 @@ def clear(code: str, *, cluster_id: Optional[str] = None) -> None:
 def record(code: str, *, cluster_id: Optional[str] = None, facts: Optional[Mapping[str, Any]] = None) -> None:
     """Report a history-only event (it has no resolved state), every time."""
     event = _event(code, cluster_id)
-    _emit(event, "recorded", event.severity, cluster_id, facts or {})
+    # Only one worker records one (the renewal runs under a lease), and each is its own event.
+    _emit(event, "recorded", event.severity, cluster_id, facts or {}, shared=True)
 
 
 def reset() -> None:

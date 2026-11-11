@@ -182,7 +182,7 @@ def test_a_recreated_backend_reports_the_recovery_of_a_refusal_it_never_saw(monk
 
     emitted = []
     monkeypatch.setattr(ops_events, "_redis", lambda: _Redis())
-    monkeypatch.setattr(ops_events, "_emit", lambda event, state, severity, cluster_id, facts: emitted.append(state))
+    monkeypatch.setattr(ops_events, "_emit", lambda event, state, severity, cluster_id, facts, shared=True: emitted.append(state))
     ops_events.reset()
     renewal._on_token_change(None, vault_token.TokenStatus("refused", 1.0))  # the old backend
     ops_events.reset()  # the recreated backend's own memory is empty
