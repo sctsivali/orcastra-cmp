@@ -14,7 +14,8 @@ from datetime import date
 from typing import Any, List, Optional, Tuple
 from urllib.parse import urlsplit
 
-from app.core.units import format_size
+# Decimal: the error is stored with the check result and read later by anyone.
+from app.core.units import DECIMAL, format_size
 from app.services.release_check import version_order
 
 MAX_BYTES = 64 * 1024
@@ -103,7 +104,7 @@ def _release(raw: Any, index: int) -> Release:
 
 def parse(body: bytes) -> Manifest:
     if len(body) > MAX_BYTES:
-        raise ManifestInvalid(f"the manifest is larger than {format_size(MAX_BYTES)}")
+        raise ManifestInvalid(f"the manifest is larger than {format_size(MAX_BYTES, DECIMAL)}")
     try:
         data = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as exc:

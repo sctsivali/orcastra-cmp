@@ -101,3 +101,11 @@ def test_a_stored_issue_from_before_keeps_its_text() -> None:
     finally:
         reset_byte_units(token)
     assert shown.message == "Target pool 'fast' has 1 GB free."
+
+
+def test_a_byte_count_the_decimal_text_does_not_show_leaves_the_hash_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    blocker = {**_blocker(_blocked(monkeypatch)), "severity": "blocker"}
+    moved = {**blocker, "sized": {**blocker["sized"], "sizes": {"free": 50 * GiB - 4096, "needed": 60 * GiB}}}
+    assert plan_contracts.approval_report_hash({"blockers": [blocker]}) == plan_contracts.approval_report_hash({"blockers": [moved]})
+    changed = {**blocker, "message": blocker["message"].replace("53.69", "53.68")}
+    assert plan_contracts.approval_report_hash({"blockers": [blocker]}) != plan_contracts.approval_report_hash({"blockers": [changed]})

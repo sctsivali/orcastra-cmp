@@ -298,10 +298,13 @@ def approval_report_hash(report: dict[str, Any]) -> str:
         ),
     )
 
+    # `sized` keeps the byte counts a sized issue is shown with in each reader's units. The decimal
+    # message is the evidence approval binds, as it was before, so a free-space change too small to
+    # move that text does not revise the plan.
     def issues(name: str) -> list[dict[str, Any]]:
         return sorted(
             (
-                dict(issue)
+                {key: value for key, value in issue.items() if key != "sized"}
                 for issue in report.get(name) or []
                 if isinstance(issue, dict)
             ),

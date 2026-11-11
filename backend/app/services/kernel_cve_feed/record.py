@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Mapping, Optional, Tuple
 
-from app.core.units import format_size
+# Decimal: the error is stored with the feed state and read later by anyone.
+from app.core.units import DECIMAL, format_size
 
 MAX_BYTES = 2 * 1024 * 1024
 MAX_PACKAGES = 1024
@@ -152,7 +153,7 @@ def _record(data: Dict[str, Any], expected_id: str) -> UbuntuCve:
 
 def parse(body: bytes, expected_id: str) -> UbuntuCve:
     if len(body) > MAX_BYTES:
-        raise RecordInvalid(f"the record is larger than {format_size(MAX_BYTES)}")
+        raise RecordInvalid(f"the record is larger than {format_size(MAX_BYTES, DECIMAL)}")
     try:
         data = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, ValueError, RecursionError) as exc:
