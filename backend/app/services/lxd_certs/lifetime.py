@@ -11,10 +11,15 @@ role's max_ttl with only a warning, and an operator must not be told a date nobo
 from __future__ import annotations
 
 import re
+import threading
+import time
+import weakref
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.config import get_settings
 from app.core.vault_client import VaultClientError
 from app.models.schemas import CertificateLifetime, CertificateLifetimeOption, CertificateLifetimeOptions
@@ -28,6 +33,15 @@ LONGEST_MARGIN = timedelta(hours=1)
 LONGEST_FLOOR = timedelta(days=1)
 # Vault counts from its own clock; a shortfall within this is not a shortened certificate.
 SHORTFALL_TOLERANCE = timedelta(minutes=10)
+# The CA changes only when an operator renews it, and the picker asks on every open, so its end is
+# read at most this often per Vault client.
+CA_CACHE_SECONDS = 300.0
+_ca_cache: "weakref.WeakKeyDictionary[Any, Tuple[float, datetime]]" = weakref.WeakKeyDictionary()
+_ca_lock = threading.Lock()
+# Its own small pool with a deadline: a slow Vault holds neither the default executor nor the
+# certificate rotation pool.
+EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="cert-lifetime")
+VAULT_TIMEOUT_S = 10.0
 
 _PERIOD_LABELS = {
     CertificateLifetime.ONE_MONTH: "1 month",
@@ -95,8 +109,21 @@ def _span(duration: timedelta) -> str:
     return f"{hours} hour" if hours == 1 else f"{hours} hours"
 
 
+async def run(fn: Callable[..., Any], *args: Any, label: str) -> Any:
+    """``fn(*args)`` on this module's pool; a slow or saturated Vault answers 503, not a hung request."""
+    try:
+        return await run_blocking(fn, *args, timeout=VAULT_TIMEOUT_S, label=label, executor=EXECUTOR)
+    except (BlockingTimeout, BlockingPoolFull) as exc:
+        raise LifetimeRefused(503, "Vault did not answer in time. Try again in a moment.") from exc
+
+
 def ca_not_after(vault: Any) -> datetime:
-    """Blocking. When the CA that signs cluster certificates expires."""
+    """Blocking. When the CA that signs cluster certificates expires; a good read is kept a while."""
+    now = time.monotonic()
+    with _ca_lock:
+        cached = _ca_cache.get(vault)
+    if cached is not None and cached[0] > now:
+        return cached[1]
     try:
         pem = (vault.vault_read(CA_PATH, use_cache=False) or {}).get("certificate")
     except VaultClientError as exc:
@@ -108,6 +135,8 @@ def ca_not_after(vault: Any) -> datetime:
         raise LifetimeRefused(
             503, "The certificate authority could not be read. Try again in a moment, or choose a period.",
         )
+    with _ca_lock:
+        _ca_cache[vault] = (now + CA_CACHE_SECONDS, end)
     return end
 
 

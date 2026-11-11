@@ -173,3 +173,44 @@ def test_a_non_default_deployment_ttl_is_labelled_by_its_length(settings, monkey
     offered = lifetime.options(_vault(ca_days=1825)).options
     assert offered[0].label == "Default (1 year)"
     assert L.ONE_YEAR in [o.value for o in offered]
+
+
+class _CountingVault(FakeVault):
+    def __init__(self) -> None:
+        super().__init__()
+        self.ca_reads = 0
+
+    def vault_read(self, path, use_cache=True):
+        if path == lifetime.CA_PATH:
+            self.ca_reads += 1
+        return super().vault_read(path, use_cache)
+
+
+def test_the_ca_is_read_once_per_window(settings, monkeypatch) -> None:
+    vault = _CountingVault()
+    vault.set_ca(1825)
+    clock = [1000.0]
+    monkeypatch.setattr(lifetime.time, "monotonic", lambda: clock[0])
+    for _ in range(5):
+        lifetime.options(vault)
+    assert vault.ca_reads == 1
+    clock[0] += lifetime.CA_CACHE_SECONDS + 1
+    lifetime.options(vault)
+    assert vault.ca_reads == 2, "a renewed CA is seen after the window"
+
+
+def test_an_unreadable_ca_is_not_remembered(settings) -> None:
+    vault = _CountingVault()
+    lifetime.options(vault)
+    vault.set_ca(1825)
+    offered = {o.value: o for o in lifetime.options(vault).options}
+    assert offered[L.LONGEST].available, "the next read after a failure goes to Vault again"
+
+
+async def test_a_vault_that_does_not_answer_in_time_is_a_503(monkeypatch) -> None:
+    import time as real_time
+
+    monkeypatch.setattr(lifetime, "VAULT_TIMEOUT_S", 0.05)
+    with pytest.raises(lifetime.LifetimeRefused) as refused:
+        await lifetime.run(real_time.sleep, 0.5, label="test.slow")
+    assert refused.value.status_code == 503

@@ -262,7 +262,7 @@ async def _guard_registration_binding(
 async def _lifetime_plan(choice: Any, cert_manager: LXDCertificateManager) -> cert_lifetime.LifetimePlan:
     """The Vault request for ``choice``; a refused lifetime answers before anything is written."""
     try:
-        return await asyncio.to_thread(cert_lifetime.plan, choice, cert_manager.vault)
+        return await cert_lifetime.run(cert_lifetime.plan, choice, cert_manager.vault, label="cert.lifetime.plan")
     except cert_lifetime.LifetimeRefused as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
@@ -282,7 +282,10 @@ async def certificate_lifetimes(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ) -> CertificateLifetimeOptions:
     response.headers["Cache-Control"] = "no-store"
-    return await asyncio.to_thread(cert_lifetime.options, cert_manager.vault)
+    try:
+        return await cert_lifetime.run(cert_lifetime.options, cert_manager.vault, label="cert.lifetime.options")
+    except cert_lifetime.LifetimeRefused as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @router.post(
