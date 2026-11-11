@@ -65,3 +65,12 @@ def test_a_bare_port_would_be_caught():
     with pytest.raises(AssertionError):
         for host_ip, _p, _c in _bindings("docker-compose.prod.yml", "redis", {"REDIS_PORT": "6381"}):
             assert host_ip == "127.0.0.1"
+
+
+def test_every_production_service_keeps_bounded_json_file_logs():
+    """Fluent Bit tails json-file logs; rotation keeps them and the disk bounded on every host."""
+    document = yaml.safe_load((ROOT / "docker-compose.prod.yml").read_text())
+    for name, service in document["services"].items():
+        logging = service.get("logging") or {}
+        assert logging.get("driver") == "json-file", name
+        assert logging.get("options", {}).get("max-size") and logging.get("options", {}).get("max-file"), name

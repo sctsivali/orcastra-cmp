@@ -14,9 +14,19 @@
 #   docker compose -f docker-compose.prod.yml logs -f
 # =============================================================================
 
+# Container logs: the json-file driver Fluent Bit tails (/var/lib/docker/containers/*/*.log),
+# rotated so `docker logs` and the disk stay bounded whatever the host's daemon.json says. Five
+# 50 MB files keep about a day of backend output at production volume.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   # PostgreSQL Database
   postgres:
+    logging: *default-logging
     image: postgres:17-alpine
     container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-postgres
     restart: always
@@ -42,6 +52,7 @@ services:
 
   # Redis Cache
   redis:
+    logging: *default-logging
     image: redis:8-alpine
     container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-redis
     restart: always
@@ -63,6 +74,7 @@ services:
 
   # Backend API (port: 8765)
   backend:
+    logging: *default-logging
     image: svlct/orcastra-dashboard:backend-${APP_VERSION:-latest}
     container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-backend
     restart: always
@@ -132,6 +144,7 @@ services:
 
   # Frontend (port: 4321)
   frontend:
+    logging: *default-logging
     image: svlct/orcastra-dashboard:frontend-${APP_VERSION:-latest}
     container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-frontend
     restart: always
@@ -185,6 +198,7 @@ services:
 
   # Fluent Bit sidecar: ships container logs to OpenSearch
   fluent-bit:
+    logging: *default-logging
     image: fluent/fluent-bit:4.2.2-debug
     container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-fluent-bit
     restart: always
@@ -233,6 +247,7 @@ services:
   # important: docker.sock gives this container root-equivalent control of the host.
   # network_mode: none removes its only exfiltration path; it needs only the unix socket.
   autoheal:
+    logging: *default-logging
     image: willfarrell/autoheal:1.2.0
     container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-autoheal
     restart: always
