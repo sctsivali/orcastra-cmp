@@ -108,6 +108,12 @@ class VaultCASConflict(VaultClientError):
     """A check-and-set write lost: the document changed since the version the caller read."""
 
 
+def _status_of(exc: BaseException) -> Optional[int]:
+    """Vault's HTTP status behind a requests error, or None when no response came back."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status if isinstance(status, int) else None
+
+
 def _unique_vault_json_pairs(pairs):
     document = {}
     for key, value in pairs:
@@ -303,7 +309,7 @@ class VaultClient:
                 duration_ms=duration,
             )
             logger.error(f"Failed to write to Vault path {path}: {e}")
-            raise VaultClientError(f"Vault write failed: {str(e)}")
+            raise VaultClientError(f"Vault write failed: {str(e)}", status_code=_status_of(e))
     
     def vault_read_versioned(self, path: str) -> Tuple[Dict[str, Any], Optional[int]]:
         """Read a KV v2 document uncached, with the version a check-and-set write needs.
@@ -421,7 +427,7 @@ class VaultClient:
                 duration_ms=duration,
             )
             logger.error(f"Failed to delete from Vault path {path}: {e}")
-            raise VaultClientError(f"Vault delete failed: {str(e)}")
+            raise VaultClientError(f"Vault delete failed: {str(e)}", status_code=_status_of(e))
     
     def vault_delete_metadata(self, path: str) -> bool:
         """
@@ -472,7 +478,7 @@ class VaultClient:
                 duration_ms=duration,
             )
             logger.error(f"Failed to delete metadata from Vault path {path}: {e}")
-            raise VaultClientError(f"Vault metadata delete failed: {str(e)}")
+            raise VaultClientError(f"Vault metadata delete failed: {str(e)}", status_code=_status_of(e))
     
     def vault_list(self, path: str, use_cache: bool = True) -> list:
         """
@@ -538,7 +544,9 @@ class VaultClient:
                 duration_ms=duration,
             )
             logger.error(f"Failed to list Vault path {path}: {e}")
-            raise VaultClientError(f"Vault list failed: {str(e)}")
+            # The LIST's own status: the HTTPError raised for a non-200 above carries no response.
+            status = response.status_code if response is not None and response.status_code != 200 else _status_of(e)
+            raise VaultClientError(f"Vault list failed: {str(e)}", status_code=status)
         finally:
             if response is not None:
                 response.close()
