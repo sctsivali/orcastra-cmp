@@ -63,3 +63,18 @@ def test_a_404_is_never_retried_by_the_vault_client():
 
     retry = VaultClient.__new__(VaultClient)._create_session().get_adapter("http://vault").max_retries
     assert 404 not in retry.status_forcelist and 403 not in retry.status_forcelist
+
+
+@pytest.mark.parametrize("key_id", ["../clusters/x", "a/b", "", "oak_" + "x" * 200, "oak space", "oak%2f"])
+def test_a_key_id_of_the_wrong_shape_never_reaches_vault(vault, key_id):
+    vault["vault"] = _Vault(known=True)
+    with pytest.raises(HTTPException) as caught:
+        integrations._validate_api_key_blocking(key_id, "oas_guess")
+    assert caught.value.status_code == 404
+    assert vault["vault"].reads == []
+
+
+def test_a_real_key_id_shape_still_reaches_vault(vault, monkeypatch):
+    monkeypatch.setattr(integrations, "verify_api_key_secret", lambda secret, stored: True)
+    vault["vault"] = _Vault(known=True)
+    assert integrations._validate_api_key_blocking("oak_" + "0123456789abcdef" * 2, "oas_right")["id"] == "oak_real"

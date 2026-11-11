@@ -8,6 +8,7 @@ import secrets
 import hashlib
 import hmac
 import logging
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -1734,12 +1735,20 @@ async def _assert_granted_projects_exist(
         )
 
 
+_KEY_ID_SHAPE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+
 def _validate_api_key_blocking(key_id: str, key_secret: str) -> Dict[str, Any]:
     """Every Vault round trip needed to validate a key. Only ever runs on auth_executor.
 
     That is 6 to 7 blocking Vault calls, each (2,3) with Retry(total=2); on the event loop a
     degraded Vault could park a worker for a minute or more.
     """
+    # A key id is one path segment of word characters (generate_api_key_pair). Anything else is
+    # answered like an unknown key without asking Vault, so a caller cannot add path levels to
+    # steer the read or spend a Vault round trip on junk.
+    if not _KEY_ID_SHAPE.fullmatch(key_id or ""):
+        raise HTTPException(status_code=404, detail="API key not found")
     vault_client = get_vault_integrations_client()
     metadata, secret_hash = get_api_key_from_vault(vault_client, key_id)
 
