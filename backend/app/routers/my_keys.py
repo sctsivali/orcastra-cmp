@@ -373,7 +373,9 @@ def _authorize_key(vault_client, key_id: str, caller_email: Optional[str]) -> Di
     list does.
     """
     try:
-        metadata = vault_client.vault_read(f"secret/data/{VAULT_KEYS_PATH}/{key_id}/metadata")
+        # Uncached: a cached record would answer while Vault is down and an unknown id would not,
+        # which tells a prober which ids exist. It also guards a private-key download.
+        metadata = vault_client.vault_read(f"secret/data/{VAULT_KEYS_PATH}/{key_id}/metadata", use_cache=False)
     except Exception as exc:
         from app.core import vault_token
 
@@ -645,7 +647,7 @@ async def list_keys(
         
         if cached_data is None:
             list_generation = get_resource_list_generation(cache, "my_keys")
-            keys_metadata = list_keys_from_vault(vault_client)
+            keys_metadata = await asyncio.to_thread(list_keys_from_vault, vault_client)
             # A key issued before the registry existed joins it here, so its trail and its use on
             # the cluster can be read even after it is deleted.
             await my_keys_registry.backfill(db, keys_metadata)
@@ -750,13 +752,13 @@ async def download_key(
     # important: this streams a private key, so authorize before reading it. A refused attempt
     # is recorded as well.
     try:
-        metadata = _authorize_key(vault_client, key_id, _rbac.email)
+        metadata = await asyncio.to_thread(_authorize_key, vault_client, key_id, _rbac.email)
     except HTTPException as refusal:
         _audit_download(key_id, None, "denied", code=str(refusal.status_code), message=str(refusal.detail))
         raise
 
     try:
-        cert_pem, key_pem = get_key_from_vault(vault_client, key_id)
+        cert_pem, key_pem = await asyncio.to_thread(get_key_from_vault, vault_client, key_id)
         
         if not cert_pem or not key_pem:
             raise HTTPException(status_code=404, detail="Key not found")
@@ -820,7 +822,7 @@ async def delete_key(
     """Delete a key."""
     vault_client = get_vault_keys_client()
 
-    _authorize_key(vault_client, key_id, _rbac.email)
+    await asyncio.to_thread(_authorize_key, vault_client, key_id, _rbac.email)
 
     try:
         key_meta = vault_client.vault_read(f"secret/data/{VAULT_KEYS_PATH}/{key_id}/metadata")

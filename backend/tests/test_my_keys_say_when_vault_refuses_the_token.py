@@ -36,7 +36,7 @@ class _Vault:
         self._keys = list(keys)
         self.session = SimpleNamespace(get=lambda *_a, **_k: _Response(self._list_status, {"data": {"keys": self._keys}}))
 
-    def vault_read(self, path: str):
+    def vault_read(self, path: str, use_cache: bool = True):
         if self._read_status != 200:
             raise VaultClientError("Vault read failed", status_code=self._read_status)
         return {"id": path.split("/")[-2], "node": "qa-c1", "certificate": "c", "private_key": "k"}
@@ -102,3 +102,16 @@ def test_authorizing_a_missing_key_with_a_live_token_is_still_404(token):
     with pytest.raises(HTTPException) as caught:
         my_keys._authorize_key(_Vault(read_status=404), "key_gone", "qa@example.test")
     assert caught.value.status_code == 404
+
+
+def test_authorizing_a_key_never_reads_the_cached_record(token):
+    token["value"] = "ok"
+    seen = []
+
+    class _Recording(_Vault):
+        def vault_read(self, path, use_cache=True):
+            seen.append(use_cache)
+            return super().vault_read(path)
+
+    my_keys._authorize_key(_Recording(), "key_a", "qa@example.test")
+    assert seen == [False], "a cached record would answer while Vault is down and an unknown id would not"

@@ -31,7 +31,7 @@ class _Vault:
         self.records = records
         self.deleted: list = []
 
-    def vault_read(self, path: str) -> Optional[Dict[str, Any]]:
+    def vault_read(self, path: str, use_cache: bool = True) -> Optional[Dict[str, Any]]:
         key_id = path.split("/")[-2]
         return self.records.get(key_id)
 
