@@ -30,11 +30,12 @@ services:
     image: postgres:17-alpine
     container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-postgres
     restart: always
-    # important: bound to loopback by default. The backend uses the compose network, and a bare
-    # port would expose the database login on every interface. POSTGRES_PORT accepts
-    # "[address:]port" to expose it on purpose (POSTGRES_PORT=0.0.0.0:5432).
+    # important: published on loopback unless POSTGRES_BIND says otherwise. The backend uses the
+    # compose network, and Docker-published ports bypass the host firewall. POSTGRES_PORT is
+    # deliberately not read: older env files held a bare port there, which published the database
+    # on every interface.
     ports:
-      - "${POSTGRES_PORT:-127.0.0.1:5432}:5432"
+      - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_HOST_PORT:-5432}:5432"
     environment:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -56,10 +57,11 @@ services:
     image: redis:8-alpine
     container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-redis
     restart: always
-    # important: bound to loopback by default; Redis has no password. REDIS_PORT accepts
-    # "[address:]port" (the deployment guide uses REDIS_PORT=127.0.0.1:6381).
+    # important: published on loopback unless REDIS_BIND says otherwise, and Redis has no
+    # password, so never bind it beyond the host. REDIS_PORT is deliberately not read: older env
+    # files held a bare port there, which published Redis on every interface.
     ports:
-      - "${REDIS_PORT:-127.0.0.1:6381}:6379"
+      - "${REDIS_BIND:-127.0.0.1}:${REDIS_HOST_PORT:-6381}:6379"
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     networks:
       - orcastra-dashboard

@@ -1,9 +1,10 @@
-"""Postgres and Redis are published on loopback by both compose files, with the template's values.
+"""Postgres and Redis are published on loopback by both compose files, whatever an old env says.
 
-Docker-published ports bypass the host firewall, and Redis has no password. The template said
-`REDIS_PORT=6381` and `POSTGRES_PORT=5432`, which docker-compose.prod.yml turned into a binding on
-every interface, while the installers and the guide already wrote `127.0.0.1:<port>`. Both
-compose files now read `[host_ip:]port`, and the template carries the loopback prefix.
+Docker-published ports bypass the host firewall, and Redis has no password. The old template set
+REDIS_PORT=6381 and POSTGRES_PORT=5432, and the production compose file published that bare port on
+every interface; the installers wrote 127.0.0.1:<port> into the same variables. Both compose files
+now read POSTGRES_BIND/POSTGRES_HOST_PORT and REDIS_BIND/REDIS_HOST_PORT, default to 127.0.0.1, and
+ignore the old variables, so neither kind of existing env file can widen the binding.
 """
 
 from __future__ import annotations
@@ -17,8 +18,15 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILES = ("docker-compose.yml", "docker-compose.prod.yml")
-STORES = {"postgres": ("POSTGRES_PORT", 5432), "redis": ("REDIS_PORT", 6379)}
+STORES = {"postgres": 5432, "redis": 6379}
 _VAR = re.compile(r"\$\{([A-Z0-9_]+)(?::-([^}]*))?\}")
+
+# Env files that exist in the field, beside the new template.
+LEGACY = {
+    "old template": {"POSTGRES_PORT": "5432", "REDIS_PORT": "6381"},
+    "installer and guide": {"POSTGRES_PORT": "127.0.0.1:5432", "REDIS_PORT": "127.0.0.1:6381"},
+    "exposed on purpose": {"POSTGRES_PORT": "0.0.0.0:5432", "REDIS_PORT": "0.0.0.0:6381"},
+}
 
 
 def _template() -> Dict[str, str]:
@@ -42,29 +50,30 @@ def _bindings(compose: str, service: str, env: Dict[str, Optional[str]]):
         yield parts
 
 
+ENVS = {"template": _template(), "unset": {}, **LEGACY}
+
+
 @pytest.mark.parametrize("compose", COMPOSE_FILES)
 @pytest.mark.parametrize("service", sorted(STORES))
-@pytest.mark.parametrize("source", ["template", "unset"])
+@pytest.mark.parametrize("source", sorted(ENVS))
 def test_the_store_is_published_on_loopback_only(compose, service, source):
-    env = _template() if source == "template" else {}
-    variable, target = STORES[service]
-    bindings = list(_bindings(compose, service, env))
+    bindings = list(_bindings(compose, service, ENVS[source]))
     assert bindings, f"{compose} publishes no port for {service}"
     for host_ip, published, container in bindings:
-        assert host_ip == "127.0.0.1", f"{compose} {service} via {variable} binds {host_ip or 'every interface'}"
-        assert published.isdigit() and int(container) == target
+        assert host_ip == "127.0.0.1", f"{compose} {service} with the {source} env binds {host_ip or 'every interface'}"
+        assert published.isdigit() and int(container) == STORES[service]
 
 
-def test_the_template_carries_the_loopback_prefix():
+def test_the_template_names_the_loopback_bind():
     template = _template()
-    for variable, _target in STORES.values():
-        assert template[variable].startswith("127.0.0.1:"), variable
+    assert template["POSTGRES_BIND"] == template["REDIS_BIND"] == "127.0.0.1"
+    assert "POSTGRES_PORT" not in template and "REDIS_PORT" not in template
 
 
-def test_a_bare_port_would_be_caught():
-    with pytest.raises(AssertionError):
-        for host_ip, _p, _c in _bindings("docker-compose.prod.yml", "redis", {"REDIS_PORT": "6381"}):
-            assert host_ip == "127.0.0.1"
+def test_an_explicit_bind_and_port_are_honoured():
+    env = {"POSTGRES_BIND": "10.0.0.5", "POSTGRES_HOST_PORT": "15432"}
+    (binding,) = list(_bindings("docker-compose.prod.yml", "postgres", env))
+    assert binding == ["10.0.0.5", "15432", "5432"]
 
 
 def test_every_production_service_keeps_bounded_json_file_logs():
