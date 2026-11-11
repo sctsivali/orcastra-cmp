@@ -163,7 +163,7 @@ class LXDService:
         except Exception as e:
             from app.core import vault_token
 
-            if vault_token.store_failed(e):
+            if vault_token.store_failed(e, vault_only=True):
                 # important: Vault could not serve this cluster's credentials (sealed, down, or
                 # refusing the dashboard's token) and the cluster was never contacted. Recorded
                 # as a cluster failure it would trip every cluster at once, and the breaker would

@@ -116,3 +116,22 @@ def test_any_other_unreadable_row_keeps_the_generic_message(token, rows):
     token["value"] = "ok"
     row = rows._cluster_info_blocking(CLUSTER, _row_manager(_failed(404)))
     assert row.error_message == rows._ROW_UNREADABLE
+
+
+def test_a_cluster_transport_failure_is_still_recorded(token, monkeypatch):
+    """The cluster itself not answering is a cluster failure even though requests raised it."""
+    import requests as _requests
+
+    token["value"] = "ok"
+    service = LXDService.__new__(LXDService)
+    service.cert_manager = SimpleNamespace(
+        vault=SimpleNamespace(vault_read=lambda path, use_cache=True: {"endpoint": "https://10.0.0.9:8443"}),
+        get_cluster_certificate=lambda cluster_id: {"client.crt": "c", "client.key": "k"},
+    )
+
+    def connect(**_kw):
+        raise _requests.ConnectionError("connection refused")
+
+    service.connection_manager = SimpleNamespace(get_client=lambda cluster_id, **_k: None, connect_with_vault_cert=connect)
+    assert service.ensure_connection(CLUSTER) is False
+    assert health.last_failure(CLUSTER) is not None

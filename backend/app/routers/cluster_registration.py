@@ -963,7 +963,7 @@ def _row_unreadable_message(exc: BaseException) -> str:
     """The row's own words for why its record could not be read; never the exception text."""
     from app.core import vault_token
 
-    if not vault_token.store_failed(exc):
+    if not vault_token.store_failed(exc, vault_only=True):
         return _ROW_UNREADABLE
     last = vault_token.peek()
     return _ROW_TOKEN_REFUSED if last is not None and last.state == "refused" else _ROW_VAULT_UNAVAILABLE

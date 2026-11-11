@@ -186,29 +186,32 @@ def refusal_explains(status_code: Optional[int]) -> bool:
     return status(max_age=REPROBE_ON_403_SECONDS).state in ("refused", "unknown")
 
 
-def _vault_failure_in(exc: BaseException) -> Optional[BaseException]:
+def _vault_failure_in(exc: BaseException, *, vault_only: bool = False) -> Optional[BaseException]:
     from app.core.vault_client import VaultClientError
 
+    kinds = (VaultClientError,) if vault_only else (VaultClientError, requests.RequestException)
     seen = 0
     current: Optional[BaseException] = exc
     while current is not None and seen < 6:
-        if isinstance(current, (VaultClientError, requests.RequestException)):
+        if isinstance(current, kinds):
             return current
         current = current.__cause__ or current.__context__
         seen += 1
     return None
 
 
-def store_failed(exc: BaseException) -> bool:
+def store_failed(exc: BaseException, *, vault_only: bool = False) -> bool:
     """True when Vault failed as a store (sealed, down, unreachable, busy, or refusing the
     dashboard's own token), never for a document that is not there or a path the policy denies.
 
     The first Vault or transport error in the exception chain decides, so a wrapper such as
-    LXDCertManagerError is classified by the Vault failure behind it.
+    LXDCertManagerError is classified by the Vault failure behind it. With `vault_only`, only a
+    VaultClientError counts: a caller that also talks to something else over requests (an LXD
+    cluster) must not read that peer's transport error as Vault's.
     """
     from app.core.vault_client import VaultClientError
 
-    failure = _vault_failure_in(exc)
+    failure = _vault_failure_in(exc, vault_only=vault_only)
     if failure is None:
         return False
     status_code = getattr(failure, "status_code", None)

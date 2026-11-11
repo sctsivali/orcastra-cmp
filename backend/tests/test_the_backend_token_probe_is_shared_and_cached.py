@@ -245,3 +245,12 @@ def test_a_wrapped_vault_failure_is_found_in_the_chain(vault) -> None:
     except Wrapper as outer:
         assert vault_token.store_failed(outer) is True
     assert vault_token.store_failed(ValueError("unrelated")) is False
+
+
+def test_a_peer_transport_error_is_not_vaults_when_only_vault_counts(vault):
+    try:
+        raise requests.ConnectionError("cluster did not answer")
+    except requests.ConnectionError as exc:
+        assert vault_token.store_failed(exc) is True
+        assert vault_token.store_failed(exc, vault_only=True) is False
+    assert vault_token.store_failed(_vault_error(503), vault_only=True) is True
