@@ -1,4 +1,5 @@
 import { fetchAPI } from "@/lib/api";
+import type { ByteUnitSystem } from "@/lib/byte-units";
 import type { PersonalizationSettings, ThemePreference } from "@/types/personalization";
 
 export const personalizationAPI = {
@@ -10,9 +11,12 @@ export const personalizationAPI = {
       ...(accessToken ? { headers: { Authorization: `Bearer ${accessToken}` } } : {}),
     }),
 
-  /** The account's own theme; null clears it so the organization's default applies. */
+  /**
+   * The account's own choices. Send either or both; a null theme clears it so the organization's
+   * default applies, a null byteUnits returns to decimal.
+   */
   update: (
-    body: { theme: ThemePreference | null },
+    body: { theme?: ThemePreference | null; byteUnits?: ByteUnitSystem | null },
     accessToken?: string,
   ): Promise<PersonalizationSettings> =>
     fetchAPI<PersonalizationSettings>("/user-preferences", {

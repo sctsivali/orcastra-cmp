@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { OverflowText } from "@/components/ui/overflow-text";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { useFileActions } from "@/hooks/use-instance-files";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { fileErrorCode, instanceFilesAPI, type GuestTarget } from "@/lib/instance-files/api";
@@ -17,7 +18,6 @@ import { guestText } from "@/lib/instance-files/guest-text";
 import { fileContentKey } from "@/lib/instance-files/keys";
 import { baseName } from "@/lib/instance-files/path";
 import { describeReadError } from "@/lib/read-error";
-import { formatBytes } from "@/lib/utils";
 import type { CodeEditorHandle } from "./code-editor";
 import { ImagePreview } from "./image-preview";
 import type { OpenFile } from "./use-explorer-session";
@@ -50,6 +50,7 @@ interface OpenedText {
 /** The file instead of the list, inside the explorer, so it never fights the console for a layer. */
 export function FileViewerPane({ target, file, writeReason, onClose, onDownload }: FileViewerPaneProps) {
   const { scopeKey } = useActorQueryScope();
+  const { formatBytes } = useByteFormat();
   const actions = useFileActions(target);
   const editorRef = React.useRef<CodeEditorHandle>(null);
   const key = draftKey(target.host, target.project, target.instanceName, file.path);

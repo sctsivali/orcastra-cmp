@@ -30,12 +30,9 @@ import {
   SelectValue } from "@/components/ui/select";
 import { isProjectDeleteUnknown, useDeleteProject, useUpdateProject } from "@/hooks/use-lxd";
 import { toast } from "@/hooks/use-toast";
-import {
-  FORM_SIZE_UNITS,
-  editableLimit,
-  formatLxdSize,
-  type FormSizeUnit,
-} from "@/lib/lxd-limits";
+import { FORM_SIZE_UNITS, formUnitSystem, type FormSizeUnit } from "@/lib/byte-units";
+import { useByteFormat, useByteUnitsRef } from "@/hooks/use-byte-format";
+import { byteFormat } from "@/lib/byte-format";
 import { ProjectInfo } from "@/types";
 import { plural } from "@/lib/utils";
 
@@ -135,16 +132,18 @@ export function ProjectDeleteDialog({ project, instanceCount, open, onOpenChange
 /** The project card's edit form. The fields are re-read from the project each time it opens. */
 export function ProjectEditDialog({ project, open, onOpenChange, refetch, isReadOnly }: ProjectDialogProps & { refetch: () => void }) {
   const updateProject = useUpdateProject();
+  const { defaultFormUnit, formatLxdSize } = useByteFormat();
+  const unitsRef = useByteUnitsRef();
   const [isSaving, setIsSaving] = React.useState(false);
   const [editName, setEditName] = React.useState(project.name);
   const [editDescription, setEditDescription] = React.useState(project.description || "");
   const [editMaxCpu, setEditMaxCpu] = React.useState(0);
   const [editMaxRamValue, setEditMaxRamValue] = React.useState(0);
-  const [editMaxRamUnit, setEditMaxRamUnit] = React.useState<FormSizeUnit>("GB");
+  const [editMaxRamUnit, setEditMaxRamUnit] = React.useState<FormSizeUnit>(defaultFormUnit);
   const [editMaxRamSource, setEditMaxRamSource] = React.useState<string | null>(null);
   const [ramLimitDirty, setRamLimitDirty] = React.useState(false);
   const [editMaxStorageValue, setEditMaxStorageValue] = React.useState(0);
-  const [editMaxStorageUnit, setEditMaxStorageUnit] = React.useState<FormSizeUnit>("GB");
+  const [editMaxStorageUnit, setEditMaxStorageUnit] = React.useState<FormSizeUnit>(defaultFormUnit);
   const [editMaxStorageSource, setEditMaxStorageSource] = React.useState<string | null>(null);
   const [storageLimitDirty, setStorageLimitDirty] = React.useState(false);
 
@@ -158,13 +157,13 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
       const cpuLimitStr = config["limits.cpu"];
       setEditMaxCpu(cpuLimitStr ? parseInt(cpuLimitStr) || 0 : 0);
 
-      const ram = editableLimit(config["limits.memory"]);
+      const ram = byteFormat(unitsRef.current).editableLimit(config["limits.memory"]);
       setEditMaxRamValue(ram.value);
       setEditMaxRamUnit(ram.unit);
       setEditMaxRamSource(ram.preservedRaw);
       setRamLimitDirty(false);
 
-      const storage = editableLimit(config["limits.disk"]);
+      const storage = byteFormat(unitsRef.current).editableLimit(config["limits.disk"]);
       setEditMaxStorageValue(storage.value);
       setEditMaxStorageUnit(storage.unit);
       setEditMaxStorageSource(storage.preservedRaw);
@@ -313,7 +312,7 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {FORM_SIZE_UNITS.map((unit) => (
+                  {FORM_SIZE_UNITS[formUnitSystem(editMaxRamUnit)].map((unit) => (
                     <SelectItem key={unit} value={unit}>{unit}</SelectItem>
                   ))}
                 </SelectContent>
@@ -356,7 +355,7 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {FORM_SIZE_UNITS.map((unit) => (
+                  {FORM_SIZE_UNITS[formUnitSystem(editMaxStorageUnit)].map((unit) => (
                     <SelectItem key={unit} value={unit}>{unit}</SelectItem>
                   ))}
                 </SelectContent>

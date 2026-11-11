@@ -9,7 +9,8 @@ import { RecordDetailDialog } from "@/components/detail/detail-dialog";
 import { DetailField, DetailGrid, DetailSection } from "@/components/detail/detail-field";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Role } from "@/types/rbac";
-import { formatBytes, formatDateTimeSeconds, formatLabel } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
+import { formatDateTimeSeconds, formatLabel } from "@/lib/utils";
 import { inventoryLinks } from "@/lib/inventory-links";
 import { sessionProtocolLabel } from "@/lib/session-display";
 import { NodeLink } from "@/components/ui/node-link";
@@ -38,6 +39,7 @@ export function SessionDetailDialog({
   // dialog is closed, and throw every Tenant off /inventory/sessions.
   const { hasRole } = usePermissions();
   const isPartner = hasRole(Role.PARTNER);
+  const { formatBytes } = useByteFormat();
 
   if (!selected) return null;
   const { kind, record } = selected;

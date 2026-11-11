@@ -1,11 +1,11 @@
 "use client";
 
-import { formatConfigValue } from "@/lib/lxd-limits";
 import * as React from "react";
 import { SearchInput } from "@/components/ui/search-input";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FileCode } from "lucide-react";
 import { plural } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 
 // A config map, rendered whole.
 //
@@ -13,6 +13,7 @@ import { plural } from "@/lib/utils";
 // dataset with columns to facet, and check-table-filters.mjs counts a TableBody outside
 // components/ui that does not go through defineTable.
 export function ConfigPanel({ entries }: { entries?: Record<string, string> }) {
+  const { formatConfigValue } = useByteFormat();
   const [query, setQuery] = React.useState("");
   const all = React.useMemo(() => Object.entries(entries ?? {}).sort(([a], [b]) => a.localeCompare(b)), [entries]);
 
@@ -25,7 +26,7 @@ export function ConfigPanel({ entries }: { entries?: Record<string, string> }) {
         String(v).toLowerCase().includes(needle) ||
         formatConfigValue(k, v).toLowerCase().includes(needle),
     );
-  }, [all, query]);
+  }, [all, query, formatConfigValue]);
 
   if (all.length === 0) {
     return <EmptyState icon={FileCode} title="No configuration" description="This resource carries no configuration keys." />;

@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useToast } from "@/hooks/use-toast";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import {
   useNetwork,
   useNetworkState,
@@ -32,7 +33,8 @@ import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Role } from "@/types/rbac";
 import { NetworkInfo } from "@/types/api";
-import { formatBytes, EMPTY_VALUE, formatLabel } from "@/lib/utils";
+import { EMPTY_VALUE, formatLabel } from "@/lib/utils";
+import type { ByteFormat } from "@/lib/byte-format";
 import { networkStatusDisplay } from "@/lib/resource-status";
 import { AlertTriangle, Network, Box, Layers, Trash2, Loader2 } from "lucide-react";
 
@@ -62,10 +64,10 @@ function parseUsedBy(url: string): UsedByRef {
   return { kind, name, project };
 }
 
-/** Wrap the shared formatBytes (lib/utils) so RX/TX render the empty value when absent. */
-function formatCounter(bytes?: number): string | null {
+/** Wrap the shared formatBytes so RX/TX render the empty value when absent. */
+function formatCounter(fmt: ByteFormat, bytes?: number): string | null {
   if (bytes == null || Number.isNaN(bytes)) return null;
-  return formatBytes(bytes);
+  return fmt.formatBytes(bytes);
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -82,6 +84,7 @@ export function NetworkDetail({ name, host, project }: NetworkDetailProps) {
   // progress bar. These hops follow a mutation and are slow.
   const { navigate } = useNavigationProgress();
   const { toast } = useToast();
+  const fmt = useByteFormat();
   const [topologyPage, setTopologyPage] = React.useState(1);
   const { data, isLoading, error } = useNetwork(name, host, project);
   const network = data as NetworkInfo | undefined;
@@ -133,8 +136,8 @@ export function NetworkDetail({ name, host, project }: NetworkDetailProps) {
 
   const state = (stateData as any)?.state;
   const counters = state?.counters || {};
-  const rx = formatCounter(counters.bytes_received);
-  const tx = formatCounter(counters.bytes_sent);
+  const rx = formatCounter(fmt, counters.bytes_received);
+  const tx = formatCounter(fmt, counters.bytes_sent);
 
   const handleDelete = async () => {
     try {

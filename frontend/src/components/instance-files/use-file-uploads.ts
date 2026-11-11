@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { toast } from "@/hooks/use-toast";
 import { instanceFilesAPI, type GuestTarget } from "@/lib/instance-files/api";
@@ -9,7 +10,6 @@ import { treeFromDrop, type PickedTree } from "@/lib/instance-files/drop-entries
 import { directoryKey } from "@/lib/instance-files/keys";
 import { joinPath, keepBothName } from "@/lib/instance-files/path";
 import { enqueueUploads } from "@/lib/instance-files/transfer-pump";
-import { formatBytes } from "@/lib/utils";
 import type { ConflictChoice } from "./conflict-dialog";
 import { isDirectoryLike } from "./file-actions";
 
@@ -31,6 +31,7 @@ function folderRowAt(event: React.DragEvent): string | null {
 export function useFileUploads({ target, folder, active, writeReason }: UploadOptions) {
   const queryClient = useQueryClient();
   const { scopeKey } = useActorQueryScope();
+  const { formatBytes } = useByteFormat();
   const [dragging, setDragging] = React.useState(false);
   const [dropTarget, setDropTarget] = React.useState<string | null>(null);
   const [pending, setPending] = React.useState<{ tree: PickedTree; folder: string; conflicts: string[]; taken: string[] } | null>(null);
@@ -74,7 +75,7 @@ export function useFileUploads({ target, folder, active, writeReason }: UploadOp
         });
       }
     },
-    [queryClient, scopeKey, target],
+    [formatBytes, queryClient, scopeKey, target],
   );
 
   const applyConflicts = (choices: ReadonlyMap<string, ConflictChoice>) => {

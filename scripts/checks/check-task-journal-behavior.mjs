@@ -32,6 +32,7 @@ function load(file, imports) {
 }
 
 const utils = load("lib/utils.ts", {
+  "@/lib/byte-units": load("lib/byte-units.ts", {}),
   clsx: requireFrontend("clsx"),
   "tailwind-merge": requireFrontend("tailwind-merge"),
   "@/lib/table-empty": { EMPTY_VALUE: "\u2014" },

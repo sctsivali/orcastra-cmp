@@ -35,7 +35,7 @@ import { OverflowText } from "@/components/ui/overflow-text";
 import { InstanceRow } from "./instance-row";
 import { ProjectDeleteDialog, ProjectEditDialog } from "./project-card-dialogs";
 import { NodeLink } from "@/components/ui/node-link";
-import { formatBytes } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { inventoryLinks } from "@/lib/inventory-links";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { useMigrationCapabilities } from "@/hooks/use-read-only-mode";
@@ -73,6 +73,7 @@ interface ProjectCardProps {
 export const INSTANCE_PAGE_SIZE = 5;
 
 export function ProjectCard({ project, projectKey, rowProps, instanceCount, countPending = false, isExpanded, instances, stats, toggleProject, instancePage, onInstancePageChange, refetch, isReadOnly = false }: ProjectCardProps) {
+  const { formatBytes } = useByteFormat();
   const count = instanceCount ?? 0;
   const updateProjectTags = useUpdateProjectTags();
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);

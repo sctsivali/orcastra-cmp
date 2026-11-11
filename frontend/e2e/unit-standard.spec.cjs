@@ -1,14 +1,15 @@
 const { test, expect } = require("@playwright/test");
 const { authenticate, installApiFixtures } = require("./support/fixtures.cjs");
 
-// One size standard on every screen. The risk: a field that shows 8.59 GB for a limit stored as
-// 8GiB must not write 8590000000 when the field was left untouched.
+// One size system on every screen, the one the account chose (decimal unless it chose binary). The
+// risk: a field that shows 8.59 GB for a limit stored as 8GiB must not write 8590000000 when the
+// field was left untouched, and in binary a field must write exact binary bytes.
 
 const gib = 1024 ** 3;
 
-async function openSpecificationDialog(page, context) {
+async function openSpecificationDialog(page, context, fixtureOptions = {}) {
   await authenticate(context, "admin");
-  await installApiFixtures(page, "admin", { snapshotInstancePage: true });
+  await installApiFixtures(page, "admin", { snapshotInstancePage: true, ...fixtureOptions });
   const previews = [];
   await page.route(/\/api\/v1\/instances\/tenant-owned-vm\/specification(?:\/preflight)?(?:\?.*)?$/, async (route) => {
     const request = route.request();
@@ -82,4 +83,52 @@ test("typing the same figure back is still the stored value", async ({ page, con
   await expect(dialog.getByRole("button", { name: "Review and apply" })).toBeEnabled();
   await memory.fill("8.59");
   await expect(dialog.getByRole("button", { name: "Review and apply" }), "nothing is left to apply").toBeDisabled();
+});
+
+test.describe("an account that reads binary", () => {
+  test("the table reads the disk in GiB", async ({ page, context }) => {
+    await authenticate(context, "admin");
+    await installApiFixtures(page, "admin", { snapshotInstancePage: true, byteUnits: "binary" });
+    await page.goto("/inventory/instances");
+    const row = page.getByRole("row", { name: /tenant-owned-vm/ });
+    await expect(row).toContainText("80 GiB");
+    await expect(row).not.toContainText("85.9 GB");
+  });
+
+  test("a size field offers binary units and shows a binary limit exactly", async ({ page, context }) => {
+    const { dialog } = await openSpecificationDialog(page, context, { byteUnits: "binary" });
+    await expect(dialog.getByRole("spinbutton", { name: "Memory Limit", exact: true })).toHaveValue("8");
+    await expect(dialog.getByRole("spinbutton", { name: "Root Disk Size", exact: true })).toHaveValue("80");
+
+    await dialog.getByRole("combobox", { name: "Memory limit unit" }).click();
+    await expect(page.getByRole("option")).toHaveText(["MiB", "GiB", "TiB"]);
+    await page.keyboard.press("Escape");
+  });
+
+  test("a figure typed in binary writes exact binary bytes", async ({ page, context }) => {
+    const { dialog, previews } = await openSpecificationDialog(page, context, { byteUnits: "binary" });
+    await dialog.getByRole("spinbutton", { name: "Memory Limit", exact: true }).fill("4");
+    await dialog.getByRole("button", { name: "Review and apply" }).click();
+
+    await expect.poll(() => previews.length).toBeGreaterThan(0);
+    expect(previews[0].memory_bytes).toBe(4 * gib);
+    expect(previews[0]).not.toHaveProperty("root_disk_bytes");
+  });
+
+  test("every API call tells the server which units to write", async ({ page, context }) => {
+    await authenticate(context, "admin");
+    await installApiFixtures(page, "admin", { snapshotInstancePage: true, byteUnits: "binary" });
+    await page.goto("/inventory/instances");
+    await expect(page.getByRole("row", { name: /tenant-owned-vm/ })).toContainText("80 GiB");
+    // From the next load on, the hint cookie carries the choice, so even the first call says binary.
+    const sent = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/api/v1/")) sent.push(request.headers()["x-byte-units"]);
+    });
+    await page.reload();
+    await expect(page.getByRole("row", { name: /tenant-owned-vm/ })).toContainText("80 GiB");
+    // The preference reads go out on plain fetch and carry no header: they return no size text.
+    expect(sent).toContain("binary");
+    expect(sent).not.toContain("decimal");
+  });
 });

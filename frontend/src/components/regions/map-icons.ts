@@ -1,5 +1,5 @@
 import L from "leaflet";
-import { formatBytes } from "@/lib/utils";
+import type { ByteFormat } from "@/lib/byte-format";
 import { escapeHtml } from "@/lib/map-basemap";
 import { placeDetail } from "@/lib/regions/place";
 import { RegionSummary } from "@/types/api";
@@ -164,7 +164,7 @@ export function createClusterIcon(cluster: L.MarkerCluster): L.DivIcon {
  * unconstrained text, and Leaflet renders a popup string as HTML. Raw interpolation would let
  * anyone able to register or relocate a cluster run script in every operator's browser.
  */
-export function createPopupContent(region: RegionSummary): string {
+export function createPopupContent(region: RegionSummary, fmt: ByteFormat): string {
   // Null for a Tenant, which is sent places and its own instances but no hardware.
   const hardware = region.hardware;
 
@@ -182,7 +182,7 @@ export function createPopupContent(region: RegionSummary): string {
       : "";
   const hardwareSection = hardware
     ? row("CPU threads", hardware.cpu_total) +
-      row("Memory", formatBytes(hardware.memory_total)) +
+      row("Memory", fmt.formatBytes(hardware.memory_total)) +
       gpuSection
     : "";
 

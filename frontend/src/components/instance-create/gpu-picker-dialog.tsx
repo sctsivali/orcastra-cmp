@@ -18,7 +18,8 @@ import {
   gpuIdentifier,
   sortGpuCards,
 } from "@/lib/gpu";
-import { cn, formatBytes } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import type { GPUCardInfo } from "@/types/api";
 import { OverflowText } from "@/components/ui/overflow-text";
 
@@ -53,6 +54,7 @@ export function GpuPickerDialog({
   onSelect,
   onAddCustom,
 }: GpuPickerDialogProps) {
+  const { formatBytes } = useByteFormat();
   const sorted = sortGpuCards(cards);
 
   return (

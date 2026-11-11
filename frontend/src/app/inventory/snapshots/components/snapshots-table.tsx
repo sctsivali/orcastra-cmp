@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/table";
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { defineTable, fromSort } from "@/lib/table-filter";
-import { formatBytes } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 
 import { SnapshotRowActions } from "./snapshot-row-actions";
 import { createdCell, expiryCell, snapshotScope } from "./snapshot-format";
@@ -151,6 +151,7 @@ export function SnapshotsTable({
   empty,
   refreshing,
 }: SnapshotsTableProps) {
+  const { formatBytes } = useByteFormat();
   return (
     <Table>
       <TableHeader>

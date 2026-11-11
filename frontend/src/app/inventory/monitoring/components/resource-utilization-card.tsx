@@ -6,7 +6,8 @@ import { GaugeChart } from "@/components/monitoring/gauge-chart";
 import { GpuAllocationGauge } from "@/components/monitoring/gpu-allocation-gauge";
 import { cpuAllocation, formatCpuThreads } from "@/lib/cpu-allocation";
 import { clusterStatusMeta } from "@/lib/cluster-status";
-import { formatBytes, formatVcpuCount, plural } from "@/lib/utils";
+import { formatVcpuCount, plural } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { ClusterStatus, type MonitoringDashboardResponse } from "@/types/api";
 
 /** The scope's host figures, as MonitoringContent's filteredStats carries them. */
@@ -84,6 +85,7 @@ interface ResourceUtilizationCardProps {
 }
 
 export function ResourceUtilizationCard({ stats, scope, scopeLabel, isPartner }: ResourceUtilizationCardProps) {
+  const { formatBytes } = useByteFormat();
   // status_message is the backend's own error text, so it is operator content.
   const statusMessage = isPartner && stats.status_message ? stats.status_message : undefined;
   const memory = scope.unavailable ? null : reading(stats.memory_usage_percent, stats.total_memory_bytes);

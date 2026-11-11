@@ -52,7 +52,8 @@ import {
   Loader2,
   History,
   ShieldAlert } from "lucide-react";
-import { formatBytes, formatElapsed, formatLabel, formatNetworkRate, formatDateTimeSeconds, formatCount, plural } from "@/lib/utils";
+import { formatElapsed, formatLabel, formatDateTimeSeconds, formatCount, plural } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { BreakGlassPanel } from "@/components/break-glass/break-glass-panel";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
@@ -890,6 +891,7 @@ function ActiveRow({ session, onSelect, scope }: {
   onSelect: (r: SessionRecord) => void;
   scope: SessionScope;
 }) {
+  const { formatBytes, formatNetworkRate } = useByteFormat();
   const isGraphics = session.protocol === GRAPHICS_SESSION_PROTOCOL;
   const protocolLabel = sessionProtocolLabel(session.protocol);
   const connectionStatus = sessionConnectionStatusDisplay(session.connection_status);
@@ -981,6 +983,7 @@ function HistoryRow({ log, onSelect, scope }: {
   onSelect: (r: SessionRecord) => void;
   scope: SessionScope;
 }) {
+  const { formatBytes } = useByteFormat();
   const isGraphics = log.protocol === GRAPHICS_SESSION_PROTOCOL;
   const protocolLabel = sessionProtocolLabel(log.protocol);
 

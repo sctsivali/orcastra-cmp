@@ -11,6 +11,7 @@ import "leaflet.markercluster/dist/MarkerCluster.Default.css";
 import "./map-theme.css";
 import { RegionSummary } from "@/types/api";
 import { useTheme } from "@/components/theme-provider";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { BasemapConfig, OFFLINE_BASEMAP, OFFLINE_MAX_ZOOM } from "@/lib/map-basemap";
 import type { CountryAreas } from "@/lib/regions/country-areas";
 import { isWholeCountry } from "@/lib/regions/place";
@@ -125,6 +126,7 @@ interface MarkerClusterLayerProps {
 
 function MarkerClusterLayer({ regions, onSelectRegion }: MarkerClusterLayerProps) {
   const map = useMap();
+  const fmt = useByteFormat();
   const clusterGroupRef = React.useRef<L.MarkerClusterGroup | null>(null);
 
   React.useEffect(() => {
@@ -161,7 +163,7 @@ function MarkerClusterLayer({ regions, onSelectRegion }: MarkerClusterLayerProps
         title: country ? `${region.region_name}, whole country` : region.region_name,
       });
 
-      marker.bindPopup(createPopupContent(region), {
+      marker.bindPopup(createPopupContent(region, fmt), {
         className: "region-popup",
         maxWidth: 300,
       });
@@ -187,7 +189,7 @@ function MarkerClusterLayer({ regions, onSelectRegion }: MarkerClusterLayerProps
         clusterGroupRef.current = null;
       }
     };
-  }, [map, regions, onSelectRegion]);
+  }, [map, regions, onSelectRegion, fmt]);
 
   return null;
 }

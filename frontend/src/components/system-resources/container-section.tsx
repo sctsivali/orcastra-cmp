@@ -10,7 +10,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { EMPTY_VALUE } from "@/components/ui/table-text";
-import { formatBytes, plural, formatCount } from "@/lib/utils";
+import { plural, formatCount } from "@/lib/utils";
+import type { ByteFormat } from "@/lib/byte-format";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { MeterRow, Tile, formatUptime } from "@/components/system-resources/primitives";
 import {
   formatWindow,
@@ -86,11 +88,13 @@ export function ContainerSection({
   );
 }
 
-function bytesOrEmpty(value: number | null | undefined): string {
-  return value === null || value === undefined ? EMPTY_VALUE : formatBytes(value);
+function bytesOrEmpty(value: number | null | undefined, fmt: ByteFormat): string {
+  return value === null || value === undefined ? EMPTY_VALUE : fmt.formatBytes(value);
 }
 
 function ContainerMemoryCard({ container }: { container: ContainerInfo }) {
+  const fmt = useByteFormat();
+  const { formatBytes } = fmt;
   const m = container.memory;
   const limit = m?.limit ?? container.memory_limit;
   const used = m?.used ?? null;
@@ -122,10 +126,10 @@ function ContainerMemoryCard({ container }: { container: ContainerInfo }) {
         )}
         <div className="space-y-2 pt-2">
           <div className="grid grid-cols-2 gap-4">
-            <Tile label="In Use" value={bytesOrEmpty(used)} sub="counted against the limit" />
+            <Tile label="In Use" value={bytesOrEmpty(used, fmt)} sub="counted against the limit" />
             <Tile label="Limit" value={limit ? formatBytes(limit) : "No limit set"} sub="set in .env" />
-            <Tile label="Process Memory" value={bytesOrEmpty(m?.anon)} sub="heap and stacks" />
-            <Tile label="File Cache" value={bytesOrEmpty(m?.file)} sub="partly reclaimable" />
+            <Tile label="Process Memory" value={bytesOrEmpty(m?.anon, fmt)} sub="heap and stacks" />
+            <Tile label="File Cache" value={bytesOrEmpty(m?.file, fmt)} sub="partly reclaimable" />
           </div>
           <p className="text-xs text-muted-foreground">
             Process memory and file cache are parts of the container&apos;s total. In Use is that

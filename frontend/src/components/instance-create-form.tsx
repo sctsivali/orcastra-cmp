@@ -1,6 +1,8 @@
 "use client";
 
-import { formatBytes, formatVcpuCount, EMPTY_VALUE, formatInstanceType, plural } from "@/lib/utils";
+import { formatVcpuCount, EMPTY_VALUE, formatInstanceType, plural } from "@/lib/utils";
+import { FORM_SIZE_UNITS, formUnitSystem } from "@/lib/byte-units";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { useSearchParams } from "next/navigation";
@@ -18,9 +20,7 @@ import {
 import { useCreateSeedValidation } from "@/components/instance-create/use-seed-validation";
 import {
   ADVANCED_DEFAULTS,
-  DEFAULT_INSTANCE_CREATE_FORM,
-  MEMORY_UNITS,
-  STORAGE_UNITS,
+  instanceCreateFormDefaults,
   isPositiveInteger,
   type AdvancedKey,
   type GpuDevice,
@@ -152,7 +152,6 @@ function isAmbiguousCreateError(error: unknown): boolean {
 type FormState = InstanceCreateFormState;
 type AdvKey = AdvancedKey;
 const ADV_DEFAULT = ADVANCED_DEFAULTS;
-const DEFAULT_FORM = DEFAULT_INSTANCE_CREATE_FORM;
 const isPositiveInt = isPositiveInteger;
 
 function InstanceCreateFormContent() {
@@ -191,9 +190,12 @@ function InstanceCreateFormContent() {
   // state does not trip them, while an effect writing the same values after mount would.
   const searchParams = useSearchParams();
   const seedRef = useRef(readCreateSeed(searchParams));
+  const byteFormat = useByteFormat();
+  // The size fields keep the units the form opened with (a fresh ref, not useByteUnitsRef, which
+  // follows the account): the actor reset below starts over in those same units.
+  const unitsRef = useRef(byteFormat.units);
   const [form, setForm] = useState<FormState>(() => ({
-    ...DEFAULT_FORM,
-    tags: [],
+    ...instanceCreateFormDefaults(unitsRef.current),
     ...seedRef.current,
   }));
   const {
@@ -845,7 +847,7 @@ function InstanceCreateFormContent() {
     seedCheckedRef.current = true;
     setSeedValidationPending(false);
     setSeedDropped(null);
-    setForm({ ...DEFAULT_FORM, tags: [] });
+    setForm(instanceCreateFormDefaults(unitsRef.current));
     setDisks([]);
     setNics([]);
     setGpus([]);
@@ -1466,7 +1468,7 @@ function InstanceCreateFormContent() {
                 />
                 {fieldError?.field === "name" && (
                   <p id="create-name-error" className="text-xs text-destructive">
-                    {fieldRefusalText(fieldError)}
+                    {fieldRefusalText(fieldError, byteFormat)}
                   </p>
                 )}
               </div>
@@ -1675,8 +1677,8 @@ function InstanceCreateFormContent() {
                     onRetry={() => refetchVolumes()}
                   />
                   <p className="text-xs text-muted-foreground">
-                    The VM boots this ISO on an empty {form.storageValue.trim()}
-                    {form.storageUnit} disk. Install the OS to the disk from the
+                    The VM boots this ISO on an empty {form.storageValue.trim()} {form.storageUnit} disk.
+                    Install the OS to the disk from the
                     console, then eject the ISO and reboot.
                   </p>
                   {volumesSucceeded && isoOptions.length === 0 && (
@@ -1735,14 +1737,14 @@ function InstanceCreateFormContent() {
                   )}
                   {fieldError?.field === "image" && (
                     <p id="create-image-error" className="text-xs text-destructive">
-                      {fieldRefusalText(fieldError)}
+                      {fieldRefusalText(fieldError, byteFormat)}
                     </p>
                   )}
                 </div>
               )}
               {fieldError?.field === "profiles" && (
                 <p id="create-profiles-error" className="text-xs text-destructive">
-                  {fieldRefusalText(fieldError)}
+                  {fieldRefusalText(fieldError, byteFormat)}
                 </p>
               )}
             </CardContent>
@@ -1790,7 +1792,7 @@ function InstanceCreateFormContent() {
                   </p>
                 ) : fieldError?.field === "cpu" ? (
                   <p id="create-cpu-error" className="text-xs text-destructive">
-                    {fieldRefusalText(fieldError)}
+                    {fieldRefusalText(fieldError, byteFormat)}
                   </p>
                 ) : quota.cpuExceeds ? (
                   <p id="create-cpu-error" className="text-xs text-destructive">
@@ -1839,7 +1841,7 @@ function InstanceCreateFormContent() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {MEMORY_UNITS.map((u) => (
+                      {FORM_SIZE_UNITS[formUnitSystem(form.memoryUnit)].map((u) => (
                         <SelectItem key={u} value={u}>
                           {u}
                         </SelectItem>
@@ -1853,11 +1855,11 @@ function InstanceCreateFormContent() {
                   </p>
                 ) : fieldError?.field === "memory" ? (
                   <p id="create-memory-error" className="text-xs text-destructive">
-                    {fieldRefusalText(fieldError)}
+                    {fieldRefusalText(fieldError, byteFormat)}
                   </p>
                 ) : quota.memoryExceeds ? (
                   <p id="create-memory-error" className="text-xs text-destructive">
-                    Exceeds the project limit of {formatBytes(projectLimits.memoryBytes ?? 0, { decimals: 1 })}.
+                    Exceeds the project limit of {byteFormat.formatBytes(projectLimits.memoryBytes ?? 0, { decimals: 1 })}.
                   </p>
                 ) : null}
               </div>
@@ -1873,7 +1875,7 @@ function InstanceCreateFormContent() {
               )}
               {fieldError?.field === "instances" && (
                 <p id="create-instances-error" className="text-xs text-destructive">
-                  {fieldRefusalText(fieldError)}
+                  {fieldRefusalText(fieldError, byteFormat)}
                 </p>
               )}
 
@@ -1958,7 +1960,7 @@ function InstanceCreateFormContent() {
           >
             <AlertTriangle className="h-4 w-4" aria-hidden />
             <AlertDescription>
-              {fieldRefusalText(fieldError)} Review the attached storage, network, and GPU devices.
+              {fieldRefusalText(fieldError, byteFormat)} Review the attached storage, network, and GPU devices.
             </AlertDescription>
           </Alert>
         )}
@@ -2015,7 +2017,7 @@ function InstanceCreateFormContent() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {STORAGE_UNITS.map((u) => (
+                      {FORM_SIZE_UNITS[formUnitSystem(form.storageUnit)].map((u) => (
                         <SelectItem key={u} value={u}>
                           {u}
                         </SelectItem>
@@ -2030,7 +2032,7 @@ function InstanceCreateFormContent() {
                 )}
                 {fieldError?.field === "storage" && (
                   <p id="create-storage-error" className="text-xs text-destructive">
-                    {fieldRefusalText(fieldError)}
+                    {fieldRefusalText(fieldError, byteFormat)}
                   </p>
                 )}
               </div>
@@ -2248,7 +2250,7 @@ function InstanceCreateFormContent() {
                 )}
                 {fieldError?.field === "network" && (
                   <p id="create-network-error" className="text-xs text-destructive">
-                    {fieldRefusalText(fieldError)}
+                    {fieldRefusalText(fieldError, byteFormat)}
                   </p>
                 )}
               </div>

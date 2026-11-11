@@ -12,7 +12,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { GpuPanel } from "@/components/gpu";
 import { GPU_UTILIZATION_NOTE } from "@/lib/gpu";
 import { usePermissions } from "@/hooks/use-permissions";
-import { cn, formatBytes, formatLabel, formatVcpuCount, EMPTY_VALUE } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
+import { cn, formatLabel, formatVcpuCount, EMPTY_VALUE } from "@/lib/utils";
 import type { NodeResources } from "@/types";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
 import { UsageMeter } from "@/components/ui/usage-meter";
@@ -150,6 +151,7 @@ export function NodeGpuPanel({
 }
 
 export function NodeMemoryPanel({ resources }: { resources: NodeResources | null }) {
+  const { formatBytes } = useByteFormat();
   return (
     <Card>
       <CardHeader>
@@ -204,6 +206,7 @@ export function NodeStoragePanel({
   nodeName?: string;
 }) {
   const { isPartner } = usePermissions();
+  const { formatBytes } = useByteFormat();
   const pools = resources?.storage_pools ?? [];
   const lostParts = resources?.degraded_parts ?? [];
   const storageLost = lostParts.some((part) => part.startsWith("storage"));

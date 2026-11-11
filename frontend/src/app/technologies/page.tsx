@@ -12,6 +12,7 @@ import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner
 import { LoadingLottiePageEnhanced } from "@/components/loading-lottie";
 import { useNodesStatus } from "@/hooks/use-lxd";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { APIError } from "@/types/api";
 import { HardwareAggregate, buildHardwareCategories } from "./components/hardware-aggregate";
@@ -37,9 +38,10 @@ function PlatformTechnologies() {
   // hook's options, whether the hardware totals refresh depends on which other component is
   // mounted to carry the interval.
   const { data: nodesResponse, isLoading, isFetching, isError, refetch } = useNodesStatus();
+  const fmt = useByteFormat();
 
   const nodes = nodesResponse?.nodes || [];
-  const hardwareInfo = React.useMemo(() => buildHardwareCategories(nodes), [nodes]);
+  const hardwareInfo = React.useMemo(() => buildHardwareCategories(nodes, fmt), [nodes, fmt]);
   const unreachable = nodes.filter((node) => !node.connected);
   const unreachableReasons = Object.fromEntries(
     unreachable.map((node) => [node.name, node.error ?? ""]),

@@ -3,8 +3,9 @@
 import * as React from "react";
 import { onAuthActorChanged } from "@/lib/api";
 import { captureActorMutationFence, isActorMutationFenceCurrent } from "@/lib/actor-mutation-fence";
+import { DEFAULT_BYTE_UNITS, type ByteUnitSystem } from "@/lib/byte-units";
 import { DEFAULT_PERSONALIZATION, type PersonalizationSettings, type ThemePreference } from "@/types/personalization";
-import { readOrgPreferences, readOrgVersion, readPersonalPreferences, sameOrgVersion, type OrgPreferencesVersion } from "./preferences";
+import { onPersonalWrite, readOrgPreferences, readOrgVersion, readPersonalPreferences, sameOrgVersion, type OrgPreferencesVersion } from "./preferences";
 
 type SettingsRef = React.MutableRefObject<PersonalizationSettings | null>;
 
@@ -22,16 +23,17 @@ interface SyncOptions {
   setSettings: React.Dispatch<React.SetStateAction<PersonalizationSettings>>;
   setIsLoading: React.Dispatch<React.SetStateAction<boolean>>;
   setThemeOrigin: React.Dispatch<React.SetStateAction<ThemeOrigin>>;
+  setByteUnits: React.Dispatch<React.SetStateAction<ByteUnitSystem>>;
 }
 
 const ORG_PREF_POLL_INTERVAL_MS = 45_000;
 
 // Every account reads the same two endpoints. The server answers my-preferences with the
 // deployment default for an Administrator without the partner role, and the personal row holds
-// only the theme for everyone.
+// only the theme and the byte units for everyone.
 export function usePersonalizationSync({
   userId, scopeKey, accessToken, authenticated, sessionLoading,
-  personalRowRef, lastLocalEditRef, setSettings, setIsLoading, setThemeOrigin,
+  personalRowRef, lastLocalEditRef, setSettings, setIsLoading, setThemeOrigin, setByteUnits,
 }: SyncOptions) {
   const appliedVersionRef = React.useRef<OrgPreferencesVersion | null>(null);
   const requestRevisionRef = React.useRef(0);
@@ -64,15 +66,16 @@ export function usePersonalizationSync({
     if (!current.ok || !sameOrgVersion(organization.value, current.value) || !canApply()) return false;
     if (expectedVersion && !sameOrgVersion(expectedVersion, current.value)) return false;
     const base = organization.value.settings;
-    const personalTheme = Boolean(personal.value.lastModified);
-    personalRowRef.current = personal.value;
-    setSettings({ ...base, theme: personalTheme ? personal.value.theme : base.theme });
+    const personalTheme = Boolean(personal.value.settings.lastModified);
+    personalRowRef.current = personal.value.settings;
+    setSettings({ ...base, theme: personalTheme ? personal.value.settings.theme : base.theme });
     setThemeOrigin({ personal: personalTheme, organizationTheme: base.theme });
+    setByteUnits(personal.value.byteUnits);
     // The baseline is advanced only after a complete, fenced payload read has been applied.
     // A null updated_at is a valid baseline, so the organization's first save triggers refresh.
     appliedVersionRef.current = current.value;
     return true;
-  }, [userId, authenticated, scopeKey, lastLocalEditRef, personalRowRef, setSettings, setThemeOrigin]);
+  }, [userId, authenticated, scopeKey, lastLocalEditRef, personalRowRef, setSettings, setThemeOrigin, setByteUnits]);
 
   React.useEffect(() => onAuthActorChanged(() => {
     requestRevisionRef.current += 1;
@@ -86,11 +89,15 @@ export function usePersonalizationSync({
       requestRevisionRef.current += 1;
       appliedVersionRef.current = null;
       personalRowRef.current = null;
-      if (previousScopeRef.current !== null) setSettings(DEFAULT_PERSONALIZATION);
+      if (previousScopeRef.current !== null) {
+        setSettings(DEFAULT_PERSONALIZATION);
+        setByteUnits(DEFAULT_BYTE_UNITS);
+      }
       previousScopeRef.current = scopeKey;
     }
     if (!authenticated || !userId) {
       setSettings(DEFAULT_PERSONALIZATION);
+      setByteUnits(DEFAULT_BYTE_UNITS);
       setIsLoading(false);
       return;
     }
@@ -100,7 +107,12 @@ export function usePersonalizationSync({
       if (!retired && currentScopeRef.current === scopeKey) setIsLoading(false);
     });
     return () => { retired = true; requestRevisionRef.current += 1; };
-  }, [sessionLoading, authenticated, userId, scopeKey, refreshSettings, personalRowRef, setIsLoading, setSettings]);
+  }, [sessionLoading, authenticated, userId, scopeKey, refreshSettings, personalRowRef, setIsLoading, setSettings, setByteUnits]);
+
+  React.useEffect(() => {
+    if (!authenticated || !userId) return;
+    return onPersonalWrite(scopeKey, () => void refreshSettings());
+  }, [authenticated, userId, scopeKey, refreshSettings]);
 
   React.useEffect(() => {
     if (!authenticated || !userId) return;

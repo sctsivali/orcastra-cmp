@@ -3,7 +3,8 @@
 import { UsageBar } from "@/components/ui/usage-bar";
 import { TableEmptyValue } from "@/components/ui/table-text";
 import { TableLink } from "@/components/ui/table-link";
-import { cn, formatBytes } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
+import { cn } from "@/lib/utils";
 import { USAGE_ELEVATED_PERCENT, usageTone } from "@/lib/usage-tone";
 import { capacityReading } from "@/lib/capacity-reading";
 
@@ -43,6 +44,7 @@ export function PoolCapacityCell({
   poolName: string;
   onOpen: () => void;
 }) {
+  const { formatBytes } = useByteFormat();
   if (capacity.percent === null) {
     return <TableEmptyValue label="Usage unavailable" />;
   }

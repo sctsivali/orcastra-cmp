@@ -11,6 +11,7 @@ import { TextFilter } from "@/components/ui/text-filter";
 import { AddFilterMenu } from "@/components/ui/add-filter-menu";
 import { ActiveFilterChips } from "@/components/ui/active-filter-chips";
 import { formatBound, type TableToolbarState } from "@/hooks/use-table-filters";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import type { ResolvedFilter } from "@/lib/table-filter";
 
 export interface TableToolbarProps<F extends string> {
@@ -81,6 +82,11 @@ export function TableToolbar<F extends string>({
     clearAll,
   } = filters;
 
+  const fmt = useByteFormat();
+  const formatFacetBound = React.useCallback(
+    (value: number, unit: string) => formatBound(value, unit, fmt),
+    [fmt],
+  );
   const chipsById = React.useMemo(() => new Map(chips.map((c) => [c.id, c])), [chips]);
   const summaryFor = (field: F) => chips.find((c) => c.field === field && c.kind !== "enum")?.valueLabel;
 
@@ -122,7 +128,7 @@ export function TableToolbar<F extends string>({
                   presets={spec.options.presets}
                   emptyLabel={spec.options.emptyLabel}
                   facts={facet.facts?.kind === "number" ? facet.facts : undefined}
-                  formatBound={formatBound}
+                  formatBound={formatFacetBound}
                 />
               );
             }

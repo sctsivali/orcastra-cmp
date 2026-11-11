@@ -19,7 +19,8 @@ import { EMPTY_VALUE } from "@/components/ui/table-text";
 import { guestText } from "@/lib/instance-files/guest-text";
 import type { GuestEntry } from "@/lib/instance-files/api";
 import { defineTable } from "@/lib/table-filter";
-import { cn, formatBytes, formatDateTime } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import type { ExplorerWidth } from "@/hooks/use-explorer-width";
 import { actionsFor, isDirectoryLike, type FileActionId } from "./file-actions";
 import type { SessionState, SortField } from "./use-explorer-session";
@@ -99,6 +100,7 @@ export function FileTable({
   folder, rows, session, mode, writeReason, dropTarget, onSort, onActivate, onSelect, onActive, onAction,
   focusRequest, onFocused,
 }: FileTableProps) {
+  const { formatBytes } = useByteFormat();
   const rowHeight = ROW_HEIGHT[mode];
   const activeIndex = React.useMemo(
     () => (session.active === null ? -1 : rows.findIndex((row) => row.name === session.active)),

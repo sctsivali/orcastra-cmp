@@ -1,5 +1,6 @@
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { formatBytes } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
+import type { ByteFormat } from "@/lib/byte-format";
 import type {
   InstanceOperationJob,
   InstanceSpecificationChange,
@@ -12,13 +13,18 @@ function fieldLabel(field: string): string {
   return field;
 }
 
-function changeValue(change: InstanceSpecificationChange, value: number | null): string {
+function changeValue(
+  change: InstanceSpecificationChange,
+  value: number | null,
+  formatBytes: ByteFormat["formatBytes"],
+): string {
   if (value === null) return "Not set";
   if (change.field === "cpu_count") return String(value);
   return formatBytes(value);
 }
 
 export function ChangeSummary({ changes }: { changes: InstanceSpecificationChange[] }) {
+  const { formatBytes } = useByteFormat();
   return (
     <dl className="divide-y rounded-md border">
       {changes.map((change) => (
@@ -28,7 +34,7 @@ export function ChangeSummary({ changes }: { changes: InstanceSpecificationChang
         >
           <dt className="font-medium">{fieldLabel(change.field)}</dt>
           <dd className="text-muted-foreground">
-            {changeValue(change, change.before)} → {changeValue(change, change.after)}
+            {changeValue(change, change.before, formatBytes)} → {changeValue(change, change.after, formatBytes)}
           </dd>
         </div>
       ))}
@@ -53,6 +59,7 @@ function readbackFor(job: InstanceOperationJob): Record<string, unknown> | null 
 }
 
 export function OperationReadback({ job }: { job: InstanceOperationJob }) {
+  const { formatBytes } = useByteFormat();
   const readback = readbackFor(job);
   const result = record(job.result);
   const cpu = numberAt(readback, "cpu", "value");

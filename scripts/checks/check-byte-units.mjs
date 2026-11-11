@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 /**
- * Guard the console's byte contract: one standard, the GB family, on every screen.
+ * Guard the console's byte contract: one system on every screen, the one the account chose.
  *
- * Mixing binary memory and limits with decimal storage makes one disk read 10GiB in a column and
- * 10.74 GB on its meter. Binary labels survive only where they are wire format: parsers that read
- * what LXD stores. Keeping this parser-free lets the CI guards job run before frontend dependencies
- * are installed.
+ * An account reads decimal (kB, MB, GB) or binary (KiB, MiB, GiB). Mixing the two on one screen
+ * makes one disk read 10GiB in a column and 10.74 GB on its meter, so every size goes through the
+ * shared formatters, bound to the account's system by useByteFormat(). The unit tables live in
+ * lib/byte-units.ts and nowhere else; a raw formatter imported by a component would print decimal
+ * whatever the account chose. Keeping this parser-free lets the CI guards job run before frontend
+ * dependencies are installed.
  */
 
 import assert from "node:assert/strict";
@@ -33,10 +35,24 @@ const PRIVATE_FORMATTER_ALLOWLIST = new Set([
   "components/member-resources/format.ts",
 ]);
 
-// Where a binary label is a value on the wire, or read off it. Nothing here reaches a screen as text.
+// Where a binary label may be written: the one unit table, and the parser that reads what LXD stores.
 const WIRE_FILES = new Set([
+  "lib/byte-units.ts", // the decimal and binary unit tables every formatter reads
   "lib/lxd-limits.ts", // parseLxdSize reads whatever LXD stores
 ]);
+
+// Modules that may import the raw formatters, because they take the system as an argument and hand
+// it on. Everything else gets them bound to the account's system from useByteFormat().
+const RAW_FORMATTER_MODULES = new Set([
+  "lib/utils.ts",
+  "lib/lxd-limits.ts",
+  "lib/byte-format.ts",
+  "components/member-resources/format.ts",
+]);
+const RAW_FORMATTER_IMPORTS = [
+  { from: "@/lib/utils", names: ["formatBytes", "formatByteQuota", "formatNetworkRate"] },
+  { from: "@/lib/lxd-limits", names: ["formatLxdSize", "formatConfigValue", "editableLimit"] },
+];
 
 function* walk(dir) {
   for (const name of readdirSync(dir)) {
@@ -70,14 +86,24 @@ function windows(lines, pattern) {
 const failures = [];
 let scanned = 0;
 
+const byteUnitsSource = readFileSync(join(src, "lib", "byte-units.ts"), "utf8");
 const requiredUtilsContracts = [
-  ['const SI_BYTE_UNITS = ["B", "kB", "MB", "GB", "TB", "PB"]', "the one unit list"],
-  ["scaleBytes(bytes, 1000, SI_BYTE_UNITS", "the one size formatter"],
-  ["scaleBytes(bytesPerSecond, 1000, SI_BYTE_UNITS", "the rate formatter on the same scale"],
-  ["scaleByteQuota(usedBytes, limitBytes, 1000, SI_BYTE_UNITS", "the quota formatter on the same scale"],
+  ["const scale = BYTE_SCALES[toByteUnitSystem(typeof options === \"object\" ? options.units : undefined)];", "the one size formatter, on the account's scale"],
+  ["scaleBytes(bytesPerSecond, scale.base, scale.units", "the rate formatter on the same scale"],
+  ["scaleByteQuota(usedBytes, limitBytes, scale.base, scale.units", "the quota formatter on the same scale"],
 ];
+for (const [needle, label] of [
+  ['decimal: { base: 1000, units: ["B", "kB", "MB", "GB", "TB", "PB"] }', "the decimal unit table"],
+  ['binary: { base: 1024, units: ["B", "KiB", "MiB", "GiB", "TiB", "PiB"] }', "the binary unit table"],
+  ['export const DEFAULT_BYTE_UNITS: ByteUnitSystem = "decimal";', "decimal as the default"],
+]) {
+  if (!byteUnitsSource.includes(needle)) failures.push(`frontend/src/lib/byte-units.ts: missing ${label}`);
+}
+if (/["'](?:kB|MB|GB|TB|PB|KiB|MiB|GiB|TiB|PiB)["']/.test(stripComments(utils))) {
+  failures.push("frontend/src/lib/utils.ts: a unit list is written here; the tables live in lib/byte-units.ts");
+}
 
-for (const retired of ["formatMemory", "formatMemoryQuota", "formatLxdLimit", "IEC_BYTE_UNITS"]) {
+for (const retired of ["formatMemory", "formatMemoryQuota", "formatLxdLimit", "IEC_BYTE_UNITS", "SI_BYTE_UNITS"]) {
   if (utils.includes(retired)) {
     failures.push(`frontend/src/lib/utils.ts: ${retired} is back, and with it a second byte standard`);
   }
@@ -117,7 +143,9 @@ const projectEdit = readFileSync(
 for (const snippet of [
   'editableLimit(config["limits.memory"])',
   'editableLimit(config["limits.disk"])',
-  'FORM_SIZE_UNITS.map(',
+  'FORM_SIZE_UNITS[formUnitSystem(editMaxRamUnit)].map(',
+  'FORM_SIZE_UNITS[formUnitSystem(editMaxStorageUnit)].map(',
+  'byteFormat(unitsRef.current).editableLimit(',
   'if (ramLimitDirty)',
   'if (storageLimitDirty)',
   'Current daemon value:',
@@ -131,11 +159,12 @@ if (/match\(\/\^\(\\d\+[^\n]+GiB\|MiB/.test(projectEdit)) {
 }
 const projectCreate = readFileSync(join(src, "components", "project-create-form.tsx"), "utf8");
 for (const snippet of [
-  'maxRamUnit: "GB"',
-  'maxStorageUnit: "GB"',
-  'FORM_UNIT_BYTES[maxRamUnitInput as FormSizeUnit]',
-  'FORM_UNIT_BYTES[maxStorageUnitInput as FormSizeUnit]',
-  'FORM_SIZE_UNITS.map(',
+  'maxRamUnit: defaultFormUnit',
+  'maxStorageUnit: defaultFormUnit',
+  'FORM_UNIT_BYTES[maxRamUnitInput]',
+  'FORM_UNIT_BYTES[maxStorageUnitInput]',
+  'FORM_SIZE_UNITS[formUnitSystem(watch("maxRamUnit"))].map(',
+  'FORM_SIZE_UNITS[formUnitSystem(watch("maxStorageUnit"))].map(',
 ]) {
   if (!projectCreate.includes(snippet)) {
     failures.push(`project create is missing the form unit contract ${JSON.stringify(snippet)}`);
@@ -214,7 +243,12 @@ function loadNumericModule(path, imports) {
   new Function("require", "module", "exports", output)(imports, loaded, loaded.exports);
   return loaded.exports;
 }
-const numeric = loadNumericModule(utilsPath, requireFromFrontend);
+const byteUnits = loadNumericModule(join(src, "lib", "byte-units.ts"), (specifier) => {
+  throw new Error(`Unexpected runtime import in byte units: ${specifier}`);
+});
+const numeric = loadNumericModule(utilsPath, (specifier) =>
+  specifier === "@/lib/byte-units" ? byteUnits : requireFromFrontend(specifier),
+);
 for (const format of [numeric.formatBytes, numeric.formatNetworkRate]) {
   for (const value of [NaN, Infinity, -Infinity, -1, null, undefined]) assert.equal(format(value), "\u2014");
   for (const value of [0, 0.5, 1, Number.MIN_VALUE, Number.MAX_VALUE]) {
@@ -240,6 +274,22 @@ for (const [seconds, text] of [[0, "0s"], [0.4, "0s"], [5, "5s"], [125, "2m 5s"]
 }
 assert.equal(numeric.formatCpuTime(31570e9), numeric.formatElapsed(31570));
 assert.deepEqual(numeric.formatByteQuota(NaN, NaN), { value: "\u2014", unit: "" });
+// The binary system: same rules, base 1024, IEC labels.
+const binary = { units: "binary" };
+assert.equal(numeric.formatBytes(8589934592, binary), "8 GiB");
+assert.equal(numeric.formatBytes(1024, binary), "1 KiB");
+assert.equal(numeric.formatBytes(1000, binary), "1000 B");
+assert.equal(numeric.formatBytes(1536 * 1024 ** 2, binary), "1.5 GiB");
+assert.equal(numeric.formatBytes(0, binary), "0 B");
+assert.equal(numeric.formatBytes(0, { ...binary, zeroDisplay: "empty" }), "\u2014");
+assert.equal(numeric.formatBytes(NaN, binary), "\u2014");
+assert.deepEqual(numeric.formatBytes(4294967296, { ...binary, split: true }), { value: "4", unit: "GiB" });
+assert.equal(numeric.formatBytes(8589934592, { units: "decimal" }), "8.59 GB");
+assert.equal(numeric.formatBytes(8589934592, { units: "bogus" }), "8.59 GB", "an unknown system reads decimal");
+assert.equal(numeric.formatNetworkRate(12800, 2, "binary"), "12.5 KiB/s");
+assert.equal(numeric.formatNetworkRate(12500, 2, "decimal"), "12.5 kB/s");
+assert.deepEqual(numeric.formatByteQuota(2 * 1024 ** 3, 8 * 1024 ** 3, 1, "binary"), { value: "2 of 8", unit: "GiB" });
+assert.deepEqual(numeric.formatByteQuota(2e9, 8e9, 1, "decimal"), { value: "2 of 8", unit: "GB" });
 const tones = loadNumericModule(join(src, "lib", "usage-tone.ts"), requireFromFrontend);
 const { capacityReading } = loadNumericModule(join(src, "lib", "capacity-reading.ts"), (name) => {
   if (name === "@/lib/usage-tone") return tones;
@@ -253,6 +303,7 @@ assert.deepEqual(capacityReading({ used: "25", total: "100" }), { used: 25, tota
 assert.equal(capacityReading({ used: 120, total: 100 }).percent, 100);
 const limits = loadNumericModule(join(src, "lib", "lxd-limits.ts"), (specifier) => {
   if (specifier === "@/lib/utils") return numeric;
+  if (specifier === "@/lib/byte-units") return byteUnits;
   throw new Error(`Unexpected runtime import in LXD limits: ${specifier}`);
 });
 const { editableLimit, formatLxdSize, formatConfigValue } = limits;
@@ -275,6 +326,37 @@ assert.equal(formatConfigValue("limits.memory", "8GiB"), "8.59 GB");
 assert.equal(formatConfigValue("limits.cpu", "4"), "4", "a count is not bytes");
 assert.equal(formatConfigValue("limits.read", "30iops"), "30iops");
 assert.equal(formatConfigValue("user.note", "8GiB"), "8GiB", "an authored value is left alone");
+// The binary system reads a binary limit exactly and keeps the stored spelling until the field changes.
+assert.deepEqual(editableLimit(undefined, "binary"), { value: 0, unit: "GiB", preservedRaw: null });
+assert.deepEqual(editableLimit("8GiB", "binary"), { value: 8, unit: "GiB", preservedRaw: "8GiB" });
+assert.deepEqual(editableLimit("512MiB", "binary"), { value: 512, unit: "MiB", preservedRaw: "512MiB" });
+assert.deepEqual(editableLimit("2TiB", "binary"), { value: 2, unit: "TiB", preservedRaw: "2TiB" });
+assert.deepEqual(editableLimit("50%", "binary"), { value: 0, unit: "GiB", preservedRaw: "50%" });
+assert.equal(editableLimit("8GB", "binary").preservedRaw, "8GB", "an untouched decimal limit stays as stored");
+assert.ok(Math.abs(editableLimit("8GB", "binary").value - 7.450580596923828) < 1e-9);
+assert.equal(formatLxdSize("8GiB", "binary"), "8 GiB");
+assert.equal(formatLxdSize("512 MiB", "binary"), "512 MiB");
+assert.equal(formatLxdSize("10GB", "binary"), "9.31 GiB");
+assert.equal(formatLxdSize("50%", "binary"), "50%");
+assert.equal(formatConfigValue("limits.memory", "8GiB", "binary"), "8 GiB");
+assert.equal(formatConfigValue("limits.cpu", "4", "binary"), "4");
+const bound = loadNumericModule(join(src, "lib", "byte-format.ts"), (specifier) => {
+  if (specifier === "@/lib/utils") return numeric;
+  if (specifier === "@/lib/byte-units") return byteUnits;
+  if (specifier === "@/lib/lxd-limits") return limits;
+  throw new Error(`Unexpected runtime import in byte format: ${specifier}`);
+});
+assert.equal(bound.byteFormat("binary"), bound.byteFormat("binary"), "one bound object per system");
+assert.equal(bound.byteFormat("nonsense"), bound.byteFormat("decimal"), "an unknown system reads decimal");
+assert.equal(bound.byteFormat("binary").formatBytes(8589934592), "8 GiB");
+assert.equal(bound.byteFormat("binary").formatBytes(1536, 0), "2 KiB", "a number argument is still the decimals");
+assert.deepEqual(bound.byteFormat("binary").formatBytes(2048, { split: true }), { value: "2", unit: "KiB" });
+assert.equal(bound.byteFormat("decimal").formatNetworkRate(12500), "12.5 kB/s");
+assert.equal(bound.byteFormat("binary").formatNetworkRate(12800), "12.5 KiB/s");
+assert.deepEqual([...bound.byteFormat("binary").formUnits], ["MiB", "GiB", "TiB"]);
+assert.deepEqual([...bound.byteFormat("decimal").formUnits], ["MB", "GB", "TB"]);
+assert.equal(bound.byteFormat("binary").defaultFormUnit, "GiB");
+assert.equal(bound.byteFormat("binary").formatLxdSize("4GiB"), "4 GiB");
 const tableFilters = readFileSync(join(src, "hooks", "use-table-filters.ts"), "utf8");
 if (!tableFilters.includes('if (unit === "bps") return formatNetworkRate(value)')) {
   failures.push("table-filter network bounds must preserve the API's bytes-per-second value");
@@ -296,6 +378,21 @@ for (const file of walk(src)) {
 
   if (/formatBytes\([^\n;]{0,180}\)\s*\}?\s*\/s\b/.test(source)) {
     failures.push(`${displayPath}: formats a rate with formatBytes(...)/s; use formatNetworkRate`);
+  }
+
+  if (!RAW_FORMATTER_MODULES.has(rel)) {
+    for (const { from, names } of RAW_FORMATTER_IMPORTS) {
+      const pattern = new RegExp(`import\\s*(?:type\\s*)?\\{([^}]*)\\}\\s*from\\s*["']${from.replace(/[/@.-]/g, "\\$&")}["']`, "g");
+      let imported;
+      while ((imported = pattern.exec(source)) !== null) {
+        const bound = imported[1].split(",").map((part) => part.trim().split(/\s+as\s+/)[0].replace(/^type\s+/, ""));
+        for (const name of names.filter((candidate) => bound.includes(candidate))) {
+          failures.push(
+            `${displayPath}:${lineOf(source, imported.index)} imports ${name} from ${from}, which prints decimal whatever the account chose; use useByteFormat()`,
+          );
+        }
+      }
+    }
   }
 
   if (rel !== "lib/utils.ts" && !PRIVATE_FORMATTER_ALLOWLIST.has(rel)) {
@@ -327,8 +424,8 @@ if (scanned < 200) failures.push(`only scanned ${scanned} TypeScript files; expe
 if (failures.length) {
   console.error("byte units: FAILED");
   for (const failure of failures) console.error(`  ${failure}`);
-  console.error("  Every size on screen goes through formatBytes, formatByteQuota or formatLxdSize.");
+  console.error("  Every size on screen goes through useByteFormat(): formatBytes, formatByteQuota, formatNetworkRate or formatLxdSize.");
   process.exit(1);
 }
 
-console.log(`byte units: ${scanned} files print one standard, the GB family`);
+console.log(`byte units: ${scanned} files print sizes in the account's one system`);

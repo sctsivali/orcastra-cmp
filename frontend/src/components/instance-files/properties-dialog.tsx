@@ -8,9 +8,10 @@ import { DialogSubmitError } from "@/components/ui/dialog-submit-error";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { OverflowText } from "@/components/ui/overflow-text";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import type { GuestEntry } from "@/lib/instance-files/api";
 import { guestText } from "@/lib/instance-files/guest-text";
-import { formatBytes, formatCount } from "@/lib/utils";
+import { formatCount } from "@/lib/utils";
 import { formatMode, formatTime } from "./file-table";
 
 interface PropertiesDialogProps {
@@ -35,6 +36,7 @@ function Fact({ label, value }: { label: string; value: React.ReactNode }) {
 
 /** Exact facts, and permissions as both boxes and an octal value that stay in step. */
 export function PropertiesDialog({ entry, path, writeReason, onSave, onClose }: PropertiesDialogProps) {
+  const { formatBytes } = useByteFormat();
   const [mode, setMode] = React.useState(0);
   const [modeText, setModeText] = React.useState("");
   const [uid, setUid] = React.useState("");

@@ -5,7 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import type { PythonInfo, WorkersInfo } from "@/types";
 import { api } from "@/lib/api";
 import { STATIC_DATA_CONFIG } from "@/lib/query-config";
-import { formatDateTime, formatBytes } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -23,6 +24,7 @@ import { Fact, FactList, Tile, formatUptime } from "@/components/system-resource
  * shows the frontend's own version, which is a separate image, so the backend build is said here.
  */
 export function WorkersCard({ workers, python }: { workers: WorkersInfo | null; python: PythonInfo }) {
+  const { formatBytes } = useByteFormat();
   const w = workers;
   const missing = w && w.expected !== null ? Math.max(w.expected - w.count, 0) : 0;
   // Without a uvicorn master the single worker is the backend, so its age is the backend's.

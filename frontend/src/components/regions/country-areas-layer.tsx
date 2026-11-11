@@ -8,6 +8,7 @@ import { OFFLINE_BASEMAP_ATTRIBUTION, escapeHtml } from "@/lib/map-basemap";
 import type { CountryArea, CountryAreas } from "@/lib/regions/country-areas";
 import { createPopupContent, regionStatus } from "./map-icons";
 import { plural } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 
 // important: above overlayPane (400), where the offline basemap's canvas lives and would take
 // every pointer event, and below markers (600), tooltips (650) and popups (700). Tiles sit at
@@ -45,6 +46,7 @@ interface CountryAreasLayerProps {
  */
 export function CountryAreasLayer({ regions, areas, onSelectRegion }: CountryAreasLayerProps) {
   const map = useMap();
+  const fmt = useByteFormat();
   const rendererRef = React.useRef<L.SVG | null>(null);
   // Read when a tooltip or popup opens, so counts stay current without a redraw on every poll.
   const latest = React.useRef(regions);
@@ -91,7 +93,7 @@ export function CountryAreasLayer({ regions, areas, onSelectRegion }: CountryAre
         direction: "top",
         className: "country-area-tooltip",
       });
-      layer.bindPopup(() => createPopupContent(current()), { className: "region-popup", maxWidth: 300 });
+      layer.bindPopup(() => createPopupContent(current(), fmt), { className: "region-popup", maxWidth: 300 });
       layer.on("click", () => onSelectRef.current(regionId));
       group.addLayer(layer);
     }
@@ -100,7 +102,7 @@ export function CountryAreasLayer({ regions, areas, onSelectRegion }: CountryAre
     return () => {
       group.remove();
     };
-  }, [map, areas, signature]);
+  }, [map, areas, signature, fmt]);
 
   return null;
 }

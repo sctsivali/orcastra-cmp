@@ -9,7 +9,8 @@ import * as React from "react";
 import { SignalHigh, SignalLow, SignalMedium } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { cn, formatNetworkRate } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import type { SpiceStats, SpiceStatus } from "@/lib/spice/session";
 import type { MouseMode } from "@/lib/spice/pointer";
 
@@ -40,6 +41,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 export function ConnectionDetails({ status, stats, mouseMode, agentConnected, resolution, scale }: ConnectionDetailsProps) {
+  const { formatNetworkRate } = useByteFormat();
   if (status !== "connected") return null;
   const rtt = stats?.rttMs ?? null;
   const { className, Icon, verdict } = tone(rtt);

@@ -21,10 +21,11 @@ import {
   PendingSnapshotAlert,
   type PendingSnapshotNotice,
 } from "@/components/snapshots/pending-snapshot-alert";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { useInstanceSnapshots, useSnapshotSchedules } from "@/hooks/use-lxd";
 import { useReadOnlyMode, useSnapshotSchedulesEnabled } from "@/hooks/use-read-only-mode";
 import { PANEL_PAGE_SIZE } from "@/lib/pagination";
-import { formatBytes, plural } from "@/lib/utils";
+import { plural } from "@/lib/utils";
 import type { VMInfo } from "@/types/api";
 
 import { SnapshotRowActions } from "@/app/inventory/snapshots/components/snapshot-row-actions";
@@ -60,6 +61,7 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
     enabled,
   );
   const { isReadOnly, isLoading: readOnlyLoading } = useReadOnlyMode();
+  const { formatBytes } = useByteFormat();
   // Read from the console's settings poll. `undefined` means not answered yet and leaves the
   // button as it was.
   const schedulesEnabled = useSnapshotSchedulesEnabled();

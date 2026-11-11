@@ -1,4 +1,4 @@
-import { FORM_SIZE_UNITS, type FormSizeUnit } from "@/lib/lxd-limits";
+import { FORM_SIZE_UNITS, formUnitSystem, type FormSizeUnit } from "@/lib/byte-units";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -55,7 +55,7 @@ function SizeField({ id, label, draft, onChange, disabled, error, help }: SizeFi
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {FORM_SIZE_UNITS.map((unit) => (
+            {FORM_SIZE_UNITS[formUnitSystem(draft.unit)].map((unit) => (
               <SelectItem key={unit} value={unit}>{unit}</SelectItem>
             ))}
           </SelectContent>

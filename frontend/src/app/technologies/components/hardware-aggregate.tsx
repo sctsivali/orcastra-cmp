@@ -3,7 +3,8 @@
 import * as React from "react";
 import { Cpu, Database, HardDrive, Sparkles, type LucideIcon } from "lucide-react";
 import { EMPTY_VALUE } from "@/components/ui/table-text";
-import { formatBytes, plural } from "@/lib/utils";
+import type { ByteFormat } from "@/lib/byte-format";
+import { plural } from "@/lib/utils";
 import type { NodeStatus } from "@/types/api";
 import { HardwareDetailDialog } from "./hardware-detail-dialog";
 import {
@@ -26,7 +27,7 @@ export interface HardwareCategory {
   items: TechnologySummaryItem[];
 }
 
-export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[] | null {
+export function buildHardwareCategories(nodes: NodeStatus[], fmt: ByteFormat): HardwareCategory[] | null {
   if (!nodes || nodes.length === 0) return null;
 
   const reportingNodes = nodes.filter((node) => node.resources);
@@ -127,7 +128,7 @@ export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[]
           label: "Total Memory",
           value:
             reportingNodeCount > 0
-              ? formatBytes(totalMemory)
+              ? fmt.formatBytes(totalMemory)
               : EMPTY_VALUE,
           detail: coverageDetail,
         },
@@ -135,7 +136,7 @@ export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[]
           label: "Memory per Cluster",
           value:
             reportingNodeCount > 0
-              ? `~${formatBytes(totalMemory / reportingNodeCount)}`
+              ? `~${fmt.formatBytes(totalMemory / reportingNodeCount)}`
               : EMPTY_VALUE,
           detail:
             reportingNodeCount > 0

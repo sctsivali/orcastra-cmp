@@ -11,7 +11,8 @@ import { clusterStatusMeta } from "@/lib/cluster-status";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { GRID_PAGE_SIZE, GRID_PAGE_SIZES } from "@/lib/pagination";
-import { formatBytes, formatHypervisorType, plural } from "@/lib/utils";
+import { formatHypervisorType, plural } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Collapsible,
@@ -131,6 +132,7 @@ function RegionCard({
   onToggle: () => void;
   onViewOnMap: () => void;
 }) {
+  const { formatBytes } = useByteFormat();
   const onlineClusters = region.nodes.filter((n) => n.status === "online").length;
   // Every cluster with no recorded location is grouped into one synthetic region whose fields
   // the backend fills with "XX" and "Unknown" (routers/regions.py). Rendered verbatim, an "XX"
@@ -265,6 +267,7 @@ function RegionCard({
 
 function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
   const { data, isLoading, error, refetch, refreshNow, dataUpdatedAt } = useRegionsOverview();
+  const { formatBytes } = useByteFormat();
   const [expandedRegions, setExpandedRegions] = React.useState<Set<string>>(new Set());
   const [selectedRegion, setSelectedRegion] = React.useState<string | null>(null);
   const [focusSignal, setFocusSignal] = React.useState(0);

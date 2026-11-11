@@ -12,7 +12,8 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatVcpuAmount, formatVcpuBusy } from "@/lib/instance-metrics-view";
-import { formatBytes, formatNetworkRate, formatVcpuCount, formatInstanceType } from "@/lib/utils";
+import { formatVcpuCount, formatInstanceType } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import type { InstanceMonitoringSummary, MonitoringDashboardResponse } from "@/types/api";
 
 type Resource = "cpu" | "memory" | "storage" | "network";
@@ -195,6 +196,7 @@ const TopConsumerRow = memo(function TopConsumerRow({
 });
 
 function ConsumerValue({ instance, type }: { instance: InstanceMonitoringSummary; type: Resource }) {
+  const { formatBytes, formatNetworkRate } = useByteFormat();
   switch (type) {
     case "cpu": {
       const busy = instance.cpu_busy_vcpus;

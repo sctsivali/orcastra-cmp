@@ -3,7 +3,8 @@
 import * as React from "react";
 import { Progress } from "@/components/ui/progress";
 import { EmptyState } from "@/components/ui/empty-state";
-import { formatBytes, formatCount } from "@/lib/utils";
+import { formatCount } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { capacityReading } from "@/lib/capacity-reading";
 import { Database } from "lucide-react";
 import type { UsageDict } from "../types";
@@ -49,6 +50,7 @@ function Meter({
 }
 
 export function CapacityPanel({ space, inodes }: { space?: UsageDict; inodes?: UsageDict }) {
+  const { formatBytes } = useByteFormat();
   const hasAny = capacityReading(space) !== null || capacityReading(inodes) !== null;
   if (!hasAny) {
     return (

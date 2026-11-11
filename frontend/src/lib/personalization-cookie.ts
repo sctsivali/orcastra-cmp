@@ -3,6 +3,7 @@ import {
   isIllustrationPreference,
   type PersonalizationSettings,
 } from "@/types/personalization";
+import { toByteUnitSystem, type ByteUnitSystem } from "@/lib/byte-units";
 
 // The hint cookie carries only the values a stylesheet needs, never an image: a logo is a
 // base64 data URI in the settings blob and would blow past the 4KB cookie budget on its own.
@@ -23,9 +24,11 @@ export interface PersonalizationHint {
   th?: string;
   /** Card illustrations, read by the root layout so the first byte of HTML already hides them. */
   il?: string;
+  /** Byte units, so the server render prints sizes in the account's system. */
+  bu?: string;
 }
 
-export function toPersonalizationHint(settings: PersonalizationSettings): PersonalizationHint {
+export function toPersonalizationHint(settings: PersonalizationSettings, byteUnits?: ByteUnitSystem): PersonalizationHint {
   return {
     ac: settings.colors.accentColor,
     sb: settings.colors.sidebarBgColor,
@@ -38,6 +41,7 @@ export function toPersonalizationHint(settings: PersonalizationSettings): Person
     an: settings.branding.appName,
     th: settings.theme,
     il: settings.illustrations,
+    bu: byteUnits,
   };
 }
 
@@ -78,6 +82,17 @@ export function parsePersonalizationHint(
     };
   } catch {
     return null;
+  }
+}
+
+/** The byte units in the hint; anything but a known system, or no hint, reads as the default. */
+export function parseByteUnitsHint(raw: string | null | undefined): ByteUnitSystem {
+  if (!raw) return toByteUnitSystem(undefined);
+  try {
+    const hint = JSON.parse(decodeURIComponent(raw)) as PersonalizationHint | null;
+    return toByteUnitSystem(hint && typeof hint === "object" ? hint.bu : undefined);
+  } catch {
+    return toByteUnitSystem(undefined);
   }
 }
 

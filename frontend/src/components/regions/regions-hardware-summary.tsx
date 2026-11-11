@@ -3,7 +3,8 @@
 import * as React from "react";
 import { Cpu, HardDrive, MemoryStick, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { formatBytes, plural } from "@/lib/utils";
+import { plural } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { GPU_EMPTY_TITLE, GPU_NO_COMPUTE_TITLE, gpuNoComputeCaption, summarizeGpus } from "@/lib/gpu";
 import { ExtendedHardwareInfo } from "@/types/api";
 
@@ -12,6 +13,7 @@ import { ExtendedHardwareInfo } from "@/types/api";
  * a labelled grid. Shared by the region card's collapsed header and its expanded body.
  */
 export function HardwareSummary({ hardware, compact = false }: { hardware: ExtendedHardwareInfo; compact?: boolean }) {
+  const { formatBytes } = useByteFormat();
   // Compute GPUs and detected cards are different numbers about the same hardware, so the
   // card count only appears when it says something the GPU count did not.
   const cardsTotal = hardware.gpu_cards_total ?? hardware.gpu_total;

@@ -1,5 +1,5 @@
 import { formatVcpuCount } from "@/lib/utils";
-import { formatLxdSize } from "@/lib/lxd-limits";
+import type { ByteFormat } from "@/lib/byte-format";
 import { APIError, type InstanceCreateIssue } from "@/types/api";
 
 export type CreateErrorField =
@@ -121,13 +121,13 @@ export function mapCreatePreflightBlockers(
   return { message, field };
 }
 
-/** The sentence under the field the cluster refused. */
-export function fieldRefusalText(err: CreateError): string {
+/** The sentence under the field the cluster refused, its limit in the account's units. */
+export function fieldRefusalText(err: CreateError, fmt: Pick<ByteFormat, "formatLxdSize">): string {
   if (!err.limit || !["cpu", "memory", "instances"].includes(err.field ?? "")) {
     return err.message;
   }
   const project = err.project ? `${err.project} allows` : "The project allows";
   if (err.field === "cpu") return `The cluster refused this value: ${project} ${err.max ? formatVcpuCount(Number(err.max)) : "this many vCPUs"} in total across its instances.`;
-  if (err.field === "memory") return `The cluster refused this value: ${project} ${err.max ? formatLxdSize(err.max) : "this much"} memory in total across its instances.`;
+  if (err.field === "memory") return `The cluster refused this value: ${project} ${err.max ? fmt.formatLxdSize(err.max) : "this much"} memory in total across its instances.`;
   return `The cluster refused this create: ${project} no more instances of this kind.`;
 }

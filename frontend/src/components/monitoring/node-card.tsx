@@ -9,6 +9,7 @@ import { Play, Server } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { clusterStatusMeta } from "@/lib/cluster-status";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { ClusterStatus } from "@/types/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -25,7 +26,7 @@ import {
   gpuDenseRatio,
   summarizeGpus,
 } from "@/lib/gpu";
-import { formatBytes, formatHypervisorType, plural } from "@/lib/utils";
+import { formatHypervisorType, plural } from "@/lib/utils";
 import { capacityReading } from "@/lib/capacity-reading";
 import type { ClusterMonitoringMetrics } from "@/types/api";
 
@@ -73,6 +74,7 @@ function hostFigures(node: ClusterMonitoringMetrics) {
 }
 
 function NodeHostFigures({ host }: { host: NonNullable<ReturnType<typeof hostFigures>> }) {
+  const { formatBytes } = useByteFormat();
   const { cpu, gpu, memory, storage } = host;
   return (
     <>

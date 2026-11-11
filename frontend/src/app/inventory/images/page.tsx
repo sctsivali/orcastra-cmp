@@ -15,7 +15,8 @@ import {
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { ImagesIllustration } from "@/components/illustrations/scenes/onboarding";
 import { OverflowCell } from "@/components/ui/overflow-cell";
-import { formatBytes, formatInstanceType, formatLabel, plural } from "@/lib/utils";
+import { formatInstanceType, formatLabel, plural } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { UploadCloud, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -105,6 +106,7 @@ const IMAGES = defineTable<ImageInfo>()({
 function ImagesContent() {
   const { data: imagesByHost = [], isLoading, refetch, refreshNow, dataUpdatedAt, isError, error } = useImages();
   const [detailImage, setDetailImage] = useState<any>(null);
+  const { formatBytes } = useByteFormat();
   // One request for the page instead of one per row. The instances list is tenant-filtered
   // server side, which is why the dialog's heading says "your instances" instead of a total.
   const { data: instanceData } = useInstances();

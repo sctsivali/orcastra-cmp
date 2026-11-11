@@ -60,7 +60,13 @@ export function useCreateSeedValidation({
     if (!nodeExists) {
       seedCheckedRef.current = true;
       setSeedValidationPending(false);
-      setForm({ ...DEFAULT_INSTANCE_CREATE_FORM, tags: [] });
+      // Starts over without the seed, in the units the form opened with.
+      setForm((current) => ({
+        ...DEFAULT_INSTANCE_CREATE_FORM,
+        memoryUnit: current.memoryUnit,
+        storageUnit: current.storageUnit,
+        tags: [],
+      }));
       setSeedDropped(
         `Cluster ${seed.selectedNode} is not available to you right now, so nothing was pre-filled.`,
       );

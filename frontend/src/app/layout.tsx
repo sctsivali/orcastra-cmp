@@ -10,6 +10,7 @@ import { MainLayout } from "@/components/main-layout";
 import { Toaster } from "@/components/ui/toaster";
 import {
   PERSONALIZATION_COOKIE,
+  parseByteUnitsHint,
   parsePersonalizationHint,
 } from "@/lib/personalization-cookie";
 import { DEFAULT_PERSONALIZATION } from "@/types/personalization";
@@ -148,9 +149,10 @@ export default async function RootLayout({
   // The sidebar colour has to be right in the first byte too. The pre-paint script can set the
   // CSS variables, but whether the aside carries `sidebar-custom-bg` is a className React owns;
   // reading the hint here keeps the server render and the first client render in agreement.
-  const initialPersonalization = parsePersonalizationHint(
-    cookieStore.get(PERSONALIZATION_COOKIE)?.value,
-  );
+  const personalizationHint = cookieStore.get(PERSONALIZATION_COOKIE)?.value;
+  const initialPersonalization = parsePersonalizationHint(personalizationHint);
+  // Sizes print on the server too; the hint keeps that text and the first client render alike.
+  const initialByteUnits = parseByteUnitsHint(personalizationHint);
   // Card illustrations from the first byte: the account's hint when there is one, otherwise the
   // deployment's choice, which the sign-in pages show before anyone signs in. getPublicBranding
   // is the same memoised read generateMetadata made, so this adds no request.
@@ -175,7 +177,7 @@ export default async function RootLayout({
       <body
         className={`${GeistSans.variable} ${GeistMono.variable} font-sans antialiased min-h-screen bg-background`}
       >
-        <Providers initialPersonalization={initialPersonalization} initialSession={initialSession}>
+        <Providers initialPersonalization={initialPersonalization} initialByteUnits={initialByteUnits} initialSession={initialSession}>
           <LayoutProvider initialCollapsed={sidebarCollapsed} initialDock={initialDock}>
             <MainLayout>{children}</MainLayout>
             <Toaster />

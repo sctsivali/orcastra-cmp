@@ -10,12 +10,10 @@ import {
 import { USAGE_CRITICAL_PERCENT, USAGE_ELEVATED_PERCENT } from "@/lib/usage-tone";
 import {
   cn,
-  formatByteQuota,
-  formatBytes,
-  formatNetworkRate,
   formatVcpuCount,
   EMPTY_VALUE,
 } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import type { InstanceMetrics } from "@/types";
 
 // The console is fixed-dark chrome, so the ramp is the --status-* set read through the
@@ -46,6 +44,7 @@ function cpuLabel(metrics: InstanceMetrics): { text: string; tone: string; perce
 
 /** CPU and memory in the compact bar. */
 export function InstanceResourceChips({ metrics }: { metrics: InstanceMetrics }) {
+  const { formatBytes, formatByteQuota } = useByteFormat();
   const cpu = cpuLabel(metrics);
   const memory = memoryReading(metrics);
   return (
@@ -84,6 +83,7 @@ export function InstanceResourcesPanel({
   metrics: InstanceMetrics | undefined;
   loading: boolean;
 }) {
+  const { formatBytes, formatByteQuota, formatNetworkRate } = useByteFormat();
   if (loading) {
     return (
       <div className="flex items-center justify-center py-4 text-gray-500">

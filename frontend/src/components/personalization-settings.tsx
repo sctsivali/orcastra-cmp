@@ -21,7 +21,8 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { getAccessToken } from "@/lib/api";
 import { personalizationAPI } from "@/lib/personalization-api";
-import { formatBytes, formatDateTime } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { APIError } from "@/types/api";
 
 // The picker fills an empty field with the built-in default, so it reads the same object
@@ -55,10 +56,10 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 
-// Logos 512 kB, backgrounds 2.1 MB. The backend holds the same byte counts.
+// Byte counts the backend holds too; the labels print them in the account's units.
 const MAX_LOGO_SIZE = 500 * 1024;
 const MAX_BACKGROUND_SIZE = 2 * 1024 * 1024;
-// The server refuses a favicon over 64 KiB (backend services/branding/validation.py).
+// The server refuses a larger favicon (backend services/branding/validation.py).
 const MAX_FAVICON_SIZE = 64 * 1024;
 const MAX_IMAGE_URL_LENGTH = 2048;
 
@@ -105,6 +106,7 @@ function ImageUploader({
   const [urlValue, setUrlValue] = React.useState("");
   const [isLoadingUrl, setIsLoadingUrl] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const { formatBytes } = useByteFormat();
   const maxSizeLabel = formatBytes(maxSize, 0);
 
   const handleFile = async (file: File) => {

@@ -17,7 +17,8 @@ import {
 import { EmptyState } from "@/components/ui/empty-state";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
-import { formatBytes, formatLabel } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
+import { formatLabel } from "@/lib/utils";
 import type { NodeStatus } from "@/types/api";
 import type { HardwareCategory } from "./hardware-aggregate";
 import { CpuSocketList, StorageDeviceList } from "./hardware-lists";
@@ -124,6 +125,7 @@ function CpuDetail({ node }: { node: NodeStatus }) {
 }
 
 function MemoryDetail({ node }: { node: NodeStatus }) {
+  const { formatBytes } = useByteFormat();
   const resources = node.resources;
   const topology = resources?.hardware?.memory;
   if (!resources) return <MissingReading node={node} noun="memory detail" />;
@@ -151,6 +153,7 @@ function MemoryDetail({ node }: { node: NodeStatus }) {
 }
 
 function StorageDetail({ node }: { node: NodeStatus }) {
+  const { formatBytes } = useByteFormat();
   const resources = node.resources;
   if (!resources) return <MissingReading node={node} noun="storage detail" />;
 

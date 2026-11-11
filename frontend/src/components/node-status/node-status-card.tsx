@@ -39,7 +39,8 @@ import { NodeStatus } from "@/types";
 import { useUpdateNodeTags, useUpdateNodeDisplayName } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { usePermissions } from "@/hooks/use-permissions";
-import { cn, formatBytes } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
+import { cn } from "@/lib/utils";
 import { capacityReading } from "@/lib/capacity-reading";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { Progress } from "@/components/ui/progress";
@@ -64,6 +65,7 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
   // tenant whose instance runs there. The control-plane endpoint, the raw connection error, the
   // rename action and the upgrade runbook are operator detail and stay partner-only.
   const { isPartner } = usePermissions();
+  const { formatBytes } = useByteFormat();
   const [editNameDialogOpen, setEditNameDialogOpen] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [newDisplayName, setNewDisplayName] = useState(node.display_name || node.name);

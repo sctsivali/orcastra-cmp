@@ -3,12 +3,13 @@
 import * as React from "react";
 import { Upload } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { hasDrafts } from "@/lib/instance-files/draft-store";
 import { setManifestActor } from "@/lib/instance-files/transfer-manifest";
 import { restoreInterrupted } from "@/lib/instance-files/transfer-pump";
 import { hasActiveTransfers, useTransferStore } from "@/lib/instance-files/transfer-store";
-import { formatNetworkRate, plural } from "@/lib/utils";
+import { plural } from "@/lib/utils";
 import { summarizeTransfers } from "./transfer-panel";
 
 /**
@@ -19,6 +20,7 @@ export function TransferTray() {
   const transfers = useTransferStore((state) => state.transfers);
   const { active, percent, rate } = summarizeTransfers(transfers);
   const { scopeKey, isAuthenticated } = useActorQueryScope();
+  const { formatNetworkRate } = useByteFormat();
 
   React.useEffect(() => {
     if (!isAuthenticated) return;

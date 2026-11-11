@@ -1,6 +1,7 @@
 "use client";
 
-import { formatLxdSize } from "@/lib/lxd-limits";
+import type { ByteFormat } from "@/lib/byte-format";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { Lock, Settings } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { OverflowCell } from "@/components/ui/overflow-cell";
@@ -71,12 +72,13 @@ function hasFixedAddress(instance: Pick<VMInfo, "devices" | "expanded_devices">)
 // bare identifier because "Pool <name>" wraps onto two lines at the table's container width.
 function rootDiskLabel(
   instance: Pick<VMInfo, "devices" | "expanded_devices">,
+  fmt: ByteFormat,
 ): { value: string; pool?: string } | null {
   const effective = instance.expanded_devices?.root ?? instance.devices?.root;
   if (!effective) return null;
   const size = String(effective.size ?? "").trim();
   const pool = String(effective.pool ?? "").trim();
-  return { value: size ? formatLxdSize(size) : "Pool default", pool: pool || undefined };
+  return { value: size ? fmt.formatLxdSize(size) : "Pool default", pool: pool || undefined };
 }
 
 const IN_FLIGHT: Record<InstanceAction, string> = {
@@ -118,11 +120,12 @@ export function InstanceTableRow({
   onRebuild,
   onDelete,
 }: InstanceTableRowProps) {
+  const fmt = useByteFormat();
   const project = instance.project || "default";
   // An instance name is unique only within one project on one host, and this table spans
   // both, so the trigger names all three. Same shape as components/dashboard/instance-row.tsx.
   const rowLabel = `${instance.name} in ${project} on ${instance.host}`;
-  const rootDisk = rootDiskLabel(instance);
+  const rootDisk = rootDiskLabel(instance, fmt);
   const inFlight = inFlightLabel(instance, pendingActions, deletePending);
   const statusDisplay = instanceStatusDisplay(instance.status);
   const readOnlyByTerm = termReadOnlyReason?.(instance.host, project, instance.name);

@@ -15,6 +15,7 @@ import { IntegrationsSections } from "@/components/integrations/integrations-sec
 import { UserGroupsSettings } from "@/components/user-groups-settings";
 import { usePermissions } from "@/hooks/use-permissions";
 import { LoadingLottie } from "@/components/loading-lottie";
+import { ByteUnitsSettings } from "./components/byte-units-settings";
 import { CacheSettings } from "./components/cache-settings";
 import { useSettingsNotice } from "./components/settings-notice";
 import { settingsTabPath, type SettingsTab } from "./settings-tabs";
@@ -88,6 +89,7 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
 
         <TabsContent value="general" className="space-y-6">
           <div className="grid gap-6">
+            <ByteUnitsSettings />
             {/* Desktop Control lives in Integrations, beside the API keys it governs. A tenant
                 cannot open that tab, and this consent is the tenant's own to give, so for a
                 tenant it stays here. */}

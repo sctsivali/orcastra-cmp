@@ -1,6 +1,6 @@
 "use client";
 
-import { FORM_SIZE_UNITS, FORM_UNIT_BYTES, type FormSizeUnit } from "@/lib/lxd-limits";
+import { FORM_SIZE_UNITS, FORM_UNIT_BYTES, formUnitSystem, isFormSizeUnit } from "@/lib/byte-units";
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
@@ -27,7 +27,8 @@ import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { toast } from "@/hooks/use-toast";
 import { projectRowKey, requestRowFocus } from "@/lib/row-focus";
-import { formatBytes, isIncusType } from "@/lib/utils";
+import { isIncusType } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 
 const projectCreateSchema = z.object({
   name: z
@@ -46,9 +47,9 @@ const projectCreateSchema = z.object({
   enableNetworks: z.boolean(),
   maxCpu: z.string().min(1, "Max vCPU is required"),
   maxRamValue: z.string().min(1, "Max memory value is required"),
-  maxRamUnit: z.string().min(1, "Max memory unit is required"),
+  maxRamUnit: z.string().refine(isFormSizeUnit, "Max memory unit is required"),
   maxStorageValue: z.string().min(1, "Max Storage value is required"),
-  maxStorageUnit: z.string().min(1, "Max Storage unit is required"),
+  maxStorageUnit: z.string().refine(isFormSizeUnit, "Max Storage unit is required"),
 });
 
 type ProjectCreateFormData = z.infer<typeof projectCreateSchema>;
@@ -83,6 +84,8 @@ export function ProjectCreateForm() {
     }
   }, [error]);
 
+  // defaultValues are read once, so the unit fields keep the units the form opened with.
+  const { formatBytes, defaultFormUnit } = useByteFormat();
   const {
     register,
     handleSubmit,
@@ -101,9 +104,9 @@ export function ProjectCreateForm() {
       enableNetworks: true,
       maxCpu: "",
       maxRamValue: "",
-      maxRamUnit: "GB",
+      maxRamUnit: defaultFormUnit,
       maxStorageValue: "",
-      maxStorageUnit: "GB",
+      maxStorageUnit: defaultFormUnit,
     },
   });
 
@@ -140,7 +143,7 @@ export function ProjectCreateForm() {
     if (!maxRamValueInput || !maxRamInBytes || !maxRamUnitInput) return;
     
     const ramNum = parseInt(maxRamValueInput);
-    const multiplier = FORM_UNIT_BYTES[maxRamUnitInput as FormSizeUnit];
+    const multiplier = FORM_UNIT_BYTES[maxRamUnitInput];
     const maxAllowed = Math.floor(maxRamInBytes / multiplier);
     
     if (ramNum > maxAllowed) {
@@ -158,7 +161,7 @@ export function ProjectCreateForm() {
     if (!maxStorageValueInput || !maxStorageInBytes || !maxStorageUnitInput) return;
     
     const storageNum = parseInt(maxStorageValueInput);
-    const multiplier = FORM_UNIT_BYTES[maxStorageUnitInput as FormSizeUnit];
+    const multiplier = FORM_UNIT_BYTES[maxStorageUnitInput];
     const maxAllowed = Math.floor(maxStorageInBytes / multiplier);
     
     if (storageNum > maxAllowed) {
@@ -393,7 +396,7 @@ export function ProjectCreateForm() {
                       id="maxRamValue"
                       type="number"
                       min="1"
-                      max={maxRamInBytes ? Math.floor(maxRamInBytes / FORM_UNIT_BYTES[watch("maxRamUnit") as FormSizeUnit]) : undefined}
+                      max={maxRamInBytes ? Math.floor(maxRamInBytes / FORM_UNIT_BYTES[watch("maxRamUnit")]) : undefined}
                       placeholder="1"
                       className={errors.maxRamValue ? "flex-1 border-destructive" : "flex-1"}
                       onKeyDown={blockNonNumeric}
@@ -401,13 +404,13 @@ export function ProjectCreateForm() {
                     />
                     <Select
                       value={watch("maxRamUnit")}
-                      onValueChange={(value) => setValue("maxRamUnit", value)}
+                      onValueChange={(value) => { if (isFormSizeUnit(value)) setValue("maxRamUnit", value); }}
                     >
                       <SelectTrigger className="w-24">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {FORM_SIZE_UNITS.map((unit) => (
+                        {FORM_SIZE_UNITS[formUnitSystem(watch("maxRamUnit"))].map((unit) => (
                           <SelectItem key={unit} value={unit}>{unit}</SelectItem>
                         ))}
                       </SelectContent>
@@ -428,7 +431,7 @@ export function ProjectCreateForm() {
                       id="maxStorageValue"
                       type="number"
                       min="1"
-                      max={maxStorageInBytes ? Math.floor(maxStorageInBytes / FORM_UNIT_BYTES[watch("maxStorageUnit") as FormSizeUnit]) : undefined}
+                      max={maxStorageInBytes ? Math.floor(maxStorageInBytes / FORM_UNIT_BYTES[watch("maxStorageUnit")]) : undefined}
                       placeholder="10"
                       className={errors.maxStorageValue ? "flex-1 border-destructive" : "flex-1"}
                       onKeyDown={blockNonNumeric}
@@ -436,13 +439,13 @@ export function ProjectCreateForm() {
                     />
                     <Select
                       value={watch("maxStorageUnit")}
-                      onValueChange={(value) => setValue("maxStorageUnit", value)}
+                      onValueChange={(value) => { if (isFormSizeUnit(value)) setValue("maxStorageUnit", value); }}
                     >
                       <SelectTrigger className="w-24">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {FORM_SIZE_UNITS.map((unit) => (
+                        {FORM_SIZE_UNITS[formUnitSystem(watch("maxStorageUnit"))].map((unit) => (
                           <SelectItem key={unit} value={unit}>{unit}</SelectItem>
                         ))}
                       </SelectContent>

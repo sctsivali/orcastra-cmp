@@ -14,7 +14,8 @@ import { EMPTY_VALUE } from "@/components/ui/table-text";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { UsageBar } from "@/components/ui/usage-bar";
 import { usageLevel, usagePercent } from "@/lib/usage-tone";
-import { formatBytes, formatDateTime, formatFrequency, plural } from "@/lib/utils";
+import { formatDateTime, formatFrequency, plural } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import {
   Fact,
   FactList,
@@ -130,6 +131,7 @@ function HostCpuCard({ host, reading }: { host: HostInfo | null; reading: Window
 }
 
 function HostMemoryCard({ host }: { host: HostInfo | null }) {
+  const { formatBytes } = useByteFormat();
   const memory = host?.memory ?? null;
   return (
     <Card>
@@ -194,6 +196,7 @@ function HostStorageCard({ host, containerised }: { host: HostInfo | null; conta
 }
 
 function FilesystemRow({ fs }: { fs: HostFilesystem }) {
+  const { formatBytes } = useByteFormat();
   // ext4 keeps blocks back for root by default; they count as neither used nor free, which is
   // why df's percent is used over (used + free) and the three figures do not sum to the total.
   const reserved = fs.total - fs.used - fs.free;

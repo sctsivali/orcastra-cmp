@@ -3,7 +3,8 @@
 import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { DetailField, DetailGrid } from "@/components/detail/detail-field";
-import { formatBytes, formatFrequency } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
+import { formatFrequency } from "@/lib/utils";
 import type { CPUSocketInfo, StorageDeviceInfo } from "@/types/api";
 
 /**
@@ -85,6 +86,7 @@ export function CpuSocketList({ sockets }: { sockets: CPUSocketInfo[] }) {
 }
 
 export function StorageDeviceList({ devices }: { devices: StorageDeviceInfo[] }) {
+  const { formatBytes } = useByteFormat();
   if (devices.length === 0) return null;
   return (
     <div className="space-y-2">

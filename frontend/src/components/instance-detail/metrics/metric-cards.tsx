@@ -5,6 +5,7 @@ import { Activity, Cpu, HardDrive, Network } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { UsageMeter } from "@/components/ui/usage-meter";
 import { DetailField, DetailGrid } from "@/components/detail/detail-field";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import {
   cpuReading,
   diskIoUnavailableText,
@@ -13,12 +14,7 @@ import {
   formatVcpuBusy,
   memoryReading,
 } from "@/lib/instance-metrics-view";
-import {
-  formatByteQuota,
-  formatBytes,
-  formatNetworkRate,
-  formatVcpuCount,
-} from "@/lib/utils";
+import { formatVcpuCount } from "@/lib/utils";
 import type { InstanceMetrics } from "@/types/api";
 
 function CardHeading({ icon: Icon, title }: { icon: LucideIcon; title: string }) {
@@ -82,6 +78,7 @@ export function CpuCard({ metrics }: { metrics: InstanceMetrics }) {
 }
 
 export function MemoryCard({ metrics }: { metrics: InstanceMetrics }) {
+  const { formatBytes, formatByteQuota } = useByteFormat();
   const reading = memoryReading(metrics);
   return (
     <Card className="space-y-3 p-4">
@@ -125,6 +122,7 @@ export function MemoryCard({ metrics }: { metrics: InstanceMetrics }) {
 }
 
 export function DiskCard({ metrics }: { metrics: InstanceMetrics }) {
+  const { formatBytes, formatByteQuota, formatNetworkRate } = useByteFormat();
   const devices = Object.entries(metrics.disk_usage_bytes ?? {});
   const totals = metrics.disk_total_bytes ?? {};
   const ioStatus = metrics.disk_io_status ?? "unavailable";
@@ -222,6 +220,7 @@ function RateValue({
   reported: boolean;
   total: number;
 }) {
+  const { formatBytes, formatNetworkRate } = useByteFormat();
   if (!reported) {
     return <span className="tabular-nums">{formatBytes(total)} since start</span>;
   }

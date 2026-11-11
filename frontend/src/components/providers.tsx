@@ -27,6 +27,7 @@ import {
 import { registerExternalMutationQueryClient } from "@/lib/mutation-coherence";
 import { PendingCreateFollower } from "@/components/pending-create-follower";
 import type { PersonalizationSettings } from "@/types/personalization";
+import type { ByteUnitSystem } from "@/lib/byte-units";
 import { unmaskSession, type HydratedSession } from "@/lib/hydrated-session";
 
 /**
@@ -146,6 +147,7 @@ function getQueryClient() {
 export function Providers({
   children,
   initialPersonalization,
+  initialByteUnits,
   initialSession,
 }: {
   children: React.ReactNode;
@@ -153,6 +155,7 @@ export function Providers({
   // tree, and handed down so the server and the browser render the same sidebar on the first
   // pass.
   initialPersonalization?: PersonalizationSettings | null;
+  initialByteUnits?: ByteUnitSystem;
   // A comfortably valid session read by the root layout (auth-session.ts), its token masked, or
   // undefined to let the browser fetch one. Never null.
   initialSession?: HydratedSession;
@@ -185,7 +188,7 @@ export function Providers({
         <PendingCreateFollower />
         <ChunkReloadReset />
         <StorageCleanupProvider>
-          <PersonalizationProvider initialSettings={initialPersonalization}>
+          <PersonalizationProvider initialSettings={initialPersonalization} initialByteUnits={initialByteUnits}>
             <ThemeProvider>
               <TooltipProvider delayDuration={150} skipDelayDuration={100}>
                 <NavigationProgressProvider>

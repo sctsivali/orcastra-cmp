@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useToast } from "@/hooks/use-toast";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { useProjects } from "@/hooks/use-lxd";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
@@ -35,7 +36,6 @@ import {
   UploadTerminalFailure,
 } from "@/lib/upload-terminal";
 import { APIError, type ProjectListResponse } from "@/types/api";
-import { formatBytes } from "@/lib/utils";
 import { Loader2, UploadCloud } from "lucide-react";
 
 // 16 MiB chunks: large enough to keep request overhead low, small enough that a
@@ -81,6 +81,7 @@ function suggestAlias(fileName: string): string {
 export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploadDialogProps) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { formatBytes } = useByteFormat();
   const { scopeKey } = useActorQueryScope();
   const nodePicker = useNodePickerOptions();
   const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;

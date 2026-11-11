@@ -12,7 +12,8 @@ import {
 import { Card, CardContent } from "@/components/ui/card";
 import { IllustrationFallback, type IllustrationProps } from "@/components/illustrations/illustration-frame";
 import { DownloadIllustration, DurationIllustration, SessionsActiveIllustration, UploadIllustration } from "@/components/illustrations/scenes/kpi";
-import { EMPTY_VALUE, formatBytes, formatCount, formatElapsed, formatNetworkRate } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
+import { EMPTY_VALUE, formatCount, formatElapsed } from "@/lib/utils";
 
 /**
  * One counter above a Sessions table, in the house stat style of the Regions tile: a small icon
@@ -72,6 +73,7 @@ export function ActiveSummary({
   downloadRate: number;
   uploadRate: number;
 }) {
+  const { formatNetworkRate } = useByteFormat();
   const shown = (text: string) => (countUnknown ? EMPTY_VALUE : text);
   return (
     <div className={ACTIVE_STRIP}>
@@ -99,6 +101,7 @@ export function HistorySummary({
   downloadBytes: number;
   uploadBytes: number;
 }) {
+  const { formatBytes } = useByteFormat();
   const shown = (text: string) => (countUnknown ? EMPTY_VALUE : text);
   return (
     <div className={HISTORY_STRIP}>

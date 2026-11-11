@@ -7,6 +7,7 @@ import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, Dia
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
+import { useByteUnitsRef } from "@/hooks/use-byte-format";
 import {
   useInstanceOperationJob,
   useInstanceSpecificationForEdit,
@@ -95,6 +96,7 @@ function InstanceSpecificationBody({
 }: BodyProps) {
   const { toast } = useToast();
   const { scopeKey } = useActorQueryScope();
+  const unitsRef = useByteUnitsRef();
   const project = instance.project || "default";
   const [attempt, setAttempt] = useState<SpecificationOperationAttempt | null>(() =>
     readSpecificationAttempt(scopeKey, instance.name, instance.host, project),
@@ -153,15 +155,12 @@ function InstanceSpecificationBody({
   }, [expectedJob, instance.host, instance.name, jobRead.data, pollMatches, project, scopeKey]);
   useEffect(() => {
     if (!specification.data) return;
-    setDraft(draftFromSpecification(specification.data));
+    setDraft(draftFromSpecification(specification.data, unitsRef.current));
     setError(null);
     setStale(false);
   }, [specification.data]);
   const validation = useMemo(
-    () =>
-      specification.data && draft
-        ? validateSpecificationDraft(specification.data, draft)
-        : null,
+    () => (specification.data && draft ? validateSpecificationDraft(specification.data, draft) : null),
     [draft, specification.data],
   );
 

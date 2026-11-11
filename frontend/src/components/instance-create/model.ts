@@ -1,4 +1,4 @@
-import { FORM_SIZE_UNITS } from "@/lib/lxd-limits";
+import { DEFAULT_BYTE_UNITS, defaultFormUnit, type ByteUnitSystem } from "@/lib/byte-units";
 import type { GpuClass } from "@/lib/gpu";
 
 export type InstanceType = "container" | "vm";
@@ -37,9 +37,6 @@ export interface GpuDevice {
   label?: string;
   gpuClass?: GpuClass;
 }
-
-export const MEMORY_UNITS = FORM_SIZE_UNITS;
-export const STORAGE_UNITS = FORM_SIZE_UNITS;
 
 export const ADVANCED_DEFAULTS = {
   secProtectDelete: "",
@@ -90,6 +87,12 @@ export const DEFAULT_INSTANCE_CREATE_FORM: InstanceCreateFormState = {
   storageUnit: "GB",
   tags: [],
 };
+
+/** A fresh form whose size fields start in the account's units: 1 GB and 10 GB, or 1 GiB and 10 GiB. */
+export function instanceCreateFormDefaults(units: ByteUnitSystem = DEFAULT_BYTE_UNITS): InstanceCreateFormState {
+  const unit = defaultFormUnit(units);
+  return { ...DEFAULT_INSTANCE_CREATE_FORM, memoryUnit: unit, storageUnit: unit, tags: [] };
+}
 
 export function isPositiveInteger(value: string): boolean {
   return /^[1-9]\d*$/.test(value.trim());

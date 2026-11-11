@@ -1,5 +1,6 @@
 import { DEFAULT_PERSONALIZATION, isIllustrationPreference, type PersonalizationSettings } from "@/types/personalization";
 import { safeImageSrc } from "@/lib/branding-images";
+import { toByteUnitSystem, type ByteUnitSystem } from "@/lib/byte-units";
 
 // `version` is the server's token over every layer under the account (its organization, that
 // organization's provider, the deployment default) and the link between them. A timestamp alone
@@ -7,6 +8,8 @@ import { safeImageSrc } from "@/lib/branding-images";
 export type OrgPreferencesVersion = { organization_id: number; updated_at: string | null; version: string | null };
 export type OrgPreferences = OrgPreferencesVersion & { settings: PersonalizationSettings };
 export type PreferenceRead<T> = { ok: true; value: T } | { ok: false };
+/** The account's own row: the defaults with its theme over them, and its byte units. */
+export type PersonalPreferences = { settings: PersonalizationSettings; byteUnits: ByteUnitSystem };
 
 export function mergeWithDefaults(data: Partial<PersonalizationSettings>): PersonalizationSettings {
   const logo = { ...DEFAULT_PERSONALIZATION.logo, ...data.logo };
@@ -75,11 +78,47 @@ async function readPreferences(
 export async function readPersonalPreferences(
   accessToken: string | undefined,
   isCurrent: () => boolean,
-): Promise<PreferenceRead<PersonalizationSettings>> {
+): Promise<PreferenceRead<PersonalPreferences>> {
   const result = await readPreferences("user-preferences", accessToken, isCurrent);
-  return result.ok && isRecord(result.value)
-    ? { ok: true, value: mergeWithDefaults(result.value as Partial<PersonalizationSettings>) }
-    : { ok: false };
+  if (!result.ok || !isRecord(result.value)) return { ok: false };
+  return {
+    ok: true,
+    value: {
+      settings: mergeWithDefaults(result.value as Partial<PersonalizationSettings>),
+      byteUnits: toByteUnitSystem(result.value.byteUnits),
+    },
+  };
+}
+
+// A personal choice saved in one tab reaches the account's other tabs at once instead of at
+// their next reload. Same origin only; the message names the account scope, never a value.
+const PERSONAL_WRITE_CHANNEL = "orcastra-personal-preferences";
+
+export function announcePersonalWrite(scopeKey: string): void {
+  if (typeof BroadcastChannel === "undefined") return;
+  try {
+    const channel = new BroadcastChannel(PERSONAL_WRITE_CHANNEL);
+    channel.postMessage({ scopeKey });
+    channel.close();
+  } catch {
+    // Another tab then picks the choice up on its next load.
+  }
+}
+
+/** Calls `onWrite` when another tab of the same account saved a personal choice. */
+export function onPersonalWrite(scopeKey: string, onWrite: () => void): () => void {
+  if (typeof BroadcastChannel === "undefined") return () => {};
+  let channel: BroadcastChannel;
+  try {
+    channel = new BroadcastChannel(PERSONAL_WRITE_CHANNEL);
+  } catch {
+    return () => {};
+  }
+  channel.onmessage = (event: MessageEvent) => {
+    const data: unknown = event.data;
+    if (isRecord(data) && data.scopeKey === scopeKey) onWrite();
+  };
+  return () => channel.close();
 }
 
 export async function readOrgPreferences(

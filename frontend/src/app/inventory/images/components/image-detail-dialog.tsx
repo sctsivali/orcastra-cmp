@@ -9,7 +9,8 @@ import { RecordDetailDialog } from "@/components/detail/detail-dialog";
 import { DetailField, DetailGrid, DetailSection } from "@/components/detail/detail-field";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { PANEL_PAGE_SIZE } from "@/lib/pagination";
-import { formatBytes, formatDateTime, formatInstanceType } from "@/lib/utils";
+import { formatDateTime, formatInstanceType } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import type { ImageInfo, VMInfo } from "@/types/api";
 import { inventoryLinks } from "@/lib/inventory-links";
 import { NodeLink } from "@/components/ui/node-link";
@@ -39,6 +40,7 @@ export function ImageDetailDialog({
   // important: hooks before the early return, or opening the dialog for an image with no row
   // would change how many hooks run.
   const [page, setPage] = React.useState(1);
+  const { formatBytes } = useByteFormat();
 
   // The join key is volatile.base_image, so one standard image can be the parent of nearly every
   // instance an organization runs. The section is paged so that image does not list the whole

@@ -30,13 +30,18 @@ if (process.env.DATE_CHECK_ZONE) {
   // One zone per process: Node reads TZ once.
   const requireFromFrontend = createRequire(resolve(root, 'frontend/package.json'));
   const ts = requireFromFrontend('typescript');
-  const path = join(src, 'lib', 'utils.ts');
-  const output = ts.transpileModule(readFileSync(path, 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
-    fileName: path,
-  }).outputText;
-  const loaded = { exports: {} };
-  new Function('require', 'module', 'exports', output)(requireFromFrontend, loaded, loaded.exports);
+  const transpile = (path, require) => {
+    const output = ts.transpileModule(readFileSync(path, 'utf8'), {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+      fileName: path,
+    }).outputText;
+    const loaded = { exports: {} };
+    new Function('require', 'module', 'exports', output)(require, loaded, loaded.exports);
+    return loaded;
+  };
+  const byteUnits = transpile(join(src, 'lib', 'byte-units.ts'), requireFromFrontend).exports;
+  const loaded = transpile(join(src, 'lib', 'utils.ts'), (name) =>
+    name === '@/lib/byte-units' ? byteUnits : requireFromFrontend(name));
   const { formatDate, formatDateTime, formatDateTimeSeconds, formatClockTime } = loaded.exports;
 
   const zone = process.env.DATE_CHECK_ZONE;

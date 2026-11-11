@@ -2,6 +2,7 @@
  * Client for the Orcastra backend API.
  */
 
+import type { ByteUnitSystem } from "@/lib/byte-units";
 import {
   IPAMListResponse,
   KeyCreateRequest,
@@ -106,6 +107,19 @@ export const API_URL = API_PREFIX;
  */
 let _accessToken: string | null = null;
 let _authActorScope: string | null = null;
+// The account's byte units, sent as X-Byte-Units so the size text the server writes into a
+// refusal or a check follows them. PersonalizationProvider sets it.
+// A type-only import above: this transport takes no runtime dependency (check-instance-create-orchestration).
+let _byteUnits: ByteUnitSystem = "decimal";
+
+/**
+ * important: browser only. On the server this module is shared by every request being rendered at
+ * once, so one account's choice would reach another's requests.
+ */
+export function setRequestByteUnits(units: ByteUnitSystem): void {
+  if (typeof window === "undefined") return;
+  _byteUnits = units;
+}
 let _authGeneration = 0;
 let _authActorGeneration = 0;
 let _onTokenRefreshed: (() => void) | null = null;
@@ -677,6 +691,7 @@ async function _fetchAPIInternal<T>(
     if (_accessToken) {
       headers["Authorization"] = `Bearer ${_accessToken}`;
     }
+    if (typeof window !== "undefined") headers["X-Byte-Units"] = _byteUnits;
 
     const { response, body, bodyError } = await fetchJSONWithTimeout(url, {
       ...options,

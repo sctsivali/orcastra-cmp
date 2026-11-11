@@ -10,7 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { formatBytes, formatNetworkRate } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { ratePerSecond } from "@/components/system-resources/rates";
 
 const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1"]);
@@ -101,6 +101,7 @@ function Direction({
   total: number;
   since: string;
 }) {
+  const { formatBytes, formatNetworkRate } = useByteFormat();
   return (
     <div className="flex items-start gap-2">
       <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />

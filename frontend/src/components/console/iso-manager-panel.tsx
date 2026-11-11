@@ -41,11 +41,12 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { isAuthActorSynchronized } from "@/lib/api";
 import { consoleAPI } from "@/lib/console-api";
 import { reconcileMutationImpact } from "@/lib/mutation-coherence";
-import { cn, formatBytes } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { useConsoleStore, AttachedISO } from "@/lib/console-store";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { BOOT_PRIORITY_OPTIONS, DEFAULT_BOOT_PRIORITY, type ISOInfo } from "./iso-panel-options";
@@ -80,6 +81,7 @@ export function ISOManagerPanel({
   const setAttachedISO = useConsoleStore((s) => s.setAttachedISO);
   const queryClient = useQueryClient();
   const { scopeKey } = useActorQueryScope();
+  const { formatBytes } = useByteFormat();
   const target = JSON.stringify([consoleId, host, project, instanceName, scopeKey]);
   const targetRef = React.useRef(target);
   targetRef.current = target;

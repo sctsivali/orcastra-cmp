@@ -18,11 +18,17 @@ const sync = code(read("components/personalization/use-personalization-sync.ts")
 assert.ok(!/orgBacked/.test(sync), "the loader still splits Administrators onto their personal row");
 assert.match(sync, /readOrgPreferences\(/, "the loader reads organizations/my-preferences for everyone");
 
-// 2. The personal row is the theme and nothing else.
+// 2. The personal row is the theme and the byte units, and never branding.
 const personalApi = read("lib/personalization-api.ts");
-assert.match(personalApi, /body: \{ theme: ThemePreference \| null \}/, "the personal write takes only a theme");
+assert.match(
+  personalApi,
+  /body: \{ theme\?: ThemePreference \| null; byteUnits\?: ByteUnitSystem \| null \}/,
+  "the personal write takes only a theme and byte units",
+);
 const mutations = code(read("components/personalization/use-personalization-mutations.ts"));
-assert.match(mutations, /personalizationAPI\.update\(\{ theme \}/, "the provider writes only the theme");
+assert.match(mutations, /personalizationAPI\.update\(body, accessToken\)/, "the provider writes through one call");
+const personalWrites = [...mutations.matchAll(/saveToAPI\(\{([^}]*)\}/g)].map((match) => match[1].trim());
+assert.deepEqual(personalWrites.sort(), ["byteUnits: units", "theme"], "the provider writes only the theme or the byte units");
 for (const gone of ["updateLogo", "updateColors", "updateBranding", "updateBackground"]) {
   assert.ok(!mutations.includes(gone), `the app-wide provider still edits branding (${gone})`);
 }
@@ -64,4 +70,4 @@ assert.match(read("lib/sign-out.ts"), /clearPersonalizationHint\(\)/, "sign-out 
 // 7. Signed in, the tab follows the account's organization.
 assert.match(read("components/main-layout.tsx"), /<DocumentBranding \/>/, "the signed-in tab never shows the organization's branding");
 
-console.log("branding surfaces: one read path, theme-only personal rows, scoped preview, branded sign-in and tab");
+console.log("branding surfaces: one read path, personal rows hold only the theme and byte units, scoped preview, branded sign-in and tab");

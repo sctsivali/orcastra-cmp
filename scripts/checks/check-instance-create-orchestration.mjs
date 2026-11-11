@@ -240,7 +240,7 @@ const actorReset = form.match(
 requireText(formPath, actorReset, [
   "formRevisionRef.current += 1",
   "seedRef.current = null",
-  "setForm({ ...DEFAULT_FORM, tags: [] })",
+  "setForm(instanceCreateFormDefaults(unitsRef.current))",
   "setDisks([])",
   "setNics([])",
   "setGpus([])",

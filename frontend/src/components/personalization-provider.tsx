@@ -5,8 +5,11 @@ import { useSession } from "next-auth/react";
 import { DEFAULT_PERSONALIZATION, type PersonalizationSettings, type PersonalizationContextType } from "@/types/personalization";
 import { hasMappedRole } from "@/types/rbac";
 import { hexToHSL } from "@/lib/color";
-import { PERSONALIZATION_COOKIE, parsePersonalizationHint, toPersonalizationHint } from "@/lib/personalization-cookie";
+import { PERSONALIZATION_COOKIE, parseByteUnitsHint, parsePersonalizationHint, toPersonalizationHint } from "@/lib/personalization-cookie";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
+import { ByteUnitsContext } from "@/hooks/use-byte-format";
+import type { ByteUnitSystem } from "@/lib/byte-units";
+import { setRequestByteUnits } from "@/lib/api";
 import { usePersonalizationSync, type ThemeOrigin } from "./personalization/use-personalization-sync";
 import { usePersonalizationMutations } from "./personalization/use-personalization-mutations";
 
@@ -31,10 +34,10 @@ export const PersonalizationContext = React.createContext<PersonalizationContext
  * Writes the visual hint cookie (365 days) so the next load paints at once. CSS values only:
  * images and logos are too large for a cookie.
  */
-function setPersonalizationCookie(settings: PersonalizationSettings, withIllustrations: boolean) {
+function setPersonalizationCookie(settings: PersonalizationSettings, withIllustrations: boolean, byteUnits: ByteUnitSystem) {
   if (typeof document === "undefined") return;
   try {
-    const hint = toPersonalizationHint(settings);
+    const hint = toPersonalizationHint(settings, byteUnits);
     // Signed out, the choice is the deployment's, which the root layout reads on every request;
     // writing the built-in default here would mask it on the next one.
     if (!withIllustrations) delete hint.il;
@@ -47,14 +50,18 @@ function setPersonalizationCookie(settings: PersonalizationSettings, withIllustr
 
 /** The hint cookie as settings merged with defaults, for the first render. Client side only. */
 function readPersonalizationCookie(): PersonalizationSettings | null {
-  if (typeof document === "undefined") return null;
-  const match = document.cookie.match(new RegExp(`${PERSONALIZATION_COOKIE}=([^;]+)`));
-  return parsePersonalizationHint(match?.[1]);
+  return parsePersonalizationHint(readHintCookie());
 }
 
-export function PersonalizationProvider({ children, initialSettings }: {
+function readHintCookie(): string | undefined {
+  if (typeof document === "undefined") return undefined;
+  return document.cookie.match(new RegExp(`${PERSONALIZATION_COOKIE}=([^;]+)`))?.[1];
+}
+
+export function PersonalizationProvider({ children, initialSettings, initialByteUnits }: {
   children: React.ReactNode;
   initialSettings?: PersonalizationSettings | null;
+  initialByteUnits?: ByteUnitSystem;
 }) {
   const { data: session, status } = useSession();
   const { scopeKey, accessToken, isAuthenticated } = useActorQueryScope();
@@ -64,6 +71,12 @@ export function PersonalizationProvider({ children, initialSettings }: {
     seededRef.current = initialSettings ?? readPersonalizationCookie() ?? DEFAULT_PERSONALIZATION;
   }
   const [settings, setSettings] = React.useState<PersonalizationSettings>(seededRef.current);
+  // Same order as the settings: the server's reading of the hint first, so both renders agree.
+  const [byteUnits, setByteUnits] = React.useState<ByteUnitSystem>(
+    () => initialByteUnits ?? parseByteUnitsHint(readHintCookie()),
+  );
+  // Before children render, so the first request any of them sends already carries the units.
+  setRequestByteUnits(byteUnits);
   const [isLoading, setIsLoading] = React.useState(true);
   const personalRowRef = React.useRef<PersonalizationSettings | null>(null);
   const lastLocalEditRef = React.useRef(0);
@@ -87,16 +100,17 @@ export function PersonalizationProvider({ children, initialSettings }: {
     ...actor,
     authenticated: isAuthenticated && mayRead,
     sessionLoading: status === "loading" && !session,
-    personalRowRef, lastLocalEditRef, setSettings, setIsLoading, setThemeOrigin,
+    personalRowRef, lastLocalEditRef, setSettings, setIsLoading, setThemeOrigin, setByteUnits,
   });
   const mutations = usePersonalizationMutations({
-    ...actor, setSettings, themeOrigin, setThemeOrigin, lastLocalEditRef,
+    ...actor, setSettings, themeOrigin, setThemeOrigin, byteUnits, setByteUnits, lastLocalEditRef,
   });
   const value: PersonalizationContextType = {
     settings,
     ...mutations,
     themeIsPersonal: themeOrigin.personal,
     organizationTheme: themeOrigin.organizationTheme,
+    byteUnits,
     refreshSettings,
     isLoading,
   };
@@ -156,12 +170,14 @@ export function PersonalizationProvider({ children, initialSettings }: {
 
   // Rewrite the hint cookie on every visual change so the next load does not flash.
   React.useEffect(() => {
-    setPersonalizationCookie(settings, ownsIllustrations);
-  }, [settings.colors, settings.branding.appName, settings.theme, settings.illustrations, ownsIllustrations]);
+    setPersonalizationCookie(settings, ownsIllustrations, byteUnits);
+  }, [settings.colors, settings.branding.appName, settings.theme, settings.illustrations, ownsIllustrations, byteUnits]);
 
   return (
     <PersonalizationContext.Provider value={value}>
-      {children}
+      <ByteUnitsContext.Provider value={byteUnits}>
+        {children}
+      </ByteUnitsContext.Provider>
     </PersonalizationContext.Provider>
   );
 }

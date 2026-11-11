@@ -1,6 +1,7 @@
 "use client";
 
-import { formatLxdSize } from "@/lib/lxd-limits";
+import type { ByteFormat } from "@/lib/byte-format";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import * as React from "react";
 import {
   Cpu,
@@ -200,8 +201,8 @@ function resourceValue(resource: InstanceResourceSpecification, format: (raw: st
   return "Unknown";
 }
 
-function rootDiskValue(instance: InstanceSpecification) {
-  if (instance.root_disk.value) return formatLxdSize(instance.root_disk.value);
+function rootDiskValue(instance: InstanceSpecification, fmt: ByteFormat) {
+  if (instance.root_disk.value) return fmt.formatLxdSize(instance.root_disk.value);
   if (instance.root_disk.source === "explicit") return "Explicit size not reported";
   if (instance.root_disk.source === "inherited") return "Inherited size not reported";
   if (instance.root_disk.source === "pool_default") return "Pool default";
@@ -215,6 +216,7 @@ function InstanceCategoryFields({
   category: TenantCategoryId;
   instance: InstanceSpecification;
 }) {
+  const fmt = useByteFormat();
   if (category === "cpu") {
     return (
       <DetailGrid cols={3}>
@@ -228,7 +230,7 @@ function InstanceCategoryFields({
   if (category === "memory") {
     return (
       <DetailGrid cols={3}>
-        <DetailField label="Memory Limit" value={resourceValue(instance.memory, formatLxdSize)} mono />
+        <DetailField label="Memory Limit" value={resourceValue(instance.memory, fmt.formatLxdSize)} mono />
         <DetailField label="Limit Source" value={RESOURCE_SOURCE_LABEL[instance.memory.source]} />
         <DetailField label="Architecture" value={instance.architecture || "Not reported"} mono />
       </DetailGrid>
@@ -238,7 +240,7 @@ function InstanceCategoryFields({
   if (category === "storage") {
     return (
       <DetailGrid cols={3}>
-        <DetailField label="Root Disk Size" value={rootDiskValue(instance)} mono />
+        <DetailField label="Root Disk Size" value={rootDiskValue(instance, fmt)} mono />
         <DetailField label="Storage Pool" value={instance.root_disk.pool || "Not reported"} />
         <DetailField label="Size Source" value={ROOT_SOURCE_LABEL[instance.root_disk.source]} />
       </DetailGrid>

@@ -15,7 +15,8 @@ import {
 import { TableEmptyRow, TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
-import { formatBytes, formatLabel } from "@/lib/utils";
+import { formatLabel } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import type { MigrationJobResource, MigrationPlannedResource } from "@/types/migrations";
 import { resourceLocation, resourceName, resourceProgress } from "./migration-format";
 
@@ -76,6 +77,7 @@ export function MigrationResourceTable({ resources }: { resources: MigrationPlan
 
 function MigrationResourceTableContent({ resources }: { resources: MigrationPlannedResource[] }) {
   const filters = useTableFilters(MIGRATION_RESOURCES, resources, { syncUrl: false });
+  const { formatBytes } = useByteFormat();
   const rows = filters.filteredRows;
 
   return (

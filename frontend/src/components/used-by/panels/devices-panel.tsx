@@ -1,15 +1,16 @@
 "use client";
 
-import { formatConfigValue } from "@/lib/lxd-limits";
 import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { DeviceIcon } from "@/components/detail/device-icon";
 import { formatLabel } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { Boxes } from "lucide-react";
 import { OverflowText } from "@/components/ui/overflow-text";
 
 export function DevicesPanel({ devices }: { devices?: Record<string, Record<string, string>> }) {
+  const { formatConfigValue } = useByteFormat();
   const entries = React.useMemo(
     () => Object.entries(devices ?? {}).sort(([a], [b]) => a.localeCompare(b)),
     [devices],

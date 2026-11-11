@@ -3,7 +3,7 @@ import { imageStoreNote } from "@/components/instance-create/image-store-copy";
 import { useImagesByHost, useRemoteImages } from "@/hooks/use-lxd";
 import { TABLE_PAGE_SIZE } from "@/lib/pagination";
 import { derivePickerState } from "@/lib/picker-state";
-import { formatBytes } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import type { ImageInfo, RemoteImageInfo } from "@/types/api";
 import type { InstanceType } from "@/components/instance-create/model";
 
@@ -83,6 +83,7 @@ export function useImageCatalogue({
   });
 
   const remoteQuery = useRemoteImages({ enabled: actorSelectionActive && remoteIntent, engine });
+  const { formatBytes } = useByteFormat();
   const remoteImages = (remoteQuery.data?.images ?? []) as RemoteImageInfo[];
   const localRows: ImageCatalogueRow[] = localImages.map((image) => {
     const name = image.aliases?.find(Boolean) || image.description || image.fingerprint;

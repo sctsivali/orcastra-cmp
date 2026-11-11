@@ -27,7 +27,7 @@ import { useCreateVM, useImages } from "@/hooks/use-lxd";
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { toast } from "@/hooks/use-toast";
-import { formatBytes } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { ImageInfo, ImageListResponse } from "@/types";
 
 const vmCreateSchema = z.object({
@@ -71,6 +71,7 @@ function ImageSelector({
   onChange: (value: string) => void;
 }) {
   const { data: imagesData, isLoading } = useImages();
+  const { formatBytes } = useByteFormat();
 
   const hostEntry = React.useMemo(() => {
     if (!imagesData || !host) return undefined;

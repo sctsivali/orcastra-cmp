@@ -5,11 +5,11 @@ import { CheckCircle2, ChevronDown, ChevronUp, FolderUp, RotateCcw, X, XCircle }
 import { Button } from "@/components/ui/button";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { Progress } from "@/components/ui/progress";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { guestText } from "@/lib/instance-files/guest-text";
 import type { GuestTarget } from "@/lib/instance-files/api";
 import { cancelAll, cancelTransfer, discardInterrupted, replaceConflicts, resumeWithFile, skipConflicts, retryTransfer } from "@/lib/instance-files/transfer-pump";
 import { isSameTarget, isActive, useTransferStore, type Transfer } from "@/lib/instance-files/transfer-store";
-import { formatBytes, formatNetworkRate } from "@/lib/utils";
 
 function etaText(remaining: number, rate: number): string {
   if (rate <= 0) return "";
@@ -28,6 +28,7 @@ export function summarizeTransfers(transfers: Transfer[]) {
 }
 
 function TransferRow({ transfer }: { transfer: Transfer }) {
+  const { formatBytes } = useByteFormat();
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [mismatch, setMismatch] = React.useState(false);
   const percent = transfer.size ? Math.round((transfer.sent / transfer.size) * 100) : 100;
@@ -104,6 +105,7 @@ function TransferRow({ transfer }: { transfer: Transfer }) {
 
 /** The queue, for the instance this explorer shows. */
 export function TransferPanel({ target }: { target: GuestTarget }) {
+  const { formatNetworkRate } = useByteFormat();
   const all = useTransferStore((state) => state.transfers);
   const remove = useTransferStore((state) => state.remove);
   const [expanded, setExpanded] = React.useState(false);

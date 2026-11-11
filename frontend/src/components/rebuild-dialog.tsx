@@ -19,6 +19,7 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useToast } from "@/hooks/use-toast";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { useImagesByHost, useRemoteImages } from "@/hooks/use-lxd";
 import { useClusterType } from "@/hooks/use-node-picker-options";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
@@ -32,7 +33,7 @@ import {
 import { reconcileInstanceFleet } from "@/lib/instance-reconciliation";
 import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { APIError, type ImageInfo, type RemoteImageInfo } from "@/types/api";
-import { formatBytes, plural } from "@/lib/utils";
+import { plural } from "@/lib/utils";
 import {
   Loader2,
   RefreshCw,
@@ -102,6 +103,7 @@ const STATUS_LABEL: Record<RebuildStatus, string> = {
 
 export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildDialogProps) {
   const { toast } = useToast();
+  const { formatBytes } = useByteFormat();
   const { scopeKey } = useActorQueryScope();
   const queryClient = useQueryClient();
   const contextKey = `${scopeKey}\u0000${instance.host}\u0000${instance.project || "default"}\u0000${instance.name}`;
@@ -216,7 +218,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
         ` · ${img.source}`,
     }));
     return [...local, ...remote].filter((r) => !wantType || r.type === wantType);
-  }, [localResp, remoteResp, wantType]);
+  }, [formatBytes, localResp, remoteResp, wantType]);
 
   const imageOptions = useMemo(
     () => imageRows.map((r) => ({ value: r.key, label: r.label })),

@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { TableEmptyValue } from "@/components/ui/table-text";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import {
   GPU_NOT_ALLOCATABLE,
   gpuCardLabel,
@@ -7,7 +8,7 @@ import {
   gpuClassOf,
   gpuIdentifier,
 } from "@/lib/gpu";
-import { cn, formatBytes } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import type { GPUCardInfo } from "@/types/api";
 
 import { GpuClassBadge } from "./gpu-class-badge";
@@ -34,6 +35,7 @@ interface GpuCardDetailsProps {
  * user-configurable and not contrast-clamped, so it must not be the only carrier of meaning.
  */
 export function GpuCardDetails({ card, dense = false }: GpuCardDetailsProps) {
+  const { formatBytes } = useByteFormat();
   const cls = gpuClassOf(card);
   const identifier = gpuIdentifier(card);
 

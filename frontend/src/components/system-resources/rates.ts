@@ -46,7 +46,8 @@ export function ratePerSecond(
   const seconds = sampleWindow(prevAt, currAt);
   if (seconds === null) return null;
   const delta = curr - prev;
-  // Whole bytes: formatBytes picks its unit from log1024 and has none for a fraction of a byte.
+  // Whole bytes: formatBytes picks its unit from the log of the account's base and has none for a
+  // fraction of a byte.
   return delta > 0 ? Math.floor(delta / seconds) : 0;
 }
 

@@ -1,5 +1,7 @@
 /** Branding and appearance settings, their presets and the product defaults. */
 
+import type { ByteUnitSystem } from "@/lib/byte-units";
+
 export interface LogoSettings {
   lightModeLogo: string | null; // Base64 or URL
   darkModeLogo: string | null;  // Base64 or URL
@@ -164,6 +166,10 @@ export interface PersonalizationContextType {
   themeIsPersonal: boolean;
   /** The theme the organization (or deployment) sets, which applies when the account chose none. */
   organizationTheme: ThemePreference;
+  /** How this account reads sizes. Components read it through useByteFormat(), not from here. */
+  byteUnits: ByteUnitSystem;
+  /** Persist this account's byte units. */
+  updateByteUnits: (units: ByteUnitSystem) => void;
   /** Show branding at once (the editor's preview of the organization the sidebar renders). */
   applySettingsOptimistically: (settings: PersonalizationSettings) => void;
   refreshSettings: () => Promise<void>;

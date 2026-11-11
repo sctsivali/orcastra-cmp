@@ -27,6 +27,7 @@ const brandingImages = load("frontend/src/lib/branding-images.ts");
 const preferences = load("frontend/src/components/personalization/preferences.ts", {
   "@/types/personalization": types,
   "@/lib/branding-images": brandingImages,
+  "@/lib/byte-units": load("frontend/src/lib/byte-units.ts"),
 });
 const cache = load("frontend/src/app/settings/components/browser-cache.ts", {
   "@tanstack/react-query": frontendRequire("@tanstack/react-query"),

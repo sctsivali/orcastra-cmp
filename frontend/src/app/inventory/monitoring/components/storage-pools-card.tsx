@@ -10,7 +10,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { EmptyState } from "@/components/ui/empty-state";
 import { Progress } from "@/components/ui/progress";
 import { TableLink } from "@/components/ui/table-link";
-import { formatBytes, formatLabel } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
+import { formatLabel } from "@/lib/utils";
 import type { StoragePoolMetrics } from "@/types/api";
 
 interface StoragePoolsCardProps {
@@ -64,6 +65,7 @@ function PoolMembers({ pool, clusterLabel }: { pool: StoragePoolMetrics; cluster
 
 export function StoragePoolsCard({ pools, selectedNode, labelOf }: StoragePoolsCardProps) {
   const [sortDesc, setSortDesc] = useState(true);
+  const { formatBytes } = useByteFormat();
   const rows = useMemo(
     () =>
       pools

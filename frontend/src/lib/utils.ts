@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { BYTE_SCALES, DEFAULT_BYTE_UNITS, toByteUnitSystem, type ByteUnitSystem } from "@/lib/byte-units";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -8,8 +9,6 @@ export function cn(...inputs: ClassValue[]) {
 // The placeholder glyph for a value the API did not return. components/ui/table-text.tsx
 // re-exports it.
 export const EMPTY_VALUE = "\u2014";
-
-const SI_BYTE_UNITS = ["B", "kB", "MB", "GB", "TB", "PB"] as const;
 
 export type FormattedByteValue = { value: string; unit: string };
 export type FormattedByteQuota = { value: string; unit: string };
@@ -21,9 +20,11 @@ export interface ByteFormatOptions {
   zeroDisplay?: "zero" | "empty";
   /** Return value and unit separately for dense cards that style them independently. */
   split?: boolean;
+  /** The account's unit system (hooks/use-byte-format.ts); decimal when absent. */
+  units?: ByteUnitSystem;
 }
 
-type SplitByteFormatOptions = ByteFormatOptions & { split: true };
+export type SplitByteFormatOptions = ByteFormatOptions & { split: true };
 
 function scaleBytes(
   bytes: number,
@@ -82,8 +83,9 @@ function joinByteValue(value: FormattedByteValue): string {
 /**
  * Every size in the console: memory, disks, pools, images, files and transfers.
  *
- * Decimal (SI) and labelled decimal on every screen, memory and limits included, so one disk
- * reads the same in a column and on its usage meter.
+ * One system on every screen, memory and limits included, so one disk reads the same in a column
+ * and on its usage meter. Components pass the account's system through useByteFormat(); without
+ * `units` this is decimal.
  */
 export function formatBytes(bytes: number, options: SplitByteFormatOptions): FormattedByteValue;
 export function formatBytes(bytes: number, options?: number | ByteFormatOptions): string;
@@ -91,7 +93,8 @@ export function formatBytes(
   bytes: number,
   options: number | ByteFormatOptions = {},
 ): string | FormattedByteValue {
-  const formatted = scaleBytes(bytes, 1000, SI_BYTE_UNITS, options);
+  const scale = BYTE_SCALES[toByteUnitSystem(typeof options === "object" ? options.units : undefined)];
+  const formatted = scaleBytes(bytes, scale.base, scale.units, options);
   return typeof options === "object" && options.split ? formatted : joinByteValue(formatted);
 }
 
@@ -100,13 +103,20 @@ export function formatByteQuota(
   usedBytes: number,
   limitBytes: number,
   decimals = 1,
+  units: ByteUnitSystem = DEFAULT_BYTE_UNITS,
 ): FormattedByteQuota {
-  return scaleByteQuota(usedBytes, limitBytes, 1000, SI_BYTE_UNITS, decimals);
+  const scale = BYTE_SCALES[toByteUnitSystem(units)];
+  return scaleByteQuota(usedBytes, limitBytes, scale.base, scale.units, decimals);
 }
 
-/** Network throughput in bytes per second, scaled with decimal SI units. */
-export function formatNetworkRate(bytesPerSecond: number, decimals = 2): string {
-  const formatted = scaleBytes(bytesPerSecond, 1000, SI_BYTE_UNITS, { decimals });
+/** Network throughput in bytes per second, on the same scale as sizes. */
+export function formatNetworkRate(
+  bytesPerSecond: number,
+  decimals = 2,
+  units: ByteUnitSystem = DEFAULT_BYTE_UNITS,
+): string {
+  const scale = BYTE_SCALES[toByteUnitSystem(units)];
+  const formatted = scaleBytes(bytesPerSecond, scale.base, scale.units, { decimals });
   return formatted.unit ? `${formatted.value} ${formatted.unit}/s` : formatted.value;
 }
 

@@ -287,7 +287,7 @@ async function installApiFixtures(page, role, options = {}) {
     }
 
     if (path === "/user-preferences") {
-      body = {};
+      body = options.byteUnits ? { byteUnits: options.byteUnits } : {};
     } else if (path === "/organizations/my-preferences") {
       body = { organization_id: 0, settings: {}, updated_at: null, version: "e2e-built-in", source: "default", subject: "deployment" };
     } else if (path === "/organizations/my-preferences/version") {

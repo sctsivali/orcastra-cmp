@@ -30,7 +30,9 @@ import { useMonitoringWebSocket } from "@/hooks/use-monitoring-ws";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { useClusterLabel } from "@/hooks/use-node-picker-options";
-import { cn, formatBytes, formatNetworkRate, plural } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
+import { BYTE_SCALES } from "@/lib/byte-units";
+import { cn, plural } from "@/lib/utils";
 import type { IllustrationProps } from "@/components/illustrations/illustration-frame";
 import { ClustersIllustration, InstancesIllustration, RunningIllustration, WarningsIllustration } from "@/components/illustrations/scenes/kpi";
 import { DisconnectedIllustration } from "@/components/illustrations/scenes/states";
@@ -207,6 +209,7 @@ const PieChartTooltip = ({ active, payload }: { active?: boolean; payload?: any[
 };
 
 const MemoryChartTooltip = ({ active, payload, label }: { active?: boolean; payload?: any[]; label?: string }) => {
+  const { formatBytes } = useByteFormat();
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
@@ -227,6 +230,7 @@ const MemoryChartTooltip = ({ active, payload, label }: { active?: boolean; payl
 };
 
 const StorageChartTooltip = ({ active, payload, label, totalStorageBytes }: { active?: boolean; payload?: any[]; label?: string; totalStorageBytes?: number }) => {
+  const { formatBytes } = useByteFormat();
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     const totalBytes = totalStorageBytes || 0;
@@ -281,6 +285,7 @@ const ResourceMetricsTooltip = memo(function ResourceMetricsTooltip({
   selectedNode = "all",
   labelOf = (nodeName) => nodeName,
 }: ResourceMetricsTooltipProps) {
+  const { formatBytes } = useByteFormat();
   if (!active || !payload || payload.length === 0) return null;
   
   const colors = {
@@ -453,6 +458,8 @@ export default function MonitoringContent() {
   const { scopeKey: actorScope } = useActorQueryScope();
   // Display names, as the Clusters page shows them; the id stays the value every filter uses.
   const labelOf = useClusterLabel();
+  const fmt = useByteFormat();
+  const { formatNetworkRate } = fmt;
   const queryClient = useQueryClient();
   const [isPaused, setIsPaused] = useState(false);
   const [pausedSnapshot, setPausedSnapshot] = useState<MonitoringDisplaySnapshot | null>(null);
@@ -1068,54 +1075,56 @@ export default function MonitoringContent() {
   }, [chartData]);
 
   const networkDomain = useMemo((): [number, number] => {
-    if (!chartData.length) return [0, 10_000_000];
+    // Steps in the account's byte base, so the axis labels land on whole units in either system.
+    const base = BYTE_SCALES[fmt.units].base;
+    const mega = base * base;
+    if (!chartData.length) return [0, 10 * mega];
     const rxValues = chartData.map(d => d.networkRxRate).filter(v => typeof v === 'number');
     const txValues = chartData.map(d => d.networkTxRate).filter(v => typeof v === 'number');
     const allValues = [...rxValues, ...txValues];
-    
-    if (allValues.length === 0) return [0, 10_000_000];
-    
+
+    if (allValues.length === 0) return [0, 10 * mega];
+
     const maxValue = Math.max(...allValues);
     const paddedMax = maxValue * 1.2;
-    
-    // Decimal byte-per-second thresholds, matching the SI labels printed on the axis.
+
     const thresholds = [
-      1_000_000,
-      2_000_000,
-      5_000_000,
-      10_000_000,
-      20_000_000,
-      50_000_000,
-      100_000_000,
-      200_000_000,
-      500_000_000,
-      1_000_000_000,
+      mega,
+      2 * mega,
+      5 * mega,
+      10 * mega,
+      20 * mega,
+      50 * mega,
+      100 * mega,
+      200 * mega,
+      500 * mega,
+      base * mega,
     ];
-    let niceCeiling = 10_000_000;
+    let niceCeiling = 10 * mega;
     for (const threshold of thresholds) {
       if (paddedMax <= threshold) {
         niceCeiling = threshold;
         break;
       }
     }
-    
-    // For very small values, show at least 1 MB/s.
-    if (maxValue < 100_000) {
-      niceCeiling = 1_000_000;
+
+    // For very small values, show at least one mega step per second.
+    if (maxValue < 100 * base) {
+      niceCeiling = mega;
     }
-    
+
     return [0, niceCeiling];
-  }, [chartData]);
+  }, [chartData, fmt.units]);
 
   // Stable tick formatters to avoid Recharts re-renders from new function refs
   const percentTickFormatter = useCallback((v: number) => `${v}%`, []);
   const identityTickFormatter = useCallback((value: string) => value, []);
-  const networkTickFormatter = useCallback((v: number) => formatNetworkRate(v, 1), []);
+  const networkTickFormatter = useCallback((v: number) => formatNetworkRate(v, 1), [formatNetworkRate]);
   const networkTooltipFormatter = useCallback((value: number | string | undefined, name?: string) => {
     const numValue = typeof value === 'number' ? value : 0;
     const label = name === "networkRxRate" ? "↓ Inbound" : "↑ Outbound";
     return [formatNetworkRate(numValue), label];
-  }, []);
+  }, [formatNetworkRate]);
   // Stable object ref for tooltip contentStyle
   const tooltipContentStyle = useMemo(() => ({
     backgroundColor: "hsl(var(--card))",

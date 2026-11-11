@@ -1,4 +1,5 @@
-import { formatBytes, formatVcpuCount, plural } from "@/lib/utils";
+import { formatVcpuCount, plural } from "@/lib/utils";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { AlertTriangle } from "lucide-react";
 
 import { type ProjectLimits } from "@/lib/lxd-limits";
@@ -52,6 +53,7 @@ interface ProjectQuotaLineProps {
  * current usage is only a warning: usage may be stale, and the cluster's own refusal decides.
  */
 export function ProjectQuotaLine({ id, project, limits, used, check }: ProjectQuotaLineProps) {
+  const { formatBytes } = useByteFormat();
   const parts: string[] = [];
   if (limits.cpu !== undefined) {
     parts.push(used ? `${used.cpu} of ${formatVcpuCount(limits.cpu)}` : formatVcpuCount(limits.cpu));

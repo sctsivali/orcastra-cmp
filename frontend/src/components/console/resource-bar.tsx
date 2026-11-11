@@ -20,10 +20,11 @@ import {
   ArrowUpFromLine,
   Loader2,
 } from "lucide-react";
-import { cn, formatBytes, formatNetworkRate, EMPTY_VALUE } from "@/lib/utils";
+import { cn, EMPTY_VALUE } from "@/lib/utils";
 import { GRAPHICS_SESSION_PROTOCOL, sessionProtocolLabel } from "@/lib/session-display";
 import { useSession } from "next-auth/react";
 import { useInstanceMetrics } from "@/hooks";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { InstanceResourceChips, InstanceResourcesPanel } from "./instance-resources";
 
@@ -96,6 +97,7 @@ export function ConsoleResourceBar({
   compact = false,
 }: ConsoleResourceBarProps) {
   const { data: authSession } = useSession();
+  const { formatBytes, formatNetworkRate } = useByteFormat();
   const userEmail = authSession?.user?.email ?? "";
   const userRole = (authSession?.user as any)?.roles?.[0]
     ?? (authSession?.user as any)?.groups?.[0]

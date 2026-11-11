@@ -1,4 +1,11 @@
-import { FORM_UNIT_BYTES, type FormSizeUnit } from "@/lib/lxd-limits";
+import {
+  DEFAULT_BYTE_UNITS,
+  FORM_UNIT_BYTES,
+  defaultFormUnit,
+  formUnitForBytes,
+  type ByteUnitSystem,
+  type FormSizeUnit,
+} from "@/lib/byte-units";
 import type {
   EditableSpecificationSource,
   InstanceSpecificationDetail,
@@ -14,18 +21,19 @@ export interface SizeDraft {
 
 export function draftFromBytes(
   bytes: number | null,
-  preferred: FormSizeUnit = "GB",
+  units: ByteUnitSystem = DEFAULT_BYTE_UNITS,
 ): SizeDraft {
-  if (bytes === null) return { value: "", unit: preferred };
-  const unit: FormSizeUnit = bytes >= FORM_UNIT_BYTES.TB ? "TB" : bytes >= FORM_UNIT_BYTES.GB ? "GB" : "MB";
+  if (bytes === null) return { value: "", unit: defaultFormUnit(units) };
+  const unit = formUnitForBytes(bytes, units);
   const value = String(Number((bytes / FORM_UNIT_BYTES[unit]).toFixed(2)));
   return { value, unit, original: { value, unit, bytes } };
 }
 
 export function bytesFromDraft(draft: SizeDraft): number | null {
   if (!draft.value.trim()) return null;
-  // important: 2GiB shows as 2.15 GB. Read back it would be 2150000000 and apply as a change the
-  // operator never made, so a field left alone answers with the bytes it came from.
+  // important: 2GiB shows as 2.15 GB in decimal, and 2 GB as 1.86 GiB in binary. Read back either
+  // would apply as a change the operator never made, so a field left alone answers with the bytes
+  // it came from.
   const { original } = draft;
   if (original && original.value === draft.value && original.unit === draft.unit) return original.bytes;
   const numeric = Number(draft.value);
@@ -48,14 +56,15 @@ export interface SpecificationDraft {
 
 export function draftFromSpecification(
   specification: InstanceSpecificationDetail,
+  units: ByteUnitSystem = DEFAULT_BYTE_UNITS,
 ): SpecificationDraft {
   return {
     cpu:
       specification.cpu.value === null
         ? ""
         : String(specification.cpu.value),
-    memory: draftFromBytes(specification.memory.value_bytes),
-    rootDisk: draftFromBytes(specification.root_disk.value_bytes),
+    memory: draftFromBytes(specification.memory.value_bytes, units),
+    rootDisk: draftFromBytes(specification.root_disk.value_bytes, units),
   };
 }
 

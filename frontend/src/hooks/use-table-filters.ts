@@ -37,7 +37,8 @@ import {
   type DateState,
   type RangeState,
 } from "@/lib/filter-url";
-import { formatBytes, formatNetworkRate } from "@/lib/utils";
+import type { ByteFormat } from "@/lib/byte-format";
+import { useByteFormat } from "@/hooks/use-byte-format";
 
 /** What a control needs to know about the rows it filters. Co-filtered, never over the raw set. */
 export type FilterFacts =
@@ -161,7 +162,8 @@ function serialiseState(state: FilterState): string | null {
 }
 
 /** Formats a bound for display only. The stored value is always the base unit. */
-export function formatBound(value: number, unit: string): string {
+export function formatBound(value: number, unit: string, fmt: ByteFormat): string {
+  const { formatBytes, formatNetworkRate } = fmt;
   if (unit === "bytes") return formatBytes(value);
   if (unit === "percent") return `${Math.round(value * 10) / 10}%`;
   if (unit === "seconds") {
@@ -175,16 +177,16 @@ export function formatBound(value: number, unit: string): string {
   return String(value);
 }
 
-function rangeLabel(s: RangeState, unit: string, emptyLabel: string): string {
+function rangeLabel(s: RangeState, unit: string, emptyLabel: string, fmt: ByteFormat): string {
   if (s.empty === "only") return emptyLabel;
   const suffix = s.empty === "include" ? ` or ${emptyLabel}` : "";
   if (s.min !== null && s.max !== null) {
     return s.min === s.max
-      ? `${formatBound(s.min, unit)}${suffix}`
-      : `${formatBound(s.min, unit)} to ${formatBound(s.max, unit)}${suffix}`;
+      ? `${formatBound(s.min, unit, fmt)}${suffix}`
+      : `${formatBound(s.min, unit, fmt)} to ${formatBound(s.max, unit, fmt)}${suffix}`;
   }
-  if (s.min !== null) return `at least ${formatBound(s.min, unit)}${suffix}`;
-  if (s.max !== null) return `at most ${formatBound(s.max, unit)}${suffix}`;
+  if (s.min !== null) return `at least ${formatBound(s.min, unit, fmt)}${suffix}`;
+  if (s.max !== null) return `at most ${formatBound(s.max, unit, fmt)}${suffix}`;
   return emptyLabel;
 }
 
@@ -211,6 +213,7 @@ export function useTableFilters<T, F extends string, C = void>(
 ) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const fmt = useByteFormat();
 
   const {
     context,
@@ -588,6 +591,7 @@ export function useTableFilters<T, F extends string, C = void>(
             state.state,
             spec.kind === "number" ? spec.options.unit : "count",
             emptyLabel,
+            fmt,
           );
         } else if (state.kind === "date") {
           valueLabel = dateLabel(state.state, emptyLabel);
@@ -599,7 +603,7 @@ export function useTableFilters<T, F extends string, C = void>(
         }
         return [{ id: `${field}:*`, field, kind: spec.kind, columnLabel, valueLabel }];
       }),
-    [activeFields, states, table],
+    [activeFields, states, table, fmt],
   );
 
   const removeChip = useCallback(

@@ -16,6 +16,7 @@ import type { MemberResources } from "@/types/api";
 import { GpuPanel } from "../gpu";
 import { GPU_UTILIZATION_NOTE } from "@/lib/gpu";
 import { formatBytes, formatBytesCompact } from "./format";
+import { useByteFormat } from "@/hooks/use-byte-format";
 
 interface MemberResourcePanelsProps {
   resources: MemberResources;
@@ -35,6 +36,7 @@ export function MemberResourcePanels({
   memberName,
   onShowInstances,
 }: MemberResourcePanelsProps) {
+  const { units } = useByteFormat();
   const lostParts = resources.degraded_parts ?? [];
   const storageLost = lostParts.some((part) => part.startsWith("storage")) || Boolean(resources.storage_partial);
   const instancesLost = lostParts.includes("instances") || Boolean(resources.instances_partial);
@@ -123,11 +125,11 @@ export function MemberResourcePanels({
           <CardContent>
             <div className="space-y-2">
               <div className="text-center text-sm">
-                <span className="text-2xl font-bold">{formatBytesCompact(resources.memory_used).value}</span>
-                <span className="text-xs text-muted-foreground"> {formatBytesCompact(resources.memory_used).unit}</span>
+                <span className="text-2xl font-bold">{formatBytesCompact(resources.memory_used, units).value}</span>
+                <span className="text-xs text-muted-foreground"> {formatBytesCompact(resources.memory_used, units).unit}</span>
                 <span className="text-xs text-muted-foreground"> / </span>
-                <span className="text-base font-semibold">{formatBytesCompact(resources.memory_total).value}</span>
-                <span className="text-xs text-muted-foreground"> {formatBytesCompact(resources.memory_total).unit}</span>
+                <span className="text-base font-semibold">{formatBytesCompact(resources.memory_total, units).value}</span>
+                <span className="text-xs text-muted-foreground"> {formatBytesCompact(resources.memory_total, units).unit}</span>
               </div>
               <Progress 
                 value={resources.memory_usage_percent} 
@@ -150,11 +152,11 @@ export function MemberResourcePanels({
           <CardContent>
             <div className="space-y-2" data-partial={storageLost ? "true" : undefined}>
               <div className="text-center text-sm">
-                <span className="text-2xl font-bold">{formatBytesCompact(storage.used).value}</span>
-                <span className="text-xs text-muted-foreground"> {formatBytesCompact(storage.used).unit}</span>
+                <span className="text-2xl font-bold">{formatBytesCompact(storage.used, units).value}</span>
+                <span className="text-xs text-muted-foreground"> {formatBytesCompact(storage.used, units).unit}</span>
                 <span className="text-xs text-muted-foreground"> / </span>
-                <span className="text-base font-semibold">{formatBytesCompact(storage.total).value}</span>
-                <span className="text-xs text-muted-foreground"> {formatBytesCompact(storage.total).unit}</span>
+                <span className="text-base font-semibold">{formatBytesCompact(storage.total, units).value}</span>
+                <span className="text-xs text-muted-foreground"> {formatBytesCompact(storage.total, units).unit}</span>
               </div>
               <Progress 
                 value={storage.percent} 
@@ -165,7 +167,7 @@ export function MemberResourcePanels({
               </p>
               {storage.sharedTotal > 0 && (
                 <p className="text-xs text-muted-foreground text-center">
-                  + {formatBytes(storage.sharedUsed)} / {formatBytes(storage.sharedTotal)} shared, cluster-wide
+                  + {formatBytes(storage.sharedUsed, units)} / {formatBytes(storage.sharedTotal, units)} shared, cluster-wide
                 </p>
               )}
             </div>
@@ -269,13 +271,13 @@ export function MemberResourcePanels({
                         )}
                       </div>
                       <span className="text-sm text-muted-foreground">
-                        {formatBytes(pool.space_used)} / {formatBytes(pool.space_total)}
+                        {formatBytes(pool.space_used, units)} / {formatBytes(pool.space_total, units)}
                       </span>
                     </div>
                     <div className="space-y-1">
                       <Progress value={usagePercent} className="h-2" />
                       <p className={`text-xs ${usageTone(usagePercent).text}`}>
-                        {usagePercent.toFixed(1)}% used · {formatBytes(pool.space_available)} available
+                        {usagePercent.toFixed(1)}% used · {formatBytes(pool.space_available, units)} available
                       </p>
                     </div>
                   </div>
@@ -304,11 +306,11 @@ export function MemberResourcePanels({
             </div>
             <div>
               <p className="text-muted-foreground mb-1">Available Memory</p>
-              <p className="font-medium">{formatBytes(resources.memory_available)}</p>
+              <p className="font-medium">{formatBytes(resources.memory_available, units)}</p>
             </div>
             <div>
               <p className="text-muted-foreground mb-1">{storage.summaryLabel}</p>
-              <p className="font-medium">{formatBytes(storage.total - storage.used)}</p>
+              <p className="font-medium">{formatBytes(storage.total - storage.used, units)}</p>
             </div>
           </div>
         </CardContent>

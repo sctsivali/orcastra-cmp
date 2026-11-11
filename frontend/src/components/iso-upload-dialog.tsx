@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useToast } from "@/hooks/use-toast";
+import { useByteFormat } from "@/hooks/use-byte-format";
 import { useStoragePools } from "@/hooks/use-lxd";
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
@@ -30,7 +31,6 @@ import {
   UploadTerminalFailure,
 } from "@/lib/upload-terminal";
 import { APIError } from "@/types/api";
-import { formatBytes } from "@/lib/utils";
 import { Loader2, UploadCloud } from "lucide-react";
 
 // 16 MiB chunks: large enough to keep request overhead low, small enough that a
@@ -62,6 +62,7 @@ function suggestName(fileName: string): string {
 export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDialogProps) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { formatBytes } = useByteFormat();
   const { scopeKey } = useActorQueryScope();
   const nodePicker = useNodePickerOptions();
   const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;
