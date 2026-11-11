@@ -1264,6 +1264,23 @@ class GeoLocationInput(GeoLocation):
     official_name: Optional[str] = Field(None, max_length=200, pattern=NO_CONTROL_CHARACTERS, description="Full Kepmendagri name")
 
 
+class CertificateLifetime(str, Enum):
+    """How long a cluster's client certificate lasts (services/lxd_certs/lifetime.py).
+
+    `default` is the deployment's VAULT_CERT_TTL; `longest` runs until the issuing CA expires. The
+    periods are CertificateTTLOption's, so a renewal request written for it still validates.
+    """
+    DEFAULT = "default"
+    ONE_MONTH = "720h"
+    TWO_MONTHS = "1440h"
+    THREE_MONTHS = "2160h"
+    FOUR_MONTHS = "2880h"
+    FIVE_MONTHS = "3600h"
+    SIX_MONTHS = "4320h"
+    ONE_YEAR = "8760h"
+    LONGEST = "longest"
+
+
 class ClusterRegisterRequest(BaseModel):
     """Request to register a new LXD cluster."""
     cluster_id: str = Field(..., min_length=1, max_length=63,
@@ -1275,6 +1292,10 @@ class ClusterRegisterRequest(BaseModel):
     zone: Optional[str] = Field(None, description="Geographical or logical zone (legacy, use location instead)")
     merchant_id: Optional[str] = Field(None, description="Merchant/organization identifier")
     location: Optional[GeoLocationInput] = Field(None, description="Geographic location information")
+    certificate_lifetime: CertificateLifetime = Field(
+        CertificateLifetime.DEFAULT,
+        description="How long the client certificate lasts; default is the deployment's VAULT_CERT_TTL",
+    )
 
     @field_validator("endpoint")
     @classmethod
@@ -1379,6 +1400,16 @@ class ClusterRegisterResponse(BaseModel):
     identity_name: Optional[str] = Field(None, description="Trust entry name the command uses")
     fingerprint: Optional[str] = Field(None, description="LXD fingerprint of the new certificate")
     previous_fingerprint: Optional[str] = Field(None, description="LXD fingerprint of the certificate still active")
+    certificate_lifetime: Optional[CertificateLifetime] = Field(None, description="The lifetime the certificate was issued for")
+    certificate_expires_at: Optional[datetime] = Field(None, description="When the issued certificate expires, read from it")
+    lifetime_shortened: bool = Field(False, description="Vault issued a shorter certificate than the lifetime asked for")
+
+
+class CertificateRegenerateRequest(BaseModel):
+    """Optional body of POST /clusters/{id}/regenerate-cert."""
+    certificate_lifetime: Optional[CertificateLifetime] = Field(
+        None, description="How long the new certificate lasts; absent keeps the cluster's last choice",
+    )
 
 
 class ClusterAuthCheckRequest(BaseModel):
@@ -1445,6 +1476,21 @@ class CertificateTTLOption(str, Enum):
     ONE_YEAR = "8760h"      # 365 days
 
 
+class CertificateLifetimeOption(BaseModel):
+    value: CertificateLifetime
+    label: str
+    # When a certificate issued now would expire: the CA's end for `longest`, now plus the period
+    # otherwise. Vault decides the real date; the response to the write reports it.
+    expires_at: Optional[datetime] = None
+    available: bool = True
+    reason: Optional[str] = None
+
+
+class CertificateLifetimeOptions(BaseModel):
+    default: CertificateLifetime = CertificateLifetime.DEFAULT
+    options: List[CertificateLifetimeOption]
+
+
 class CertificateInfo(BaseModel):
     """Certificate information with expiry details."""
     cluster_id: str = Field(..., description="Cluster identifier")
@@ -1467,6 +1513,9 @@ class CertificateInfo(BaseModel):
     cluster_type: Optional[str] = Field(
         None, description="Registered hypervisor type (LXD, MicroCloud, Incus); null until the first trusted read"
     )
+    # The lifetime this certificate was issued for, so regenerate and renew can offer it again; None
+    # for one issued before the choice existed.
+    lifetime: Optional[CertificateLifetime] = Field(None, description="Lifetime the certificate was issued for")
 
 
 class CertificateListResponse(BaseModel):
@@ -1480,9 +1529,11 @@ class CertificateListResponse(BaseModel):
 class CertificateRenewalRequest(BaseModel):
     """Request to initiate certificate renewal."""
     cluster_id: str = Field(..., description="Cluster identifier")
-    ttl: CertificateTTLOption = Field(
-        CertificateTTLOption.SIX_MONTHS,
-        description="Certificate validity period"
+    # Optional so the service can tell an absent choice, which keeps the cluster's last one, from
+    # a chosen one. The six months it meant before still applies to a cluster with no stored choice.
+    ttl: Optional[CertificateLifetime] = Field(
+        None,
+        description="Certificate validity period; absent keeps the cluster's last choice, else six months",
     )
     trust_password: Optional[str] = Field(
         None,
@@ -1502,6 +1553,9 @@ class CertificateRenewalResponse(BaseModel):
     pending_cert_id: Optional[str] = Field(None, description="ID for pending verification")
     fingerprint: Optional[str] = Field(None, description="LXD fingerprint of the new certificate")
     previous_fingerprint: Optional[str] = Field(None, description="LXD fingerprint it replaces")
+    certificate_lifetime: Optional[CertificateLifetime] = Field(None, description="The lifetime the certificate was issued for")
+    certificate_expires_at: Optional[datetime] = Field(None, description="When the issued certificate expires, read from it")
+    lifetime_shortened: bool = Field(False, description="Vault issued a shorter certificate than the lifetime asked for")
 
 
 class CertificateVerifyRequest(BaseModel):

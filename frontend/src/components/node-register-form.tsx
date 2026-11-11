@@ -19,8 +19,9 @@ import { Badge } from "@/components/ui/badge";
 import { CodeBlock } from "@/components/ui/code-block";
 
 import { toast } from "@/hooks/use-toast";
-import { formatHypervisorType, generateIdentityName, hypervisorCli, isIncusType, trustPickupHint } from "@/lib/utils";
-import { ClusterStatus, APIError } from "@/types/api";
+import { formatDate, formatHypervisorType, generateIdentityName, hypervisorCli, isIncusType, trustPickupHint } from "@/lib/utils";
+import { ClusterStatus, APIError, type CertificateLifetime } from "@/types/api";
+import { CertificateLifetimeSelect } from "@/components/certificate-lifetime-select";
 import { useRegisterCluster, useCheckClusterAuth, useFacilitySuggestions } from "@/hooks/use-lxd";
 import { loadRegionCatalog, resolveRegion, toGeoLocation } from "@/lib/regions/catalog";
 import { RegionPicker } from "@/components/regions/region-picker";
@@ -87,6 +88,7 @@ export function NodeRegisterForm() {
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = React.useState(false);
   const [identityName, setIdentityName] = React.useState<string>("");
+  const [lifetime, setLifetime] = React.useState<CertificateLifetime | undefined>(undefined);
   
   const registerCluster = useRegisterCluster();
   const checkClusterAuth = useCheckClusterAuth();
@@ -99,6 +101,8 @@ export function NodeRegisterForm() {
     certificate?: string;
     cluster_id?: string;
     cluster_type?: string;  // Auto-detected: "LXD", "MicroCloud", or "Incus"
+    certificate_expires_at?: string | null;
+    lifetime_shortened?: boolean;
   } | null>(null);
 
   const {
@@ -190,6 +194,8 @@ export function NodeRegisterForm() {
         endpoint: data.endpoint,
         zone: regionInfo?.name || undefined,  // Region name as zone, for backwards compatibility.
         location: locationData,
+        // Nothing picked sends nothing, so the deployment's default applies exactly as before.
+        ...(lifetime ? { certificate_lifetime: lifetime } : {}),
       });
 
       setRegistrationResult({
@@ -202,6 +208,8 @@ export function NodeRegisterForm() {
         // The pre-trust probe answers null unless the host names itself (older Incus releases
         // do, through public dev_incus extensions); the form then offers both commands.
         cluster_type: response.cluster_type ?? undefined,
+        certificate_expires_at: response.certificate_expires_at,
+        lifetime_shortened: response.lifetime_shortened,
       });
 
       if (response.success && response.certificate) {
@@ -276,7 +284,16 @@ export function NodeRegisterForm() {
             </CardTitle>
             <CardDescription>
               Follow these steps to add trust and complete the registration.
+              {registrationResult.certificate_expires_at && (
+                <> The certificate is valid until {formatDate(registrationResult.certificate_expires_at)}.</>
+              )}
             </CardDescription>
+            {registrationResult.lifetime_shortened && (
+              <p className="text-sm text-status-pending">
+                Vault issued a shorter certificate than the lifetime chosen: its PKI role caps how long a
+                certificate may last.
+              </p>
+            )}
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="space-y-3">
@@ -504,6 +521,14 @@ export function NodeRegisterForm() {
                 </p>
               </div>
             </div>
+
+            <CertificateLifetimeSelect
+              id="certificate_lifetime"
+              value={lifetime}
+              onChange={setLifetime}
+              fallback="default"
+              disabled={isSubmitting}
+            />
 
             <Alert>
               <Info className="h-4 w-4" />

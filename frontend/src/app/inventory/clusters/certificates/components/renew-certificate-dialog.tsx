@@ -16,16 +16,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/hooks/use-toast";
 import { useInitiateCertRenewal, usePendingCertificate, useVerifyCertRenewal } from "@/hooks/use-lxd";
-import { hypervisorCli, isIncusType } from "@/lib/utils";
-import {
-  CertificateStatus,
-  CertificateTTLOption,
-  TTL_LABELS,
-  type CertificateInfo,
-} from "@/types/api";
+import { formatDate, hypervisorCli, isIncusType } from "@/lib/utils";
+import { CertificateLifetimeSelect } from "@/components/certificate-lifetime-select";
+import { CertificateStatus, type CertificateInfo, type CertificateLifetime } from "@/types/api";
 
 import { FingerprintField, TRUST_LIST_CHARS } from "./certificate-fingerprint";
 
@@ -41,6 +36,8 @@ interface ManualTrust {
 interface Done {
   fingerprint?: string | null;
   previous_fingerprint?: string | null;
+  certificate_expires_at?: string | null;
+  lifetime_shortened?: boolean;
 }
 
 interface RenewCertificateDialogProps {
@@ -59,7 +56,9 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
   const cli = hypervisorCli(certificate?.cluster_type);
   // Incus has no core.trust_password, so on Incus the only way back in is the CLI command.
   const offersTrustPassword = !isIncusType(certificate?.cluster_type);
-  const [ttl, setTtl] = React.useState<CertificateTTLOption>(CertificateTTLOption.SIX_MONTHS);
+  // Undefined until the operator picks: the server then keeps the cluster's last lifetime, or six
+  // months for a certificate issued before the choice existed, which is what the picker shows.
+  const [ttl, setTtl] = React.useState<CertificateLifetime | undefined>(undefined);
   const [trustPassword, setTrustPassword] = React.useState("");
   const [manual, setManual] = React.useState<ManualTrust | null>(null);
   const [done, setDone] = React.useState<Done | null>(null);
@@ -72,7 +71,7 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
 
   React.useEffect(() => {
     if (!open) return;
-    setTtl(CertificateTTLOption.SIX_MONTHS);
+    setTtl(undefined);
     setTrustPassword("");
     setManual(null);
     setDone(null);
@@ -97,12 +96,17 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
     try {
       const result = await renewal.mutateAsync({
         cluster_id: certificate.cluster_id,
-        ttl,
+        ...(ttl ? { ttl } : {}),
         trust_password: (offersTrustPassword && trustPassword) || undefined,
       });
       if (result.auto_renewed) {
         toast({ title: "Certificate renewed", description: "The new certificate is active." });
-        setDone({ fingerprint: result.fingerprint, previous_fingerprint: result.previous_fingerprint });
+        setDone({
+          fingerprint: result.fingerprint,
+          previous_fingerprint: result.previous_fingerprint,
+          certificate_expires_at: result.certificate_expires_at,
+          lifetime_shortened: result.lifetime_shortened,
+        });
         setStep("done");
       } else if (result.requires_manual_trust) {
         setManual({
@@ -193,21 +197,14 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
               hint={`The first ${TRUST_LIST_CHARS} characters are what ${cli} config trust list shows for it.`}
             />
 
-            <div className="space-y-2">
-              <Label htmlFor="renew-ttl">Certificate Validity Period</Label>
-              <Select value={ttl} onValueChange={(v) => setTtl(v as CertificateTTLOption)}>
-                <SelectTrigger id="renew-ttl">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.entries(TTL_LABELS).map(([value, label]) => (
-                    <SelectItem key={value} value={value}>
-                      {label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            <CertificateLifetimeSelect
+              id="renew-ttl"
+              value={ttl}
+              onChange={setTtl}
+              fallback={certificate.lifetime ?? "4320h"}
+              disabled={renewal.isPending}
+              enabled={open && step === "form"}
+            />
 
             {/* Offered for every renewal. A valid certificate is still rejected once its trust
                 entry is replaced or dropped on the LXD side; the backend then cannot
@@ -312,6 +309,12 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
                 The new certificate is active. The cluster still trusts the previous one for now:
                 its trust entry is removed automatically after a short grace period, or right away
                 from the old trust entries link on this cluster&apos;s row.
+                {done?.certificate_expires_at && (
+                  <> It is valid until {formatDate(done.certificate_expires_at)}.</>
+                )}
+                {done?.lifetime_shortened && (
+                  <> Vault issued a shorter certificate than the lifetime chosen: its PKI role caps how long a certificate may last.</>
+                )}
               </AlertDescription>
             </Alert>
             <FingerprintField

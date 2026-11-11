@@ -12,7 +12,7 @@ from cryptography.hazmat.backends import default_backend
 
 from app.core.cert_fingerprint import lxd_fingerprint
 from app.core.type_utils import normalize_cluster_type
-from app.models.schemas import CertificateInfo, CertificateStatus
+from app.models.schemas import CertificateInfo, CertificateLifetime, CertificateStatus
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +92,13 @@ def get_warning_severity(days_until_expiry: int) -> str:
     return "info"
 
 
+def _stored_lifetime(value: Any) -> Optional[CertificateLifetime]:
+    try:
+        return CertificateLifetime(value) if value else None
+    except ValueError:
+        return None
+
+
 def read_certificate_row(cert_manager: Any, cluster_id: str) -> Optional[Tuple[CertificateInfo, Optional[str]]]:
     """Blocking. One cluster's certificate row and its hypervisor type, or None when it has none.
 
@@ -132,6 +139,7 @@ def read_certificate_row(cert_manager: Any, cluster_id: str) -> Optional[Tuple[C
             serial_number=parsed.get("serial_number"),
             pending_fingerprint=pending_fp,
             cluster_type=normalize_cluster_type(metadata["type"]) if metadata.get("type") else None,
+            lifetime=_stored_lifetime(certs.get("lifetime")),
         )
         return info, metadata.get("type")
     except VaultClientError as exc:

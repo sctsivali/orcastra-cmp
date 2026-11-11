@@ -177,10 +177,14 @@ class VaultStorageMixin:
     def generate_and_store_certificate(
         self,
         cluster_id: str,
+        lifetime_plan: Any,
         common_name: Optional[str] = None,
-        ttl: str = "720h"
-    ) -> Dict[str, str]:
-        """Issue a client certificate from Vault PKI and store it under the cluster."""
+    ) -> Dict[str, Any]:
+        """Issue a client certificate from Vault PKI for ``lifetime_plan`` and store it under the cluster.
+
+        The answer carries ``lifetime``, the IssuedLifetime read back from the certificate.
+        """
+        from app.services.lxd_certs import lifetime
         if common_name is None:
             from app.core.config import get_settings
             domain = get_settings().orcastra_domain
@@ -188,19 +192,21 @@ class VaultStorageMixin:
         
         try:
             # Vault PKI requires an FQDN as the common name.
-            cert_data = self.vault.generate_lxd_certificate(common_name, ttl)
+            cert_data, outcome = lifetime.issue(self.vault, common_name, lifetime_plan)
 
-            # Vault is the only persistent store of the certificate.
+            # Vault is the only persistent store of the certificate. `lifetime` is what regenerate
+            # and renew offer next time.
             path = f"{self.clusters_path}/{cluster_id}/certs"
             self.vault.vault_kv_put(path, {
                 "client.crt": cert_data["cert"],
                 "client.key": cert_data["key"],
                 "ca.pem": cert_data["ca"],
-                "common_name": common_name
+                "common_name": common_name,
+                "lifetime": outcome.lifetime.value,
             })
             
             logger.info(f"Generated and stored certificate for cluster {cluster_id}")
-            return cert_data
+            return {**cert_data, "lifetime": outcome}
             
         except VaultClientError as e:
             logger.error(f"Failed to generate/store certificate: {e}")

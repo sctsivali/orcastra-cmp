@@ -594,14 +594,16 @@ class VaultClient:
     def generate_lxd_certificate(
         self,
         common_name: str,
-        ttl: str = "720h",
-        role: str = "lxd"
+        ttl: Optional[str] = "720h",
+        role: str = "lxd",
+        not_after: Optional[str] = None,
     ) -> Dict[str, str]:
         """
         Issue an LXD client certificate from Vault PKI (`pki_int/issue/<role>`).
 
         ``common_name`` must be an FQDN, ex; "cluster1.example.com". The default ``ttl`` of
-        720h is 30 days.
+        720h is 30 days. ``not_after`` (``YYYY-MM-DDTHH:MM:SSZ``) replaces the ttl: Vault refuses
+        a request carrying both, and caps a ttl, never a not_after, at the role's max_ttl.
         """
         # An FQDN, for hostname validation. The caller appends settings.orcastra_domain.
         if '.' not in common_name:
@@ -610,10 +612,11 @@ class VaultClient:
                 "Pass full FQDN from the caller using settings.orcastra_domain."
             )
         
-        payload = {
-            "common_name": common_name,
-            "ttl": ttl
-        }
+        payload = {"common_name": common_name}
+        if not_after is not None:
+            payload["not_after"] = not_after
+        else:
+            payload["ttl"] = ttl
         
         start = time.perf_counter()
         try:
@@ -623,7 +626,7 @@ class VaultClient:
             _audit_vault_operation(
                 "vault.cert.generate", f"pki_int/issue/{role}",
                 duration_ms=duration,
-                details={"common_name": common_name, "ttl": ttl, "role": role},
+                details={"common_name": common_name, "role": role, **{k: v for k, v in payload.items() if k != "common_name"}},
             )
 
             return {

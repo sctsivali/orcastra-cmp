@@ -1285,6 +1285,8 @@ export interface ClusterRegisterRequest {
   cluster_id: string;
   display_name: string;
   endpoint: string;
+  /** How long the client certificate lasts; absent is the deployment default. */
+  certificate_lifetime?: CertificateLifetime;
   zone?: string;
   merchant_id?: string;
   location?: {
@@ -1422,6 +1424,11 @@ export interface ClusterRegisterResponse {
   identity_name?: string | null;
   fingerprint?: string | null;
   previous_fingerprint?: string | null;
+  certificate_lifetime?: CertificateLifetime | null;
+  /** When the issued certificate expires, read from the certificate itself. */
+  certificate_expires_at?: string | null;
+  /** Vault issued a shorter certificate than the lifetime chosen. */
+  lifetime_shortened?: boolean;
 }
 
 export interface ClusterAuthCheckRequest {
@@ -2068,15 +2075,25 @@ export enum CertificateTTLOption {
   ONE_YEAR = "8760h"
 }
 
-export const TTL_LABELS: Record<CertificateTTLOption, string> = {
-  [CertificateTTLOption.ONE_MONTH]: "1 Month",
-  [CertificateTTLOption.TWO_MONTHS]: "2 Months",
-  [CertificateTTLOption.THREE_MONTHS]: "3 Months",
-  [CertificateTTLOption.FOUR_MONTHS]: "4 Months",
-  [CertificateTTLOption.FIVE_MONTHS]: "5 Months",
-  [CertificateTTLOption.SIX_MONTHS]: "6 Months",
-  [CertificateTTLOption.ONE_YEAR]: "1 Year"
-};
+/**
+ * How long a cluster's client certificate lasts. `default` is the deployment's own length and
+ * `longest` runs until the issuing certificate authority expires; the rest are the periods.
+ */
+export type CertificateLifetime = "default" | `${CertificateTTLOption}` | "longest";
+
+export interface CertificateLifetimeOption {
+  value: CertificateLifetime;
+  label: string;
+  /** When a certificate issued now would expire. */
+  expires_at?: string | null;
+  available: boolean;
+  reason?: string | null;
+}
+
+export interface CertificateLifetimeOptions {
+  default: CertificateLifetime;
+  options: CertificateLifetimeOption[];
+}
 
 export interface CertificateInfo {
   cluster_id: string;
@@ -2096,6 +2113,8 @@ export interface CertificateInfo {
   superseded?: SupersededTrust[];
   /** Registered hypervisor type (LXD, MicroCloud, Incus); null until the first trusted read. */
   cluster_type?: string | null;
+  /** The lifetime this certificate was issued for; null for one issued before the choice existed. */
+  lifetime?: CertificateLifetime | null;
 }
 
 export type SupersededTrustState = "pending" | "failed" | "removed" | "cancelled";
@@ -2141,7 +2160,8 @@ export interface CertificateListResponse {
 
 export interface CertificateRenewalRequest {
   cluster_id: string;
-  ttl: CertificateTTLOption;
+  /** Absent keeps the cluster's last choice, else six months. */
+  ttl?: CertificateLifetime;
   trust_password?: string;
 }
 
@@ -2156,6 +2176,9 @@ export interface CertificateRenewalResponse {
   pending_cert_id?: string;
   fingerprint?: string | null;
   previous_fingerprint?: string | null;
+  certificate_lifetime?: CertificateLifetime | null;
+  certificate_expires_at?: string | null;
+  lifetime_shortened?: boolean;
 }
 
 export interface CertificateVerifyRequest {

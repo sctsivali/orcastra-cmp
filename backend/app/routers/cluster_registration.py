@@ -5,12 +5,14 @@ re-pin certificates, and deregister. Vault holds each cluster's record and certi
 
 import logging
 import asyncio
-from typing import Optional
+from typing import Any, Optional
 from concurrent.futures import ThreadPoolExecutor
-from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi import APIRouter, HTTPException, Depends, Response, status
 from datetime import datetime, timezone
 
 from app.models.schemas import (
+    CertificateLifetimeOptions,
+    CertificateRegenerateRequest,
     ClusterRegisterRequest,
     ClusterRegisterResponse,
     ClusterAuthCheckRequest,
@@ -54,6 +56,7 @@ from app.services import cluster_generations
 from app.services.cluster_records import forget_cluster_records
 from app.services.activity_logger import get_activity_logger
 from app.services.registration_budget import spend_registration_budget
+from app.services.lxd_certs import lifetime as cert_lifetime
 from app.services.lxd_certs import pending as pending_certs
 from app.services.lxd_certs import trust_cleanup
 from app.services.lxd_certs.storage import stored_location, stored_location_fields
@@ -256,6 +259,32 @@ async def _guard_registration_binding(
     return org_ids
 
 
+async def _lifetime_plan(choice: Any, cert_manager: LXDCertificateManager) -> cert_lifetime.LifetimePlan:
+    """The Vault request for ``choice``; a refused lifetime answers before anything is written."""
+    try:
+        return await asyncio.to_thread(cert_lifetime.plan, choice, cert_manager.vault)
+    except cert_lifetime.LifetimeRefused as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.get(
+    "/certificate-lifetimes",
+    response_model=CertificateLifetimeOptions,
+    summary="Certificate lifetimes a cluster can be given",
+    description=(
+        "What the lifetime picker offers at registration, regenerate and renew, each with the date "
+        "a certificate issued now would reach. The issued certificate's own date is in the write's answer."
+    ),
+)
+async def certificate_lifetimes(
+    response: Response,
+    cert_manager: LXDCertificateManager = Depends(get_cert_manager),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
+) -> CertificateLifetimeOptions:
+    response.headers["Cache-Control"] = "no-store"
+    return await asyncio.to_thread(cert_lifetime.options, cert_manager.vault)
+
+
 @router.post(
     "/register",
     response_model=ClusterRegisterResponse,
@@ -289,6 +318,8 @@ async def register_cluster(
     try:
         settings = get_settings()
         cluster_id = request.cluster_id
+        # The lifetime is checked before anything is written, so a refused one registers nothing.
+        lifetime_plan = await _lifetime_plan(request.certificate_lifetime, cert_manager)
 
         try:
             pending_serialization = serialize_cluster_share(db, cluster_id)
@@ -477,7 +508,7 @@ async def register_cluster(
                     cert_data = await asyncio.to_thread(
                         cert_manager.generate_and_store_certificate,
                         cluster_id=cluster_id,
-                        ttl=settings.vault_cert_ttl,
+                        lifetime_plan=lifetime_plan,
                     )
                     await db.commit()
             except trust_store.CertificateOperationBusy:
@@ -489,6 +520,7 @@ async def register_cluster(
             
             # Get certificate PEM for user to copy-paste
             certificate_pem = cert_data.get("cert")
+            issued_lifetime = cert_data.get("lifetime")
             
             # Incus 6.0.7 and 7.6 send an untrusted caller no api_extensions, so before trust the
             # type is usually unknown for every engine and the message names both commands.
@@ -499,6 +531,8 @@ async def register_cluster(
                 else "Certificate generated! Run the trust command for your hypervisor (lxc on LXD or "
                 "MicroCloud, incus on Incus). The type is confirmed once the certificate is trusted."
             )
+            if issued_lifetime is not None and issued_lifetime.shortened:
+                register_message = f"{register_message} {cert_lifetime.shortened_notice(issued_lifetime)}"
             if org_bind_warning:
                 register_message = f"{register_message} {org_bind_warning}"
 
@@ -514,6 +548,7 @@ async def register_cluster(
                     "zone": request.zone,
                     "cluster_type": cluster_type,
                     "certificate_generated": True,
+                    **(cert_lifetime.audit_fields(issued_lifetime) if issued_lifetime is not None else {}),
                 }
             )
             
@@ -525,7 +560,8 @@ async def register_cluster(
                 certificate_generated=True,
                 trust_added=False,
                 certificate=certificate_pem,
-                cluster_type=cluster_type
+                cluster_type=cluster_type,
+                **(cert_lifetime.response_fields(issued_lifetime) if issued_lifetime is not None else {}),
             )
                 
         except LXDCertManagerError as e:
@@ -1503,6 +1539,7 @@ async def regenerate_certificate(
     db: AsyncSession = Depends(get_db),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    body: Optional[CertificateRegenerateRequest] = None,
 ):
     """Regenerate certificate for a cluster."""
     verify_cluster_access(cluster_id)
@@ -1543,12 +1580,17 @@ async def regenerate_certificate(
         # trusts the new one and Verify activates it (services/lxd_certs/pending.py). Overwriting
         # it at once would cut off every worker that reconnects before trust is added.
         try:
-            issued = await pending_certs.regenerate(db, cert_manager, cluster_id, cluster_type=cluster_type)
+            issued = await pending_certs.regenerate(
+                db, cert_manager, cluster_id, cluster_type=cluster_type,
+                lifetime_choice=body.certificate_lifetime if body is not None else None,
+            )
         except trust_store.CertificateOperationBusy:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Another certificate change on this cluster is in progress. Try again in a moment.",
             )
+        except cert_lifetime.LifetimeRefused as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
         if issued.activated:
             # The cluster had no certificate at all, so the new one is active and the Vault cache
             # must not keep serving the absence.
@@ -1561,6 +1603,8 @@ async def regenerate_certificate(
             else f"New certificate issued as pending; the current one stays active. Run the {cli_tool} "
                  f"command on the host, then Verify to activate it. Detected: {cluster_type}."
         )
+        if issued.lifetime is not None and issued.lifetime.shortened:
+            message = f"{message} {cert_lifetime.shortened_notice(issued.lifetime)}"
         # `status` describes the new certificate, which the cluster does not trust yet; the
         # cluster's own status is unchanged until Verify.
         return ClusterRegisterResponse(
@@ -1577,6 +1621,7 @@ async def regenerate_certificate(
             identity_name=issued.identity_name,
             fingerprint=issued.fingerprint,
             previous_fingerprint=issued.previous_fingerprint,
+            **(cert_lifetime.response_fields(issued.lifetime) if issued.lifetime is not None else {}),
         )
 
     except LXDCertManagerError as e:

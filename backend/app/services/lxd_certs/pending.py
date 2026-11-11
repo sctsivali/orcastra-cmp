@@ -15,7 +15,10 @@ from app.core.config import get_settings
 from app.core.request_context import get_current_user_id
 from app.core.type_utils import build_trust_add_command
 from app.models.cert_trust_schemas import PendingCertificateResponse
+from app.models.schemas import CertificateLifetime
+from app.services.lxd_certs import lifetime
 from app.services.lxd_certs import trust_cleanup_store as store
+from app.services.lxd_certs.lifetime import IssuedLifetime
 from app.services.lxd_certs.rotation import (
     PENDING_MAX_AGE_HOURS,
     TRUST_TIMEOUT_S,
@@ -106,6 +109,7 @@ class PendingIssue:
     previous_fingerprint: Optional[str]
     # True only when the cluster had no certificate at all, so there was nothing to protect.
     activated: bool
+    lifetime: Optional[IssuedLifetime] = None
 
 
 async def regenerate(
@@ -115,6 +119,7 @@ async def regenerate(
     *,
     cluster_type: Optional[str],
     session_maker: Optional[Any] = None,
+    lifetime_choice: Optional[CertificateLifetime] = None,
 ) -> PendingIssue:
     """Issue a replacement certificate as PENDING; Verify activates it once the cluster trusts it.
 
@@ -132,6 +137,13 @@ async def regenerate(
             )
         except CertificateNotFound:
             state = None
+        # Checked before anything is recorded: a refused lifetime leaves the cluster as it was.
+        lifetime_plan = await _blocking(
+            lifetime.plan,
+            lifetime.resolve(lifetime_choice, state.certs.get("lifetime") if state is not None else None),
+            cert_manager.vault,
+            label="cert.regenerate.lifetime",
+        )
         if state is not None and state.pending:
             await _record(
                 session_maker, cluster_id=cluster_id, fingerprint=state.pending_fp or "",
@@ -139,8 +151,8 @@ async def regenerate(
                 identity_name=state.pending.get("identity_name"), requested_by=actor,
             )
         common_name = f"{cluster_id}.{settings.orcastra_domain}"
-        issued = await _blocking(
-            partial(cert_manager.vault.generate_lxd_certificate, common_name=common_name, ttl=settings.vault_cert_ttl),
+        issued, issued_lifetime = await _blocking(
+            partial(lifetime.issue, cert_manager.vault, common_name, lifetime_plan),
             timeout=TRUST_TIMEOUT_S, label="cert.regenerate.issue",
         )
         material = {
@@ -148,6 +160,7 @@ async def regenerate(
             "client.key": issued["key"],
             "ca.pem": issued.get("ca", ""),
             "common_name": common_name,
+            "lifetime": issued_lifetime.lifetime.value,
         }
         identity_name = trust_identity_name(cluster_id)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -175,7 +188,8 @@ async def regenerate(
     previous_fp = state.current_fp if state is not None else None
     audit("cluster.certificate.regenerate", cluster_id,
           mode="pending" if state is not None else "initial",
-          fingerprint=new_fp, previous_fingerprint=previous_fp, identity_name=identity_name)
+          fingerprint=new_fp, previous_fingerprint=previous_fp, identity_name=identity_name,
+          **lifetime.audit_fields(issued_lifetime))
     cli_type = cluster_type or (_cli_type(state) if state is not None else "LXD")
     return PendingIssue(
         pending_cert_id=pending_cert_id,
@@ -185,4 +199,5 @@ async def regenerate(
         fingerprint=new_fp,
         previous_fingerprint=previous_fp,
         activated=state is None,
+        lifetime=issued_lifetime,
     )

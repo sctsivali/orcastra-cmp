@@ -16,7 +16,13 @@ import {
 import { DEFAULT_HISTORY_WINDOW_SECONDS, HISTORY_WINDOWS } from "@/lib/monitoring-history";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useEffect, useRef, useState } from "react";
-import { APIError, type MetricsHistoryPoint } from "@/types/api";
+import {
+  APIError,
+  type CertificateLifetime,
+  type CertificateRenewalRequest,
+  type ClusterRegisterRequest,
+  type MetricsHistoryPoint,
+} from "@/types/api";
 import { 
   vmAPI, 
   imageAPI, 
@@ -2024,7 +2030,7 @@ export function useRegisterCluster() {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: (data: any) => api.clusters.register(data),
+    mutationFn: (data: ClusterRegisterRequest) => api.clusters.register(data),
     onSuccess: () => reconcile(queryClient, "cluster.register"),
   });
 }
@@ -2051,7 +2057,8 @@ export function useRegenerateCert() {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: (clusterId: string) => api.clusters.regenerateCert(clusterId),
+    mutationFn: ({ clusterId, lifetime }: { clusterId: string; lifetime?: CertificateLifetime }) =>
+      api.clusters.regenerateCert(clusterId, lifetime),
     onSuccess: () => reconcile(queryClient, "cluster.certificate"),
   });
 }
@@ -2165,6 +2172,16 @@ export function useCertificates() {
   });
 }
 
+/** What the certificate lifetime picker offers; the dates count from the moment of the read. */
+export function useCertificateLifetimes(enabled = true) {
+  return useQuery({
+    queryKey: ["certificate-lifetimes"],
+    queryFn: () => api.clusters.certificateLifetimes(),
+    enabled,
+    staleTime: 60_000,
+  });
+}
+
 export function useCertificate(clusterId: string) {
   return useQuery({
     queryKey: ["certificate", clusterId],
@@ -2178,8 +2195,7 @@ export function useInitiateCertRenewal() {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: (request: { cluster_id: string; ttl: string; trust_password?: string }) => 
-      api.certificates.initiateRenewal(request as any),
+    mutationFn: (request: CertificateRenewalRequest) => api.certificates.initiateRenewal(request),
     onSuccess: () => reconcile(queryClient, "cluster.certificate"),
   });
 }

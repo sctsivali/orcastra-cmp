@@ -43,6 +43,8 @@ import {
   APIError,
   ClusterRegisterRequest,
   ClusterRegisterResponse,
+  CertificateLifetime,
+  CertificateLifetimeOptions,
   ClusterAuthCheckResponse,
   ClusterListResponse,
   ClusterInfo,
@@ -2291,13 +2293,20 @@ export const clusterAPI = {
     });
   },
 
-  regenerateCert: async (clusterId: string): Promise<ClusterRegisterResponse> => {
+  /** Absent `lifetime` keeps the cluster's last choice. */
+  regenerateCert: async (clusterId: string, lifetime?: CertificateLifetime): Promise<ClusterRegisterResponse> => {
     return fetchAPI<ClusterRegisterResponse>(
       `/clusters/${clusterId}/regenerate-cert`,
       {
         method: "POST",
+        ...(lifetime ? { body: JSON.stringify({ certificate_lifetime: lifetime }) } : {}),
       }
     );
+  },
+
+  /** What the certificate lifetime picker offers, each with the date it reaches if issued now. */
+  certificateLifetimes: async (): Promise<CertificateLifetimeOptions> => {
+    return fetchAPI<CertificateLifetimeOptions>("/clusters/certificate-lifetimes");
   },
 
   updateLocation: async (clusterId: string, location: GeoLocation): Promise<ClusterLocationUpdateResponse> => {

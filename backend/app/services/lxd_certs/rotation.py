@@ -30,10 +30,12 @@ from app.core.request_context import get_current_user_id
 from app.core.type_utils import build_trust_add_command
 from app.core.vault_client import VaultClientError
 from app.models.schemas import (
+    CertificateLifetime,
     CertificateRenewalRequest,
     CertificateRenewalResponse,
     CertificateVerifyResponse,
 )
+from app.services.lxd_certs import lifetime
 from app.services.lxd_certs import trust_cleanup_store as store
 from app.services.lxd_certs.inspect import parse_certificate_pem
 
@@ -138,11 +140,12 @@ def _issue_and_trust(
     request: CertificateRenewalRequest,
     current_valid: bool,
     identity_name: str,
+    lifetime_plan: lifetime.LifetimePlan,
 ) -> Dict[str, Any]:
     """Blocking. A new certificate from Vault PKI, added to trust when the dashboard can do it."""
     settings = get_settings()
-    issued = cert_manager.vault.generate_lxd_certificate(
-        common_name=f"{cluster_id}.{settings.orcastra_domain}", ttl=request.ttl.value
+    issued, outcome = lifetime.issue(
+        cert_manager.vault, f"{cluster_id}.{settings.orcastra_domain}", lifetime_plan,
     )
     auto = False
     if current_valid:
@@ -165,7 +168,7 @@ def _issue_and_trust(
             ))
         except Exception as exc:  # noqa: BLE001
             logger.warning("Renewal with password failed for %s: %s", cluster_id, exc)
-    return {"issued": issued, "auto": auto}
+    return {"issued": issued, "auto": auto, "lifetime": outcome}
 
 
 def _activate(cert_manager: Any, cluster_id: str, material: Dict[str, str]) -> None:
@@ -239,16 +242,25 @@ async def renew(
         identity_name = trust_identity_name(cluster_id)
         pending_cert_id = f"pending-{stamp}-{secrets.token_hex(4)}"
 
+        # Checked before anything is recorded: a refused lifetime leaves the cluster as it was. Six
+        # months is what a renewal meant before the choice existed.
+        lifetime_plan = await _blocking(
+            lifetime.plan,
+            lifetime.resolve(request.ttl, state.certs.get("lifetime"), CertificateLifetime.SIX_MONTHS),
+            cert_manager.vault,
+            label="cert.renew.lifetime",
+        )
+
         if state.pending:
             await _record(
                 session_maker, cluster_id=cluster_id, fingerprint=state.pending_fp or "", reason="pending_replaced",
                 grace_seconds=grace, identity_name=state.pending.get("identity_name"), requested_by=actor,
             )
         outcome = await _blocking(
-            _issue_and_trust, cert_manager, cluster_id, request, current_valid, identity_name,
+            _issue_and_trust, cert_manager, cluster_id, request, current_valid, identity_name, lifetime_plan,
             timeout=TRUST_TIMEOUT_S, label="cert.renew.issue",
         )
-        issued, auto = outcome["issued"], outcome["auto"]
+        issued, auto, issued_lifetime = outcome["issued"], outcome["auto"], outcome["lifetime"]
         new_fp = _fp(issued["cert"])
         domain = get_settings().orcastra_domain
         material = {
@@ -256,6 +268,7 @@ async def renew(
             "client.key": issued["key"],
             "ca.pem": issued.get("ca", ""),
             "common_name": f"{cluster_id}.{domain}",
+            "lifetime": issued_lifetime.lifetime.value,
         }
 
         if auto:
@@ -282,7 +295,8 @@ async def renew(
             except Exception as exc:  # noqa: BLE001 - this worker heals on its next request
                 logger.warning("Could not switch this worker to the renewed certificate: %s", exc)
             audit("cluster.certificate.renew", cluster_id, mode="automatic",
-                   fingerprint=new_fp, previous_fingerprint=state.current_fp, identity_name=identity_name)
+                   fingerprint=new_fp, previous_fingerprint=state.current_fp, identity_name=identity_name,
+                   **lifetime.audit_fields(issued_lifetime))
             audit("cluster.certificate.activate", cluster_id,
                    fingerprint=new_fp, previous_fingerprint=state.current_fp)
             return CertificateRenewalResponse(
@@ -294,6 +308,7 @@ async def renew(
                 pending_cert_id=pending_cert_id,
                 fingerprint=new_fp,
                 previous_fingerprint=state.current_fp,
+                **lifetime.response_fields(issued_lifetime),
             )
 
         await _blocking(
@@ -310,7 +325,8 @@ async def renew(
         )
         await db.commit()
     audit("cluster.certificate.renew", cluster_id, mode="manual",
-           fingerprint=new_fp, previous_fingerprint=state.current_fp, identity_name=identity_name)
+           fingerprint=new_fp, previous_fingerprint=state.current_fp, identity_name=identity_name,
+           **lifetime.audit_fields(issued_lifetime))
     return CertificateRenewalResponse(
         success=True,
         message="New certificate generated. Add trust manually and verify.",
@@ -322,6 +338,7 @@ async def renew(
         pending_cert_id=pending_cert_id,
         fingerprint=new_fp,
         previous_fingerprint=state.current_fp,
+        **lifetime.response_fields(issued_lifetime),
     )
 
 
@@ -368,6 +385,7 @@ async def verify(
             "client.key": pending["client.key"],
             "ca.pem": pending.get("ca.pem", ""),
             "common_name": pending.get("common_name", ""),
+            **({"lifetime": pending["lifetime"]} if pending.get("lifetime") else {}),
         }
         await _blocking(_activate, cert_manager, cluster_id, material, label="cert.verify.activate")
         await db.commit()

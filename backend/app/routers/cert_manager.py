@@ -41,6 +41,7 @@ from app.models.schemas import (
     SystemWarningsResponse,
 )
 from app.services.lxd_cert_manager import LXDCertificateManager
+from app.services.lxd_certs import lifetime as cert_lifetime
 from app.services.lxd_certs import pending as pending_certs
 from app.services.lxd_certs import rotation, trust_cleanup
 from app.services.lxd_certs import trust_cleanup_store as store
@@ -238,6 +239,8 @@ async def initiate_renewal(
         return await rotation.renew(db, cert_manager, request)
     except store.CertificateOperationBusy:
         raise _busy()
+    except cert_lifetime.LifetimeRefused as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except rotation.CertificateNotFound:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

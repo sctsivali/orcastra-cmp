@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "@/hooks/use-toast";
 import { useCancelPendingCert, useCheckClusterAuth, useVerifyCertRenewal } from "@/hooks/use-lxd";
-import { formatHypervisorType, hypervisorCli, isIncusType, trustPickupHint } from "@/lib/utils";
+import { formatDate, formatHypervisorType, hypervisorCli, isIncusType, trustPickupHint } from "@/lib/utils";
 import type { ClusterInfo, ClusterRegisterResponse } from "@/types/api";
 
 import { FingerprintField, TRUST_LIST_CHARS } from "../certificates/components/certificate-fingerprint";
@@ -120,7 +120,14 @@ export function RegenerateCertificateDialog({
               {pendingId
                 ? `Add trust for the new certificate on ${cluster?.display_name ?? clusterId}, then verify it. The current certificate stays active until then.`
                 : `Add trust to complete the authentication for ${cluster?.display_name ?? clusterId}.`}
+              {issued?.certificate_expires_at && ` The new certificate is valid until ${formatDate(issued.certificate_expires_at)}.`}
             </DialogDescription>
+            {issued?.lifetime_shortened && (
+              <p className="text-sm text-status-pending">
+                Vault issued a shorter certificate than the lifetime chosen: its PKI role caps how long a
+                certificate may last.
+              </p>
+            )}
           </DialogHeader>
 
           {issued && (

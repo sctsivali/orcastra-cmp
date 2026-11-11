@@ -37,6 +37,7 @@ import { TableLink } from "@/components/ui/table-link";
 import { ClusterDetailDialog } from "./components/cluster-detail-dialog";
 import { LeftoverTrustDialog, type LeftoverTrust } from "./components/leftover-trust-dialog";
 import { RegenerateCertificateDialog } from "./components/regenerate-certificate-dialog";
+import { RegenerateCertificateConfirm } from "./components/regenerate-certificate-confirm";
 import {
   Dialog,
   DialogContent,
@@ -47,7 +48,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/use-toast";
-import { ClusterInfo, ClusterStatus, type ClusterRegisterResponse } from "@/types/api";
+import { ClusterInfo, ClusterStatus, type CertificateLifetime, type ClusterRegisterResponse } from "@/types/api";
 import { useClusters, useCheckClusterAuth, useDeleteCluster, useRegenerateCert } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
@@ -121,6 +122,7 @@ function ClustersContent() {
   const [detailCluster, setDetailCluster] = React.useState<ClusterInfo | null>(null);
   const [checkingAuth, setCheckingAuth] = React.useState<string | null>(null);
   const [regenerated, setRegenerated] = React.useState<{ cluster: ClusterInfo; issued: ClusterRegisterResponse } | null>(null);
+  const [regenerating, setRegenerating] = React.useState<ClusterInfo | null>(null);
   const [deleteConfirmModal, setDeleteConfirmModal] = React.useState<{open: boolean, cluster: any | null}>({open: false, cluster: null});
   const [leftoverTrust, setLeftoverTrust] = React.useState<LeftoverTrust | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = React.useState("");
@@ -187,9 +189,11 @@ function ClustersContent() {
   };
 
 
-  const handleRegenerateCert = async (cluster: ClusterInfo) => {
+  const handleRegenerateCert = async (cluster: ClusterInfo, lifetime: CertificateLifetime | undefined) => {
+    if (regenerateCert.isPending) return;
     try {
-      const response = await regenerateCert.mutateAsync(cluster.cluster_id);
+      const response = await regenerateCert.mutateAsync({ clusterId: cluster.cluster_id, lifetime });
+      setRegenerating(null);
       if (response.success && response.certificate) {
         setRegenerated({
           cluster,
@@ -264,6 +268,12 @@ function ClustersContent() {
   return (
     <div className="container py-8">
       <ReadOnlyBanner />
+      <RegenerateCertificateConfirm
+        cluster={regenerating}
+        pending={regenerateCert.isPending}
+        onCancel={() => setRegenerating(null)}
+        onConfirm={(lifetime) => regenerating && void handleRegenerateCert(regenerating, lifetime)}
+      />
       <RegenerateCertificateDialog
         cluster={regenerated?.cluster ?? null}
         issued={regenerated?.issued ?? null}
@@ -435,7 +445,7 @@ function ClustersContent() {
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => handleRegenerateCert(cluster)}
+                              onClick={() => setRegenerating(cluster)}
                               title="Regenerate Certificate"
                               className="text-status-pending"
                             >

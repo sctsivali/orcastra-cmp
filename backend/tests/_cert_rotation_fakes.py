@@ -15,8 +15,8 @@ from tests._sqlite_session import sqlite_session
 CLUSTERS = "secret/data/clusters"
 
 
-def make_cert(cn: str = "nuc9.orcastra.io", days: int = 30) -> Tuple[str, str]:
-    """A real self-signed certificate and key, PEM encoded."""
+def make_cert(cn: str = "nuc9.orcastra.io", days: int = 30, until: Optional[dt.datetime] = None) -> Tuple[str, str]:
+    """A real self-signed certificate and key, PEM encoded, valid for ``days`` or until ``until``."""
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)])
     issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Orcastra Test CA")])
@@ -28,7 +28,7 @@ def make_cert(cn: str = "nuc9.orcastra.io", days: int = 30) -> Tuple[str, str]:
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - dt.timedelta(days=1))
-        .not_valid_after(now + dt.timedelta(days=days))
+        .not_valid_after(until or now + dt.timedelta(days=days))
         .sign(key, hashes.SHA256())
     )
     cert_pem = cert.public_bytes(serialization.Encoding.PEM).decode()
@@ -46,6 +46,9 @@ class FakeVault:
         self.writes: List[str] = []
         self.fail_writes_to: Optional[str] = None
         self.issued: List[Tuple[str, str]] = []
+        # What each issuance asked Vault for, and the role's max_ttl a ttl is capped at, as Vault does.
+        self.issue_params: List[Dict[str, Any]] = []
+        self.max_ttl_hours = 8760
 
     def vault_read(self, path: str, use_cache: bool = True) -> Dict[str, Any]:
         if path not in self.data:
@@ -65,10 +68,23 @@ class FakeVault:
         del self.data[path]
         return True
 
-    def generate_lxd_certificate(self, common_name: str, ttl: str) -> Dict[str, str]:
-        cert, key = make_cert(common_name)
+    def generate_lxd_certificate(
+        self, common_name: str, ttl: Optional[str] = "720h", role: str = "lxd", not_after: Optional[str] = None,
+    ) -> Dict[str, str]:
+        self.issue_params.append({"ttl": ttl} if not_after is None else {"not_after": not_after})
+        if not_after is not None:
+            until = dt.datetime.strptime(not_after, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+        else:
+            hours = min(int(str(ttl).rstrip("h")), self.max_ttl_hours)
+            until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=hours)
+        cert, key = make_cert(common_name, until=until)
         self.issued.append((cert, key))
         return {"cert": cert, "key": key, "ca": "CA-PEM"}
+
+    def set_ca(self, days: int) -> None:
+        """The issuing CA, expiring in ``days``, where lifetime.py reads it."""
+        cert, _ = make_cert("Orcastra Intermediate CA", days=days)
+        self.data["pki_int/cert/ca"] = {"certificate": cert}
 
 
 class FakeCertManager:

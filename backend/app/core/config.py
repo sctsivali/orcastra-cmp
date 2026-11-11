@@ -689,7 +689,20 @@ class Settings(BaseSettings):
     vault_cert_ttl: str = Field(
         default="720h",
         alias="VAULT_CERT_TTL",
-        description="Default TTL for generated certificates (720h = 30 days). Must stay <= the pki_int/lxd role max_ttl (8760h = 1 year) or Vault rejects issuance."
+        description=(
+            "Default lifetime of a cluster's client certificate (720h = 30 days), what registration "
+            "issues when the operator keeps the default. Keep it at or under the pki_int/lxd role "
+            "max_ttl (8760h = 1 year): Vault silently shortens a longer ttl to max_ttl."
+        ),
+    )
+    cluster_cert_allow_longest: bool = Field(
+        default=True,
+        alias="CLUSTER_CERT_ALLOW_LONGEST",
+        description=(
+            "Offer a cluster certificate that lasts until the issuing CA expires. It is issued with "
+            "Vault's not_after, which the role's max_ttl does not bound, so a deployment that lowered "
+            "max_ttl as a policy should set this false."
+        ),
     )
     vault_unseal_ui_enabled: bool = Field(
         default=True,
