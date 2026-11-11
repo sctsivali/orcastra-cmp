@@ -75,7 +75,9 @@ test("a failed save puts the choice back and says so", async ({ page, context })
   const prefs = await withPreferences(page, { failPut: true });
   await page.goto("/settings/general");
 
-  await radio(page, "Binary").check();
+  // click, not check: the refused save puts Decimal back at once, which check() reads as a click
+  // that changed nothing.
+  await radio(page, "Binary").click();
   await expect.poll(() => prefs.puts.length).toBe(1);
   await expect(page.getByText("Could not save units").first()).toBeVisible();
   await expect(radio(page, "Decimal")).toBeChecked();
