@@ -72,6 +72,7 @@ from app.services.lxd.cloud_init_reach import cloud_init_changes, proxy_cloud_in
 from app.services.lxd.operation_metadata import redact_operation_response
 from app.core.tenant_visibility import used_by_in_projects
 from app.services.key_default_view_only import refuse_key_default_operation
+from app.services.key_paid_term import narrow_to_paid_term
 from app.services.key_party_bound import (
     forget_creator_bound_of,
     is_party_bounded,
@@ -2366,6 +2367,9 @@ async def validate_api_key(
     # created is held to its creator's projects on a cluster another party holds, so a stored `*`
     # grant does not reach the other party (services/key_party_bound.py).
     metadata = await narrow_to_party_bound(metadata)
+    # important: also after the cache. A key a buyer founder minted reads only, or reaches nothing,
+    # on a cluster it holds through a purchase past its paid term (services/key_paid_term.py).
+    metadata = await narrow_to_paid_term(metadata)
     _schedule_last_used_update(x_api_key_id)
 
     return metadata

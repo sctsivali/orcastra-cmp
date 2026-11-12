@@ -223,6 +223,37 @@ def _no_party_bound_for_a_key(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_paid_term_for_a_key(monkeypatch):
+    """A key's grants follow its creator's purchase term, which needs the database. The default is
+    "no purchase", so the suites that drive keys stay hermetic.
+    test_a_key_is_held_to_its_creators_paid_term.py puts the real reader back.
+    """
+    from app.services import key_paid_term
+
+    async def _no_purchase(api_key, _db):
+        return str(api_key.get("created_by") or ""), {}
+
+    monkeypatch.setattr(key_paid_term, "_read_phases", _no_purchase)
+    key_paid_term.forget_paid_terms()
+    yield
+    key_paid_term.forget_paid_terms()
+
+
+@pytest.fixture(autouse=True)
+def _no_paid_term_for_a_schedule(monkeypatch):
+    """The schedule worker's paid-term rule reads purchases from the database. Schedule suites run
+    on fakes that answer only the queries they are about, so the default is "not refused".
+    test_a_schedule_stops_when_its_purchase_term_ends.py calls the real rule.
+    """
+    from app.services.snapshots import schedule_authority
+
+    async def _not_refused(_db, _schedule):
+        return None
+
+    monkeypatch.setattr(schedule_authority, "paid_term_refusal", _not_refused)
+
+
+@pytest.fixture(autouse=True)
 def _no_other_party_holds_default_for_a_schedule(monkeypatch):
     """The schedule worker's view-only `default` rule reads parties from the database.
 

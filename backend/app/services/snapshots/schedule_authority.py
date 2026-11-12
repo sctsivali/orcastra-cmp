@@ -19,6 +19,8 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import and_, or_, select
 
+from app.core.config import get_settings
+
 from app.models.db_models import (
     Organization,
     OrganizationCluster,
@@ -36,6 +38,7 @@ MISSING_INSTANCE_GRACE = 3
 
 DEFAULT_VIEW_ONLY_FOR_THE_OWNER = "default_is_view_only_for_the_owner"
 OWNER_ROLE_UNREADABLE = "schedule_owner_role_unreadable"
+PURCHASE_TERM_PASSED = "purchase_term_passed"
 
 
 @dataclass(frozen=True)
@@ -315,6 +318,32 @@ async def default_view_only_refusal(db: Any, schedule: Any, *, roles: Any = None
             "organization, so it is view only for whoever owns this schedule, and the schedule "
             "stopped. Schedule the instance from one of the owner's own projects, or ask an "
             "administrator."
+        ),
+        terminal=True,
+    )
+
+
+async def paid_term_refusal(db: Any, schedule: Any) -> Optional[Refusal]:
+    """The owner reaches the cluster only by a purchase past its paid term: the schedule pauses.
+
+    Past the term the owner may only look (core/sale_term.py), and a snapshot is a write on the
+    seller's cluster. Kept apart from standing_authority_refusal for the reason
+    default_view_only_refusal is: the owner must still see, pause and delete it. A renewed term lets
+    the owner resume it.
+    """
+    from app.core.sale_term import ENDED, READ_ONLY, purchase_phases
+
+    if not get_settings().tenant_term_enforcement_enabled:
+        return None
+    phase = (await purchase_phases(db, schedule.owner_email)).get(schedule.cluster_id)
+    if phase not in (READ_ONLY, ENDED):
+        return None
+    return Refusal(
+        code=PURCHASE_TERM_PASSED,
+        message=(
+            f"The owner of this schedule reaches cluster '{schedule.cluster_id}' only through a "
+            "purchase whose paid term has passed, so it may no longer change anything there and "
+            "the schedule stopped. Resume it after the purchase is renewed."
         ),
         terminal=True,
     )

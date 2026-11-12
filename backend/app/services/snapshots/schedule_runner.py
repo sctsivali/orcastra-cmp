@@ -245,6 +245,8 @@ async def _run_one_guarded(
 
     refusal = await authority.db_refusal_for(db, schedule)
     if refusal is None:
+        refusal = await authority.paid_term_refusal(db, schedule)
+    if refusal is None:
         refusal = await authority.default_view_only_refusal(db, schedule)
         if refusal is not None and refusal.code == authority.OWNER_ROLE_UNREADABLE:
             # An identity provider outage is not this schedule's failure, so it never counts

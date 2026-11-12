@@ -122,15 +122,32 @@ async def partner_read_only_clusters(db: AsyncSession, email: Optional[str]) -> 
     return (await partner_purchase_reach(db, email))[1]
 
 
-async def _past_term(db: AsyncSession, candidates: Dict[str, Set[int]]) -> Set[str]:
+async def purchase_phases(db: AsyncSession, email: Optional[str]) -> Dict[str, str]:
+    """The phase of every cluster this account reaches only by purchase (ACTIVE, READ_ONLY, ENDED).
+
+    For what acts for the account without its session: a key it minted, a schedule it made.
+    """
+    if not email:
+        return {}
+    _full, candidates = await _reach(db, email)
+    if not candidates:
+        return {}
+    return await _phases(db, candidates)
+
+
+async def _phases(db: AsyncSession, candidates: Dict[str, Set[int]]) -> Dict[str, str]:
+    # The account's best purchase on a cluster decides: one running term keeps it active.
     terms = await orcahub_terms(db, {o for orgs in candidates.values() for o in orgs})
     now = datetime.now(timezone.utc)
-    read_only = set()
+    out: Dict[str, str] = {}
     for cluster_id, orgs in candidates.items():
         phases = {sale_phase(terms.get((org_id, cluster_id), []), now) for org_id in orgs}
-        if ACTIVE not in phases and READ_ONLY in phases:
-            read_only.add(cluster_id)
-    return read_only
+        out[cluster_id] = ACTIVE if ACTIVE in phases else READ_ONLY if READ_ONLY in phases else ENDED
+    return out
+
+
+async def _past_term(db: AsyncSession, candidates: Dict[str, Set[int]]) -> Set[str]:
+    return {c for c, phase in (await _phases(db, candidates)).items() if phase == READ_ONLY}
 
 
 async def reaches_only_by_purchase(db: AsyncSession, email: Optional[str], cluster_id: str) -> bool:

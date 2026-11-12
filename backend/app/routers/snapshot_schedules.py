@@ -316,6 +316,9 @@ async def resume_schedule(
             project=schedule.project,
         )
         if refusal is None:
+            # A purchase past its paid term: resuming would only pause it again at the next tick.
+            refusal = await schedule_authority.paid_term_refusal(db, schedule)
+        if refusal is None:
             # The owner's own view-only `default` rule, so an Admin resuming a partner's schedule
             # there is told now rather than watching it pause again at the next tick.
             refusal = await schedule_authority.default_view_only_refusal(db, schedule)
