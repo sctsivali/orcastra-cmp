@@ -129,6 +129,7 @@ function world() {
     "@/lib/auth-refresh": load("frontend/src/lib/auth-refresh.ts"),
     "@/types/rbac": load("frontend/src/types/rbac.ts"),
     "@/lib/token-stamp": load("frontend/src/lib/token-stamp.ts"),
+    "@/lib/session-cookie": { pinnedSessionCookies: () => undefined },
   });
   return { jwt: auth.authConfig.callbacks.jwt, config: auth.authConfig, registry };
 }

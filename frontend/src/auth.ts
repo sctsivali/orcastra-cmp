@@ -11,6 +11,7 @@ import { Role, hasMappedRole, hasMinimumRole, resolveRoles } from "@/types/rbac"
 import { forget, grantOnce, holdTombstones, upgradeSpent, type GrantOutcome, type RefreshedFields } from "@/lib/refresh-grants";
 import { REFRESH_FAILED, REFRESH_TOKEN_REVOKED, createIdpClient } from "@/lib/auth-refresh";
 import { tokenStamp } from "@/lib/token-stamp";
+import { pinnedSessionCookies } from "@/lib/session-cookie";
 
 // The custom fields this app keeps on the session, user and JWT.
 declare module "next-auth" {
@@ -278,6 +279,10 @@ const PUBLIC_ASSET_EXTENSION =
 
 export const authConfig: NextAuthConfig = {
   providers: [authentikProvider],
+
+  // On an https deployment the session cookie is `__Host-` (lib/session-cookie.ts), which the
+  // /api/v1 proxy reads by the same rule. Other cookies keep NextAuth's own names.
+  cookies: pinnedSessionCookies(process.env.AUTH_URL ?? process.env.NEXTAUTH_URL),
 
   // Use JWT for session management (stateless)
   session: {

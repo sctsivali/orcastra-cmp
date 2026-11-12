@@ -173,6 +173,7 @@ function world() {
     '@/lib/auth-refresh': refreshLib,
     '@/types/rbac': load('frontend/src/types/rbac.ts'),
     '@/lib/token-stamp': load('frontend/src/lib/token-stamp.ts'),
+    '@/lib/session-cookie': { pinnedSessionCookies: () => undefined },
   });
   return { jwt: auth.authConfig.callbacks.jwt, authorized: auth.authConfig.callbacks.authorized };
 }

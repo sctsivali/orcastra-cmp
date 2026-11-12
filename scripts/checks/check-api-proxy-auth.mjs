@@ -38,7 +38,7 @@ const proxyAuth = load("frontend/src/lib/api-proxy-auth.ts", {
   "@/lib/auth-refresh": load("frontend/src/lib/auth-refresh.ts"),
 });
 const { decideProxyAuth, resolveProxyAuth, applyProxyAuth, ACTOR_HEADER } = proxyAuth;
-const { sessionCookieName, carriesSessionCookie } = sessionCookie;
+const { sessionCookieName, carriesSessionCookie, pinnedSessionCookies } = sessionCookie;
 
 const SECRET = "qa-secret-".repeat(4);
 const OTHER_SECRET = "other-deployment-".repeat(3);
@@ -69,9 +69,10 @@ async function decide(method, extra, ...rest) {
   const H = (extra = {}) => new Headers(extra);
   const PLAIN = "authjs.session-token";
   const SECURE = "__Secure-authjs.session-token";
+  const HOST = "__Host-authjs.session-token";
   assert.equal(sessionCookieName(H(), "http://x.invalid/api/v1/a", "http://x.invalid"), PLAIN);
   assert.equal(sessionCookieName(H(), "https://x.invalid/api/v1/a", "http://x.invalid"), PLAIN, "the configured URL decides, as in NextAuth");
-  assert.equal(sessionCookieName(H(), "http://x.invalid/api/v1/a", "https://x.invalid"), SECURE);
+  assert.equal(sessionCookieName(H(), "http://x.invalid/api/v1/a", "https://x.invalid"), HOST, "an https deployment pins __Host-");
   assert.equal(sessionCookieName(H(), "https://x.invalid/api/v1/a", undefined), SECURE);
   assert.equal(sessionCookieName(H({ "x-forwarded-proto": "https" }), "http://x.invalid/api/v1/a", undefined), SECURE);
   assert.equal(sessionCookieName(H({ "x-forwarded-proto": "http" }), "https://x.invalid/api/v1/a", undefined), PLAIN);
@@ -79,6 +80,18 @@ async function decide(method, extra, ...rest) {
   assert.equal(carriesSessionCookie(`a=1; ${PLAIN}=x`, PLAIN), true);
   assert.equal(carriesSessionCookie(`${PLAIN}.0=x; ${PLAIN}.1=y`, PLAIN), true, "a chunked session");
   assert.equal(carriesSessionCookie(`${SECURE}=y`, PLAIN), false);
+  // The pinned cookie: only for a configured https URL, and with what the __Host- prefix demands
+  // (Secure, Path=/, no Domain), or the browser drops it.
+  assert.equal(pinnedSessionCookies("http://x.invalid"), undefined);
+  assert.equal(pinnedSessionCookies(undefined), undefined);
+  assert.equal(pinnedSessionCookies("::not a url::"), undefined);
+  const pinned = pinnedSessionCookies("https://app.example.invalid");
+  assert.equal(pinned.sessionToken.name, HOST);
+  assert.deepEqual(pinned.sessionToken.options, { httpOnly: true, sameSite: "lax", path: "/", secure: true });
+  assert.equal("domain" in pinned.sessionToken.options, false);
+  const authSource = readFileSync(join(root, "frontend/src/auth.ts"), "utf8");
+  assert.match(authSource, /cookies: pinnedSessionCookies\(process\.env\.AUTH_URL \?\? process\.env\.NEXTAUTH_URL\),/,
+    "NextAuth writes the session cookie under the name the proxy reads");
   assert.equal(carriesSessionCookie("authjs.csrf-token=x; theme=dark", PLAIN), false);
   assert.equal(carriesSessionCookie("", PLAIN), false);
   assert.equal(carriesSessionCookie(null, PLAIN), false);
@@ -92,11 +105,23 @@ async function decide(method, extra, ...rest) {
   }), SECRET, CONFIGURED);
   assert.deepEqual(read, { kind: "session", bearer: "at-session" }, "the cookie's token replaces the caller's header");
 
+  const hosted = await encode(session, "__Host-authjs.session-token");
+  const readHosted = await resolveProxyAuth(new Request("https://dash.example.invalid/api/v1/clusters", {
+    headers: { host: "dash.example.invalid", cookie: hosted, [ACTOR_HEADER]: ACTOR },
+  }), SECRET, "https://dash.example.invalid");
+  assert.deepEqual(readHosted, { kind: "session", bearer: "at-session" }, "an https deployment reads the __Host- name");
+  // On that deployment a __Secure- cookie, which a sibling host could set, is not the session.
+  const siblingSet = await encode({ ...session, accessToken: "at-sibling" }, "__Secure-authjs.session-token");
+  const readSibling = await resolveProxyAuth(new Request("https://dash.example.invalid/api/v1/clusters", {
+    headers: { host: "dash.example.invalid", cookie: `${siblingSet}; ${hosted}`, [ACTOR_HEADER]: ACTOR },
+  }), SECRET, "https://dash.example.invalid");
+  assert.deepEqual(readSibling, { kind: "session", bearer: "at-session" }, "a sibling's __Secure- cookie is ignored");
+  //    With no URL configured NextAuth names it by the request, and so does the proxy.
   const secure = await encode(session, "__Secure-authjs.session-token");
   const readSecure = await resolveProxyAuth(new Request("https://dash.example.invalid/api/v1/clusters", {
     headers: { host: "dash.example.invalid", cookie: secure, [ACTOR_HEADER]: ACTOR },
-  }), SECRET, "https://dash.example.invalid");
-  assert.deepEqual(readSecure, { kind: "session", bearer: "at-session" }, "an https deployment reads the __Secure- name");
+  }), SECRET, undefined);
+  assert.deepEqual(readSecure, { kind: "session", bearer: "at-session" }, "an unconfigured https request reads __Secure-");
 
   // A cookie of the other name, planted by a host on the same site, is not what NextAuth reads, so
   // neither does the proxy: the real session stays the one used.
