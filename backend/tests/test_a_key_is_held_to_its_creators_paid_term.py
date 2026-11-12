@@ -187,6 +187,23 @@ def test_validate_api_key_holds_every_request_to_the_term() -> None:
     assert "narrow_to_paid_term" in _calls("validate_api_key")
 
 
+async def test_in_retention_the_key_does_not_reach_inside_a_guest(founder) -> None:
+    founder["world"] = RETENTION_TERM
+    narrowed = await narrow_to_paid_term(_key())
+    with pytest.raises(HTTPException) as refused:
+        kpt.refuse_guest_reach_in_retention(narrowed, "sold")
+    assert refused.value.status_code == 403 and refused.value.detail["code"] == "purchase_read_only"
+    kpt.refuse_guest_reach_in_retention(narrowed, "own")
+    founder["world"] = ACTIVE_TERM
+    kpt.forget_paid_terms()
+    kpt.refuse_guest_reach_in_retention(await narrow_to_paid_term(_key()), "sold")
+
+
+@pytest.mark.parametrize("function", ["raw_proxy", "proxy_operation"])
+def test_both_proxies_ask_before_reaching_inside_a_guest(function) -> None:
+    assert "refuse_guest_reach_in_retention" in _calls(function)
+
+
 @pytest.mark.parametrize("function", ["provision_tenant_access", "revoke_tenant_access"])
 def test_both_tenant_doors_refuse_a_purchased_cluster(function) -> None:
     # Policy sync judges each rule through rule_outside_the_key_grant (tested above).

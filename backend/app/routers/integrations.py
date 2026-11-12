@@ -72,7 +72,11 @@ from app.services.lxd.cloud_init_reach import cloud_init_changes, proxy_cloud_in
 from app.services.lxd.operation_metadata import redact_operation_response
 from app.core.tenant_visibility import used_by_in_projects
 from app.services.key_default_view_only import refuse_key_default_operation
-from app.services.key_paid_term import narrow_to_paid_term, refuse_tenant_writes_on_a_purchase
+from app.services.key_paid_term import (
+    narrow_to_paid_term,
+    refuse_guest_reach_in_retention,
+    refuse_tenant_writes_on_a_purchase,
+)
 from app.services.key_party_bound import (
     forget_creator_bound_of,
     is_party_bounded,
@@ -4824,6 +4828,13 @@ async def raw_proxy(
                 error_message=str(refusal.detail),
             )
             raise
+        if guest_access_capability_for(request.path) or guest_data_path_capability_for(request.path):
+            # A purchase past its paid term reads, it does not reach inside (services/key_paid_term.py).
+            try:
+                refuse_guest_reach_in_retention(api_key, request.cluster_id)
+            except HTTPException as refusal:
+                _audit_raw_refusal(api_key, request, method, project, refusal, "purchase_read_only")
+                raise
         # important: an image export, an image secret and a custom volume backup hand a guest's
         # data out whole, which /files prices one file at a time (core/guest_data_export.py).
         # Priced on the path alone, like the guest-access gate above, so both run before the body
@@ -5553,6 +5564,9 @@ async def proxy_operation(
             return ProxyResponse(success=False, error_code=not_sent.error_code, error=str(not_sent))
         if guest_capability is None:
             guest_capability = cloud_init_capability
+        if guest_capability:
+            # A purchase past its paid term reads, it does not reach inside (services/key_paid_term.py).
+            refuse_guest_reach_in_retention(api_key, request.cluster_id)
 
         # Observation only, outside the capability decision above: these keys reach sideways into
         # another product's ledger rather than inside the guest.

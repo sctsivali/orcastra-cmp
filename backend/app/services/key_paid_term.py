@@ -143,6 +143,23 @@ def refuse_tenant_writes_on_a_purchase(api_key: Mapping[str, Any], cluster_id: s
         )
 
 
+def refuse_guest_reach_in_retention(api_key: Mapping[str, Any], cluster_id: str) -> None:
+    """403 when the key would reach inside a guest (exec, files, a desktop, a data export) on a
+    cluster its creator holds through a purchase past its paid term. The browser refuses its
+    console, terminal and file sockets there too: in retention the buyer may look, not reach in."""
+    if reached_by_purchase(api_key, cluster_id) == READ_ONLY:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "purchase_read_only",
+                "message": (
+                    f"The purchase that gives this key cluster '{cluster_id}' is past its paid term: "
+                    "it may read the cluster, not reach inside a guest."
+                ),
+            },
+        )
+
+
 async def installer_phase(installer: str, cluster_id: str) -> Optional[str]:
     """For an add-on's events: the phase through which its installer reaches `cluster_id`, or None.
 

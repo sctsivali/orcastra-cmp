@@ -148,7 +148,12 @@ async def _purchase_ended(install: Any, cluster_id: str) -> bool:
     from app.core.sale_term import ENDED
     from app.services.key_paid_term import installer_phase
 
-    return await installer_phase(str(getattr(install, "installed_by", "") or ""), cluster_id) == ENDED
+    # Bounded like the installer's bound: a slow pool must not hold up the emit. A read that does
+    # not answer in time raises, which every caller counts as not reached.
+    phase = await asyncio.wait_for(
+        installer_phase(str(getattr(install, "installed_by", "") or ""), cluster_id), EVENT_REACH_SECONDS,
+    )
+    return phase == ENDED
 
 
 async def install_reaches_project(
