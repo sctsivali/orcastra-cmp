@@ -1,11 +1,11 @@
 "use client";
 
 import { UsageBar } from "@/components/ui/usage-bar";
+import { UsageCaption } from "@/components/ui/usage-caption";
 import { TableEmptyValue } from "@/components/ui/table-text";
 import { TableLink } from "@/components/ui/table-link";
 import { useByteFormat } from "@/hooks/use-byte-format";
-import { cn } from "@/lib/utils";
-import { USAGE_ELEVATED_PERCENT, usageTone } from "@/lib/usage-tone";
+import { usageLevel } from "@/lib/usage-tone";
 import { capacityReading } from "@/lib/capacity-reading";
 
 export interface PoolCapacity {
@@ -31,9 +31,10 @@ export function poolCapacity(space: unknown): PoolCapacity {
  *
  * The bar has a fixed width, so a reader compares fill against fill down the column.
  *
- * The percentage stays muted below the elevated threshold: across up to a hundred rows, a green
- * number on every one teaches an operator to stop reading the colour. The bar fill keeps the
- * full ramp, because that is the part being scanned.
+ * The percentage follows the shared caption rule (components/ui/usage-caption.tsx): muted while
+ * Normal, because across up to a hundred rows a green number on every one teaches an operator to
+ * stop reading the colour, then toned and named. The bar fill keeps the full ramp, because that
+ * is the part being scanned.
  */
 export function PoolCapacityCell({
   capacity,
@@ -72,16 +73,9 @@ export function PoolCapacityCell({
           percent={capacity.percent}
           valueText={percentText}
         />
-        <span
-          className={cn(
-            "text-xs tabular-nums",
-            capacity.percent >= USAGE_ELEVATED_PERCENT
-              ? usageTone(capacity.percent).text
-              : "text-muted-foreground",
-          )}
-        >
+        <UsageCaption level={usageLevel(capacity.percent)} className="text-xs">
           {percentText}
-        </span>
+        </UsageCaption>
       </div>
     </div>
   );

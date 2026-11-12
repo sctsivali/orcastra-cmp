@@ -8,8 +8,8 @@ const { hypervisorRelease, platformNodes } = require("./support/api-fixture-data
 
 // The version verdict on a cluster card comes from the backend, per release track (ex; LXD 5.21.5
 // is not "Latest" while 5.21/stable is at 5.21.9). The card also writes host capacity as CPU
-// threads and explains vCPU allocation and GPUs behind an (i) that opens on hover, click, tap and
-// the keyboard.
+// threads, explains vCPU allocation and storage behind an (i) that opens on hover, click, tap and
+// the keyboard, and draws vCPU, Memory and Storage on the one usage ramp.
 //
 // Every negative below has a positive control with the same locator in another test.
 
@@ -175,7 +175,9 @@ test("tenant: no version verdict and no host capacity reach the tenant's cards",
   await expect(clusters.locator('[data-slot="badge"]', { hasText: /^(Online|Unavailable)$/ }).first()).toBeVisible();
   await expect(page.getByText(/^(Latest|Latest LTS|Update Available|Not checked|Newer than stable)$/)).toHaveCount(0);
   await expect(page.getByRole("button", { name: "About vCPU allocation" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "About cluster storage" })).toHaveCount(0);
   await expect(clusters).not.toContainText("CPU threads");
+  await expect(clusters.getByRole("meter")).toHaveCount(0);
   await expectCleanInventoryHarness(state);
 });
 
@@ -190,6 +192,12 @@ test("admin: an over-committed card says CPU threads and explains the ratio behi
   await expect(card).toContainText("25 vCPUs / 12 CPU threads");
   await expect(card).toContainText("2.1x over-committed");
   await expect(card).not.toContainText(/hardware thread|allocated \(over-committed\)/i);
+  // Measured against the 4x ceiling: 2.1x is about half full and still green, not a full bar.
+  const meter = card.getByRole("meter", { name: /^vCPU allocation:/ });
+  await expect(meter).toHaveAttribute("aria-valuenow", "52");
+  await expect(meter).toHaveAttribute("data-level", "normal");
+  await expect(meter.locator("> div")).toHaveClass(/bg-success/);
+  await expect(card).not.toContainText("· High");
 
   const info = card.getByRole("button", { name: "About vCPU allocation", exact: true });
   if (!isMobile) {
@@ -207,41 +215,137 @@ test("admin: an over-committed card says CPU threads and explains the ratio behi
   const panel = page.getByRole("dialog").filter({ hasText: "Running instances on this cluster" });
   await expect(panel).toContainText("are given 25 vCPUs in total. Its hosts have 12 CPU threads, so the allocation is 2.1x.");
   await expect(panel).toContainText("cores × threads per core");
-  await expect(panel).toContainText("Above 4x is flagged.");
+  await expect(panel).toContainText("The bar fills at 4x, the usual ceiling for general workloads. It turns amber from 3x and red above 4x.");
   await page.keyboard.press("Escape");
   await expect(panel).toHaveCount(0);
   await expect(info).toBeFocused();
   await expectCleanInventoryHarness(state);
 });
 
-test("admin: a cluster with only a display card says no GPU is for instances", async ({ page, isMobile }) => {
+// One case per band edge on each meter. `fill` is the bar's class, `caption` the number's.
+const BANDS = [
+  { level: "normal", fill: /bg-success/, caption: /text-muted-foreground/, word: null },
+  { level: "high", fill: /bg-status-pending/, caption: /text-status-pending/, word: "· High" },
+  { level: "critical", fill: /bg-destructive/, caption: /text-status-offline/, word: "· Critical" },
+];
+
+for (const [label, share, band] of [
+  ["just under amber", 0.749, BANDS[0]],
+  ["at amber", 0.75, BANDS[1]],
+  ["just under red", 0.899, BANDS[1]],
+  ["at red", 0.9, BANDS[2]],
+  ["thin-provisioned past full", 1.3, BANDS[2]],
+]) {
+  test(`admin: storage ${label} (${share * 100}%) takes the ${band.level} band on the card`, async ({ page }) => {
+    await authenticate(page.context(), "admin");
+    const total = 2 * 1024 ** 4;
+    const used = Math.round(total * share);
+    const state = await install(page, "admin", {
+      resources: { storage_total: total, storage_used: used, storage_available: Math.max(0, total - used) },
+    });
+    await page.goto("/inventory");
+
+    const card = coreCard(page);
+    await expect(card).toContainText("Storage");
+    await expect(card).not.toContainText(/No GPU for instances|display card|compute GPU/);
+    await expect(card.getByRole("button", { name: "About GPUs for instances" })).toHaveCount(0);
+    const meter = card.getByRole("meter", { name: /^Storage:/ });
+    const percent = Math.min(100, share * 100);
+    await expect(meter).toHaveAttribute("aria-valuenow", String(Math.round(percent)));
+    await expect(meter).toHaveAttribute("data-level", band.level);
+    await expect(meter.locator("> div")).toHaveClass(band.fill);
+    const caption = card.locator('[data-level]:not([role="meter"])', { hasText: `${percent.toFixed(1)}% used` }).last();
+    await expect(caption).toHaveClass(band.caption);
+    if (band.word) await expect(caption).toContainText(band.word);
+    else await expect(caption).not.toContainText(/· (High|Critical)/);
+    await expect(card).not.toContainText(/NaN|Infinity|undefined/);
+    await expectCleanInventoryHarness(state);
+  });
+}
+
+for (const [label, ratio, band, valuenow] of [
+  ["within threads", 0.9, BANDS[0], 23],
+  ["a normal over-commit", 1.4, BANDS[0], 35],
+  ["just under amber", 2.99, BANDS[0], 75],
+  ["at amber", 3, BANDS[1], 75],
+  ["at the ceiling", 4, BANDS[1], 100],
+  ["past the ceiling", 4.01, BANDS[2], 100],
+]) {
+  test(`admin: vCPU ${label} (${ratio}x) takes the ${band.level} band on the card`, async ({ page }) => {
+    await authenticate(page.context(), "admin");
+    const threads = 100;
+    const allocated = Math.round(threads * ratio);
+    const state = await install(page, "admin", {
+      resources: {
+        cpu_total: threads,
+        cpu_used: allocated,
+        cpu_allocated: allocated,
+        cpu_available: Math.max(0, threads - allocated),
+        cpu_allocation_ratio: ratio,
+      },
+    });
+    await page.goto("/inventory");
+
+    const card = coreCard(page);
+    const meter = card.getByRole("meter", { name: /^vCPU allocation:/ });
+    // 2.99x is 74.75% of the ceiling: rounded for the value, still green for the band.
+    await expect(meter).toHaveAttribute("aria-valuenow", String(valuenow));
+    await expect(meter).toHaveAttribute("data-level", band.level);
+    await expect(meter.locator("> div")).toHaveClass(band.fill);
+    const caption = card.locator('[data-level]:not([role="meter"])', { hasText: `${ratio.toFixed(1)}x` }).first();
+    await expect(caption).toHaveClass(band.caption);
+    if (band.level === "high") await expect(caption).toContainText("· High");
+    // Past the ceiling the words already name the state; the band is not repeated after them.
+    if (band.level === "critical") {
+      await expect(caption).toContainText("heavily over-committed");
+      await expect(caption).not.toContainText("· Critical");
+    }
+    if (band.level === "normal") await expect(caption).not.toContainText(/· (High|Critical)/);
+    await expectCleanInventoryHarness(state);
+  });
+}
+
+test("admin: storage that could not be read says so instead of drawing an empty disk", async ({ page }) => {
   await authenticate(page.context(), "admin");
-  const display = {
-    index: 0,
-    id: 0,
-    driver: "ast",
-    vendor: "ASPEED Technology, Inc.",
-    pci_address: "0000:02:00.0",
-    gpu_class: "display",
-    is_compute: false,
-    in_use: false,
-  };
   const state = await install(page, "admin", {
-    resources: { gpu_total: 0, gpu_used: 0, gpu_available: 0, gpu_cards_total: 1, gpu_display_total: 1, gpu_cards: [display] },
+    resources: {
+      storage_total: 0,
+      storage_used: 0,
+      storage_available: 0,
+      storage_pools: [],
+      degraded: true,
+      degraded_parts: ["storage"],
+    },
   });
   await page.goto("/inventory");
 
   const card = coreCard(page);
-  await expect(card).toContainText("No GPU for instances");
-  await expect(card).toContainText("1 display card only");
-  await expect(card).not.toContainText(/No compute GPU|card detected/);
-  const info = card.getByRole("button", { name: "About GPUs for instances", exact: true });
-  if (isMobile) {
-    await info.tap();
-  } else {
-    await info.click();
-  }
-  await expect(page.getByRole("dialog")).toContainText("Display cards, such as a server's onboard VGA, are detected but cannot be allocated.");
+  await expect(card).toContainText("Storage unknown");
+  await expect(card).toContainText("Usage unavailable");
+  await expect(card.getByRole("meter", { name: /^Storage:/ })).toHaveCount(0);
+  await expect(card).not.toContainText(/0 B \/ 0 B|0\.0% used/);
+  // The other two meters still draw: one lost part does not blank the card.
+  await expect(card.getByRole("meter", { name: /^Memory:/ })).toHaveCount(1);
+  await expect(card.getByRole("meter", { name: /^vCPU allocation:/ })).toHaveCount(1);
+  await expectCleanInventoryHarness(state);
+});
+
+test("admin: storage with a pool that did not answer is a floor and says so", async ({ page, isMobile }) => {
+  await authenticate(page.context(), "admin");
+  const state = await install(page, "admin", {
+    resources: { degraded: true, degraded_parts: ["storage:slow-pool"] },
+  });
+  await page.goto("/inventory");
+
+  const card = coreCard(page);
+  await expect(card).toContainText("Some pools did not answer");
+  const meter = card.getByRole("meter", { name: /^Storage:/ });
+  await expect(meter).toHaveAttribute("aria-label", /some pools did not answer/);
+  const info = card.getByRole("button", { name: "About cluster storage", exact: true });
+  if (isMobile) await info.tap();
+  else await info.click();
+  await expect(page.getByRole("dialog")).toContainText("counted once rather than once per cluster member");
+  await page.keyboard.press("Escape");
   await expectCleanInventoryHarness(state);
 });
 

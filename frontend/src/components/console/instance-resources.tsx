@@ -7,7 +7,7 @@ import {
   formatVcpuBusy,
   memoryReading,
 } from "@/lib/instance-metrics-view";
-import { USAGE_CRITICAL_PERCENT, USAGE_ELEVATED_PERCENT } from "@/lib/usage-tone";
+import { usageLevel, type UsageLevel } from "@/lib/usage-tone";
 import {
   cn,
   formatVcpuCount,
@@ -17,18 +17,28 @@ import { useByteFormat } from "@/hooks/use-byte-format";
 import type { InstanceMetrics } from "@/types";
 
 // The console is fixed-dark chrome, so the ramp is the --status-* set read through the
-// terminal-status rebinding (their dark values in either page theme), on the same thresholds as
-// the rest of the product, so the bar and the dialog turn amber and red together.
+// terminal-status rebinding (their dark values in either page theme). The band comes from
+// usageLevel, the product's one ramp, so the bar and the dialog turn amber and red together.
+// Neutral while Normal, as every caption is (components/ui/usage-caption.tsx).
 function toneFor(percent: number): string {
-  if (percent >= USAGE_CRITICAL_PERCENT) return "terminal-status text-status-offline";
-  if (percent >= USAGE_ELEVATED_PERCENT) return "terminal-status text-status-pending";
+  const level = usageLevel(percent);
+  if (level === "Critical") return "terminal-status text-status-offline";
+  if (level === "High") return "terminal-status text-status-pending";
   return "text-gray-300";
 }
 
 function barFor(percent: number): string {
-  if (percent >= USAGE_CRITICAL_PERCENT) return "terminal-status bg-status-offline";
-  if (percent >= USAGE_ELEVATED_PERCENT) return "terminal-status bg-status-pending";
+  const level = usageLevel(percent);
+  if (level === "Critical") return "terminal-status bg-status-offline";
+  if (level === "High") return "terminal-status bg-status-pending";
   return "terminal-status bg-status-online";
+}
+
+/** " · High" beside a flagged reading, so the band is never told by colour alone. */
+function LevelWord({ percent, srOnly = false }: { percent: number; srOnly?: boolean }) {
+  const level: UsageLevel = usageLevel(percent);
+  if (level === "Normal") return null;
+  return <span className={srOnly ? "sr-only" : "whitespace-nowrap font-sans"}>{` · ${level}`}</span>;
 }
 
 function quota({ value, unit }: { value: string; unit: string }): string {
@@ -52,7 +62,10 @@ export function InstanceResourceChips({ metrics }: { metrics: InstanceMetrics })
       <div className="flex items-center gap-1 text-xs">
         <Cpu className="h-3 w-3 text-gray-400" aria-hidden="true" />
         <span className="sr-only">vCPU</span>
-        <span className={cn("font-mono", cpu.tone)}>{cpu.text}</span>
+        <span className={cn("font-mono", cpu.tone)}>
+          {cpu.text}
+          {cpu.percent !== null ? <LevelWord percent={cpu.percent} srOnly /> : null}
+        </span>
       </div>
 
       <div className="h-3 w-px bg-terminal-border" />
@@ -66,6 +79,7 @@ export function InstanceResourceChips({ metrics }: { metrics: InstanceMetrics })
             : memory && memory.total > 0
               ? quota(formatByteQuota(memory.used, memory.total, 1))
               : EMPTY_VALUE}
+          {memory && !memory.unlimited && memory.total > 0 ? <LevelWord percent={memory.percent} srOnly /> : null}
         </span>
       </div>
 
@@ -118,10 +132,11 @@ export function InstanceResourcesPanel({
               : cpuState.state === "ready" && cpuState.busy !== null && cpuState.vcpus
                 ? ` (${formatVcpuAmount(cpuState.busy)} of ${formatVcpuCount(cpuState.vcpus)})`
                 : ""}
+            {cpu.percent !== null ? <LevelWord percent={cpu.percent} /> : null}
           </span>
         </div>
         {cpu.percent !== null ? (
-          <ProgressBar value={cpu.percent} color={barFor(cpu.percent)} />
+          <ProgressBar value={cpu.percent} color={barFor(cpu.percent)} label={`vCPU usage: ${cpu.text}`} />
         ) : null}
       </div>
 
@@ -130,16 +145,27 @@ export function InstanceResourcesPanel({
           <span className="text-gray-400 flex items-center gap-1">
             <Activity className="h-3 w-3 text-gray-400" aria-hidden="true" /> Memory
           </span>
-          <span className="text-gray-300 font-mono">
+          {/* Toned like the vCPU line and the compact chip above it. */}
+          <span
+            className={cn(
+              "font-mono",
+              memory && !memory.unlimited && memory.total > 0 ? toneFor(memory.percent) : "text-gray-300",
+            )}
+          >
             {memory && memory.unlimited
               ? `${formatBytes(memory.used)} used, no limit`
               : memory && memory.total > 0
                 ? `${quota(formatByteQuota(memory.used, memory.total, 2))} (${memory.percent.toFixed(0)}%)`
                 : EMPTY_VALUE}
+            {memory && !memory.unlimited && memory.total > 0 ? <LevelWord percent={memory.percent} /> : null}
           </span>
         </div>
         {memory && memory.total > 0 && !memory.unlimited ? (
-          <ProgressBar value={memory.percent} color={barFor(memory.percent)} />
+          <ProgressBar
+            value={memory.percent}
+            color={barFor(memory.percent)}
+            label={`Memory: ${quota(formatByteQuota(memory.used, memory.total, 2))} (${memory.percent.toFixed(0)}%)`}
+          />
         ) : null}
         {/* Without a memory limit "available" is the host's free memory, not this
             instance's headroom, so it is left out. */}
@@ -193,12 +219,21 @@ export function InstanceResourcesPanel({
   );
 }
 
-function ProgressBar({ value, color }: { value: number; color: string }) {
-  const clamped = Math.min(Math.max(value, 0), 100);
+// A live reading, so the fill eases between samples; reduced motion jumps instead.
+function ProgressBar({ value, color, label }: { value: number; color: string; label: string }) {
+  const clamped = Number.isFinite(value) ? Math.min(Math.max(value, 0), 100) : 0;
+  const level = usageLevel(clamped);
   return (
-    <div className="w-full bg-terminal-border rounded-full h-1.5 overflow-hidden">
+    <div
+      aria-label={level === "Normal" ? label : `${label}, ${level.toLowerCase()}`}
+      aria-valuemax={100}
+      aria-valuemin={0}
+      aria-valuenow={Math.round(clamped)}
+      className="w-full bg-terminal-border rounded-full h-1.5 overflow-hidden"
+      role="meter"
+    >
       <div
-        className={cn("h-full rounded-full transition-all duration-300", color)}
+        className={cn("h-full rounded-full [transition-property:width] duration-300 motion-reduce:transition-none", color)}
         style={{ width: `${clamped}%` }}
       />
     </div>

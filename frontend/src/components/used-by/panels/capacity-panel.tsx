@@ -1,11 +1,13 @@
 "use client";
 
 import * as React from "react";
-import { Progress } from "@/components/ui/progress";
+import { UsageBar } from "@/components/ui/usage-bar";
+import { UsageCaption } from "@/components/ui/usage-caption";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatCount } from "@/lib/utils";
 import { useByteFormat } from "@/hooks/use-byte-format";
 import { capacityReading } from "@/lib/capacity-reading";
+import { usageLevel } from "@/lib/usage-tone";
 import { Database } from "lucide-react";
 import type { UsageDict } from "../types";
 
@@ -21,16 +23,24 @@ function Meter({
 }) {
   const reading = capacityReading(usage);
   if (!reading) return null;
-  const { used, total } = reading;
-  const percent = Math.round(reading.percent);
+  const { used, total, percent } = reading;
+  // One decimal, as the pools table beside this panel prints it: rounding would show 90%
+  // under a bar the table calls 89.6%.
+  const percentText = `${percent.toFixed(1)}%`;
 
   return (
     <div className="space-y-2 rounded-lg border p-4">
       <div className="flex items-baseline justify-between gap-2">
         <span className="font-medium">{title}</span>
-        <span className="text-sm text-muted-foreground">{percent}%</span>
+        <UsageCaption level={usageLevel(percent)} className="text-sm">
+          {percentText}
+        </UsageCaption>
       </div>
-      <Progress value={percent} />
+      <UsageBar
+        percent={percent}
+        label={title}
+        valueText={`${format(used)} of ${format(total)} (${percentText})`}
+      />
       <dl className="grid grid-cols-3 gap-2 text-sm">
         <div>
           <dt className="text-xs text-muted-foreground">Used</dt>

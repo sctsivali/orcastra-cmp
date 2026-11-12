@@ -95,7 +95,9 @@ for (const role of ["admin", "partner"]) {
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByText("Space", { exact: true })).toBeVisible();
     await expect(dialog.getByText("Inodes", { exact: true })).toBeVisible();
-    await expect(dialog.getByText("50%", { exact: true })).toBeVisible();
+    // One decimal, as the pools table row behind the dialog prints the same reading.
+    await expect(dialog.getByText("50.0%", { exact: true }).first()).toBeVisible();
+    await expect(dialog.getByRole("meter", { name: /^Space:/ })).toHaveAttribute("data-level", "normal");
     await expect(dialog).not.toContainText(/NaN|undefined|Infinity/);
     await capture(page, testInfo, `${role}-storage-capacity`);
     await page.keyboard.press("Escape");

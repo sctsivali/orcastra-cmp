@@ -251,6 +251,11 @@ jobs:
       - name: Semantic colour and contrast
         run: node scripts/checks/check-semantic-colour.mjs .
 
+      # Keeps every capacity bar and its caption on the one usage ramp: no task-progress
+      # primitive, fill override, copied threshold or hand-toned number on a capacity reading.
+      - name: Capacity bars
+        run: node scripts/checks/check-capacity-bars.mjs .
+
       # The default sidebar and accent colours are defined in several places. Keeps the copies
       # equal, checks each hex against its HSL triplet, and measures the shipped pair.
       - name: Personalization defaults

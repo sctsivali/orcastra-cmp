@@ -48,12 +48,20 @@ export function usageLevel(percent: number): UsageLevel {
   return "Normal";
 }
 
-export function usageTone(percent: number): UsageTone {
-  if (percent >= USAGE_CRITICAL_PERCENT) {
+/**
+ * The classes for one band. Exported so a reading on its own scale (vCPU allocation against
+ * its over-commit ceiling, lib/cpu-allocation.ts) lands on the same colours.
+ */
+export function toneForLevel(level: UsageLevel): UsageTone {
+  if (level === "Critical") {
     return { text: "text-status-offline", fill: "bg-destructive", stroke: "stroke-status-offline" };
   }
-  if (percent >= USAGE_ELEVATED_PERCENT) {
+  if (level === "High") {
     return { text: "text-status-pending", fill: "bg-status-pending", stroke: "stroke-status-pending" };
   }
   return { text: "text-status-online", fill: "bg-success", stroke: "stroke-status-online" };
+}
+
+export function usageTone(percent: number): UsageTone {
+  return toneForLevel(usageLevel(percent));
 }

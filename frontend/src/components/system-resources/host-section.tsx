@@ -13,7 +13,7 @@ import {
 import { EMPTY_VALUE } from "@/components/ui/table-text";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { UsageBar } from "@/components/ui/usage-bar";
-import { usageLevel, usagePercent } from "@/lib/usage-tone";
+import { usagePercent } from "@/lib/usage-tone";
 import { formatDateTime, formatFrequency, plural } from "@/lib/utils";
 import { useByteFormat } from "@/hooks/use-byte-format";
 import {
@@ -218,7 +218,7 @@ function FilesystemRow({ fs }: { fs: HostFilesystem }) {
       <UsageBar
         percent={usagePercent(fs.percent, 100)}
         label={`Disk ${fs.device}`}
-        valueText={`${fs.percent.toFixed(1)}% full, ${usageLevel(fs.percent).toLowerCase()}`}
+        valueText={`${fs.percent.toFixed(1)}% full`}
       />
       <div className="flex flex-wrap justify-between gap-x-4 text-xs text-muted-foreground">
         <span>{formatBytes(fs.used)} used</span>

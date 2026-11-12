@@ -1,6 +1,10 @@
 import { InfoToggletip } from "@/components/ui/info-toggletip";
+import { UsageBar } from "@/components/ui/usage-bar";
+import { UsageCaption } from "@/components/ui/usage-caption";
 import {
+  CPU_ELEVATED_RATIO,
   CPU_OVERCOMMIT_WARN_RATIO,
+  cpuAllocationFigure,
   cpuAllocationText,
   formatCpuThreads,
   type CpuAllocationView,
@@ -56,6 +60,43 @@ export function CpuAllocationText({ cpu, className }: { cpu: CpuAllocationView; 
 }
 
 /**
+ * The allocation meter on every vCPU surface: the share of the over-commit ceiling, in the
+ * band lib/cpu-allocation.ts gives it. Nothing to draw without a thread count.
+ */
+export function CpuAllocationMeter({ cpu, className }: { cpu: CpuAllocationView; className?: string }) {
+  if (cpu.threads <= 0) return null;
+  return (
+    <UsageBar
+      percent={cpu.meterPercent}
+      level={cpu.level}
+      label="vCPU allocation"
+      valueText={`${cpuAllocationFigure(cpu)}, ${cpuAllocationText(cpu)}, ${Math.round(cpu.meterPercent)}% of the ${CPU_OVERCOMMIT_WARN_RATIO}x ceiling`}
+      className={className}
+    />
+  );
+}
+
+/**
+ * The ratio line under the meter, on the shared caption rule. Past the ceiling the words
+ * already say "heavily over-committed", so the band is not repeated after them.
+ */
+export function CpuAllocationCaption({
+  cpu,
+  rest = "muted",
+  className,
+}: {
+  cpu: CpuAllocationView;
+  rest?: "muted" | "foreground";
+  className?: string;
+}) {
+  return (
+    <UsageCaption level={cpu.level} rest={rest} showLevel={cpu.level !== "Critical"} className={className}>
+      <CpuAllocationText cpu={cpu} />
+    </UsageCaption>
+  );
+}
+
+/**
  * The (i) beside every "vCPU Allocation" heading: what vCPUs and CPU threads are, and why a
  * ratio above 1.0x is a normal state rather than a fault.
  */
@@ -77,8 +118,11 @@ export function CpuAllocationInfo({ cpu, scope = "cluster", className }: CpuAllo
       </p>
       <p>
         Above 1.0x the {scope} is over-committed: normal for light workloads, but busy instances
-        share the same threads and slow each other down. Above {CPU_OVERCOMMIT_WARN_RATIO}x is
-        flagged.
+        share the same threads and slow each other down.
+      </p>
+      <p>
+        The bar fills at {CPU_OVERCOMMIT_WARN_RATIO}x, the usual ceiling for general workloads. It
+        turns amber from {CPU_ELEVATED_RATIO}x and red above {CPU_OVERCOMMIT_WARN_RATIO}x.
       </p>
     </InfoToggletip>
   );

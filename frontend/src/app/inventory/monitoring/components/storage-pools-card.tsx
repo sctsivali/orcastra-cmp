@@ -8,10 +8,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Progress } from "@/components/ui/progress";
+import { UsageBar } from "@/components/ui/usage-bar";
+import { UsageCaption } from "@/components/ui/usage-caption";
 import { TableLink } from "@/components/ui/table-link";
 import { useByteFormat } from "@/hooks/use-byte-format";
 import { formatLabel } from "@/lib/utils";
+import { usageLevel, usagePercent } from "@/lib/usage-tone";
 import type { StoragePoolMetrics } from "@/types/api";
 
 interface StoragePoolsCardProps {
@@ -129,6 +131,9 @@ export function StoragePoolsCard({ pools, selectedNode, labelOf }: StoragePoolsC
           <div className="space-y-4">
             {rows.map((pool) => {
               const clusterLabel = labelOf(pool.node);
+              // From the byte counters, so the bar and the figure beside it cannot disagree.
+              const percent = usagePercent(pool.used_bytes, pool.total_bytes);
+              const figure = `${formatBytes(pool.used_bytes)} / ${formatBytes(pool.total_bytes)}`;
               return (
                 <div key={`${pool.node}-${pool.name}-${pool.driver}`} className="space-y-1.5">
                   <div className="flex items-start justify-between gap-3 text-sm">
@@ -144,11 +149,17 @@ export function StoragePoolsCard({ pools, selectedNode, labelOf }: StoragePoolsC
                         </span>
                       ) : null}
                     </div>
-                    <span className="font-medium tabular-nums shrink-0">
-                      {formatBytes(pool.used_bytes)} / {formatBytes(pool.total_bytes)}
-                    </span>
+                    <span className="font-medium tabular-nums shrink-0">{figure}</span>
                   </div>
-                  <Progress value={pool.usage_percent} className="h-2" />
+                  <UsageBar
+                    percent={percent}
+                    label={`${pool.name} on ${clusterLabel}`}
+                    valueText={`${figure} (${percent.toFixed(1)}%)`}
+                    className="h-2"
+                  />
+                  <p className="text-right text-xs">
+                    <UsageCaption level={usageLevel(percent)}>{`${percent.toFixed(1)}% used`}</UsageCaption>
+                  </p>
                 </div>
               );
             })}

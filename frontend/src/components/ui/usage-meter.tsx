@@ -2,7 +2,8 @@
 
 import { cn } from "@/lib/utils";
 import { UsageBar } from "@/components/ui/usage-bar";
-import { usagePercent } from "@/lib/usage-tone";
+import { UsageCaption } from "@/components/ui/usage-caption";
+import { usageLevel, usagePercent } from "@/lib/usage-tone";
 
 export interface UsageMeterProps {
   label: string;
@@ -20,13 +21,17 @@ export interface UsageMeterProps {
  * components/ui/usage-bar.tsx, which the storage pools table uses without this label row.
  */
 export function UsageMeter({ label, value, used, total, className }: UsageMeterProps) {
+  const percent = usagePercent(used, total);
+  const level = usageLevel(percent);
   return (
     <div className={cn("space-y-1", className)}>
-      <div className="flex justify-between text-sm">
+      <div className="flex justify-between gap-3 text-sm">
         <span className="text-muted-foreground">{label}</span>
-        <span className="font-semibold tabular-nums">{value}</span>
+        <UsageCaption level={level} rest="foreground" className="text-right font-semibold">
+          {value}
+        </UsageCaption>
       </div>
-      <UsageBar percent={usagePercent(used, total)} label={label} valueText={value} />
+      <UsageBar percent={percent} label={label} valueText={value} level={level} />
     </div>
   );
 }

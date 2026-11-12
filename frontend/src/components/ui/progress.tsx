@@ -32,7 +32,9 @@ const Progress = React.forwardRef<
   >
     <ProgressPrimitive.Indicator
       className={cn(
-        "h-full w-full flex-1 transition-all duration-300 ease-out",
+        // Task progress only (uploads, transfers, migrations): a capacity reading is a
+        // UsageBar, which never animates. The slide honours reduced motion.
+        "h-full w-full flex-1 transition-transform duration-300 ease-out motion-reduce:transition-none",
         gradient 
           ? "bg-gradient-to-r from-primary via-primary/80 to-primary" 
           : "bg-primary",

@@ -13,14 +13,14 @@ import { GpuPanel } from "@/components/gpu";
 import { GPU_UTILIZATION_NOTE } from "@/lib/gpu";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useByteFormat } from "@/hooks/use-byte-format";
-import { cn, formatLabel, formatVcpuCount, EMPTY_VALUE } from "@/lib/utils";
+import { formatLabel, formatVcpuCount, EMPTY_VALUE } from "@/lib/utils";
 import type { NodeResources } from "@/types";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
 import { UsageMeter } from "@/components/ui/usage-meter";
-import { Progress } from "@/components/ui/progress";
+import { UsageCaption } from "@/components/ui/usage-caption";
 import { usagePercent } from "@/lib/usage-tone";
 import { cpuAllocation, cpuAllocationFigure, cpuAllocationText, formatCpuThreads } from "@/lib/cpu-allocation";
-import { CpuAllocationInfo } from "@/components/cpu/cpu-allocation-info";
+import { CpuAllocationInfo, CpuAllocationMeter } from "@/components/cpu/cpu-allocation-info";
 
 /**
  * The four tabs that read NodeResources: the freshest copy the modal has, from the list row or
@@ -81,8 +81,8 @@ export function NodeCpuPanel({
                 <CpuAllocationInfo cpu={cpu} />
               </h4>
               <div className="space-y-3">
-                {/* The card's allocation meter instead of UsageMeter, which turns red past 90%.
-                    An over-commit is a ratio to read and no fault (lib/cpu-allocation.ts). */}
+                {/* The card's allocation meter instead of UsageMeter: measured against the 4x
+                    over-commit ceiling, so a normal over-commit is no fault (lib/cpu-allocation.ts). */}
                 <div className="space-y-1">
                   <div className="flex justify-between gap-4 text-sm">
                     <span className="text-muted-foreground">Allocated</span>
@@ -90,23 +90,24 @@ export function NodeCpuPanel({
                       {`${cpuAllocationFigure(cpu)} (${cpu.ratioLabel})`}
                     </span>
                   </div>
-                  {cpu.threads > 0 && (
-                    <Progress
-                      role="meter"
-                      value={cpu.percentClamped}
-                      aria-label="vCPU allocation"
-                      getValueLabel={() => `${cpuAllocationFigure(cpu)}, ${cpuAllocationText(cpu)}`}
-                      className={cn("h-2", cpu.meterClassName)}
-                    />
-                  )}
+                  <CpuAllocationMeter cpu={cpu} className="h-2" />
                 </div>
-                <div className="flex justify-between text-sm">
+                <div className="flex justify-between gap-4 text-sm">
                   <span className="text-muted-foreground">
                     {cpu.over > 0 ? "Beyond capacity" : "Unallocated"}
                   </span>
-                  <span className={`font-semibold tabular-nums ${cpu.over > 0 ? cpu.textClassName : ""}`}>
-                    {cpu.over > 0 ? `${formatVcpuCount(cpu.over)} (${cpuAllocationText(cpu)})` : formatCpuThreads(cpu.unallocated)}
-                  </span>
+                  {cpu.over > 0 ? (
+                    <UsageCaption
+                      level={cpu.level}
+                      rest="foreground"
+                      showLevel={cpu.level !== "Critical"}
+                      className="text-right font-semibold"
+                    >
+                      {`${formatVcpuCount(cpu.over)} (${cpuAllocationText(cpu)})`}
+                    </UsageCaption>
+                  ) : (
+                    <span className="font-semibold tabular-nums">{formatCpuThreads(cpu.unallocated)}</span>
+                  )}
                 </div>
               </div>
             </div>

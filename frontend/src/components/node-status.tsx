@@ -73,8 +73,8 @@ function LoadingSkeleton() {
                 <Skeleton className="h-4 w-44" />
               </div>
               <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {/* vCPU and Memory carry a meter between the figure and its caption; GPU is text. */}
-                {[true, true, false].map((meter, j) => (
+                {/* vCPU, Memory and Storage each carry a meter between the figure and its caption. */}
+                {[true, true, true].map((meter, j) => (
                   <div key={j} className="flex flex-col gap-1">
                     <Skeleton className="h-3.5 w-10" />
                     <Skeleton className="h-4 w-24" />

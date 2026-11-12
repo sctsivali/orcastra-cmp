@@ -1,4 +1,6 @@
-import { Progress } from "@/components/ui/progress";
+import { UsageBar } from "@/components/ui/usage-bar";
+import { UsageCaption } from "@/components/ui/usage-caption";
+import { usageLevel } from "@/lib/usage-tone";
 import {
   gpuAllocationCaption,
   gpuCardsCaption,
@@ -37,16 +39,25 @@ export function GpuSummary({ src, allocationUnknown = false }: { src: GpuSummary
 
       {cardsCaption && <p className="text-xs text-muted-foreground">{cardsCaption}</p>}
 
+      {/* A fully allocated GPU leaves no room for another GPU instance, so the bar is on the
+          same ramp as every other capacity bar. */}
       {summary.hasCompute && !allocationUnknown && (
         <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-sm">
+          <div className="flex items-center justify-between gap-3 text-sm">
             <span className="text-muted-foreground">Allocation</span>
             <span className="inline-flex items-center gap-1.5 font-medium">
-              {gpuAllocationCaption(summary)}
+              <UsageCaption level={usageLevel(summary.allocationPercent ?? 0)} rest="foreground">
+                {gpuAllocationCaption(summary)}
+              </UsageCaption>
               <GpuUtilizationInfo />
             </span>
           </div>
-          <Progress value={summary.allocationPercent ?? 0} className="h-2" />
+          <UsageBar
+            percent={summary.allocationPercent ?? 0}
+            label="GPU allocation"
+            valueText={gpuAllocationCaption(summary)}
+            className="h-2"
+          />
         </div>
       )}
     </div>

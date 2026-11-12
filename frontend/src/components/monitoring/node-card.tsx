@@ -2,7 +2,12 @@
 
 import { memo } from "react";
 import { cpuAllocation } from "@/lib/cpu-allocation";
-import { CpuAllocationFigure, CpuAllocationInfo, CpuAllocationText } from "@/components/cpu/cpu-allocation-info";
+import {
+  CpuAllocationCaption,
+  CpuAllocationFigure,
+  CpuAllocationInfo,
+  CpuAllocationMeter,
+} from "@/components/cpu/cpu-allocation-info";
 import { GpuCapacityInfo } from "@/components/gpu";
 import { Play, Server } from "lucide-react";
 
@@ -12,7 +17,8 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { useByteFormat } from "@/hooks/use-byte-format";
 import { ClusterStatus } from "@/types/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
+import { UsageBar } from "@/components/ui/usage-bar";
+import { UsageCaption } from "@/components/ui/usage-caption";
 import {
   Tooltip as UITooltip,
   TooltipContent,
@@ -26,8 +32,9 @@ import {
   gpuDenseRatio,
   summarizeGpus,
 } from "@/lib/gpu";
-import { formatHypervisorType, plural } from "@/lib/utils";
+import { EMPTY_VALUE, formatHypervisorType, plural } from "@/lib/utils";
 import { capacityReading } from "@/lib/capacity-reading";
+import { usageLevel } from "@/lib/usage-tone";
 import type { ClusterMonitoringMetrics } from "@/types/api";
 
 interface NodeCardProps {
@@ -75,7 +82,12 @@ function hostFigures(node: ClusterMonitoringMetrics) {
 
 function NodeHostFigures({ host }: { host: NonNullable<ReturnType<typeof hostFigures>> }) {
   const { formatBytes } = useByteFormat();
-  const { cpu, gpu, memory, storage } = host;
+  const { cpu, gpu, memory } = host;
+  // A cluster that sent 0 / 0 for storage has nothing to measure; an empty bar would read as
+  // an empty disk.
+  const storage = host.storage && host.storage.total > 0 ? host.storage : null;
+  const memoryFigure = `${formatBytes(host.memoryUsed)} / ${formatBytes(host.memoryTotal)}`;
+  const storageFigure = `${formatBytes(host.storageUsed)} / ${formatBytes(host.storageTotal)}`;
   return (
     <>
       <div className="space-y-1.5">
@@ -86,32 +98,59 @@ function NodeHostFigures({ host }: { host: NonNullable<ReturnType<typeof hostFig
           </span>
           <CpuAllocationFigure cpu={cpu} className="text-right font-medium" />
         </div>
-        <Progress value={cpu.percentClamped} className={`h-2 ${cpu.meterClassName}`} />
-        <p className={`text-xs text-right ${cpu.textClassName}`}>
-          <CpuAllocationText cpu={cpu} />
+        <CpuAllocationMeter cpu={cpu} className="h-2" />
+        <p className="text-xs text-right">
+          <CpuAllocationCaption cpu={cpu} />
         </p>
       </div>
       
       <div className="space-y-1.5">
         <div className="flex justify-between text-sm">
           <span className="text-muted-foreground">Memory</span>
-          <span className="font-medium">{formatBytes(host.memoryUsed)} / {formatBytes(host.memoryTotal)}</span>
+          <span className="font-medium">{memoryFigure}</span>
         </div>
-        {memory && <Progress value={memory.percent} className="h-2" />}
-        <p className="text-xs text-muted-foreground text-right">{memory ? `${memory.percent.toFixed(1)}%` : "Usage unavailable"}</p>
+        {memory && (
+          <UsageBar
+            percent={memory.percent}
+            label="Memory"
+            valueText={`${memoryFigure} (${memory.percent.toFixed(1)}%)`}
+            className="h-2"
+          />
+        )}
+        <p className="text-xs text-right">
+          {memory ? (
+            <UsageCaption level={usageLevel(memory.percent)}>{`${memory.percent.toFixed(1)}%`}</UsageCaption>
+          ) : (
+            <span className="text-muted-foreground">Usage unavailable</span>
+          )}
+        </p>
       </div>
       
       <div className="space-y-1.5">
         <div className="flex justify-between text-sm">
           <span className="text-muted-foreground">Storage</span>
-          <span className="font-medium">{formatBytes(host.storageUsed)} / {formatBytes(host.storageTotal)}</span>
+          <span className="font-medium">{storage ? storageFigure : EMPTY_VALUE}</span>
         </div>
-        {storage && <Progress value={storage.percent} className="h-2" />}
-        <p className="text-xs text-muted-foreground text-right">{storage ? `${storage.percent.toFixed(1)}%` : "Usage unavailable"}</p>
+        {storage && (
+          <UsageBar
+            percent={storage.percent}
+            label="Storage"
+            valueText={`${storageFigure} (${storage.percent.toFixed(1)}%)`}
+            className="h-2"
+          />
+        )}
+        <p className="text-xs text-right">
+          {storage ? (
+            <UsageCaption level={usageLevel(storage.percent)}>{`${storage.percent.toFixed(1)}%`}</UsageCaption>
+          ) : (
+            <span className="text-muted-foreground">Usage unavailable</span>
+          )}
+        </p>
       </div>
       
       {/* GPU allocation only: LXD reports no GPU telemetry. The cards count sits on the
-          line below the ratio so "0 / 1" never reads as "not detected". */}
+          line below the ratio so "0 / 1" never reads as "not detected". A fully allocated GPU
+          is no room for another GPU instance, so the bar is on the same ramp as the others. */}
       <div className="space-y-1.5">
         <div className="flex justify-between text-sm">
           <span className="inline-flex items-center gap-1.5 text-muted-foreground">
@@ -126,10 +165,21 @@ function NodeHostFigures({ host }: { host: NonNullable<ReturnType<typeof hostFig
                 : GPU_EMPTY_TITLE}
           </span>
         </div>
-        {gpu.hasCompute && <Progress value={gpu.allocationPercent ?? 0} className="h-2" />}
+        {gpu.hasCompute && (
+          <UsageBar
+            percent={gpu.allocationPercent ?? 0}
+            label="GPU allocation"
+            valueText={`${gpuDenseRatio(gpu)} (${(gpu.allocationPercent ?? 0).toFixed(1)}%)`}
+            className="h-2"
+          />
+        )}
         {(gpu.hasCompute || gpu.hasCards) && (
           <p className="text-xs text-muted-foreground text-right">
-            {gpu.hasCompute && `${(gpu.allocationPercent ?? 0).toFixed(1)}% allocated`}
+            {gpu.hasCompute && (
+              <UsageCaption level={usageLevel(gpu.allocationPercent ?? 0)}>
+                {`${(gpu.allocationPercent ?? 0).toFixed(1)}% allocated`}
+              </UsageCaption>
+            )}
             {gpu.hasCompute && gpuCardsCaption(gpu) ? " · " : ""}
             {gpu.hasCompute ? gpuCardsCaption(gpu) : gpuNoComputeCaption(gpu)}
           </p>

@@ -4,7 +4,8 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { EMPTY_VALUE } from "@/components/ui/table-text";
 import { UsageBar } from "@/components/ui/usage-bar";
-import { usageLevel, usagePercent, usageTone } from "@/lib/usage-tone";
+import { UsageCaption } from "@/components/ui/usage-caption";
+import { usageLevel, usagePercent } from "@/lib/usage-tone";
 
 export function formatUptime(seconds: number): string {
   const days = Math.floor(seconds / 86400);
@@ -17,13 +18,12 @@ export function formatUptime(seconds: number): string {
   return parts.length > 0 ? parts.join(" ") : "< 1m";
 }
 
-/** "80.5% · High", the level in words beside the number so the state never rests on colour. */
+/** "80.5% · High" through the shared caption rule: neutral while Normal, toned and named above. */
 export function StatusPercent({ percent }: { percent: number }) {
   return (
-    <span className="font-medium tabular-nums">
-      {percent.toFixed(1)}%{" "}
-      <span className={usageTone(percent).text}>· {usageLevel(percent)}</span>
-    </span>
+    <UsageCaption level={usageLevel(percent)} rest="foreground" className="font-medium">
+      {percent.toFixed(1)}%
+    </UsageCaption>
   );
 }
 
@@ -58,7 +58,7 @@ export function MeterRow({
       <UsageBar
         percent={clamped}
         label={label}
-        valueText={percent === null ? (measuring ? "measuring" : "not reported") : `${percent.toFixed(1)}%, ${usageLevel(percent).toLowerCase()}`}
+        valueText={percent === null ? (measuring ? "measuring" : "not reported") : `${percent.toFixed(1)}%`}
       />
       {caption && <p className="text-xs text-muted-foreground">{caption}</p>}
     </div>

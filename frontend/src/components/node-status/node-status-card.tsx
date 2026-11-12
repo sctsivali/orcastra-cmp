@@ -1,20 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { cpuAllocation, cpuAllocationFigure, cpuAllocationText } from "@/lib/cpu-allocation";
+import { cpuAllocation } from "@/lib/cpu-allocation";
 import {
-  GPU_EMPTY_TITLE,
-  GPU_NO_COMPUTE_TITLE,
-  gpuDenseRatio,
-  gpuNoComputeCaption,
-  summarizeGpus,
-} from "@/lib/gpu";
-import { CpuAllocationFigure, CpuAllocationInfo, CpuAllocationText } from "@/components/cpu/cpu-allocation-info";
-import { GpuCapacityInfo } from "@/components/gpu";
+  CpuAllocationCaption,
+  CpuAllocationFigure,
+  CpuAllocationInfo,
+  CpuAllocationMeter,
+} from "@/components/cpu/cpu-allocation-info";
+import { StorageCapacityInfo } from "@/components/storage/storage-capacity-info";
 import { HypervisorReleaseStatus, versionRange } from "@/components/hypervisor-release";
 
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
-import { Server, Cloud, Cpu, MemoryStick, Sparkles, MoreVertical, Edit, Users } from "lucide-react";
+import { Server, Cloud, Cpu, HardDrive, MemoryStick, MoreVertical, Edit, Users } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,9 +40,11 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { useByteFormat } from "@/hooks/use-byte-format";
 import { cn } from "@/lib/utils";
 import { capacityReading } from "@/lib/capacity-reading";
+import { storageReading } from "@/lib/storage-reading";
+import { usageLevel } from "@/lib/usage-tone";
 import { OverflowText } from "@/components/ui/overflow-text";
-import { Progress } from "@/components/ui/progress";
 import { UsageBar } from "@/components/ui/usage-bar";
+import { UsageCaption } from "@/components/ui/usage-caption";
 import { clusterStatusMeta } from "@/lib/cluster-status";
 import { TagManager } from "@/components/tag-manager";
 import { toast } from "@/hooks/use-toast";
@@ -61,9 +61,10 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
   const updateNodeTags = useUpdateNodeTags();
   const updateNodeDisplayName = useUpdateNodeDisplayName();
   const { isReadOnly } = useReadOnlyMode();
-  // important: every role reaches this card on the Overview. The node name and status concern a
-  // tenant whose instance runs there. The control-plane endpoint, the raw connection error, the
-  // rename action and the upgrade runbook are operator detail and stay partner-only.
+  // important: only partner and admin mount this card (components/dashboard.tsx; a tenant gets
+  // TenantClusterStatusCards, and /nodes is require_partner()). The isPartner gates below stay
+  // as a second line: the endpoint, the raw connection error, the rename action and the upgrade
+  // runbook are operator detail, should the card ever be mounted for another role.
   const { isPartner } = usePermissions();
   const { formatBytes } = useByteFormat();
   const [editNameDialogOpen, setEditNameDialogOpen] = useState(false);
@@ -140,7 +141,6 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
   };
 
   const cpu = cpuAllocation(node.resources ?? { cpu_total: 0, cpu_used: 0 });
-  const cpuFigure = cpuAllocationFigure(cpu);
   const memoryFigure = node.resources
     ? `${formatBytes(node.resources.memory_used)} / ${formatBytes(node.resources.memory_total)}`
     : "";
@@ -149,6 +149,10 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
   const memory = node.resources
     ? capacityReading({ used: node.resources.memory_used, total: node.resources.memory_total })
     : null;
+  const storage = storageReading(node.resources);
+  const storageFigure = storage.reading
+    ? `${formatBytes(storage.reading.used)} / ${formatBytes(storage.reading.total)}`
+    : "";
   // Clustering, not the distribution name, is what the Cloud glyph is saying here.
   const NodeIcon = node.clustered ? Cloud : Server;
   const statusMeta = clusterStatusMeta(node);
@@ -264,21 +268,13 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
               </div>
               <div className="text-xs">
                 <CpuAllocationFigure cpu={cpu} className="block font-semibold text-foreground" />
-                {/* The monitoring card's meter: the clamped share of threads in the allocation
-                    tone, so an over-commit reads as a ratio rather than as a red bar.
-                    important: role="meter", not Radix's progressbar. This is a level, and "no
-                    progressbar on the page" is how the house loader is told apart from a
+                {/* Measured against the 4x over-commit ceiling, so a normal over-commit draws a
+                    part-filled green bar and only a cluster near the ceiling turns amber.
+                    important: role="meter", never Radix's progressbar. This is a level, and
+                    "no progressbar on the page" is how the house loader is told apart from a
                     settled Overview. */}
-                {cpu.threads > 0 && (
-                  <Progress
-                    role="meter"
-                    value={cpu.percentClamped}
-                    aria-label="vCPU allocation"
-                    getValueLabel={() => `${cpuFigure}, ${cpuAllocationText(cpu)}`}
-                    className={cn("my-1 h-2", cpu.meterClassName)}
-                  />
-                )}
-                <CpuAllocationText cpu={cpu} className={cn("block", cpu.textClassName)} />
+                <CpuAllocationMeter cpu={cpu} className="my-1 h-2" />
+                <CpuAllocationCaption cpu={cpu} className="block" />
               </div>
             </div>
 
@@ -297,41 +293,54 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
                     className="my-1 h-2"
                   />
                 )}
-                <div className="text-muted-foreground">
-                  {memory ? `${memory.percent.toFixed(1)}% used` : "Usage unavailable"}
-                </div>
+                {memory ? (
+                  <UsageCaption level={usageLevel(memory.percent)} className="block">
+                    {memory.percent.toFixed(1)}% used
+                  </UsageCaption>
+                ) : (
+                  <div className="text-muted-foreground">Usage unavailable</div>
+                )}
               </div>
             </div>
 
+            {/* Storage, not GPU: disk is the capacity every cluster runs out of, and the GPU
+                inventory stays one click away in View Details and on Monitoring. */}
             <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                <span className="font-medium">GPU</span>
-                <GpuCapacityInfo />
+                <HardDrive className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span className="font-medium">Storage</span>
+                <StorageCapacityInfo />
               </div>
-              {(() => {
-                const gpu = summarizeGpus(node.resources);
-                return (
-                  <div className="text-xs">
-                    <div className="font-semibold text-foreground">
-                      {gpu.hasCompute
-                        ? gpuDenseRatio(gpu)
-                        : gpu.hasCards
-                          ? GPU_NO_COMPUTE_TITLE
-                          : GPU_EMPTY_TITLE}
-                    </div>
-                    {(gpu.hasCompute || gpu.hasCards) && (
-                      <div className="text-muted-foreground">
-                        {gpu.hasCompute
-                          ? `${(gpu.allocationPercent ?? 0).toFixed(1)}% allocated${
-                              gpu.extraCards > 0 ? ` · ${gpu.cardsTotal} cards` : ""
-                            }`
-                          : gpuNoComputeCaption(gpu)}
-                      </div>
+              <div className="text-xs">
+                {storage.reading ? (
+                  <>
+                    <div className="font-semibold text-foreground">{storageFigure}</div>
+                    <UsageBar
+                      percent={storage.reading.percent}
+                      label="Storage"
+                      valueText={`${storageFigure} (${storage.reading.percent.toFixed(1)}%)${
+                        storage.state === "partial" ? ", some pools did not answer" : ""
+                      }`}
+                      className="my-1 h-2"
+                    />
+                    <UsageCaption level={usageLevel(storage.reading.percent)} className="block">
+                      {storage.reading.percent.toFixed(1)}% used
+                    </UsageCaption>
+                    {storage.state === "partial" && (
+                      <div className="text-muted-foreground">Some pools did not answer</div>
                     )}
-                  </div>
-                );
-              })()}
+                  </>
+                ) : (
+                  <>
+                    <div className="font-semibold text-foreground">
+                      {storage.state === "none" ? "No storage pools" : "Storage unknown"}
+                    </div>
+                    <div className="text-muted-foreground">
+                      {storage.state === "none" ? "Nothing to measure" : "Usage unavailable"}
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         )}

@@ -3,15 +3,16 @@
 import * as React from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Progress } from "@/components/ui/progress";
+import { UsageBar } from "@/components/ui/usage-bar";
+import { UsageCaption } from "@/components/ui/usage-caption";
 import { TableLink } from "@/components/ui/table-link";
 import { AlertTriangle, Cpu, HardDrive, Layers, MemoryStick, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
 import { cpuAllocation, cpuAllocationText, formatCpuThreads } from "@/lib/cpu-allocation";
-import { CpuAllocationInfo, CpuAllocationText } from "@/components/cpu/cpu-allocation-info";
+import { CpuAllocationCaption, CpuAllocationInfo, CpuAllocationMeter } from "@/components/cpu/cpu-allocation-info";
 import { formatLabel, formatVcpuCount } from "@/lib/utils";
-import { usageTone } from "@/lib/usage-tone";
+import { usageLevel, usagePercent } from "@/lib/usage-tone";
 import type { MemberResources } from "@/types/api";
 import { GpuPanel } from "../gpu";
 import { GPU_UTILIZATION_NOTE } from "@/lib/gpu";
@@ -45,6 +46,8 @@ export function MemberResourcePanels({
   // (one core for an instance with no limit). LXD's resources API carries no host CPU
   // utilisation, and KVM lets the sum exceed the thread count, so it is a ratio.
   const cpu = cpuAllocation(resources);
+  // The API's own percentage, held to the range a bar can draw.
+  const memoryPercent = usagePercent(resources.memory_usage_percent, 100);
 
   // What the storage card headlines. A cluster-wide pool (ceph) is seen from every member, so
   // adding it to each would inflate every member's total. With the local/shared split the card
@@ -60,7 +63,7 @@ export function MemberResourcePanels({
       summaryLabel: hasSplit ? "Available Storage (Local)" : "Available Storage",
       total,
       used,
-      percent: total > 0 ? (used / total) * 100 : 0,
+      percent: usagePercent(used, total),
       sharedTotal: hasSplit ? resources.storage_shared_total ?? 0 : 0,
       sharedUsed: hasSplit ? resources.storage_shared_used ?? 0 : 0,
     };
@@ -101,15 +104,23 @@ export function MemberResourcePanels({
                   {cpu.allocated === 1 ? "vCPU" : "vCPUs"} / {formatCpuThreads(cpu.threads)}
                 </span>
               </div>
-              <Progress
-                value={instancesLost ? 0 : cpu.percentClamped}
-                className={`h-2 ${cpu.meterClassName}`}
-              />
-              <p className={`flex items-center justify-center gap-1 text-sm font-medium ${instancesLost ? "text-muted-foreground" : cpu.textClassName}`}>
-                {cpu.tone === "warning" && !instancesLost && (
-                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              {/* An unknown allocation draws an empty track: zero would read as free capacity. */}
+              {instancesLost ? (
+                <UsageBar percent={0} label="vCPU allocation" valueText="unknown" className="h-2" />
+              ) : (
+                <CpuAllocationMeter cpu={cpu} className="h-2" />
+              )}
+              <p className="flex items-center justify-center gap-1 text-sm font-medium">
+                {instancesLost ? (
+                  <span className="text-muted-foreground">allocation unknown</span>
+                ) : (
+                  <>
+                    {cpu.level === "Critical" && (
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-status-offline" aria-hidden />
+                    )}
+                    <CpuAllocationCaption cpu={cpu} />
+                  </>
                 )}
-                {instancesLost ? "allocation unknown" : <CpuAllocationText cpu={cpu} />}
               </p>
             </div>
           </CardContent>
@@ -131,12 +142,14 @@ export function MemberResourcePanels({
                 <span className="text-base font-semibold">{formatBytesCompact(resources.memory_total, units).value}</span>
                 <span className="text-xs text-muted-foreground"> {formatBytesCompact(resources.memory_total, units).unit}</span>
               </div>
-              <Progress 
-                value={resources.memory_usage_percent} 
+              <UsageBar
+                percent={memoryPercent}
+                label="Memory"
+                valueText={`${formatBytes(resources.memory_used, units)} / ${formatBytes(resources.memory_total, units)} (${memoryPercent.toFixed(1)}%)`}
                 className="h-2"
               />
-              <p className={`text-sm font-medium text-center ${usageTone(resources.memory_usage_percent).text}`}>
-                {resources.memory_usage_percent.toFixed(1)}% used
+              <p className="text-sm font-medium text-center">
+                <UsageCaption level={usageLevel(memoryPercent)}>{`${memoryPercent.toFixed(1)}% used`}</UsageCaption>
               </p>
             </div>
           </CardContent>
@@ -158,12 +171,16 @@ export function MemberResourcePanels({
                 <span className="text-base font-semibold">{formatBytesCompact(storage.total, units).value}</span>
                 <span className="text-xs text-muted-foreground"> {formatBytesCompact(storage.total, units).unit}</span>
               </div>
-              <Progress 
-                value={storage.percent} 
+              <UsageBar
+                percent={storage.percent}
+                label={storage.headline}
+                valueText={`${formatBytes(storage.used, units)} / ${formatBytes(storage.total, units)} (${storage.percent.toFixed(1)}%)${storageLost ? ", incomplete" : ""}`}
                 className="h-2"
               />
-              <p className={`text-sm font-medium text-center ${usageTone(storage.percent).text}`}>
-                {storage.percent.toFixed(1)}% used{storageLost ? " (incomplete)" : ""}
+              <p className="text-sm font-medium text-center">
+                <UsageCaption level={usageLevel(storage.percent)}>
+                  {`${storage.percent.toFixed(1)}% used${storageLost ? " (incomplete)" : ""}`}
+                </UsageCaption>
               </p>
               {storage.sharedTotal > 0 && (
                 <p className="text-xs text-muted-foreground text-center">
@@ -255,10 +272,8 @@ export function MemberResourcePanels({
           <CardContent>
             <div className="space-y-4">
               {resources.storage_pools.map((pool, index) => {
-                const usagePercent = pool.space_total > 0
-                  ? ((pool.space_used / pool.space_total) * 100)
-                  : 0;
-            
+                const poolPercent = usagePercent(pool.space_used, pool.space_total);
+
                 return (
                   <div key={index} className="space-y-2">
                     <div className="flex items-center justify-between">
@@ -275,9 +290,15 @@ export function MemberResourcePanels({
                       </span>
                     </div>
                     <div className="space-y-1">
-                      <Progress value={usagePercent} className="h-2" />
-                      <p className={`text-xs ${usageTone(usagePercent).text}`}>
-                        {usagePercent.toFixed(1)}% used · {formatBytes(pool.space_available, units)} available
+                      <UsageBar
+                        percent={poolPercent}
+                        label={`${pool.name} usage`}
+                        valueText={`${formatBytes(pool.space_used, units)} / ${formatBytes(pool.space_total, units)} (${poolPercent.toFixed(1)}%)`}
+                        className="h-2"
+                      />
+                      <p className="text-xs">
+                        <UsageCaption level={usageLevel(poolPercent)}>{`${poolPercent.toFixed(1)}% used`}</UsageCaption>
+                        <span className="text-muted-foreground"> · {formatBytes(pool.space_available, units)} available</span>
                       </p>
                     </div>
                   </div>

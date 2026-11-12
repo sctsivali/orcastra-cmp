@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { usagePercent, usageTone } from "@/lib/usage-tone";
+import { usageLevel, usagePercent, usageTone } from "@/lib/usage-tone";
 import {
   Tooltip as UITooltip,
   TooltipContent,
@@ -16,11 +16,6 @@ interface GaugeChartProps {
   statusMessage?: string;
   /** What the gauge says when there is no reading, ex; "Calculating…". */
   emptyLabel?: string;
-  /**
-   * "usage" puts the arc on the usage ramp. "allocation" keeps it on the accent: a fully
-   * allocated GPU is a working state, which the ramp would paint critical red.
-   */
-  kind?: "usage" | "allocation";
 }
 
 export function GaugeChart({
@@ -30,7 +25,6 @@ export function GaugeChart({
   size = 120,
   statusMessage,
   emptyLabel = "Unavailable",
-  kind = "usage",
 }: GaugeChartProps) {
   const reported =
     value !== null && Number.isFinite(value) && value >= 0 && Number.isFinite(max) && max > 0;
@@ -41,12 +35,31 @@ export function GaugeChart({
   const offset = circumference - (percentage / 100) * circumference;
   const arc = `M ${strokeWidth / 2} ${size / 2} A ${radius} ${radius} 0 0 1 ${size - strokeWidth / 2} ${size / 2}`;
 
+  const level = usageLevel(percentage);
+  const tone = usageTone(percentage);
+  const flagged = reported && level !== "Normal";
+
   // The status message explains an empty or zero gauge, so the tooltip appears only then.
   const showTooltip = percentage === 0 && statusMessage;
 
+  // The arc is a picture of the number, so the container is the meter and the SVG is hidden
+  // from assistive technology rather than read out as a string of shapes.
   const gaugeContent = (
-    <div className="flex flex-col items-center">
-      <svg width={size} height={size / 2 + 20} className="transform">
+    <div
+      className="flex flex-col items-center"
+      // A meter needs a value, so a gauge with no reading is announced as a labelled image.
+      role={reported ? "meter" : "img"}
+      aria-label={
+        reported
+          ? `${label}: ${percentage.toFixed(1)}%${flagged ? `, ${level.toLowerCase()}` : ""}`
+          : `${label}: ${emptyLabel}`
+      }
+      aria-valuemin={reported ? 0 : undefined}
+      aria-valuemax={reported ? 100 : undefined}
+      aria-valuenow={reported ? Math.round(percentage) : undefined}
+      data-level={reported ? level.toLowerCase() : undefined}
+    >
+      <svg width={size} height={size / 2 + 20} className="transform" aria-hidden="true">
         <path
           d={arc}
           fill="none"
@@ -54,8 +67,9 @@ export function GaugeChart({
           strokeWidth={strokeWidth}
           className="text-muted"
         />
-        {/* Value arc, on the same usage ramp as every usage bar (lib/usage-tone.ts). No arc
-            without a reading: a round cap on a zero-length dash still paints a dot. */}
+        {/* Value arc, on the same usage ramp as every capacity bar (lib/usage-tone.ts), GPU
+            allocation included. No arc without a reading: a round cap on a zero-length dash
+            still paints a dot. */}
         {reported ? (
           <path
             d={arc}
@@ -65,8 +79,8 @@ export function GaugeChart({
             strokeDashoffset={offset}
             strokeLinecap="round"
             className={cn(
-              "transition-all duration-500 motion-reduce:transition-none",
-              kind === "usage" ? usageTone(percentage).stroke : "stroke-primary",
+              "[transition-property:stroke-dashoffset,stroke] duration-500 motion-reduce:transition-none",
+              tone.stroke,
             )}
           />
         ) : null}
@@ -85,7 +99,11 @@ export function GaugeChart({
           {reported ? `${percentage.toFixed(1)}%` : emptyLabel}
         </text>
       </svg>
-      <span className="text-sm font-medium text-muted-foreground mt-1">{label}</span>
+      <span className="text-sm font-medium text-muted-foreground mt-1">
+        {label}
+        {/* The band in words beside the arc, as under every bar: colour is never the only cue. */}
+        {flagged ? <span className={cn("whitespace-nowrap", tone.text)}> · {level}</span> : null}
+      </span>
     </div>
   );
 
