@@ -8,36 +8,55 @@ export function sessionCookieBase(name: string): string | undefined {
   return SESSION_COOKIES.find((base) => name === base || name.startsWith(`${base}.`));
 }
 
-/** The session cookie name a Cookie header carries, if any. The secure name wins when both do. */
-export function presentSessionCookie(cookieHeader: string | null | undefined): string | undefined {
-  if (!cookieHeader) return undefined;
-  const names = new Set(
-    cookieHeader
-      .split(";")
-      .map((pair) => sessionCookieBase(pair.slice(0, pair.indexOf("=")).trim()))
-      .filter((base): base is string => Boolean(base)),
-  );
-  return SESSION_COOKIES.find((base) => names.has(base));
+/**
+ * The name NextAuth itself gives the session cookie for this request (@auth/core init): secure when
+ * the configured AUTH_URL or NEXTAUTH_URL is https, else when the request came in over https.
+ *
+ * important: never "whichever name is present". A host on the same site can plant the other name
+ * with a narrower Path (Path=/api/v1), which the browser sends first, and swap or blank the session
+ * the proxy reads while NextAuth keeps reading the real one.
+ */
+export function sessionCookieName(requestHeaders: Headers, requestUrl: string, configuredUrl: string | undefined): string {
+  let protocol: string | undefined;
+  try {
+    if (configuredUrl) protocol = new URL(configuredUrl).protocol;
+  } catch {
+    protocol = undefined;
+  }
+  if (!protocol) {
+    const forwarded = requestHeaders.get("x-forwarded-proto")?.split(",")[0].trim();
+    protocol = forwarded ? `${forwarded.replace(/:$/, "")}:` : new URL(requestUrl).protocol;
+  }
+  return protocol === "https:" ? SESSION_COOKIES[0] : SESSION_COOKIES[1];
+}
+
+/** Whether a Cookie header carries the named session cookie, whole or chunked. */
+export function carriesSessionCookie(cookieHeader: string | null | undefined, name: string): boolean {
+  if (!cookieHeader) return false;
+  return cookieHeader.split(";").some((pair) => {
+    const cookie = pair.slice(0, pair.indexOf("=")).trim();
+    return cookie === name || cookie.startsWith(`${name}.`);
+  });
 }
 
 /**
- * The session a request's cookies carry: undefined when they carry none, null when they carry one
- * this deployment cannot read (another secret, a truncated chunk, an empty value).
+ * The session a request's cookies carry under `name`: undefined when they carry none, null when
+ * they carry one this deployment cannot read (another secret, a truncated chunk, an empty value).
  */
 export async function readSessionCookie(
   requestHeaders: Headers,
+  name: string,
   secret: string | undefined,
 ): Promise<JWT | null | undefined> {
   const cookieHeader = requestHeaders.get("cookie");
-  const base = presentSessionCookie(cookieHeader);
-  if (!base) return undefined;
+  if (!carriesSessionCookie(cookieHeader, name)) return undefined;
   if (!secret) return null;
   // important: the Cookie header alone, never requestHeaders. getToken falls back to an
   // Authorization bearer when the cookie is empty, and that bearer is whatever the caller sent.
   return getToken({
     req: { headers: new Headers({ cookie: cookieHeader ?? "" }) },
     secret,
-    cookieName: base,
-    secureCookie: base.startsWith("__Secure-"),
+    cookieName: name,
+    secureCookie: name.startsWith("__Secure-"),
   });
 }

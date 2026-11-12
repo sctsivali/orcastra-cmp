@@ -48,9 +48,12 @@ test("a page's read and write reach the backend with the session's token and not
   // A page that renders without the app shell, so only the requests below reach the backend.
   await page.goto("/healthz");
   const answers = await page.evaluate(async () => {
-    const read = await fetch("/api/v1/proxy-probe/read", { headers: { Authorization: "Bearer page-chosen" } });
+    // As the app sends them: the account it acts for, and here a bearer the page chose, which the
+    // proxy replaces.
+    const actor = { "x-orcastra-actor": encodeURIComponent("partner@e2e.invalid") };
+    const read = await fetch("/api/v1/proxy-probe/read", { headers: { ...actor, Authorization: "Bearer page-chosen" } });
     const write = await fetch("/api/v1/proxy-probe/write", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      method: "POST", headers: { ...actor, "Content-Type": "application/json" }, body: "{}",
     });
     const pick = (r) => ({
       status: r.status, acao: r.headers.get("access-control-allow-origin"),
@@ -85,14 +88,27 @@ test("a write another site starts is refused before the backend", async ({ page 
   expect(lastUpstream("/proxy-probe/forged")).toBeUndefined();
 });
 
-test("a script with the session cookie and no Origin is the session, as the QA harness is", async ({ page }) => {
+test("a script with the session cookie that names its account is the session, as the QA harness is", async ({ page }) => {
   await authenticate(page.context(), "admin");
   const response = await page.request.post(`${BASE_URL}/api/v1/proxy-probe/script`, {
-    headers: { authorization: "Bearer undefined", "content-type": "application/json" },
+    headers: {
+      authorization: "Bearer undefined", "content-type": "application/json",
+      [ACTOR]: encodeURIComponent("admin@e2e.invalid"),
+    },
     data: {},
   });
   expect(response.status()).toBe(200);
   expect(lastUpstream("/proxy-probe/script").headers.authorization).toBe("Bearer e2e-admin-access-token");
+});
+
+test("a navigation never gets the session, wherever the link was", async ({ page }) => {
+  await authenticate(page.context(), "partner");
+  // A link opened in the tab: no actor header, so no session, on http as on https.
+  await page.goto("/api/v1/proxy-probe/navigated");
+  const upstream = lastUpstream("/proxy-probe/navigated");
+  expect(upstream, "the navigation reached the backend").toBeTruthy();
+  expect(upstream.headers.authorization, "a navigation carries no session").toBeUndefined();
+  expect(upstream.headers.cookie).toBeUndefined();
 });
 
 test("an integration's own key passes through when no session cookie is sent", async ({ playwright }) => {
@@ -126,7 +142,9 @@ test("a tab acting for another account is told so and reaches nothing", async ({
 
 test("a session the identity provider ended is over at the proxy", async ({ page }) => {
   await authenticate(page.context(), "partner", { tokenFields: { error: "RefreshTokenRevoked" } });
-  const response = await page.request.get(`${BASE_URL}/api/v1/proxy-probe/ended`);
+  const response = await page.request.get(`${BASE_URL}/api/v1/proxy-probe/ended`, {
+    headers: { [ACTOR]: encodeURIComponent("partner@e2e.invalid") },
+  });
   expect(response.status()).toBe(401);
   expect(response.headers()["x-orcastra-auth"]).toBe("session-ended");
   expect(lastUpstream("/proxy-probe/ended")).toBeUndefined();

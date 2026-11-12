@@ -38,7 +38,7 @@ const proxyAuth = load("frontend/src/lib/api-proxy-auth.ts", {
   "@/lib/auth-refresh": load("frontend/src/lib/auth-refresh.ts"),
 });
 const { decideProxyAuth, resolveProxyAuth, applyProxyAuth, ACTOR_HEADER } = proxyAuth;
-const { presentSessionCookie } = sessionCookie;
+const { sessionCookieName, carriesSessionCookie } = sessionCookie;
 
 const SECRET = "qa-secret-".repeat(4);
 const OTHER_SECRET = "other-deployment-".repeat(3);
@@ -50,8 +50,12 @@ const session = {
 const encode = (token, name = "authjs.session-token", secret = SECRET) =>
   jwt.encode({ token, secret, salt: name }).then((value) => `${name}=${value}`);
 
+// The page names its account on every request; `null` in `extra` drops a header.
+const ACTOR = encodeURIComponent("qa-partner@example.invalid");
 function headers(extra = {}) {
-  return new Headers({ host: "100.64.0.10:2025", ...extra });
+  const all = { host: "100.64.0.10:2025", [ACTOR_HEADER]: ACTOR, ...extra };
+  for (const [name, value] of Object.entries(all)) if (value === null) delete all[name];
+  return new Headers(all);
 }
 // An explicit `undefined` session means "no cookie", so defaults apply only to omitted arguments.
 async function decide(method, extra, ...rest) {
@@ -60,27 +64,54 @@ async function decide(method, extra, ...rest) {
   return decideProxyAuth(method, headers(extra), token, configured);
 }
 
-// 1. Cookie names: both of NextAuth's names, chunked or whole; the secure one wins.
-assert.equal(presentSessionCookie("a=1; authjs.session-token=x"), "authjs.session-token");
-assert.equal(presentSessionCookie("authjs.session-token.0=x; authjs.session-token.1=y"), "authjs.session-token");
-assert.equal(presentSessionCookie("authjs.session-token=x; __Secure-authjs.session-token=y"), "__Secure-authjs.session-token");
-assert.equal(presentSessionCookie("authjs.csrf-token=x; theme=dark"), undefined);
-assert.equal(presentSessionCookie(""), undefined);
-assert.equal(presentSessionCookie(null), undefined);
+// 1. Cookie name: the one NextAuth itself uses for the request, never whichever is present.
+{
+  const H = (extra = {}) => new Headers(extra);
+  const PLAIN = "authjs.session-token";
+  const SECURE = "__Secure-authjs.session-token";
+  assert.equal(sessionCookieName(H(), "http://x.invalid/api/v1/a", "http://x.invalid"), PLAIN);
+  assert.equal(sessionCookieName(H(), "https://x.invalid/api/v1/a", "http://x.invalid"), PLAIN, "the configured URL decides, as in NextAuth");
+  assert.equal(sessionCookieName(H(), "http://x.invalid/api/v1/a", "https://x.invalid"), SECURE);
+  assert.equal(sessionCookieName(H(), "https://x.invalid/api/v1/a", undefined), SECURE);
+  assert.equal(sessionCookieName(H({ "x-forwarded-proto": "https" }), "http://x.invalid/api/v1/a", undefined), SECURE);
+  assert.equal(sessionCookieName(H({ "x-forwarded-proto": "http" }), "https://x.invalid/api/v1/a", undefined), PLAIN);
+  assert.equal(sessionCookieName(H(), "http://x.invalid/api/v1/a", "::not a url::"), PLAIN);
+  assert.equal(carriesSessionCookie(`a=1; ${PLAIN}=x`, PLAIN), true);
+  assert.equal(carriesSessionCookie(`${PLAIN}.0=x; ${PLAIN}.1=y`, PLAIN), true, "a chunked session");
+  assert.equal(carriesSessionCookie(`${SECURE}=y`, PLAIN), false);
+  assert.equal(carriesSessionCookie("authjs.csrf-token=x; theme=dark", PLAIN), false);
+  assert.equal(carriesSessionCookie("", PLAIN), false);
+  assert.equal(carriesSessionCookie(null, PLAIN), false);
+}
 
 // 2. The session in a real cookie is read from the Cookie header only.
 {
   const cookie = await encode(session);
   const read = await resolveProxyAuth(new Request("http://100.64.0.10:2025/api/v1/clusters", {
-    headers: { host: "100.64.0.10:2025", cookie, authorization: "Bearer caller-chosen" },
+    headers: { host: "100.64.0.10:2025", cookie, authorization: "Bearer caller-chosen", [ACTOR_HEADER]: ACTOR },
   }), SECRET, CONFIGURED);
   assert.deepEqual(read, { kind: "session", bearer: "at-session" }, "the cookie's token replaces the caller's header");
 
   const secure = await encode(session, "__Secure-authjs.session-token");
   const readSecure = await resolveProxyAuth(new Request("https://dash.example.invalid/api/v1/clusters", {
-    headers: { host: "dash.example.invalid", cookie: secure },
+    headers: { host: "dash.example.invalid", cookie: secure, [ACTOR_HEADER]: ACTOR },
+  }), SECRET, "https://dash.example.invalid");
+  assert.deepEqual(readSecure, { kind: "session", bearer: "at-session" }, "an https deployment reads the __Secure- name");
+
+  // A cookie of the other name, planted by a host on the same site, is not what NextAuth reads, so
+  // neither does the proxy: the real session stays the one used.
+  const planted = await encode({ ...session, accessToken: "at-planted" }, "__Secure-authjs.session-token");
+  const readPlanted = await resolveProxyAuth(new Request("http://100.64.0.10:2025/api/v1/clusters", {
+    headers: { host: "100.64.0.10:2025", cookie: `${planted}; ${cookie}`, [ACTOR_HEADER]: ACTOR },
   }), SECRET, CONFIGURED);
-  assert.deepEqual(readSecure, { kind: "session", bearer: "at-session" }, "the __Secure- name is read too");
+  assert.deepEqual(readPlanted, { kind: "session", bearer: "at-session" }, "a planted cookie of the other name is ignored");
+
+  // Without the actor header no session is attached: a navigation, or a script that does not name
+  // the account it acts for.
+  const noActor = await resolveProxyAuth(new Request("http://100.64.0.10:2025/api/v1/my-keys/k1/download", {
+    headers: { host: "100.64.0.10:2025", cookie, accept: "text/html,application/xhtml+xml" },
+  }), SECRET, CONFIGURED);
+  assert.deepEqual(noActor, { kind: "anonymous" }, "a link from any site on plain http reaches the API without the session");
 
   // A bearer alone is never read as the session (getToken's fallback must not apply).
   const bearerOnly = await resolveProxyAuth(new Request("http://100.64.0.10:2025/api/v1/clusters", {
@@ -111,10 +142,15 @@ assert.deepEqual(await decide("POST", { authorization: "Bearer id:secret" }, und
 assert.deepEqual(await decide("POST", { origin: "https://evil.example" }, undefined), { kind: "anonymous" },
   "without a session there is nothing to forge, so the backend decides");
 
-// 4. Reads: same-origin, a typed address, and non-browser clients get the session.
+// 4. Reads that name their account: the page's own, and a script's that names it.
 assert.deepEqual(await decide("GET", {}), { kind: "session", bearer: "at-session" }, "no fetch metadata (http, curl, Playwright)");
 assert.deepEqual(await decide("GET", { "sec-fetch-site": "same-origin" }), { kind: "session", bearer: "at-session" });
-assert.deepEqual(await decide("GET", { "sec-fetch-site": "none" }), { kind: "session", bearer: "at-session" }, "typed in the address bar");
+//    A navigation never names its account, so it never gets the session: a typed address, a link
+//    from mail or chat, a link on another site over plain http (no Origin, no fetch metadata).
+assert.deepEqual(await decide("GET", { "sec-fetch-site": "none", [ACTOR_HEADER]: null }), { kind: "anonymous" }, "typed in the address bar");
+assert.deepEqual(await decide("GET", { [ACTOR_HEADER]: null, accept: "text/html" }), { kind: "anonymous" }, "a cross-site link over plain http");
+assert.deepEqual(await decide("GET", { "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", [ACTOR_HEADER]: null }), { kind: "anonymous" });
+assert.deepEqual(await decide("POST", { [ACTOR_HEADER]: null }), { kind: "anonymous" }, "a write that names no account gets no session");
 assert.deepEqual(await decide("HEAD", { "sec-fetch-site": "same-origin" }), { kind: "session", bearer: "at-session" });
 //    A read another site starts goes out without the session.
 assert.deepEqual(await decide("GET", { "sec-fetch-site": "cross-site" }), { kind: "anonymous" });
@@ -161,8 +197,9 @@ for (const ended of [{ ...session, error: "RefreshTokenRevoked" }, { ...session,
 }
 //    A transient refresh failure keeps the token it has; the backend judges its expiry.
 assert.deepEqual(await decide("GET", {}, { ...session, error: "RefreshAccessTokenError" }), { kind: "session", bearer: "at-session" });
-//    A cross-site request learns nothing about the session's state.
+//    A cross-site request, or one that names no account, learns nothing about the session's state.
 assert.deepEqual(await decide("GET", { "sec-fetch-site": "cross-site" }, { ...session, error: "RefreshTokenRevoked" }), { kind: "anonymous" });
+assert.deepEqual(await decide("GET", { [ACTOR_HEADER]: null }, { ...session, error: "RefreshTokenRevoked" }), { kind: "anonymous" });
 
 // 7. A tab that loaded for one account never acts for another.
 assert.deepEqual(await decide("POST", { [ACTOR_HEADER]: encodeURIComponent("qa-partner@example.invalid") }),

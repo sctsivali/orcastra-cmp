@@ -7,11 +7,17 @@
  * started (cross-site request forgery), a session the identity provider ended, and a tab still
  * acting for an account that is no longer the one signed in. A request without a session cookie
  * (an integration's API key, an MCP client, a script) passes through with its own Authorization.
+ *
+ * important: the session is attached only to a request that names its account in x-orcastra-actor.
+ * A page on another origin cannot send that header without a CORS preflight, which nothing here
+ * approves, and a navigation (a link, window.open, a redirect) never carries one. On plain http the
+ * browser sends neither Origin nor Sec-Fetch-Site with a navigation, so without this rule a link on
+ * any site would reach the API as the signed-in user.
  */
 import type { JWT } from "next-auth/jwt";
 import { ACTOR_HEADER } from "@/lib/auth-headers";
 import { REFRESH_TOKEN_REVOKED } from "@/lib/auth-refresh";
-import { readSessionCookie } from "@/lib/session-cookie";
+import { readSessionCookie, sessionCookieName } from "@/lib/session-cookie";
 
 export { ACTOR_HEADER, AUTH_SIGNAL_HEADER } from "@/lib/auth-headers";
 
@@ -104,11 +110,12 @@ export function decideProxyAuth(
       detail: "This request did not come from this dashboard's own pages.",
     };
   }
+  const actor = headers.get(ACTOR_HEADER);
+  if (actor === null) return { kind: "anonymous" };
   if (session.error === REFRESH_TOKEN_REVOKED || !session.accessToken) {
     return { kind: "refuse", status: 401, signal: "session-ended", detail: "The session has ended. Sign in again." };
   }
-  const actor = headers.get(ACTOR_HEADER);
-  if (actor !== null && decodedActor(actor) !== sessionSubject(session)) {
+  if (decodedActor(actor) !== sessionSubject(session)) {
     return {
       kind: "refuse", status: 401, signal: "actor-changed",
       detail: "Another account signed in on this browser. Reload the page to continue as that account.",
@@ -122,7 +129,8 @@ export async function resolveProxyAuth(
   secret: string | undefined,
   configuredUrl: string | undefined,
 ): Promise<ProxyAuth> {
-  const session = await readSessionCookie(request.headers, secret);
+  const name = sessionCookieName(request.headers, request.url, configuredUrl);
+  const session = await readSessionCookie(request.headers, name, secret);
   return decideProxyAuth(request.method, request.headers, session, configuredUrl);
 }
 
