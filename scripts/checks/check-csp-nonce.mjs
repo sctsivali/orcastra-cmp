@@ -133,16 +133,62 @@ const report = load("frontend/src/lib/csp-report.ts");
   assert.equal(await report.readCapped(stream(8 * 1024), 8 * 1024), "\u0000".repeat(8 * 1024));
   assert.equal(await report.readCapped(stream(8 * 1024 + 1), 8 * 1024), null, "one byte past the cap is refused");
   assert.equal(await report.readCapped(null), "");
+
+  const ours = (document, headers = {}, configured = "https://dash.example") =>
+    report.fromThisDeployment({ ...v, document }, new Headers(headers), configured);
+  assert.equal(ours("https://dash.example/inventory"), true, "the configured host");
+  assert.equal(ours("http://100.64.0.10:2025/x", { host: "100.64.0.10:2025" }, "http://other.example"), true, "the host it was sent to");
+  assert.equal(ours("https://evil.example/x", { host: "dash.example" }), false, "another site's report-uri pointed here");
+  assert.equal(ours("", { host: "dash.example" }), false);
+  assert.equal(ours("inline", { host: "dash.example" }), false);
 }
 
 // 4. Wiring.
 {
-  const middleware = read("frontend/src/middleware.ts");
-  assert.match(middleware, /return withContentSecurityPolicy\(request\);\n\}\);/, "every page response the auth callback passes gets the policy");
-  assert.match(middleware, /requestHeaders\.set\("x-nonce", nonce\)/);
-  assert.match(middleware, /requestHeaders\.set\("Content-Security-Policy", reportOnly\)/, "Next reads the nonce from the request's policy");
-  assert.match(middleware, /NextResponse\.next\(\{ request: \{ headers: requestHeaders \} \}\)/);
-  assert.match(middleware, /scriptPolicyMode\(process\.env\.CSP_SCRIPT_POLICY\)/);
+  const middlewareSource = read("frontend/src/middleware.ts");
+  assert.match(middlewareSource, /return withContentSecurityPolicy\(request\);\n\}\);/, "every page response the auth callback passes gets the policy");
+
+  // The middleware itself, in both modes. Next copies the middleware response's headers onto the
+  // request it renders and reads the nonce from that request's Content-Security-Policy, so what
+  // reaches Next is the response policy when there is one, else the request override.
+  class TestNextResponse extends Response {
+    static next({ request } = {}) {
+      const response = new TestNextResponse(null, { status: 200 });
+      response.forwarded = request?.headers;
+      return response;
+    }
+  }
+  const middleware = load("frontend/src/middleware.ts", {
+    "next-auth": { __esModule: true, default: () => ({ auth: (callback) => callback }) },
+    "@/auth": { authConfig: { callbacks: {} } },
+    "@/lib/request-security": { inspectRequestTarget: () => null },
+    "@/lib/csp": csp,
+    "@/lib/session-cookie-echo": { dropUnchangedSessionCookie: async (_q, r) => r, sessionSecret: () => undefined },
+    "@/lib/session-cookie": { legacySessionCookieExpiries: () => [] },
+    "next/server": { NextResponse: TestNextResponse },
+    "@/app/settings/settings-tabs": { isSettingsTab: () => true },
+  }).default;
+  const nextReads = (response) => response.headers.get("content-security-policy") ?? response.forwarded.get("content-security-policy");
+  const page = () => ({ method: "GET", nextUrl: new URL("https://qa.invalid/inventory"), headers: new Headers({ "x-nonce": "client-chosen", "content-security-policy": "script-src *" }) });
+  const saved = process.env.CSP_SCRIPT_POLICY;
+  try {
+    delete process.env.CSP_SCRIPT_POLICY;
+    const enforced = await middleware(page());
+    const nonce = enforced.forwarded.get("x-nonce");
+    assert.notEqual(nonce, "client-chosen", "a client cannot choose the nonce");
+    assert.match(enforced.headers.get("content-security-policy"), new RegExp(`'nonce-${nonce.replace(/[+/=]/g, "\\$&")}'`), "enforce: the response policy names the nonce");
+    assert.match(nextReads(enforced), /'nonce-/, "enforce: Next finds the nonce");
+
+    process.env.CSP_SCRIPT_POLICY = "report-only";
+    const reporting = await middleware(page());
+    assert.equal(reporting.headers.get("content-security-policy"), null,
+      "report-only: no response policy, or Next copies its nonce-less value onto the request and drops its nonces");
+    assert.match(nextReads(reporting), new RegExp(`'nonce-${reporting.forwarded.get("x-nonce").replace(/[+/=]/g, "\\$&")}'`), "report-only: Next still finds the nonce");
+    assert.match(reporting.headers.get("content-security-policy-report-only"), /'strict-dynamic'/);
+  } finally {
+    if (saved === undefined) delete process.env.CSP_SCRIPT_POLICY;
+    else process.env.CSP_SCRIPT_POLICY = saved;
+  }
 
   const layout = read("frontend/src/app/layout.tsx");
   assert.match(layout, /const nonce = requestHeaders\.get\("x-nonce"\) \?\? undefined;/);
@@ -165,10 +211,40 @@ const report = load("frontend/src/lib/csp-report.ts");
   assert.doesNotMatch(config, /Content-Security-Policy-Report-Only/, "middleware owns the report-only policy for pages");
   assert.doesNotMatch(config, /script-src 'self'[^;]*'unsafe/, "no unsafe script source in the static baseline");
 
+  // What middleware does not match gets script-src 'none', page paths keep a baseline without
+  // script-src (report-only mode relies on it), and the guest download keeps its sandbox. For one
+  // header key the last matching rule wins, as in Next.
+  const configModule = frontendRequire(join(root, "frontend/next.config.js"));
+  const rules = await (typeof configModule === "function" ? configModule("phase-production-build", {}) : configModule).headers();
+  const { getPathMatch } = frontendRequire("next/dist/shared/lib/router/utils/path-match");
+  const policyFor = (path) => {
+    let value;
+    for (const rule of rules) {
+      if (!getPathMatch(rule.source, { removeUnnamedParams: true, strict: true })(path)) continue;
+      const header = rule.headers.find((h) => h.key.toLowerCase() === "content-security-policy");
+      if (header) value = header.value;
+    }
+    return value ?? "";
+  };
+  for (const path of ["/api", "/api/x", "/api/v1/unknown", "/api/auth/signout", "/health/x", "/healthz", "/_next/static/chunks/a.js",
+    "/_next/image", "/geo/x.json", "/spice-html5/x", "/x.json", "/favicon.ico"]) {
+    assert.match(policyFor(path), /script-src 'none'/, `${path}: middleware skips it, so its HTML must run no script`);
+  }
+  for (const path of ["/", "/inventory", "/settings/integrations", "/auth/signin", "/console/x"]) {
+    assert.doesNotMatch(policyFor(path), /script-src/, `${path}: the static baseline must not decide script-src for a page`);
+  }
+  assert.match(policyFor("/api/v1/instance-files/download"), /^sandbox; default-src 'none'$/, "guest file bytes keep their sandbox");
+  // The matcher's exclusions and the config's list name the same paths.
+  const matcher = /matcher:\s*\[\s*(?:\/\*[\s\S]*?\*\/\s*)?"([^"]+)"/.exec(middlewareSource)[1];
+  for (const excluded of ["api", "health", "_next/static", "_next/image", "geo/", "spice-html5/", "ico|png|jpg|svg|webp|json"]) {
+    assert.ok(matcher.includes(excluded), `the middleware matcher no longer excludes ${excluded}; update UNMATCHED_BY_MIDDLEWARE`);
+  }
+
   const route = read("frontend/src/app/api/csp-report/route.ts");
   assert.match(route, /export async function POST/);
   assert.doesNotMatch(route, /export async function (GET|PUT|DELETE|PATCH)/, "reports are POSTed only");
-  assert.match(route, /if \(!budget\.take\(\)\) break;/, "the budget bounds what a flood logs");
+  assert.match(route, /if \(!fromThisDeployment\(violation, request\.headers, configuredUrl\)\) continue;/, "another site's reports cost nothing");
+  assert.match(route, /violation\.disposition === "enforce" \? budgets\.enforce : budgets\.report/, "report-only noise cannot spend the enforced budget");
 }
 
 console.log("csp nonce: per-response nonce, enforced script-src, report-only wider policy, hostile reports handled");

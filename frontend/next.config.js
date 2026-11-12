@@ -6,6 +6,26 @@ const packageJson = require('./package.json');
 // Prefer APP_VERSION from environment (set via Docker build args or .env), fallback to package.json
 const appVersion = process.env.APP_VERSION || packageJson.version;
 
+// The static Content Security Policy baseline: the directives that cannot break a working page.
+const CSP_BASELINE = ["object-src 'none'", "base-uri 'self'", "form-action 'self'", "frame-ancestors 'self'"];
+
+// important: what middleware.ts does not match never gets its nonce policy, yet an unknown path
+// there (/api/x, /x.json, /spice-html5/x) still renders the whole app as a 404 page. These answers
+// run no script of their own, so script-src 'none' makes such a page inert; its links are then
+// full navigations, which get a nonce. A script file served from here is unaffected: a response's
+// policy governs the document it is, not a page that loads it. Keep this list in step with the
+// middleware matcher.
+const UNMATCHED_BY_MIDDLEWARE = [
+  '/api/:path*',
+  '/health/:path*',
+  '/healthz/:path*',
+  '/_next/static/:path*',
+  '/_next/image/:path*',
+  '/geo/:path*',
+  '/spice-html5/:path*',
+  '/:file([^/]+\\.(?:ico|png|jpg|svg|webp|json))',
+];
+
 const nextConfig = {
   output: 'standalone',
   // Tree-shake large packages for smaller bundles
@@ -108,15 +128,14 @@ const nextConfig = {
             // so `default-src 'self'` would silently become script-src and style-src too, block
             // Next's inline bootstrap and every inline style Radix and Tailwind emit, and take the
             // whole frontend down.
-            value: [
-              "object-src 'none'",
-              "base-uri 'self'",
-              "form-action 'self'",
-              "frame-ancestors 'self'",
-            ].join('; '),
+            value: CSP_BASELINE.join('; '),
           },
         ],
       },
+      ...UNMATCHED_BY_MIDDLEWARE.map((source) => ({
+        source,
+        headers: [{ key: 'Content-Security-Policy', value: ["script-src 'none'", ...CSP_BASELINE].join('; ') }],
+      })),
       {
         // important: guest file bytes. This must follow the rule above, because for one header key
         // the last match wins, and that rule would otherwise replace the backend's sandbox with

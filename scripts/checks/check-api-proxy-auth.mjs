@@ -38,7 +38,7 @@ const proxyAuth = load("frontend/src/lib/api-proxy-auth.ts", {
   "@/lib/auth-refresh": load("frontend/src/lib/auth-refresh.ts"),
 });
 const { decideProxyAuth, resolveProxyAuth, applyProxyAuth, ACTOR_HEADER } = proxyAuth;
-const { sessionCookieName, carriesSessionCookie, pinnedSessionCookies } = sessionCookie;
+const { sessionCookieName, carriesSessionCookie, pinnedSessionCookies, legacySessionCookieExpiries } = sessionCookie;
 
 const SECRET = "qa-secret-".repeat(4);
 const OTHER_SECRET = "other-deployment-".repeat(3);
@@ -89,6 +89,17 @@ async function decide(method, extra, ...rest) {
   assert.equal(pinned.sessionToken.name, HOST);
   assert.deepEqual(pinned.sessionToken.options, { httpOnly: true, sameSite: "lax", path: "/", secure: true });
   assert.equal("domain" in pinned.sessionToken.options, false);
+  // After the rename, the old __Secure- cookie and its chunks are expired, on a pinned deployment only.
+  const legacyCookies = "__Secure-authjs.session-token.0=a; __Secure-authjs.session-token.1=b; theme=dark; __Host-authjs.session-token=c";
+  assert.deepEqual(legacySessionCookieExpiries(legacyCookies, "https://app.example.invalid").sort(), [
+    "__Secure-authjs.session-token.0=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax",
+    "__Secure-authjs.session-token.1=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax",
+  ]);
+  assert.deepEqual(legacySessionCookieExpiries("__Secure-authjs.session-token=a", "https://app.example.invalid").length, 1);
+  assert.deepEqual(legacySessionCookieExpiries(legacyCookies, "http://100.64.0.10:2025"), [], "not pinned: nothing to expire");
+  assert.deepEqual(legacySessionCookieExpiries("__Host-authjs.session-token=c", "https://app.example.invalid"), [], "the current cookie stays");
+  assert.deepEqual(legacySessionCookieExpiries("__Secure-authjs.session-tokenX=1", "https://app.example.invalid"), []);
+  assert.deepEqual(legacySessionCookieExpiries(null, "https://app.example.invalid"), []);
   const authSource = readFileSync(join(root, "frontend/src/auth.ts"), "utf8");
   assert.match(authSource, /cookies: pinnedSessionCookies\(process\.env\.AUTH_URL \?\? process\.env\.NEXTAUTH_URL\),/,
     "NextAuth writes the session cookie under the name the proxy reads");

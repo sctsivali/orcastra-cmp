@@ -460,6 +460,7 @@ try {
       "@/auth": { authConfig: config },
       "@/lib/request-security": { inspectRequestTarget: () => null },
       "@/lib/csp": load("frontend/src/lib/csp.ts"),
+      "@/lib/session-cookie": { legacySessionCookieExpiries: () => [] },
       "@/lib/session-cookie-echo": { dropUnchangedSessionCookie: async (_q, r) => r, sessionSecret: () => "x" },
       "next/server": { NextResponse: Response },
       "@/app/settings/settings-tabs": { isSettingsTab: () => true },

@@ -38,6 +38,24 @@ export function sessionCookieBase(name: string): string | undefined {
 }
 
 /**
+ * Set-Cookie values that expire the `__Secure-` session cookie (and its chunks) a browser still
+ * holds from before this deployment pinned `__Host-`; empty when there is none or nothing is pinned.
+ * Left alone it would keep a refresh-token chain for up to a week, and an image rolled back to the
+ * old name would sign the browser back into it.
+ */
+export function legacySessionCookieExpiries(cookieHeader: string | null | undefined, configuredUrl: string | undefined): string[] {
+  if (!pinnedSessionCookies(configuredUrl) || !cookieHeader) return [];
+  const legacy = "__Secure-authjs.session-token";
+  const names = new Set(
+    cookieHeader
+      .split(";")
+      .map((pair) => pair.slice(0, pair.indexOf("=")).trim())
+      .filter((name) => name === legacy || /^__Secure-authjs\.session-token\.\d+$/.test(name)),
+  );
+  return [...names].map((name) => `${name}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax`);
+}
+
+/**
  * The name the session cookie has for this request: `__Host-` when the configured AUTH_URL or
  * NEXTAUTH_URL is https (pinnedSessionCookies), plain when it is http, and NextAuth's own choice
  * (@auth/core init) when none is configured: `__Secure-` for a request that came in over https.

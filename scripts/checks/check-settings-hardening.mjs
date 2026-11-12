@@ -55,6 +55,7 @@ const middleware = load("frontend/src/middleware.ts", {
   "@/auth": { authConfig: { callbacks: {} } },
   "@/lib/request-security": load("frontend/src/lib/request-security.ts"),
   "@/lib/csp": load("frontend/src/lib/csp.ts"),
+  "@/lib/session-cookie": { legacySessionCookieExpiries: () => [] },
   "next/server": { NextResponse: TestNextResponse },
   "@/app/settings/settings-tabs": tabs,
   "@/lib/session-cookie-echo": { dropUnchangedSessionCookie: async (_request, response) => response, sessionSecret: () => undefined },
@@ -67,7 +68,7 @@ for (const path of ["/settings", ...tabs.SETTINGS_TABS.map((tab) => `/settings/$
   assert.match(passed.headers.get("content-security-policy"), new RegExp(`script-src 'self' 'nonce-${nonce.replace(/[+/=]/g, "\\$&")}' 'strict-dynamic'`), path);
 }
 for (const path of ["/settings/not-a-tab", "/settings/integrations/unknown"]) {
-  assert.equal((await middleware({ method: "GET", nextUrl: new URL(`https://qa.invalid${path}`) })).status, 404);
+  assert.equal((await middleware({ method: "GET", nextUrl: new URL(`https://qa.invalid${path}`), headers: new Headers() })).status, 404);
 }
 
 const empty = { organization_id: 17, updated_at: null };

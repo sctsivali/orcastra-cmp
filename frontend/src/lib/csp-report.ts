@@ -98,6 +98,27 @@ export function parseCspReport(contentType: string, text: string, limit = 10): C
 }
 
 /**
+ * Whether a violation happened on this deployment's own pages: its document's host is the
+ * configured AUTH_URL or NEXTAUTH_URL host, or the host the report was sent to. Any site can point
+ * report-uri here; its reports are dropped before they cost any budget.
+ */
+export function fromThisDeployment(violation: CspViolation, requestHeaders: Headers, configuredUrl: string | undefined): boolean {
+  let host: string;
+  try {
+    host = new URL(violation.document).host.toLowerCase();
+  } catch {
+    return false;
+  }
+  try {
+    if (configuredUrl && new URL(configuredUrl).host.toLowerCase() === host) return true;
+  } catch {
+    // An unusable configured URL names no host.
+  }
+  const addressed = (requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host") ?? "").split(",")[0].trim().toLowerCase();
+  return addressed !== "" && addressed === host;
+}
+
+/**
  * One budget for the whole process, so a flood of reports costs a bounded amount of logging
  * whoever sends it. `capacity` reports at once, refilled at `perSecond`.
  */

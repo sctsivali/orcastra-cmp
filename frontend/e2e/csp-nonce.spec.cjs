@@ -39,6 +39,19 @@ for (const path of ["/inventory/iso-images", "/settings/integrations"]) {
   });
 }
 
+test("a page middleware does not match runs no script", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-light", "headers are the same on every project");
+  await authenticate(page.context(), "admin");
+  for (const path of ["/api/not-a-route", "/not-a-file.json", "/spice-html5/not-a-file"]) {
+    const response = await page.goto(path, { waitUntil: "domcontentloaded" });
+    const policy = (await response.headersArray()).filter((h) => h.name.toLowerCase() === "content-security-policy").map((h) => h.value).join(" | ");
+    expect(policy, `${path}: no nonce policy reaches it, so it must forbid script`).toContain("script-src 'none'");
+    // The app's 404 page is in the HTML; none of its scripts may have run.
+    const ran = await page.evaluate(() => Boolean(window.next || window.__next_f?.length > 0 && document.querySelector("[data-nextjs-scroll-focus-boundary]")));
+    expect(ran, `${path}: a script ran`).toBe(false);
+  }
+});
+
 test("the report endpoint takes a browser's report and refuses anything else", async ({ playwright }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-light", "server behaviour, once");
   const client = await playwright.request.newContext({ baseURL: BASE_URL });
