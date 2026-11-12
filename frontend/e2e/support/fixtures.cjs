@@ -41,11 +41,12 @@ const ROLE_GROUPS = {
 };
 
 
-async function authenticate(context, role, { sessionRole = role, accessExpiresIn = 60 * 60, groups: groupsClaim } = {}) {
+async function authenticate(context, role, { sessionRole = role, accessExpiresIn = 60 * 60, groups: groupsClaim, tokenFields = {} } = {}) {
   // A refreshed synthetic session can lose privileges without changing its principal or bearer.
   // accessExpiresIn below 60 s keeps the server from hydrating the session, as for a deep link
   // opened in a new tab long after the last refresh: the page then reads /api/auth/session itself.
   // `groups` replaces the role's canonical group, for an IdP that names it another way.
+  // `tokenFields` adds or overrides session fields, for a session the identity provider ended.
   const groups = groupsClaim ?? ROLE_GROUPS[sessionRole];
   if (!ROLE_GROUPS[role] || !groups) throw new Error(`Unknown E2E role: ${sessionRole}`);
   const { encode } = await import("next-auth/jwt");
@@ -68,6 +69,7 @@ async function authenticate(context, role, { sessionRole = role, accessExpiresIn
       iat: now,
       exp: now + 60 * 60,
       jti: `e2e-${role}-${now}`,
+      ...tokenFields,
     },
   });
 

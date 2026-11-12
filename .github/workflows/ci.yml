@@ -294,6 +294,11 @@ jobs:
       - name: Session cookie echo
         run: node scripts/checks/check-session-cookie-echo.mjs .
 
+      # The proxy attaches the session's token itself and refuses cross-site writes, ended
+      # sessions and a tab acting for another account.
+      - name: API proxy auth
+        run: node scripts/checks/check-api-proxy-auth.mjs .
+
       # invalid_grant ends the session and sends a deep link through sign-in; a timeout, 5xx or
       # 429 cools down instead.
       - name: Auth refresh contract

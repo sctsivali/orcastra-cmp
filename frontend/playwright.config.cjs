@@ -9,6 +9,7 @@ if (!Number.isInteger(e2ePort) || e2ePort < 1 || e2ePort > 65535) {
 }
 const artifactRoot = process.env.ORCASTRA_E2E_ARTIFACT_ROOT || "/tmp/orcastra-playwright";
 const outputDir = process.env.ORCASTRA_E2E_OUTPUT_DIR || path.join(artifactRoot, "test-results");
+const upstreamPort = Number(process.env.ORCASTRA_E2E_UPSTREAM_PORT || 47391);
 const reportDir = process.env.ORCASTRA_E2E_REPORT_DIR || path.join(artifactRoot, "playwright-report");
 
 module.exports = defineConfig({
@@ -86,7 +87,9 @@ module.exports = defineConfig({
       AUTHENTIK_ISSUER: "https://idp.invalid/application/o/orcastra/",
       AUTHENTIK_CLIENT_ID: "orcastra-e2e-client",
       AUTHENTIK_CLIENT_SECRET: "unused-e2e-client-secret",
-      INTERNAL_BACKEND_URL: "http://127.0.0.1:1",
+      // Nothing listens here except the fake backend of api-proxy-upstream.spec.cjs, so a request
+      // that escapes a spec's browser-side fixtures is refused as before.
+      INTERNAL_BACKEND_URL: `http://127.0.0.1:${upstreamPort}`,
       NEXT_PUBLIC_API_URL: "",
       NEXT_TELEMETRY_DISABLED: "1",
     },

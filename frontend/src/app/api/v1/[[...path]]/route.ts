@@ -13,7 +13,14 @@
  * a backend failure mid-body reaches the client truncated instead of as the 502 JSON below.
  */
 import { NextRequest, NextResponse } from "next/server";
+import {
+  AUTH_SIGNAL_HEADER,
+  applyProxyAuth,
+  finishProxyResponse,
+  resolveProxyAuth,
+} from "@/lib/api-proxy-auth";
 import { inspectRequestTarget } from "@/lib/request-security";
+import { sessionSecret } from "@/lib/session-cookie-echo";
 import {
   gzipBody,
   isCompressibleType,
@@ -192,9 +199,29 @@ async function proxyRequest(req: NextRequest): Promise<Response> {
     return NextResponse.json({ error: "Invalid backend URL" }, { status: 502 });
   }
 
+  // important: a browser request is authenticated by its session cookie here, and the session's
+  // access token is attached for the backend (lib/api-proxy-auth.ts). A caller without the cookie
+  // keeps its own Authorization header.
+  const auth = await resolveProxyAuth(req, sessionSecret(), process.env.AUTH_URL ?? process.env.NEXTAUTH_URL);
+  if (auth.kind === "refuse") {
+    return NextResponse.json(
+      { detail: auth.detail },
+      {
+        status: auth.status,
+        headers: {
+          "Cache-Control": "no-store",
+          ...(auth.status === 401
+            ? { [AUTH_SIGNAL_HEADER]: auth.signal }
+            : { "X-Orcastra-Security-Action": auth.signal }),
+        },
+      }
+    );
+  }
+
   const targetUrl = buildTargetUrl(pathname, search);
 
   const headers = buildForwardHeaders(req);
+  applyProxyAuth(headers, auth);
 
   const headersDeadline = new AbortController();
   const deadlineTimer = setTimeout(
@@ -250,6 +277,7 @@ async function proxyRequest(req: NextRequest): Promise<Response> {
     // Hop-by-hop headers do not carry over to the browser leg.
     responseHeaders.delete("transfer-encoding");
     responseHeaders.delete("connection");
+    finishProxyResponse(responseHeaders, auth);
 
     const upstreamEncoding = upstream.headers.get("content-encoding");
     if (isNullBody) {
