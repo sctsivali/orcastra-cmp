@@ -32,6 +32,7 @@ function load(relativePath, dependencies = {}) {
 
 const { dropUnchangedSessionCookie, sameSession, withoutSessionEcho } = load("frontend/src/lib/session-cookie-echo.ts", {
   "next-auth/jwt": jwt,
+  "@/lib/session-cookie": load("frontend/src/lib/session-cookie.ts", { "next-auth/jwt": jwt }),
 });
 
 const SECRET = "qa-secret-".repeat(4);
