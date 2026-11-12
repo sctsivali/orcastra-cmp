@@ -66,6 +66,7 @@ test("a page's read and write reach the backend with the session's token and not
     const upstream = lastUpstream(path);
     expect(upstream, `${path} reached the backend`).toBeTruthy();
     expect(upstream.headers.authorization).toBe("Bearer e2e-partner-access-token");
+    expect(upstream.headers["x-orcastra-proxy-auth"], "the backend may key this account's rate limit").toBe("session");
     expect(upstream.headers.cookie, "the refresh token in the cookie stays at the proxy").toBeUndefined();
     expect(upstream.headers.origin).toBeUndefined();
   }
@@ -108,6 +109,7 @@ test("a navigation never gets the session, wherever the link was", async ({ page
   const upstream = lastUpstream("/proxy-probe/navigated");
   expect(upstream, "the navigation reached the backend").toBeTruthy();
   expect(upstream.headers.authorization, "a navigation carries no session").toBeUndefined();
+  expect(upstream.headers["x-orcastra-proxy-auth"]).toBeUndefined();
   expect(upstream.headers.cookie).toBeUndefined();
 });
 
@@ -115,10 +117,13 @@ test("an integration's own key passes through when no session cookie is sent", a
   const client = await playwright.request.newContext();
   try {
     const response = await client.get(`${BASE_URL}/api/v1/proxy-probe/keyed`, {
-      headers: { authorization: "Bearer key-id:key-secret" },
+      // A caller claiming the session mark must not get a rate-limit bucket per token it invents.
+      headers: { authorization: "Bearer key-id:key-secret", "x-orcastra-proxy-auth": "session" },
     });
     expect(response.status()).toBe(200);
-    expect(lastUpstream("/proxy-probe/keyed").headers.authorization).toBe("Bearer key-id:key-secret");
+    const upstream = lastUpstream("/proxy-probe/keyed");
+    expect(upstream.headers.authorization).toBe("Bearer key-id:key-secret");
+    expect(upstream.headers["x-orcastra-proxy-auth"], "the caller's mark is dropped").toBeUndefined();
   } finally {
     await client.dispose();
   }

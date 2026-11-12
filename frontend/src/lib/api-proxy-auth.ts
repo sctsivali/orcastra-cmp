@@ -35,6 +35,10 @@ export type ProxyAuth =
   | ProxyAuthRefusal;
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+// Tells the backend this request carries a session's token the proxy attached, so its rate limit is
+// that account's own (backend/app/middleware/security.py PROXY_SESSION_HEADER). Believed only from
+// a trusted proxy address, and dropped from anything a caller sends.
+export const PROXY_SESSION_HEADER = "x-orcastra-proxy-auth";
 
 /** The account a session belongs to, as the session's `user.id` names it (auth.ts). */
 export function sessionSubject(token: JWT): string {
@@ -165,5 +169,9 @@ export function applyProxyAuth(headers: Headers, auth: ProxyAuth): void {
   headers.delete("cookie");
   headers.delete("origin");
   headers.delete(ACTOR_HEADER);
-  if (auth.kind === "session") headers.set("authorization", `Bearer ${auth.bearer}`);
+  headers.delete(PROXY_SESSION_HEADER);
+  if (auth.kind === "session") {
+    headers.set("authorization", `Bearer ${auth.bearer}`);
+    headers.set(PROXY_SESSION_HEADER, "session");
+  }
 }

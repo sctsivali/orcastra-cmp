@@ -132,6 +132,10 @@ def _per_worker_share(limit: int) -> int:
     return max(1, limit // configured_worker_count())
 
 
+# The frontend's /api/v1 proxy sets this on a request it authenticated from the session cookie, and
+# drops it from anything a caller sends (frontend/src/lib/api-proxy-auth.ts applyProxyAuth).
+PROXY_SESSION_HEADER = "x-orcastra-proxy-auth"
+
 _FRESH_FLAG = TypeAdapter(bool)
 
 
@@ -374,12 +378,33 @@ class RequestSecurityMiddleware(BaseHTTPMiddleware):
                 return RateLimitHit(scope, limit, self.limiter.retry_after(key, window, now))
         return None
 
-    def _rate_limit_keys(self, client_ip: str, request: Request) -> Iterable[tuple[str, int]]:
-        yield f"ip:{client_ip}", self.settings.rate_limit_requests
+    def _proxied_session(self, request: Request) -> Optional[str]:
+        """The token bucket of a request the dashboard's proxy authenticated from a session, or None.
 
-        subnet = get_client_subnet(client_ip)
-        if subnet:
-            yield f"subnet:{subnet}", self.settings.rate_limit_subnet_requests
+        Every operator's page calls arrive from the frontend container's one address, so an
+        address-keyed budget is shared by everyone signed in to the deployment. The proxy's mark is
+        believed only from a trusted proxy address, the trust `x-orcastra-client-ip` already gets.
+        important: never the bearer alone. A cookieless caller's own Authorization passes through
+        the proxy unmarked, and keying on it would let random tokens open a bucket per request.
+        """
+        if request.headers.get(PROXY_SESSION_HEADER) != "session":
+            return None
+        if not resolve_client_ip(request, self.settings.trusted_proxy_cidrs).trusted_proxy:
+            return None
+        subject = _rate_limit_subject(request, "")
+        return subject if subject.startswith("tok:") else None
+
+    def _rate_limit_keys(self, client_ip: str, request: Request) -> Iterable[tuple[str, int]]:
+        session = self._proxied_session(request)
+        if session is not None:
+            # No subnet bucket: it would be the frontend container's, shared again by everyone.
+            yield f"user:{session}", self.settings.rate_limit_requests
+        else:
+            yield f"ip:{client_ip}", self.settings.rate_limit_requests
+
+            subnet = get_client_subnet(client_ip)
+            if subnet:
+                yield f"subnet:{subnet}", self.settings.rate_limit_subnet_requests
 
         # important: a forced cache bypass costs a full fan-out to every cluster in
         # scope, so it gets its own much smaller budget, keyed per operator token
