@@ -314,7 +314,7 @@ def aggregate_microcloud_resources(
             if storage.unknown_drivers:
                 logger.info(
                     "Unclassified storage driver(s) on %s: %s. Counted per member, which "
-                    "understates a shared pool rather than overstating it.",
+                    "overstates the pool if its backing store is in fact shared.",
                     node_name,
                     ", ".join(storage.unknown_drivers),
                 )

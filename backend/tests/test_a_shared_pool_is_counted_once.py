@@ -35,6 +35,25 @@ class DriverClassificationTests(unittest.TestCase):
             self.assertTrue(is_shared_driver(driver), driver)
             self.assertEqual("shared", classify_driver(driver))
 
+    def test_the_newer_remote_drivers_are_shared(self):
+        """Remote storage per the hypervisors' own storage docs: LXD lists powerstore and
+        alletra beside ceph and pure, and Incus lists linstor and truenas, whose volumes are
+        available from any cluster member."""
+        for driver in ("powerstore", "alletra", "linstor", "truenas"):
+            self.assertTrue(is_shared_driver(driver), driver)
+            self.assertEqual("shared", classify_driver(driver), driver)
+
+    def test_a_remote_pool_seen_from_three_members_is_counted_once(self):
+        for driver in ("powerstore", "alletra", "linstor", "truenas"):
+            summary = summarise_cluster_storage([
+                PoolReading(member, "remote", driver, 400 * GB, 100 * GB)
+                for member in ("m1", "m2", "m3")
+            ])
+            self.assertEqual(400 * GB, summary.total, driver)
+            self.assertEqual(100 * GB, summary.used, driver)
+            self.assertEqual(1200 * GB, summary.raw_total, driver)
+            self.assertEqual([], summary.unknown_drivers, driver)
+
     def test_the_per_member_drivers_are_local(self):
         for driver in ("zfs", "btrfs", "lvm", "dir"):
             self.assertFalse(is_shared_driver(driver), driver)
@@ -47,8 +66,8 @@ class DriverClassificationTests(unittest.TestCase):
         self.assertEqual("shared", classify_driver("lvmcluster"))
 
     def test_an_unknown_driver_counts_as_local_and_is_named(self):
-        """An unknown driver understates capacity rather than overstating it, and is named so
-        the gap stays visible."""
+        """An unknown driver is summed per member, which overstates a pool that is in fact
+        shared, so it is named and the gap stays visible."""
         self.assertEqual("unknown", classify_driver("some-future-driver"))
         summary = summarise_cluster_storage([
             PoolReading("m1", "p", "some-future-driver", 10, 1),

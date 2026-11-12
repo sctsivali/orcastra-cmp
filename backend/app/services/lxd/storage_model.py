@@ -27,7 +27,11 @@ SHARED_STORAGE_DRIVERS = frozenset({
     "cephobject",
     "lvmcluster",
     "powerflex",    # Dell PowerFlex, LXD 6.x
+    "powerstore",   # Dell PowerStore, LXD 6.x
     "pure",         # Pure Storage, LXD 6.x
+    "alletra",      # HPE Alletra, LXD 6.x
+    "linstor",      # LINSTOR, Incus
+    "truenas",      # TrueNAS over iSCSI, Incus
 })
 
 # Each member's own disks. The same pool name on two members is two different disks.
