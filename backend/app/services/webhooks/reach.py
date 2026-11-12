@@ -141,6 +141,16 @@ async def read_bounds(pairs: Iterable[Tuple[Any, str]], memo: ReachMemo, seconds
             memo[key] = _UNREADABLE
 
 
+async def _purchase_ended(install: Any, cluster_id: str) -> bool:
+    """The installer reaches the cluster only through a purchase that has ended: its add-on hears
+    nothing more about it, as its key reaches nothing there (services/key_paid_term.py). Judged from
+    the purchase alone and cached per installer; raises when it cannot be read."""
+    from app.core.sale_term import ENDED
+    from app.services.key_paid_term import installer_phase
+
+    return await installer_phase(str(getattr(install, "installed_by", "") or ""), cluster_id) == ENDED
+
+
 async def install_reaches_project(
     install: Any, cluster_id: str, project: Optional[str], *,
     deleted_and_held: Optional[bool] = None, memo: Optional[ReachMemo] = None,
@@ -159,6 +169,8 @@ async def install_reaches_project(
     """
     grants = _grants_on(install, cluster_id)
     if not _grants_naming(grants, cluster_id, project):
+        return False
+    if await _purchase_ended(install, cluster_id):
         return False
     if deleted_and_held:
         return True

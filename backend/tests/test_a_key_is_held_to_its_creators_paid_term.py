@@ -18,6 +18,7 @@ from fastapi import HTTPException
 
 from app.core.api_key_permissions import assert_cluster_permission
 from app.services import key_paid_term as kpt
+from app.services.api_key_grant_bound import rule_outside_the_key_grant
 from app.services.key_paid_term import narrow_to_paid_term
 from tests._purchase_world import ACTIVE_TERM, ENDED_TERM, FOUNDER, RETENTION_TERM, purchase_world
 
@@ -78,19 +79,42 @@ async def test_once_access_ended_the_key_reaches_nothing_there(founder) -> None:
     founder["world"] = ENDED_TERM
     narrowed = await narrow_to_paid_term(_key())
 
-    assert _grant(narrowed, "sold")["permissions"] == []
+    assert [g["cluster_id"] for g in narrowed["cluster_permissions"]] == ["own"], (
+        "no door lists, reads or writes the cluster: the grant is left out"
+    )
     with pytest.raises(HTTPException) as refused:
         assert_cluster_permission(narrowed, "sold", "read")
     assert refused.value.status_code == 403, "an ended purchase is a refusal, not 'cluster not registered'"
+    assert refused.value.detail["code"] == "purchase_ended"
     assert _grant(narrowed, "own")["permissions"] == ALL
 
 
-@pytest.mark.parametrize("world", [ACTIVE_TERM, {**RETENTION_TERM, "registered_elsewhere": True}],
-                         ids=["term-running", "also-registered-elsewhere"])
-async def test_otherwise_the_key_is_untouched(founder, world) -> None:
-    founder["world"] = world
+async def test_while_the_term_runs_the_key_acts_but_is_marked(founder) -> None:
+    founder["world"] = ACTIVE_TERM
+    stored = _key()
+    narrowed = await narrow_to_paid_term(stored)
+    assert narrowed["cluster_permissions"] == stored["cluster_permissions"]
+    assert kpt.reached_by_purchase(narrowed, "sold") == "active"
+    assert kpt.reached_by_purchase(narrowed, "own") is None
+
+
+async def test_a_cluster_the_founder_reaches_otherwise_is_untouched(founder) -> None:
+    founder["world"] = {**RETENTION_TERM, "registered_elsewhere": True}
     stored = _key()
     assert await narrow_to_paid_term(stored) is stored
+
+
+@pytest.mark.parametrize("world", [ACTIVE_TERM, RETENTION_TERM], ids=["term-running", "retention"])
+async def test_the_key_never_writes_tenant_access_on_what_was_bought(founder, world) -> None:
+    founder["world"] = world
+    narrowed = await narrow_to_paid_term(_key())
+    with pytest.raises(HTTPException) as refused:
+        kpt.refuse_tenant_writes_on_a_purchase(narrowed, "sold")
+    assert refused.value.status_code == 403
+    assert refused.value.detail["code"] == "cluster_reached_by_purchase"
+    kpt.refuse_tenant_writes_on_a_purchase(narrowed, "own")
+    assert rule_outside_the_key_grant(narrowed, "sold", "shop") is not None
+    assert rule_outside_the_key_grant(narrowed, "own", "anything") is None
 
 
 async def test_an_admin_creators_key_is_untouched(founder) -> None:
@@ -152,9 +176,35 @@ async def test_a_creators_phases_are_read_once_per_window(monkeypatch) -> None:
     kpt.forget_paid_terms()
 
 
-def test_validate_api_key_holds_every_request_to_the_term() -> None:
+def _calls(function: str) -> set:
     source = (Path(kpt.__file__).resolve().parents[1] / "routers" / "integrations.py").read_text()
-    validate = next(n for n in ast.walk(ast.parse(source))
-                    if isinstance(n, ast.AsyncFunctionDef) and n.name == "validate_api_key")
-    called = [getattr(c.func, "id", None) for c in ast.walk(validate) if isinstance(c, ast.Call)]
-    assert "narrow_to_paid_term" in called
+    fn = next(n for n in ast.walk(ast.parse(source))
+              if isinstance(n, ast.AsyncFunctionDef) and n.name == function)
+    return {getattr(c.func, "id", None) for c in ast.walk(fn) if isinstance(c, ast.Call)}
+
+
+def test_validate_api_key_holds_every_request_to_the_term() -> None:
+    assert "narrow_to_paid_term" in _calls("validate_api_key")
+
+
+@pytest.mark.parametrize("function", ["provision_tenant_access", "revoke_tenant_access"])
+def test_both_tenant_doors_refuse_a_purchased_cluster(function) -> None:
+    # Policy sync judges each rule through rule_outside_the_key_grant (tested above).
+    assert "refuse_tenant_writes_on_a_purchase" in _calls(function)
+
+
+async def test_an_installer_whose_purchase_ended_hears_no_more_about_it(founder, monkeypatch) -> None:
+    from app.services.webhooks import reach
+
+    async def no_bound(_install, _cluster_id, _memo):
+        return None
+
+    monkeypatch.setattr(reach, "_installer_bound", no_bound)
+    install = SimpleNamespace(installed_by=FOUNDER, granted_scope=[
+        {"cluster_id": "sold", "projects": ["shop"]}, {"cluster_id": "own", "projects": ["*"]},
+    ])
+    for world, hears in ((ACTIVE_TERM, True), (RETENTION_TERM, True), (ENDED_TERM, False)):
+        founder["world"] = world
+        kpt.forget_paid_terms()
+        assert await reach.install_reaches_project(install, "sold", "shop") is hears, world
+        assert await reach.install_reaches_project(install, "own", "x") is True

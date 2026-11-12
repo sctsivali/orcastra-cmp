@@ -5,7 +5,12 @@ purchase (org_scope.refuse_grants_on_purchased_clusters), but a key minted befor
 its grant. The browser holds the founder to the purchase's phase (core/sale_term.py): active acts,
 retention reads, ended reaches nothing. A key acts for its creator (the installer for an add-on,
 key_default_view_only._creator), so every request holds its grants there to the same phase, in a
-copy: `read` in retention, an empty grant once ended (a 403 at every door, not "not registered").
+copy: `read` in retention, and once ended the grant is left out, so no door lists, reads or writes
+that cluster (api_key_permissions.refuse_a_paused_grant answers 403 `purchase_ended`).
+
+Whatever the phase, such a key may not write tenant access there (provision, revoke, policy sync):
+an organization a key provisions is stamped with the key's creator, and a creator reaches its own
+organizations' clusters outright, so one provision would lift the term for good.
 """
 
 from __future__ import annotations
@@ -27,11 +32,12 @@ logger = logging.getLogger(__name__)
 
 # The same window as the key metadata cache: a renewed or ended term reaches a key within it.
 PAID_TERM_SECONDS = 30
-PAID_TERM_HELD = "_paid_term_clusters"
+# cluster -> phase, for every granted cluster the key's creator reaches only through a purchase.
+PURCHASE_CLUSTERS = "_purchase_clusters"
 HELD = "_held_cluster_permissions"
 
 _lock = threading.Lock()
-# creator -> (read at, {cluster: phase} for the clusters it reaches only by purchase)
+# key id (or creator) -> (read at, (creator, {cluster: phase}))
 _phases: Dict[str, Tuple[float, Tuple[str, Dict[str, str]]]] = {}
 
 
@@ -58,18 +64,20 @@ async def _creator_phases(api_key: Mapping[str, Any], db: Any) -> Tuple[str, Dic
     return read
 
 
-def held_to_phase(grant: Mapping[str, Any], phase: str) -> Dict[str, Any]:
+def held_to_phase(grant: Mapping[str, Any], phase: str) -> Optional[Dict[str, Any]]:
+    """The grant as the phase leaves it: None once ended, `read` in retention."""
     if phase == ENDED:
-        return {**grant, "permissions": []}
-    held = grant.get("permissions", ["read"])
-    return {**grant, "permissions": ["read"] if held else []}
+        return None
+    if phase == READ_ONLY:
+        return {**grant, "permissions": ["read"] if grant.get("permissions", ["read"]) else []}
+    return dict(grant)
 
 
 async def narrow_to_paid_term(
     api_key: Dict[str, Any], *, db: Any = None, roles: Optional[CurrentRoleReader] = None,
 ) -> Dict[str, Any]:
-    """The key with every grant on a cluster its creator reaches only by a purchase past its paid
-    term held to that phase. Returns the key itself when nothing changes, else a copy.
+    """The key held to the phase of every purchase its creator reaches a granted cluster through.
+    Returns the key itself when no grant is on such a cluster, else a copy.
 
     important: never the cached document. A renewed term must give the grant back.
     """
@@ -85,28 +93,66 @@ async def narrow_to_paid_term(
     except Exception as exc:  # noqa: BLE001 - an unreadable term is not a verdict either way
         logger.warning("Paid term unavailable for key %s: %s", api_key.get("id"), type(exc).__name__)
         raise HTTPException(status_code=503, detail="Authentication backend unavailable") from None
-    limited = {
+    bought = {
         str(g.get("cluster_id")): phases[str(g.get("cluster_id"))]
         for g in grants
-        if phases.get(str(g.get("cluster_id"))) in (READ_ONLY, ENDED)
+        if str(g.get("cluster_id")) in phases
     }
-    if not limited:
+    if not bought:
         return api_key
     admin = await creator_is_admin(creator, roles=roles)
     if admin:
         return api_key
     if admin is None:
         logger.warning("Creator role unknown for key %s; held to the purchase's paid term", api_key.get("id"))
-    narrowed: List[Dict[str, Any]] = [
-        held_to_phase(g, limited[str(g.get("cluster_id"))]) if str(g.get("cluster_id")) in limited else g
-        for g in grants
-    ]
+    narrowed: List[Dict[str, Any]] = []
+    for grant in grants:
+        cluster_id = str(grant.get("cluster_id"))
+        if cluster_id not in bought:
+            narrowed.append(grant)
+            continue
+        held = held_to_phase(grant, bought[cluster_id])
+        if held is not None:
+            narrowed.append(held)
     return {
         **api_key,
         "cluster_permissions": narrowed,
         HELD: api_key.get(HELD) or grants,
-        PAID_TERM_HELD: limited,
+        PURCHASE_CLUSTERS: bought,
     }
+
+
+def reached_by_purchase(api_key: Mapping[str, Any], cluster_id: str) -> Optional[str]:
+    """The purchase phase through which the key's creator reaches `cluster_id`, or None."""
+    return (api_key.get(PURCHASE_CLUSTERS) or {}).get(cluster_id)
+
+
+def refuse_tenant_writes_on_a_purchase(api_key: Mapping[str, Any], cluster_id: str) -> None:
+    """403 when the key would provision, revoke or sync tenant access on a cluster its creator
+    reaches only through a purchase (see the module note)."""
+    if reached_by_purchase(api_key, cluster_id) is not None:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "cluster_reached_by_purchase",
+                "message": (
+                    f"Cluster '{cluster_id}' reaches this key's creator only through a purchase, so "
+                    "the key cannot provision or change tenant access there."
+                ),
+            },
+        )
+
+
+async def installer_phase(installer: str, cluster_id: str) -> Optional[str]:
+    """For an add-on's events: the phase through which its installer reaches `cluster_id`, or None.
+
+    Read in its own session, cached per installer for PAID_TERM_SECONDS. Raises when unreadable.
+    """
+    if not installer or not get_settings().tenant_term_enforcement_enabled:
+        return None
+    probe = {"id": f"installer:{installer.strip().lower()}", "created_by": installer}
+    _creator_name, phases = await _creator_phases(probe, None)
+    return phases.get(cluster_id)
 
 
 def forget_paid_terms() -> None:

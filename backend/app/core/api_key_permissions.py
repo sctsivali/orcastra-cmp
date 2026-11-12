@@ -46,6 +46,16 @@ def refuse_a_paused_grant(api_key: Dict[str, Any], cluster_id: str) -> None:
     live = {g.get("cluster_id") for g in api_key.get("cluster_permissions", []) if isinstance(g, dict)}
     if cluster_id in live:
         return
+    # A grant left out because the purchase its creator reaches the cluster by has ended
+    # (services/key_paid_term.py): the cluster is registered, the key's access to it is over.
+    if (api_key.get("_purchase_clusters") or {}).get(cluster_id) == "ended":
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "purchase_ended",
+                "message": f"The purchase that gave this key access to cluster '{cluster_id}' has ended",
+            },
+        )
     if any(
         isinstance(held, dict) and held.get("cluster_id") == cluster_id
         for held in api_key.get("_held_cluster_permissions", [])

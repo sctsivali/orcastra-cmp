@@ -152,6 +152,9 @@ def rule_outside_the_key_grant(api_key: Mapping[str, Any], cluster_id: str, proj
     grant = by_cluster.get(cluster_id)
     if grant is None:
         return f"rule names cluster '{cluster_id}', which this key is not granted"
+    if (api_key.get("_purchase_clusters") or {}).get(cluster_id) is not None:
+        # services/key_paid_term.py: tenant access there is not this key's to write.
+        return f"rule names cluster '{cluster_id}', which this key's creator reaches only through a purchase"
     # A missing list means `default`, an empty one means nothing, as on every proxy door. A grant
     # held to its creator's bound can be empty (services/key_party_bound.py).
     projects = grant.get("projects", ["default"])

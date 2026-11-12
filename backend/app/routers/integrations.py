@@ -72,7 +72,7 @@ from app.services.lxd.cloud_init_reach import cloud_init_changes, proxy_cloud_in
 from app.services.lxd.operation_metadata import redact_operation_response
 from app.core.tenant_visibility import used_by_in_projects
 from app.services.key_default_view_only import refuse_key_default_operation
-from app.services.key_paid_term import narrow_to_paid_term
+from app.services.key_paid_term import narrow_to_paid_term, refuse_tenant_writes_on_a_purchase
 from app.services.key_party_bound import (
     forget_creator_bound_of,
     is_party_bounded,
@@ -7823,6 +7823,10 @@ async def provision_tenant_access(
     allowed_projects = cluster_permissions[body.cluster_id].get("projects", ["default"])
     if body.project_name not in allowed_projects and "*" not in allowed_projects:
         raise HTTPException(status_code=403, detail=f"No permission for project {body.project_name}")
+    # A buyer founder's key may not write tenant access where it holds the cluster only by a
+    # purchase: the organization a provision creates is stamped with the key's creator, which
+    # would reach the cluster outright from then on (services/key_paid_term.py).
+    refuse_tenant_writes_on_a_purchase(api_key, body.cluster_id)
 
     # important: the key's grant is validated when the key is minted and can carry an id no
     # cluster is registered under; a rule written under such an id counts for nothing, so it is
@@ -8231,6 +8235,10 @@ async def revoke_tenant_access(
     allowed_projects = cluster_permissions[body.cluster_id].get("projects", ["default"])
     if body.project_name not in allowed_projects and "*" not in allowed_projects:
         raise HTTPException(status_code=403, detail=f"No permission for project {body.project_name}")
+    # A buyer founder's key may not write tenant access where it holds the cluster only by a
+    # purchase: the organization a provision creates is stamped with the key's creator, which
+    # would reach the cluster outright from then on (services/key_paid_term.py).
+    refuse_tenant_writes_on_a_purchase(api_key, body.cluster_id)
 
     def _invalidate_tenant_caches():
         try:
