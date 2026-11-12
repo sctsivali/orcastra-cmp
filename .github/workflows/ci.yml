@@ -299,6 +299,10 @@ jobs:
       - name: API proxy auth
         run: node scripts/checks/check-api-proxy-auth.mjs .
 
+      # Every page response carries its own nonce and enforces script-src; reports are taken safely.
+      - name: CSP nonce
+        run: node scripts/checks/check-csp-nonce.mjs .
+
       # invalid_grant ends the session and sends a deep link through sign-in; a timeout, 5xx or
       # 429 cools down instead.
       - name: Auth refresh contract

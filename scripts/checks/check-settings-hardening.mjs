@@ -41,16 +41,30 @@ assert.equal(tabs.isSettingsTab("general"), true);
 assert.equal(tabs.isSettingsTab("system-info"), false);
 assert.equal(tabs.isSettingsTab("unknown"), false);
 
+globalThis.crypto ??= (await import("node:crypto")).webcrypto;
+// NextResponse.next: a pass-through answer that carries the request headers it was given.
+class TestNextResponse extends Response {
+  static next({ request } = {}) {
+    const response = new TestNextResponse(null, { status: 200 });
+    response.forwardedRequestHeaders = request?.headers;
+    return response;
+  }
+}
 const middleware = load("frontend/src/middleware.ts", {
   "next-auth": { __esModule: true, default: () => ({ auth: (callback) => callback }) },
   "@/auth": { authConfig: { callbacks: {} } },
   "@/lib/request-security": load("frontend/src/lib/request-security.ts"),
-  "next/server": { NextResponse: Response },
+  "@/lib/csp": load("frontend/src/lib/csp.ts"),
+  "next/server": { NextResponse: TestNextResponse },
   "@/app/settings/settings-tabs": tabs,
   "@/lib/session-cookie-echo": { dropUnchangedSessionCookie: async (_request, response) => response, sessionSecret: () => undefined },
 }).default;
 for (const path of ["/settings", ...tabs.SETTINGS_TABS.map((tab) => `/settings/${tab}`)]) {
-  assert.equal(await middleware({ method: "GET", nextUrl: new URL(`https://qa.invalid${path}`) }), undefined);
+  // A known tab renders: the answer passes through, with this request's policy and its nonce.
+  const passed = await middleware({ method: "GET", nextUrl: new URL(`https://qa.invalid${path}`), headers: new Headers() });
+  assert.equal(passed.status, 200, path);
+  const nonce = passed.forwardedRequestHeaders.get("x-nonce");
+  assert.match(passed.headers.get("content-security-policy"), new RegExp(`script-src 'self' 'nonce-${nonce.replace(/[+/=]/g, "\\$&")}' 'strict-dynamic'`), path);
 }
 for (const path of ["/settings/not-a-tab", "/settings/integrations/unknown"]) {
   assert.equal((await middleware({ method: "GET", nextUrl: new URL(`https://qa.invalid${path}`) })).status, 404);

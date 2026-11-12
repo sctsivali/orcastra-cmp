@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import "./globals.css";
@@ -140,9 +140,12 @@ export default async function RootLayout({
 }) {
   // Read the collapse preference on the server so the sidebar width and the content
   // margin are correct in the first byte of HTML. Absent cookie means expanded.
-  // The session is read alongside so the first client render already holds the bearer and
+  // The session is read alongside so the first client render already knows its account and
   // fires its data requests without waiting on /api/auth/session (auth-session.ts).
-  const [cookieStore, initialSession] = await Promise.all([cookies(), readHydratableSession()]);
+  const [cookieStore, initialSession, requestHeaders] = await Promise.all([cookies(), readHydratableSession(), headers()]);
+  // This response's Content Security Policy nonce (middleware.ts, lib/csp.ts). Without it the
+  // browser blocks the two inline scripts below once script-src is enforced.
+  const nonce = requestHeaders.get("x-nonce") ?? undefined;
   const sidebarCollapsed = cookieStore.get("orcastra-sidebar-collapsed")?.value === "true";
   // The task panel's open state and height, for the same first-byte reason.
   const initialDock = parseDockCookie(cookieStore.get(DOCK_COOKIE)?.value);
@@ -169,9 +172,9 @@ export default async function RootLayout({
     >
       <head>
         {/* Prevent theme flash: apply theme before paint via cookie hint */}
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <script nonce={nonce} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: themeInitScript }} />
         {/* Prevent personalization flash: apply CSS custom properties before paint */}
-        <script dangerouslySetInnerHTML={{ __html: personalizationInitScript }} />
+        <script nonce={nonce} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: personalizationInitScript }} />
         {/* The favicon links come from generateMetadata above; do not write them here too. */}
       </head>
       <body

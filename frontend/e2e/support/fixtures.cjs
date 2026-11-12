@@ -114,6 +114,9 @@ async function installApiFixtures(page, role, options = {}) {
     monitoringSockets: [],
     instanceSockets: [],
     pageErrors: [],
+    // What the page's Content Security Policy blocked (enforced) or would block (report-only).
+    cspViolations: [],
+    cspReportOnly: [],
     metricsMode: "success",
     metricsCalls: [],
     detailCalls: 0,
@@ -128,6 +131,11 @@ async function installApiFixtures(page, role, options = {}) {
   const configuredSnapshotTarget = snapshotTarget(options);
 
   page.on("pageerror", (error) => state.pageErrors.push(error.message));
+  page.on("console", (message) => {
+    const text = message.text();
+    if (!/Content Security Policy/i.test(text)) return;
+    (text.includes("[Report Only]") ? state.cspReportOnly : state.cspViolations).push(text.slice(0, 300));
+  });
 
   const baseUrl = new URL(BASE_URL);
   const allowedOrigin = baseUrl.origin;
@@ -581,6 +589,9 @@ async function expectCleanHarness(state) {
     [],
   );
   expect(state.pageErrors, "uncaught browser errors").toEqual([]);
+  expect(state.cspViolations ?? [], "what the enforced Content Security Policy blocked").toEqual([]);
+  // The report-only policy is the next tightening; what it would block is listed, not failed.
+  for (const line of new Set(state.cspReportOnly ?? [])) console.log(`[csp-report-only] ${line}`);
 }
 
 async function expectNoHorizontalOverflow(page) {

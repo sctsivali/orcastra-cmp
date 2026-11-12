@@ -93,17 +93,15 @@ const nextConfig = {
             key: 'Permissions-Policy',
             value: 'camera=(), microphone=(), geolocation=()'
           },
-          // Content-Security-Policy, staged. The access token is readable by client JavaScript
-          // (auth.ts) and the console renders untrusted guest framebuffer and terminal output
-          // through spice-html5 and xterm, so any script that lands in this origin gets an
-          // operator's bearer.
+          // Content-Security-Policy baseline for every response. Page responses get their own
+          // policy from middleware (lib/csp.ts): a per-request nonce for script-src, enforced, and
+          // a wider report-only policy. The console renders untrusted guest framebuffer, terminal
+          // and file output, and a script that lands in this origin acts as the signed-in operator
+          // through the /api/v1 proxy.
           //
-          // The enforcing policy carries only directives that cannot break a working page: nothing
-          // here embeds objects, sets a <base>, is meant to be framed, or posts a form off-origin.
-          //
-          // script-src is report-only for now. Next emits inline bootstrap scripts, so enforcing it
-          // needs per-request nonces threaded through middleware and the root layout; the reports
-          // show what a strict policy would break in the xterm and SPICE consoles first.
+          // This baseline carries only directives that cannot break a working page: nothing here
+          // embeds objects, sets a <base>, is meant to be framed, or posts a form off-origin. It
+          // also covers what middleware does not match: API answers and static files.
           {
             key: 'Content-Security-Policy',
             // important: no default-src here. It is the fallback for every directive not listed,
@@ -117,30 +115,13 @@ const nextConfig = {
               "frame-ancestors 'self'",
             ].join('; '),
           },
-          {
-            key: 'Content-Security-Policy-Report-Only',
-            value: [
-              "default-src 'self'",
-              // The target policy. Everything it would break shows up as a report first.
-              "script-src 'self'",
-              "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-              "img-src 'self' data: blob: https://*.cloudinary.com",
-              "font-src 'self' data:",
-              // Same-origin API plus the WebSocket the console, terminal and event stream use.
-              "connect-src 'self' ws: wss:",
-              "object-src 'none'",
-              "base-uri 'self'",
-              "form-action 'self'",
-              "frame-ancestors 'self'",
-            ].join('; '),
-          }
         ],
       },
       {
         // important: guest file bytes. This must follow the rule above, because for one header key
         // the last match wins, and that rule would otherwise replace the backend's sandbox with
-        // the app's policy. The access token is readable by script, so a guest's HTML or SVG must
-        // never run on this origin, even if a browser ignored `attachment`.
+        // the app's policy. A script on this origin acts as the signed-in operator, so a guest's
+        // HTML or SVG must never run here, even if a browser ignored `attachment`.
         source: '/api/v1/instance-files/download',
         headers: [
           { key: 'Content-Security-Policy', value: "sandbox; default-src 'none'" },

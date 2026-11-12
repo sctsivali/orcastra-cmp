@@ -459,6 +459,7 @@ try {
       "next-auth": { __esModule: true, default: (c) => { middlewareConfig = c; return { auth: (handler) => handler }; } },
       "@/auth": { authConfig: config },
       "@/lib/request-security": { inspectRequestTarget: () => null },
+      "@/lib/csp": load("frontend/src/lib/csp.ts"),
       "@/lib/session-cookie-echo": { dropUnchangedSessionCookie: async (_q, r) => r, sessionSecret: () => "x" },
       "next/server": { NextResponse: Response },
       "@/app/settings/settings-tabs": { isSettingsTab: () => true },

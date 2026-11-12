@@ -163,6 +163,8 @@ services:
       # trusts, and this port is reachable directly, so enabling it without a real reverse
       # proxy lets a caller pick the address it is rate-limited and audited by.
       - FORWARD_CLIENT_IP_HEADERS=${FORWARD_CLIENT_IP_HEADERS:-false}
+      # enforce (default) or report-only: the switch back if the nonce script-src blocks a page.
+      - CSP_SCRIPT_POLICY=${CSP_SCRIPT_POLICY:-enforce}
       - TRUSTED_CLIENT_IP_HEADERS=${TRUSTED_CLIENT_IP_HEADERS:-cf-connecting-ip,true-client-ip,cf-connecting-ipv6,x-forwarded-for,x-real-ip}
       # Internal Docker URL for server-side API proxying
       - INTERNAL_BACKEND_URL=http://backend:4050

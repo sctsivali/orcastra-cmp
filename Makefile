@@ -344,6 +344,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-session-cookie-echo.mjs
 	@echo "$(COLOR_GREEN)Checking who the API proxy speaks for...$(COLOR_RESET)"
 	@node scripts/checks/check-api-proxy-auth.mjs
+	@echo "$(COLOR_GREEN)Checking the nonce Content Security Policy...$(COLOR_RESET)"
+	@node scripts/checks/check-csp-nonce.mjs
 	@echo "$(COLOR_GREEN)Checking what a failed token refresh means...$(COLOR_RESET)"
 	@node scripts/checks/check-auth-refresh-contract.mjs
 	@echo "$(COLOR_GREEN)Checking the terminal and console close contract...$(COLOR_RESET)"
