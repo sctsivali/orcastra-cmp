@@ -230,6 +230,7 @@ function ProgressBar({ value, color, label }: { value: number; color: string; la
       aria-valuemin={0}
       aria-valuenow={Math.round(clamped)}
       className="w-full bg-terminal-border rounded-full h-1.5 overflow-hidden"
+      data-level={level.toLowerCase()}
       role="meter"
     >
       <div

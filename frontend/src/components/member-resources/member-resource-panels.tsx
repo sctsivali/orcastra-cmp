@@ -110,7 +110,7 @@ export function MemberResourcePanels({
               ) : (
                 <CpuAllocationMeter cpu={cpu} className="h-2" />
               )}
-              <p className="flex items-center justify-center gap-1 text-sm font-medium">
+              <p className="flex items-center justify-center gap-1 text-center text-sm font-medium">
                 {instancesLost ? (
                   <span className="text-muted-foreground">allocation unknown</span>
                 ) : (
