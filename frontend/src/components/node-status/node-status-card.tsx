@@ -50,6 +50,25 @@ import { TagManager } from "@/components/tag-manager";
 import { toast } from "@/hooks/use-toast";
 import { inventoryLinks } from "@/lib/inventory-links";
 
+/**
+ * The card's three metric columns, shared with the loading skeleton so both land at one height.
+ *
+ * Sized by content, not by viewport: each column needs about 6.75rem for "vCPU Allocation (i)",
+ * "over-committed" and a whole "137.44 GiB". A wide card (1440 px and up, or the sidebar
+ * collapsed) fits three across; a narrow one (three-up at 1280 with the sidebar open, a 309 px
+ * card) wraps to two and one instead of letting a figure or its (i) run into the next column.
+ */
+export const CLUSTER_METRIC_GRID = "grid grid-cols-[repeat(auto-fit,minmax(min(100%,6.75rem),1fr))] gap-3";
+
+/** "1.65 TB / 2.2 TB" with each side kept whole, so a narrow column never strands a unit. */
+function UsedOfTotal({ used, total }: { used: string; total: string }) {
+  return (
+    <>
+      <span className="whitespace-nowrap">{used}</span> / <span className="whitespace-nowrap">{total}</span>
+    </>
+  );
+}
+
 interface NodeStatusCardProps {
   node: NodeStatus;
   onViewDetails: (node: NodeStatus) => void;
@@ -259,7 +278,7 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
           </div>
         )}
         {node.connected && node.resources && (
-          <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className={cn("mt-4", CLUSTER_METRIC_GRID)}>
             <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Cpu className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -284,7 +303,14 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
                 <span className="font-medium">Memory</span>
               </div>
               <div className="text-xs">
-                <div className="font-semibold text-foreground">{memoryFigure}</div>
+                <div className="font-semibold text-foreground">
+                  {node.resources && (
+                    <UsedOfTotal
+                      used={formatBytes(node.resources.memory_used)}
+                      total={formatBytes(node.resources.memory_total)}
+                    />
+                  )}
+                </div>
                 {memory && (
                   <UsageBar
                     percent={memory.percent}
@@ -314,7 +340,12 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
               <div className="text-xs">
                 {storage.reading ? (
                   <>
-                    <div className="font-semibold text-foreground">{storageFigure}</div>
+                    <div className="font-semibold text-foreground">
+                      <UsedOfTotal
+                        used={formatBytes(storage.reading.used)}
+                        total={formatBytes(storage.reading.total)}
+                      />
+                    </div>
                     <UsageBar
                       percent={storage.reading.percent}
                       label="Storage"

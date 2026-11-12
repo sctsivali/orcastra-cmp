@@ -19,14 +19,14 @@ import { useTableSort } from "@/hooks/use-table-sort";
 import { GRID_PAGE_SIZE, GRID_PAGE_SIZES } from "@/lib/pagination";
 import { NodeDetailModal } from "./node-detail/node-detail-modal";
 import { useLiveRecord } from "@/hooks/use-live-record";
-import { NodeStatusCard } from "./node-status/node-status-card";
+import { CLUSTER_METRIC_GRID, NodeStatusCard } from "./node-status/node-status-card";
 import {
   CLUSTER_CARDS,
   ClusterGridToolbar,
   type ClusterSortField,
 } from "./node-status/cluster-grid-toolbar";
 import { EmptyClustersIllustration } from "@/components/illustrations/scenes/onboarding";
-import { collectedAtMs } from "@/lib/utils";
+import { cn, collectedAtMs } from "@/lib/utils";
 
 const nodeId = (node: NodeStatus) => node.name;
 
@@ -72,13 +72,13 @@ function LoadingSkeleton() {
                 <Skeleton className="h-4 w-36" />
                 <Skeleton className="h-4 w-44" />
               </div>
-              <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className={cn("mt-4", CLUSTER_METRIC_GRID)}>
                 {/* vCPU, Memory and Storage each carry a meter between the figure and its caption. */}
-                {[true, true, true].map((meter, j) => (
+                {[0, 1, 2].map((j) => (
                   <div key={j} className="flex flex-col gap-1">
                     <Skeleton className="h-3.5 w-10" />
                     <Skeleton className="h-4 w-24" />
-                    {meter && <Skeleton className="h-2 w-full rounded-full" />}
+                    <Skeleton className="h-2 w-full rounded-full" />
                     <Skeleton className="h-4 w-20" />
                   </div>
                 ))}
