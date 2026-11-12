@@ -1,4 +1,4 @@
-const { installApiFixtures, expectCleanHarness } = require("./fixtures.cjs");
+const { expectCleanHarness, installApiFixtures, namesActor } = require("./fixtures.cjs");
 const { fullInstance } = require("./api-fixture-data.cjs");
 
 function serverRows(count) {
@@ -50,7 +50,7 @@ async function installInventoryHardeningFixtures(page, role, options = {}) {
     const entry = { path, method: request.method(), search: url.search };
     state.requests.push(entry);
     const baseURL = new URL(process.env.ORCASTRA_E2E_BASE_URL || "http://127.0.0.1:2025");
-    if (url.origin !== baseURL.origin || request.headers().authorization !== `Bearer e2e-${role}-access-token`) {
+    if (url.origin !== baseURL.origin || !namesActor(request, role)) {
       base.authFailures.push(entry);
       return route.fulfill({ status: 401, json: { detail: "Unexpected fixture actor or origin" } });
     }

@@ -65,6 +65,7 @@ import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { NodeLink } from "@/components/ui/node-link";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
+import { actorHeaders } from "@/lib/auth-headers";
 import { GRAPHICS_SESSION_PROTOCOL, sessionProtocolLabel } from "@/lib/session-display";
 import {
   sessionConnectionStatusDisplay,
@@ -206,7 +207,7 @@ function ActiveSessionsTab() {
   const {
     scopeKey: actorScope,
     isAuthenticated,
-    accessToken: actorAccessToken,
+    actorId,
   } = useActorQueryScope();
   const [selectedSession, setSelectedSession] = useState<SessionRecord | null>(null);
   const [selectedSessionActorScope, setSelectedSessionActorScope] = useState(actorScope);
@@ -233,8 +234,8 @@ function ActiveSessionsTab() {
   // fetchSessions it would re-run the loading fetch on every silent token rotation, flashing the
   // loader and restarting the poll. A request is only sent with the token of the actor it was
   // made for; an actor change is handled by the actorScope reset above.
-  const actorTokenRef = useRef({ scope: actorScope, token: actorAccessToken });
-  actorTokenRef.current = { scope: actorScope, token: actorAccessToken };
+  const actorRef = useRef({ scope: actorScope, actorId });
+  actorRef.current = { scope: actorScope, actorId };
 
   // Session routes survive a same-document sign-out/sign-in. Gate actor-owned state during
   // render so the next actor cannot see the previous rows while effect cleanup is pending.
@@ -310,11 +311,10 @@ function ActiveSessionsTab() {
     setError(null);
     try {
       const params = new URLSearchParams({ scope });
-      const bound = actorTokenRef.current;
+      const bound = actorRef.current;
       if (bound.scope !== requestActorScope) return;
-      const actorAccessToken = bound.token;
       const res = await fetch(`${API_URL}/api/v1/console/sessions/active?${params}`, {
-        headers: actorAccessToken ? { Authorization: `Bearer ${actorAccessToken}` } : {},
+        headers: actorHeaders(bound.actorId),
         signal: controller.signal,
       });
       if (!res.ok) throw new Error(`Failed to fetch (${res.status})`);
@@ -584,7 +584,7 @@ function SessionHistoryTab() {
   const {
     scopeKey: actorScope,
     isAuthenticated,
-    accessToken: actorAccessToken,
+    actorId,
   } = useActorQueryScope();
   const [selectedSession, setSelectedSession] = useState<SessionRecord | null>(null);
   const [selectedSessionActorScope, setSelectedSessionActorScope] = useState(actorScope);
@@ -607,8 +607,8 @@ function SessionHistoryTab() {
   activeRequestScopeRef.current = requestScopeKey;
   // Read at call time and paired with its actor, as in ActiveSessionsTab, so a silent token
   // rotation does not re-read the whole trail.
-  const actorTokenRef = useRef({ scope: actorScope, token: actorAccessToken });
-  actorTokenRef.current = { scope: actorScope, token: actorAccessToken };
+  const actorRef = useRef({ scope: actorScope, actorId });
+  actorRef.current = { scope: actorScope, actorId };
 
   // Keyed on actor and scope, as on the Active tab.
   const logsAreCurrent = logsRequestScope === requestScopeKey;
@@ -688,11 +688,10 @@ function SessionHistoryTab() {
           offset: String(offset),
           scope,
         });
-        const bound = actorTokenRef.current;
+        const bound = actorRef.current;
         if (bound.scope !== requestActorScope) return;
-        const actorAccessToken = bound.token;
         const res = await fetch(`${API_URL}/api/v1/console/sessions/audit?${params}`, {
-          headers: actorAccessToken ? { Authorization: `Bearer ${actorAccessToken}` } : {},
+          headers: actorHeaders(bound.actorId),
           signal: controller.signal,
         });
         if (!res.ok) throw new Error(`Failed to fetch (${res.status})`);

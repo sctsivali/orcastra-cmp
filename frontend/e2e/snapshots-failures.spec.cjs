@@ -146,7 +146,7 @@ test("A snapshot 401 completes auth refresh without retrying the mutation", asyn
           groups: ["role_partner"],
           roles: ["role_partner"],
         },
-        accessToken: "e2e-partner-access-token",
+        tokenStamp: "e2e-partner-token-stamp",
         expires: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
       }),
     });

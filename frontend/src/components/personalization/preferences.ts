@@ -1,4 +1,5 @@
 import { DEFAULT_PERSONALIZATION, isIllustrationPreference, type PersonalizationSettings } from "@/types/personalization";
+import { actorHeaders } from "@/lib/auth-headers";
 import { safeImageSrc } from "@/lib/branding-images";
 import { toByteUnitSystem, type ByteUnitSystem } from "@/lib/byte-units";
 
@@ -49,7 +50,7 @@ export function parseOrgVersion(value: unknown): OrgPreferencesVersion | null {
 
 async function readPreferences(
   path: string,
-  accessToken: string | undefined,
+  actorId: string | null | undefined,
   isCurrent: () => boolean,
 ): Promise<PreferenceRead<unknown>> {
   for (let attempt = 0; attempt <= 2; attempt += 1) {
@@ -59,7 +60,8 @@ async function readPreferences(
       const response = await fetch(`/api/v1/${path}`, {
         credentials: "include",
         cache: "no-store",
-        headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+        // Bound to the account the read started for: once another signs in, the proxy refuses it.
+        headers: actorHeaders(actorId),
         signal: AbortSignal.timeout(10_000),
       });
       if (!isCurrent()) return { ok: false };
@@ -76,10 +78,10 @@ async function readPreferences(
 }
 
 export async function readPersonalPreferences(
-  accessToken: string | undefined,
+  actorId: string | null | undefined,
   isCurrent: () => boolean,
 ): Promise<PreferenceRead<PersonalPreferences>> {
-  const result = await readPreferences("user-preferences", accessToken, isCurrent);
+  const result = await readPreferences("user-preferences", actorId, isCurrent);
   if (!result.ok || !isRecord(result.value)) return { ok: false };
   return {
     ok: true,
@@ -122,10 +124,10 @@ export function onPersonalWrite(scopeKey: string, onWrite: () => void): () => vo
 }
 
 export async function readOrgPreferences(
-  accessToken: string | undefined,
+  actorId: string | null | undefined,
   isCurrent: () => boolean,
 ): Promise<PreferenceRead<OrgPreferences>> {
-  const result = await readPreferences("organizations/my-preferences", accessToken, isCurrent);
+  const result = await readPreferences("organizations/my-preferences", actorId, isCurrent);
   if (!result.ok || !isRecord(result.value) || !isRecord(result.value.settings)) return { ok: false };
   const version = parseOrgVersion(result.value);
   return version
@@ -134,10 +136,10 @@ export async function readOrgPreferences(
 }
 
 export async function readOrgVersion(
-  accessToken: string | undefined,
+  actorId: string | null | undefined,
   isCurrent: () => boolean,
 ): Promise<PreferenceRead<OrgPreferencesVersion>> {
-  const result = await readPreferences("organizations/my-preferences/version", accessToken, isCurrent);
+  const result = await readPreferences("organizations/my-preferences/version", actorId, isCurrent);
   const version = result.ok ? parseOrgVersion(result.value) : null;
   return version ? { ok: true, value: version } : { ok: false };
 }

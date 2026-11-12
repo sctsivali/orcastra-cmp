@@ -6,6 +6,7 @@ const {
   expectCleanHarness,
   expectNoHorizontalOverflow,
   installApiFixtures,
+  namesActor,
 } = require("./support/fixtures.cjs");
 const { installSettingsFixtures, expectCleanSettingsHarness } = require("./support/settings-fixtures.cjs");
 
@@ -36,7 +37,6 @@ const SHOWN = { organization: { illustrations: "show" } };
  */
 async function installBranding(page, role, { organization = {} } = {}) {
   const state = { organization: { ...organization }, revision: 0, writes: [], foreignActor: [] };
-  const bearer = `Bearer e2e-${role}-access-token`;
   const version = () => `e2e-illustrations-${state.revision}`;
   const orgRow = () => ({
     organization_id: 17,
@@ -50,7 +50,7 @@ async function installBranding(page, role, { organization = {} } = {}) {
     version: version(),
   });
   const watch = (route) => {
-    if (route.request().headers().authorization !== bearer) state.foreignActor.push(route.request().url());
+    if (!namesActor(route.request(), role)) state.foreignActor.push(route.request().url());
   };
   await page.route("**/api/v1/user-preferences", (route) => {
     watch(route);

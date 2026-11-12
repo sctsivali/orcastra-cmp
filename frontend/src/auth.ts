@@ -10,6 +10,7 @@ import { readGroupsClaim, roleGroups } from "@/lib/token-claims";
 import { Role, hasMappedRole, hasMinimumRole, resolveRoles } from "@/types/rbac";
 import { forget, grantOnce, holdTombstones, upgradeSpent, type GrantOutcome, type RefreshedFields } from "@/lib/refresh-grants";
 import { REFRESH_FAILED, REFRESH_TOKEN_REVOKED, createIdpClient } from "@/lib/auth-refresh";
+import { tokenStamp } from "@/lib/token-stamp";
 
 // The custom fields this app keeps on the session, user and JWT.
 declare module "next-auth" {
@@ -22,7 +23,9 @@ declare module "next-auth" {
       groups?: string[];
       roles?: string[];
     };
-    accessToken?: string;
+    // A stamp of the access token, which changes when it rotates (lib/token-stamp.ts). The token
+    // itself stays in the cookie and is attached by the /api/v1 proxy.
+    tokenStamp?: string;
     error?: string;
   }
 
@@ -297,7 +300,9 @@ export const authConfig: NextAuthConfig = {
           groups: token.groups || [],
           roles: token.roles || [],
         },
-        accessToken: token.accessToken,
+        // important: never the access token. Everything this returns reaches page JavaScript through
+        // /api/auth/session and the layout's hydrated session.
+        tokenStamp: await tokenStamp(token.accessToken),
         error: token.error,
       };
     },

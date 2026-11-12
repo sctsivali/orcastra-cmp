@@ -1,5 +1,5 @@
 const { expect } = require("@playwright/test");
-const { expectCleanHarness, installApiFixtures } = require("./fixtures.cjs");
+const { expectCleanHarness, installApiFixtures, namesActor } = require("./fixtures.cjs");
 const { fullInstance } = require("./api-fixture-data.cjs");
 
 const baseURL = new URL(process.env.ORCASTRA_E2E_BASE_URL || "http://127.0.0.1:2025");
@@ -70,7 +70,7 @@ async function installTaskFixtures(page, role, options = {}) {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname.replace(/^\/api\/v1/, "");
-    if (url.origin !== baseURL.origin || request.headers().authorization !== `Bearer e2e-${role}-access-token`) {
+    if (url.origin !== baseURL.origin || !namesActor(request, role)) {
       state.authFailures.push({ path, method: request.method() });
       await route.abort("blockedbyclient");
       return;

@@ -490,10 +490,17 @@ const apiOutput = ts.transpileModule(api, {
   },
   fileName: apiPath,
 }).outputText;
+const authHeadersModule = { exports: {} };
+new Function("module", "exports", ts.transpileModule(
+  readFileSync(join(root, "frontend/src/lib/auth-headers.ts"), "utf8"),
+  { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } },
+).outputText)(authHeadersModule, authHeadersModule.exports);
 const apiModule = { exports: {} };
 new Function("require", "module", "exports", apiOutput)(
   (specifier) => {
     if (specifier === "@/types") return { APIError: TestAPIError };
+    // The one runtime import the transport takes: the header names it shares with the proxy.
+    if (specifier === "@/lib/auth-headers") return authHeadersModule.exports;
     throw new Error(`Unexpected runtime import in API transport: ${specifier}`);
   },
   apiModule,

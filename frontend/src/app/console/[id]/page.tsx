@@ -18,7 +18,6 @@ import { OverflowText } from "@/components/ui/overflow-text";
 import { SessionStatusBadge } from "@/components/terminal/session-status";
 import { ConsoleWorkspace } from "@/components/console/console-workspace";
 import type { ConsoleConnectionStatus, ConsoleTab, InstanceStatus } from "@/lib/console-store";
-import { getAccessToken } from "@/lib/api";
 import { isReauthenticating } from "@/lib/reauth";
 import { AgentActivityBadge } from "./components/agent-activity-badge";
 
@@ -117,7 +116,7 @@ function ConsolePage() {
         <span className="hidden shrink-0 text-sm text-muted-foreground sm:inline" translate="no">({project})</span>
         <SessionStatusBadge status={connection} />
         {/* Shows an agent driving the same desktop while it happens. */}
-        <AgentActivityBadge instanceName={instanceName} accessToken={getAccessToken()} />
+        <AgentActivityBadge instanceName={instanceName} />
       </header>
 
       <ConsoleWorkspace

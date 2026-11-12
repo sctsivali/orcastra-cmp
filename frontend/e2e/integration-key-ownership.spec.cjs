@@ -1,5 +1,5 @@
 const { test, expect } = require("@playwright/test");
-const { authenticate, capture, expectNoHorizontalOverflow } = require("./support/fixtures.cjs");
+const { authenticate, capture, expectNoHorizontalOverflow, namesActor } = require("./support/fixtures.cjs");
 const { installSettingsFixtures, expectCleanSettingsHarness } = require("./support/settings-fixtures.cjs");
 
 // Settings > Integrations against mocked API answers: which organizations a key owns, why an
@@ -93,7 +93,7 @@ async function installOwnership(page, role) {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname.replace(/^\/api\/v1/, "");
-    if (request.headers().authorization !== `Bearer e2e-${role}-access-token`) {
+    if (!namesActor(request, role)) {
       return route.fulfill({ status: 401, json: { detail: "Unexpected fixture actor" } });
     }
     if (request.method() === "GET" && path === "/integrations/api-keys") {

@@ -28,6 +28,7 @@ const preferences = load("frontend/src/components/personalization/preferences.ts
   "@/types/personalization": types,
   "@/lib/branding-images": brandingImages,
   "@/lib/byte-units": load("frontend/src/lib/byte-units.ts"),
+  "@/lib/auth-headers": load("frontend/src/lib/auth-headers.ts"),
 });
 const cache = load("frontend/src/app/settings/components/browser-cache.ts", {
   "@tanstack/react-query": frontendRequire("@tanstack/react-query"),
@@ -67,7 +68,7 @@ const originalFetch = globalThis.fetch;
 try {
   let calls = 0;
   globalThis.fetch = async () => { calls += 1; return { ok: true, json: async () => ({ ...empty, settings: {} }) }; };
-  const unset = await preferences.readOrgPreferences("synthetic-read-token", () => true);
+  const unset = await preferences.readOrgPreferences("synthetic-actor", () => true);
   assert.equal(unset.ok, true);
   assert.equal(unset.value.settings.colors.accentColor, types.DEFAULT_PERSONALIZATION.colors.accentColor);
   assert.equal(unset.value.updated_at, null);
@@ -75,7 +76,7 @@ try {
   let release;
   let current = true;
   globalThis.fetch = () => new Promise((resolveFetch) => { release = resolveFetch; });
-  const retired = preferences.readOrgPreferences("synthetic-read-token", () => current);
+  const retired = preferences.readOrgPreferences("synthetic-actor", () => current);
   current = false;
   release({ ok: true, json: async () => ({ ...empty, settings: {} }) });
   assert.deepEqual(await retired, { ok: false });

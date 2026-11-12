@@ -13,6 +13,7 @@
  */
 
 import { formatClockTime } from "@/lib/utils";
+import { authHeaders } from "@/lib/api";
 import * as React from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -39,13 +40,7 @@ type AuditRow = {
   created_at: string;
 };
 
-export function AgentActivityBadge({
-  instanceName,
-  accessToken,
-}: {
-  instanceName: string;
-  accessToken?: string | null;
-}) {
+export function AgentActivityBadge({ instanceName }: { instanceName: string }) {
   const [lastSeen, setLastSeen] = React.useState<Date | null>(null);
 
   React.useEffect(() => {
@@ -60,7 +55,7 @@ export function AgentActivityBadge({
           instance_name: instanceName,
         });
         const res = await fetch(`${API_URL}/api/v1/console/sessions/audit?${params}`, {
-          headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+          headers: authHeaders(),
         });
         if (!res.ok) return;
         // The endpoint returns a page envelope. The badge wants only the newest matching row, so
@@ -94,7 +89,7 @@ export function AgentActivityBadge({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [instanceName, accessToken]);
+  }, [instanceName]);
 
   if (!lastSeen) return null;
 

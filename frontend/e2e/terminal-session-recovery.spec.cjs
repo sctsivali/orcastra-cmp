@@ -137,7 +137,7 @@ test("a deep link whose session the IdP ended signs in again and comes back to i
     session: () => ({
       user: SESSION_USER,
       expires: new Date(Date.now() + 3_600_000).toISOString(),
-      accessToken: "e2e-admin-access-token",
+      tokenStamp: "e2e-admin-token-stamp",
       error: "RefreshTokenRevoked",
     }),
   });
@@ -157,7 +157,7 @@ test("a second automatic sign-in within a minute waits for the operator", async 
     session: () => ({
       user: SESSION_USER,
       expires: new Date(Date.now() + 3_600_000).toISOString(),
-      accessToken: "e2e-admin-access-token",
+      tokenStamp: "e2e-admin-token-stamp",
       error: "RefreshTokenRevoked",
     }),
     onSocket: (socket) => socket.onMessage(() => socket.close({ code: 4401, reason: "session_ended" })),

@@ -4,11 +4,10 @@ import type { PersonalizationSettings, ThemePreference } from "@/types/personali
 
 export const personalizationAPI = {
   /** Read-only command endpoint that fetches a CORS-restricted image through the guarded backend. */
-  proxyImage: (url: string, accessToken?: string): Promise<{ data: string }> =>
+  proxyImage: (url: string): Promise<{ data: string }> =>
     fetchAPI<{ data: string }>("/user-preferences/proxy-image", {
       method: "POST",
       body: JSON.stringify({ url }),
-      ...(accessToken ? { headers: { Authorization: `Bearer ${accessToken}` } } : {}),
     }),
 
   /**
@@ -17,11 +16,9 @@ export const personalizationAPI = {
    */
   update: (
     body: { theme?: ThemePreference | null; byteUnits?: ByteUnitSystem | null },
-    accessToken?: string,
   ): Promise<PersonalizationSettings> =>
     fetchAPI<PersonalizationSettings>("/user-preferences", {
       method: "PUT",
       body: JSON.stringify(body),
-      ...(accessToken ? { headers: { Authorization: `Bearer ${accessToken}` } } : {}),
     }),
 };

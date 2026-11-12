@@ -4,6 +4,7 @@ const {
   expectCleanHarness,
   expectNoHorizontalOverflow,
   installApiFixtures,
+  namesActor,
 } = require("./support/fixtures.cjs");
 
 const gib = 1024 ** 3;
@@ -354,7 +355,7 @@ test("tenant API denial remains enforced when the hidden edit route is called di
   await authenticate(page.context(), "tenant");
   const api = await installApiFixtures(page, "tenant", { snapshotInstancePage: true });
   await page.route("**/api/v1/instances/tenant-owned-vm/specification**", async (route) => {
-    expect(route.request().headers().authorization).toBe("Bearer e2e-tenant-access-token");
+    expect(namesActor(route.request(), "tenant")).toBe(true);
     await route.fulfill({
       status: 403,
       contentType: "application/json",
@@ -366,7 +367,8 @@ test("tenant API denial remains enforced when the hidden edit route is called di
   const response = await page.evaluate(async () => {
     const result = await fetch(
       "/api/v1/instances/tenant-owned-vm/specification?host=cluster-a&project=tenant-a",
-      { headers: { Authorization: "Bearer e2e-tenant-access-token" } },
+      // As the app sends it: the account it acts for, never a bearer (the proxy holds the token).
+      { headers: { "x-orcastra-actor": encodeURIComponent("tenant@e2e.invalid") } },
     );
     return { status: result.status, body: await result.json() };
   });

@@ -17,7 +17,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
-import { getAccessToken } from "@/lib/api";
+import { getSessionStamp } from "@/lib/api";
 import { WS_CLOSE, ticketedSocketUrl } from "@/lib/ws-url";
 import { APIError } from "@/types/api";
 import type { TaskFeedFrame } from "@/types/tasks";
@@ -256,7 +256,7 @@ function connect(): void {
     });
   }
   const startedIn = lifecycle;
-  const mintedWithToken = getAccessToken();
+  const mintedWithToken = getSessionStamp();
   mintingIn = startedIn;
   ticketedSocketUrl({ kind: "tasks" }).then(
     (url) => {
@@ -410,8 +410,8 @@ function release(): void {
 }
 
 /**
- * The session token as the panel sees it. A rotation closes the open socket so the reconnect
- * carries the new token; a new token also lifts a 1008 halt.
+ * The session's token, by its stamp, as the panel sees it. A rotation closes the open socket so
+ * the reconnect mints under the new token; a new token also lifts a 1008 halt.
  *
  * lib/api.ts holds one onTokenRefreshed slot and providers.tsx owns it, so the feed watches the
  * session directly instead of taking that slot away.
@@ -460,7 +460,7 @@ export function subscribeTaskFrames(fn: (frame: TaskFeedFrame) => void): () => v
 /** Mounts the singleton socket while `enabled`; the panel is the one caller. */
 export function useTaskFeed(enabled: boolean): TaskFeedSnapshot {
   const client = useQueryClient();
-  const { scopeKey, accessToken: token } = useActorQueryScope();
+  const { scopeKey, sessionStamp: token } = useActorQueryScope();
 
   useEffect(() => {
     if (!enabled) return;

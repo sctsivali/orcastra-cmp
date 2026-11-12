@@ -3,6 +3,7 @@ const {
   authenticate,
   expectCleanHarness,
   installApiFixtures,
+  namesActor,
 } = require("./support/fixtures.cjs");
 
 const LOCAL_FINGERPRINT = "a".repeat(64);
@@ -167,7 +168,7 @@ async function installCreateRoutes(page, {
       method,
       path,
       search: url.search,
-      authorization: request.headers().authorization ?? null,
+      namesActor: namesActor(request, "admin"),
     };
     requests.push(entry);
 
@@ -320,7 +321,7 @@ test("create inventory reads are staged by cluster and picker intent", async ({ 
   await expect(localImageRow(page)).toBeVisible();
   await expect(page.getByText("debian/bookworm", { exact: true })).toBeVisible();
 
-  expect(requests.every((entry) => entry.authorization === "Bearer e2e-admin-access-token")).toBe(true);
+  expect(requests.every((entry) => entry.namesActor), "every request names admin and carries no bearer").toBe(true);
   await expectCleanHarness(api);
 });
 

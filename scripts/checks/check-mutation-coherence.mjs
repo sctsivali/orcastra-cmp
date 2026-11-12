@@ -420,7 +420,7 @@ const RAW_FETCH_WRITE_ALLOWLIST = [
     path: "frontend/src/lib/instance-files/api.ts",
     method: "POST",
     endpointMarker: "/instance-files/preview-image",
-    markers: ["response.blob()", "getAccessToken()", "response.ok"],
+    markers: ["response.blob()", "authHeaders()", "response.ok"],
   },
 ];
 const seenRawFetchWrites = new Set();

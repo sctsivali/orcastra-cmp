@@ -34,6 +34,7 @@ function load(relativePath, dependencies = {}) {
 const sessionCookie = load("frontend/src/lib/session-cookie.ts", { "next-auth/jwt": jwt });
 const proxyAuth = load("frontend/src/lib/api-proxy-auth.ts", {
   "@/lib/session-cookie": sessionCookie,
+  "@/lib/auth-headers": load("frontend/src/lib/auth-headers.ts"),
   "@/lib/auth-refresh": load("frontend/src/lib/auth-refresh.ts"),
 });
 const { decideProxyAuth, resolveProxyAuth, applyProxyAuth, ACTOR_HEADER } = proxyAuth;
@@ -230,6 +231,37 @@ assert.deepEqual(await decide("GET", { [ACTOR_HEADER]: "anyone" }, undefined), {
   assert.equal(keyed.get("cache-control"), "public, max-age=60");
   assert.equal(keyed.get("vary"), null);
   assert.equal(keyed.get("access-control-allow-origin"), null);
+}
+
+// 10. No page code holds the access token or sends a bearer of its own: the session reaches the
+//     backend only through the proxy. Only the server-side session code may name the token.
+{
+  const { readdirSync, statSync } = await import("node:fs");
+  const SERVER_SIDE = new Set([
+    "auth.ts", "auth-session.ts", "middleware.ts",
+    "lib/api-proxy-auth.ts", "lib/session-cookie.ts", "lib/session-cookie-echo.ts",
+    "lib/auth-refresh.ts", "lib/refresh-grants.ts", "lib/token-stamp.ts",
+  ]);
+  const src = join(root, "frontend/src");
+  const files = (function walk(dir) {
+    return readdirSync(dir).flatMap((name) => {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) return walk(path);
+      return /\.(?:ts|tsx)$/.test(name) ? [path.slice(src.length + 1)] : [];
+    });
+  })(src);
+  const offenders = files
+    .filter((file) => !SERVER_SIDE.has(file) && !file.startsWith("app/api/"))
+    .filter((file) => /accessToken|["']?Authorization["']?\s*[:\]]|Bearer \$\{/.test(readFileSync(join(src, file), "utf8")));
+  assert.deepEqual(offenders, [], "page code names the access token or sets a bearer");
+  const apiSource = readFileSync(join(src, "lib/api.ts"), "utf8");
+  assert.match(apiSource, /Object\.assign\(headers, authHeaders\(\)\);/, "fetchAPI names the installed actor on every request");
+  for (const file of files) {
+    const text = readFileSync(join(src, file), "utf8");
+    if (/^["']use client["']/m.test(text)) {
+      assert.doesNotMatch(text, /@\/lib\/(?:api-proxy-auth|session-cookie)["']/, `${file}: a client module imports the server session reader`);
+    }
+  }
 }
 
 console.log("check-api-proxy-auth: ok");

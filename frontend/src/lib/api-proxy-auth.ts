@@ -9,13 +9,11 @@
  * (an integration's API key, an MCP client, a script) passes through with its own Authorization.
  */
 import type { JWT } from "next-auth/jwt";
+import { ACTOR_HEADER } from "@/lib/auth-headers";
 import { REFRESH_TOKEN_REVOKED } from "@/lib/auth-refresh";
 import { readSessionCookie } from "@/lib/session-cookie";
 
-/** The signed-in account the page was rendered for, sent URI-encoded by the API client. */
-export const ACTOR_HEADER = "x-orcastra-actor";
-/** Names why the proxy answered 401 itself, for the API client's session handling. */
-export const AUTH_SIGNAL_HEADER = "x-orcastra-auth";
+export { ACTOR_HEADER, AUTH_SIGNAL_HEADER } from "@/lib/auth-headers";
 
 export type ProxyAuthRefusal = {
   kind: "refuse";

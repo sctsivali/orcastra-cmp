@@ -27,6 +27,19 @@ const AUTH_SECRET =
   process.env.NEXTAUTH_SECRET ||
   "orcastra-e2e-only-secret-32-characters-minimum";
 const SESSION_COOKIE = "authjs.session-token";
+// The browser never holds the access token: every request names its account here, and the
+// /api/v1 proxy attaches the token from the session cookie (src/lib/api-proxy-auth.ts).
+const ACTOR_HEADER = "x-orcastra-actor";
+
+function actorOf(role) {
+  return encodeURIComponent(`${role}@e2e.invalid`);
+}
+
+/** True when a browser request names the role's account and carries no credential of its own. */
+function namesActor(request, role) {
+  const headers = request.headers();
+  return headers[ACTOR_HEADER] === actorOf(role) && headers.authorization === undefined;
+}
 
 // Node 18 does not expose WebCrypto globally, while Auth.js/Jose expects the
 // browser-compatible API when generating the synthetic E2E session token.
@@ -216,13 +229,16 @@ async function installApiFixtures(page, role, options = {}) {
       return;
     }
 
-    const expectedBearer = `Bearer e2e-${role}-access-token`;
-    if (request.headers().authorization !== expectedBearer) {
-      state.authFailures.push({ ...entry, authorization: request.headers().authorization || null });
+    if (!namesActor(request, role)) {
+      state.authFailures.push({
+        ...entry,
+        actor: request.headers()[ACTOR_HEADER] || null,
+        authorization: request.headers().authorization || null,
+      });
       await route.fulfill({
         status: 401,
         contentType: "application/json",
-        body: JSON.stringify({ detail: "Missing role fixture bearer" }),
+        body: JSON.stringify({ detail: "Missing role fixture actor" }),
       });
       return;
     }
@@ -606,7 +622,9 @@ async function expectServerRedirectHome(page, path) {
 }
 
 module.exports = {
+  ACTOR_HEADER,
   BASE_URL,
+  actorOf,
   authenticate,
   expectServerRedirectHome,
   capture,
@@ -614,4 +632,5 @@ module.exports = {
   expectCleanHarness,
   expectNoHorizontalOverflow,
   installApiFixtures,
+  namesActor,
 };

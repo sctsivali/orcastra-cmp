@@ -26,7 +26,7 @@ assert.match(
   "the personal write takes only a theme and byte units",
 );
 const mutations = code(read("components/personalization/use-personalization-mutations.ts"));
-assert.match(mutations, /personalizationAPI\.update\(body, accessToken\)/, "the provider writes through one call");
+assert.match(mutations, /personalizationAPI\.update\(body\)/, "the provider writes through one call");
 const personalWrites = [...mutations.matchAll(/saveToAPI\(\{([^}]*)\}/g)].map((match) => match[1].trim());
 assert.deepEqual(personalWrites.sort(), ["byteUnits: units", "theme"], "the provider writes only the theme or the byte units");
 for (const gone of ["updateLogo", "updateColors", "updateBranding", "updateBackground"]) {

@@ -1,5 +1,5 @@
 const { expect } = require("@playwright/test");
-const { expectCleanHarness, installApiFixtures } = require("./fixtures.cjs");
+const { expectCleanHarness, installApiFixtures, namesActor } = require("./fixtures.cjs");
 
 const COMMON_KEYS = ["ipv4.address", "ipv6.address", "ipv4.nat", "ipv6.nat", "ipv4.dhcp", "ipv6.dhcp",
   "ipv4.dhcp.ranges", "ipv6.dhcp.stateful", "dns.domain", "security.acls"];
@@ -24,7 +24,7 @@ async function installNetworkFixtures(page, role, options = {}) {
     const path = url.pathname.replace(/^\/api\/v1/, "");
     const owned = ["/nodes/names", "/projects", "/projects/cluster-a", "/networks", "/network-acls", "/networks/creation/capabilities"];
     if (!owned.includes(path)) return route.fallback();
-    expect(request.headers().authorization).toBe(`Bearer e2e-${role}-access-token`);
+    expect(namesActor(request, role), `${request.url()} names ${role} and carries no bearer`).toBe(true);
     expect(url.origin).toBe(new URL(process.env.ORCASTRA_E2E_BASE_URL || "http://127.0.0.1:2025").origin);
     const method = request.method();
     const send = (body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });

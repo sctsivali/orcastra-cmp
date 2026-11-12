@@ -1,10 +1,12 @@
 "use client";
 
 /**
- * Session provider that keeps the API client's bearer token in step with the next-auth session.
+ * Session provider that keeps the API client's session context in step with the next-auth session.
  *
+ * The access token stays in the session cookie, where the /api/v1 proxy reads it. The client
+ * installs the session's stamp (it changes when the token rotates) and the account it acts for.
  * The session is polled every 4 minutes, a 401 asks for a session refresh instead of
- * redirecting, and children render only once the token is installed. A session the IdP ended
+ * redirecting, and children render only once the session is installed. A session the IdP ended
  * signs in again on its own in a tab that never worked (ex; a deep link opened in a new tab),
  * and behind a Sign In Again banner in one that did.
  */
@@ -14,14 +16,14 @@ import type { Session } from "next-auth";
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { getActorQueryScope } from "@/hooks/use-query-scope";
 import {
-  getAccessToken,
+  getSessionStamp,
   isAuthActorSynchronized,
   isAuthContextSynchronized,
   onAuthFailure,
   onAuthRecovered,
   onForceSessionRefresh,
   onSessionRefreshNeeded,
-  setAccessToken,
+  setSessionAuth,
 } from "@/lib/api";
 import { REFRESH_FAILED, REFRESH_TOKEN_REVOKED } from "@/lib/auth-refresh";
 import { noteSessionWorked, reauthenticate } from "@/lib/reauth";
@@ -31,11 +33,11 @@ import { SOCKET_MESSAGES } from "@/lib/ws-close";
 const SESSION_REFRESH_INTERVAL_S = 4 * 60;
 
 /**
- * Installs the session's access token in the API client. Must render inside SessionProvider.
+ * Installs the session's stamp and actor in the API client. Must render inside SessionProvider.
  *
- * Children wait until the session is resolved and the token is set, so React Query never sends
- * a request without the bearer. A failed refresh keeps the stale token behind a sign-in banner
- * and never redirects, which would loop while the IdP is down.
+ * Children wait until the session is resolved and installed, so React Query never sends a request
+ * that names no actor. A failed refresh keeps the stale session behind a sign-in banner and never
+ * redirects, which would loop while the IdP is down.
  */
 function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: boolean }) {
   const { data: session, status, update: updateSession } = useSession();
@@ -49,14 +51,15 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
   const retryCountRef = useRef(0);
   const wasAuthenticatedRef = useRef(false);
   const signOutConfirmedRef = useRef(false);
-  const sessionToken = session?.accessToken ?? null;
+  const sessionToken = session?.tokenStamp ?? null;
   const actorScope = sessionToken ? getActorQueryScope(session) : null;
+  const actorId = sessionToken ? session?.user?.id ?? null : null;
 
-  const synchronizeAuth = useCallback((token: string | null, scope: string | null) => {
-    // Install the module-global bearer before recording this context as ready. An actor change
+  const synchronizeAuth = useCallback((token: string | null, scope: string | null, actor: string | null) => {
+    // Install the module-global session before recording this context as ready. An actor change
     // keeps descendants withheld until the following render; a silent rotation for the same
-    // actor leaves their forms and sockets mounted while this effect replaces the bearer.
-    setAccessToken(token, scope);
+    // actor leaves their forms and sockets mounted while this effect replaces the stamp.
+    setSessionAuth(token, scope, actor);
     setSynchronizedAuth((current) =>
       current?.token === token && current.actorScope === scope
         ? current
@@ -78,14 +81,14 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
     // A token for the same actor is installed here, before the socket mints again; another
     // actor goes through the effect below, which remounts the page.
     onForceSessionRefresh(async () => {
-      const before = getAccessToken();
+      const before = getSessionStamp();
       const next = await updateSession({ forceRefresh: true }).catch(() => null);
       if (!next) return "unavailable";
       if (next.error === REFRESH_TOKEN_REVOKED) return "revoked";
-      if (next.error === REFRESH_FAILED || !next.accessToken) return "unavailable";
-      if (next.accessToken === before) return "unchanged";
+      if (next.error === REFRESH_FAILED || !next.tokenStamp) return "unavailable";
+      if (next.tokenStamp === before) return "unchanged";
       const scope = getActorQueryScope(next);
-      if (isAuthActorSynchronized(scope)) setAccessToken(next.accessToken, scope);
+      if (isAuthActorSynchronized(scope)) setSessionAuth(next.tokenStamp, scope, next.user?.id ?? null);
       return "refreshed";
     });
   }, [updateSession]);
@@ -101,7 +104,7 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
   useEffect(() => {
     let cancelled = false;
 
-    if (status === "authenticated" && session?.accessToken) {
+    if (status === "authenticated" && session?.tokenStamp) {
       // The IdP refused the refresh token: this session is over. A tab that never worked (a deep
       // link in a new tab) has nothing to lose and signs in again at once, which is silent while
       // the IdP session lives; reauthenticate holds a second automatic try within a minute back.
@@ -114,7 +117,7 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
         }
         console.warn("[Auth] the identity provider ended this session; offering to sign in again");
         setSessionEnd("ended");
-        synchronizeAuth(session.accessToken, actorScope); // stale, so the page keeps its identity
+        synchronizeAuth(session.tokenStamp, actorScope, actorId); // stale, so the page keeps its identity
         return;
       }
 
@@ -126,7 +129,7 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
         // token behind the same banner api.ts raises on a 401.
         console.warn("[Auth] Token refresh failed, using stale token");
         setAuthError(true);
-        synchronizeAuth(session.accessToken, actorScope); // stale but non-null
+        synchronizeAuth(session.tokenStamp, actorScope, actorId); // stale but non-null
         return;
       }
 
@@ -139,7 +142,7 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
       setAuthError(false);
       setSessionEnd(null);
       noteSessionWorked();
-      synchronizeAuth(session.accessToken, actorScope);
+      synchronizeAuth(session.tokenStamp, actorScope, actorId);
     } else if (status === "unauthenticated") {
       // important: next-auth's fetchData() returns null on any failure, including a transient
       // network error, and SessionProvider commits that null. _getSession then short-circuits
@@ -150,20 +153,20 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
         void (async () => {
           const confirmed = await updateSession().catch(() => null);
           if (!cancelled && !confirmed) {
-            synchronizeAuth(null, null);
+            synchronizeAuth(null, null, null);
           }
         })();
         return () => {
           cancelled = true;
         };
       }
-      synchronizeAuth(null, null); // resolved, no token needed
+      synchronizeAuth(null, null, null); // resolved, no session to install
     }
 
     return () => {
       cancelled = true;
     };
-  }, [actorScope, session, status, synchronizeAuth, updateSession]);
+  }, [actorId, actorScope, session, status, synchronizeAuth, updateSession]);
 
   const retainedSessionIsLoading = status === "loading" && sessionToken !== null;
   const authenticatedContextReady =

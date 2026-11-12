@@ -176,8 +176,8 @@ const checks = [
       ],
       [/\{connectionStatus\.label\}/, "session status must render its display label"],
       [
-        /accessToken: actorAccessToken,[\s\S]{0,80}= useActorQueryScope\(\)/,
-        "session tabs must bind requests to the authenticated actor's token",
+        /actorId,[\s\S]{0,80}= useActorQueryScope\(\)[\s\S]*headers: actorHeaders\(bound\.actorId\)/,
+        "session tabs must bind requests to the authenticated actor",
       ],
       [
         /const currentSessions = sessionsAreCurrent \? sessions : \[\]/,
@@ -192,12 +192,12 @@ const checks = [
         "session reads must support cancellation",
       ],
       [
-        /Authorization: `Bearer \$\{actorAccessToken\}`/,
-        "session reads must not use a lagging module-global token during actor transitions",
+        /headers: actorHeaders\(bound\.actorId\)/,
+        "session reads must not name a lagging module-global actor during actor transitions",
       ],
       [
-        /if \(bound\.scope !== requestActorScope\) return;\s*const actorAccessToken = bound\.token;/,
-        "a session read must only carry the token of the actor it was made for",
+        /if \(bound\.scope !== requestActorScope\) return;\s*const res = await fetch\(/,
+        "a session read must only name the actor it was made for",
       ],
       [
         /activeActorScopeRef\.current !== requestActorScope/,

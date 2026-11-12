@@ -11,7 +11,7 @@ type ScopedSessionUser = {
 type ScopedSession = {
   user?: ScopedSessionUser;
   expires?: string;
-  accessToken?: string;
+  tokenStamp?: string;
 } | null | undefined;
 
 /**
@@ -33,7 +33,10 @@ export function useActorQueryScope() {
 
   return {
     scopeKey: getActorQueryScope(session),
-    accessToken: session?.accessToken ?? null,
+    // Changes when the access token rotates; the token itself never reaches the page.
+    sessionStamp: session?.tokenStamp ?? null,
+    // The account a request names in X-Orcastra-Actor (lib/api.ts actorHeaders).
+    actorId: session?.tokenStamp ? session.user?.id ?? null : null,
     // A silent session refresh temporarily reports loading while retaining the current session.
     // Keep active reads mounted in that state, but never start them before a session exists.
     isAuthenticated: Boolean(session) && status !== "unauthenticated",

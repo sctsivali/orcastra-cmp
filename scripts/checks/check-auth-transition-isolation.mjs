@@ -90,12 +90,16 @@ const fetchStub = (url, options) => {
 
 const api = compileCommonJs(
   "frontend/src/lib/api.ts",
-  { "@/types": { APIError: TestAPIError } },
+  { "@/types": { APIError: TestAPIError }, "@/lib/auth-headers": compileCommonJs("frontend/src/lib/auth-headers.ts", {}) },
   { fetch: fetchStub, window: {} },
 );
+// The browser never holds the access token. Each request names its actor, and the proxy refuses
+// one whose actor is no longer the cookie's (lib/api-proxy-auth.ts).
+const ACTOR = "x-orcastra-actor";
+const actorOf = (call) => decodeURIComponent(call.options.headers?.[ACTOR] ?? "");
 
 // A and B ask for the same endpoint while A is still in flight. B must issue its own request,
-// carry B's bearer, and be able to complete before A.
+// name B as its actor, and be able to complete before A.
 const actorARead = deferred();
 const actorBRead = deferred();
 let readNumber = 0;
@@ -104,16 +108,16 @@ fetchImplementation = () => {
   return readNumber === 1 ? actorARead.promise : actorBRead.promise;
 };
 
-api.setAccessToken("test-token-a", "actor-a");
+api.setSessionAuth("stamp-a", "actor-a", "actor-a");
 const aRead = api.fetchAPI("/auth-race");
-assert.equal(api.isAuthContextSynchronized("test-token-b", "actor-b"), false);
-api.setAccessToken("test-token-b", "actor-b");
-assert.equal(api.isAuthContextSynchronized("test-token-b", "actor-b"), true);
+assert.equal(api.isAuthContextSynchronized("stamp-b", "actor-b"), false);
+api.setSessionAuth("stamp-b", "actor-b", "actor-b");
+assert.equal(api.isAuthContextSynchronized("stamp-b", "actor-b"), true);
 const bRead = api.fetchAPI("/auth-race");
 
 assert.equal(calls.length, 2, "B joined A's endpoint-only in-flight GET");
-assert.equal(calls[0].options.headers.Authorization, "Bearer test-token-a");
-assert.equal(calls[1].options.headers.Authorization, "Bearer test-token-b");
+assert.equal(actorOf(calls[0]), "actor-a");
+assert.equal(actorOf(calls[1]), "actor-b");
 
 actorBRead.resolve(response(200, { actor: "b" }));
 assert.deepEqual(await bRead, { actor: "b" });
@@ -152,10 +156,10 @@ preWriteRead.resolve(response(200, { before: true }));
 assert.deepEqual(await stalePoll, { before: true });
 
 // A pending A mutation that gets a 401 after a direct A -> B refresh must not replay its body
-// with B's bearer. One network call is the invariant.
-api.setAccessToken("test-token-a2", "actor-a");
+// as B. One network call is the invariant.
+api.setSessionAuth("stamp-a2", "actor-a", "actor-a");
 api.onSessionRefreshNeeded(async () => {
-  api.setAccessToken("test-token-b2", "actor-b");
+  api.setSessionAuth("stamp-b2", "actor-b", "actor-b");
 });
 fetchImplementation = async () => response(401, { detail: "expired" });
 const beforeCrossActorMutation = calls.length;
@@ -166,13 +170,13 @@ await assert.rejects(
 assert.equal(
   calls.length,
   beforeCrossActorMutation + 1,
-  "A mutation retried under B's bearer",
+  "A mutation retried as B",
 );
 
 // The normal recovery path is retained: a same-actor silent token rotation retries once.
-api.setAccessToken("test-token-a3-old", "actor-a");
+api.setSessionAuth("stamp-a3-old", "actor-a", "actor-a");
 api.onSessionRefreshNeeded(async () => {
-  api.setAccessToken("test-token-a3-new", "actor-a");
+  api.setSessionAuth("stamp-a3-new", "actor-a", "actor-a");
 });
 let sameActorMutationAttempt = 0;
 fetchImplementation = async () => {
@@ -187,8 +191,8 @@ assert.deepEqual(
   { recovered: true },
 );
 assert.equal(calls.length, beforeSameActorMutation + 2);
-assert.equal(calls.at(-2).options.headers.Authorization, "Bearer test-token-a3-old");
-assert.equal(calls.at(-1).options.headers.Authorization, "Bearer test-token-a3-new");
+assert.equal(actorOf(calls.at(-2)), "actor-a");
+assert.equal(actorOf(calls.at(-1)), "actor-a");
 
 // A debounced personalization callback captures both actor label and monotonic generation.
 // It must dispatch nothing after A -> B, including the ABA case where the label becomes A again.
@@ -204,46 +208,46 @@ const { personalizationAPI } = compileCommonJs(
 );
 fetchImplementation = async () => response(200, { saved: true });
 
-api.setAccessToken("test-token-pref-a", "actor-pref-a");
+api.setSessionAuth("stamp-pref-a", "actor-pref-a", "actor-pref-a");
 const stalePreferenceFence = actorMutationFence.captureActorMutationFence("actor-pref-a");
-api.setAccessToken("test-token-pref-b", "actor-pref-b");
+api.setSessionAuth("stamp-pref-b", "actor-pref-b", "actor-pref-b");
 const beforeRetiredPreference = calls.length;
 assert.deepEqual(
   await actorMutationFence.dispatchActorMutation(
     stalePreferenceFence,
-    () => personalizationAPI.update({ theme: "light" }, "test-token-pref-a"),
+    () => personalizationAPI.update({ theme: "light" }),
   ),
   { retired: true },
 );
-assert.equal(calls.length, beforeRetiredPreference, "A's delayed preference save used B's bearer");
+assert.equal(calls.length, beforeRetiredPreference, "A's delayed preference save went out as B");
 
-api.setAccessToken("test-token-pref-a2", "actor-pref-a");
+api.setSessionAuth("stamp-pref-a2", "actor-pref-a", "actor-pref-a");
 const abaPreferenceFence = actorMutationFence.captureActorMutationFence("actor-pref-a");
-api.setAccessToken("test-token-pref-b2", "actor-pref-b");
-api.setAccessToken("test-token-pref-a3", "actor-pref-a");
+api.setSessionAuth("stamp-pref-b2", "actor-pref-b", "actor-pref-b");
+api.setSessionAuth("stamp-pref-a3", "actor-pref-a", "actor-pref-a");
 const beforeAbaPreference = calls.length;
 assert.deepEqual(
   await actorMutationFence.dispatchActorMutation(
     abaPreferenceFence,
-    () => personalizationAPI.update({ theme: null }, "test-token-pref-a2"),
+    () => personalizationAPI.update({ theme: null }),
   ),
   { retired: true },
 );
 assert.equal(calls.length, beforeAbaPreference, "an A -> B -> A theme clear was revived");
 
 const currentPreferenceFence = actorMutationFence.captureActorMutationFence("actor-pref-a");
-api.setAccessToken("test-token-pref-a4", "actor-pref-a");
+api.setSessionAuth("stamp-pref-a4", "actor-pref-a", "actor-pref-a");
 const beforeCurrentPreference = calls.length;
 const currentPreference = await actorMutationFence.dispatchActorMutation(
   currentPreferenceFence,
-  () => personalizationAPI.update({ theme: "dark" }, "test-token-pref-a3"),
+  () => personalizationAPI.update({ theme: "dark" }),
 );
 assert.equal(currentPreference.retired, false, "same-actor token rotation retired a valid save");
 assert.equal(calls.length, beforeCurrentPreference + 1);
-assert.equal(calls.at(-1).options.headers.Authorization, "Bearer test-token-pref-a4");
+assert.equal(actorOf(calls.at(-1)), "actor-pref-a");
 
 // A socket opens with a single-use ticket minted over the authenticated fetch, so it carries the
-// installed actor's session and never the bearer itself. Once B is installed, a newly mounted
+// installed actor's session and never a credential of its own. Once B is installed, a newly mounted
 // stream must be minted under B and its URL must hold no token at all.
 const wsTicketApi = compileCommonJs(
   "frontend/src/lib/ws-ticket-api.ts",
@@ -260,27 +264,27 @@ const wsUrls = compileCommonJs(
   { fetch: fetchStub, window: { location: { hostname: "localhost", protocol: "http:" } } },
 );
 fetchImplementation = async ({ options }) => {
-  const bearer = options.headers.Authorization.replace(/^Bearer /, "");
-  return response(201, { ticket: `ticket-of-${bearer.slice(-1)}`, tickets: null, expires_in: 30 });
+  const actor = actorOf({ options });
+  return response(201, { ticket: `ticket-of-${actor.slice(-1)}`, tickets: null, expires_in: 30 });
 };
-api.setAccessToken("test-token-ws-a", "actor-a");
+api.setSessionAuth("stamp-ws-a", "actor-a", "actor-a");
 const aWs = await wsUrls.ticketedSocketUrl({ kind: "events", host: "node-1" });
 const aMint = calls.at(-1);
-api.setAccessToken("test-token-ws-b", "actor-b");
+api.setSessionAuth("stamp-ws-b", "actor-b", "actor-b");
 const bWs = await wsUrls.ticketedSocketUrl({ kind: "events", host: "node-1" });
 const bMint = calls.at(-1);
 assert.equal(aMint.url, "/api/v1/ws-tickets");
 assert.equal(aMint.options.method, "POST");
 assert.deepEqual(JSON.parse(aMint.options.body), { kind: "events", host: "node-1" });
-assert.equal(bMint.options.headers.Authorization, "Bearer test-token-ws-b");
+assert.equal(actorOf(bMint), "actor-b");
 assert.match(aWs, /\/api\/v1\/events\/ws\?host=node-1&ticket=ticket-of-a$/);
 assert.match(bWs, /&ticket=ticket-of-b$/);
-assert.doesNotMatch(aWs + bWs, /token=|test-token-ws/);
+assert.doesNotMatch(aWs + bWs, /token=|stamp-|actor-/);
 
 // Providers listens to the same actor boundary. Model its exact replacement operation with a
 // real QueryClient: same-actor token rotation keeps cache, while A -> B retires and clears it.
 const { QueryClient } = requireFromFrontend("@tanstack/react-query");
-api.setAccessToken("test-token-cache-a", "actor-cache-a");
+api.setSessionAuth("stamp-cache-a", "actor-cache-a", "actor-cache-a");
 let cacheClient = new QueryClient();
 let retiredClient = null;
 let actorCacheResets = 0;
@@ -291,7 +295,7 @@ const stopWatchingActor = api.onAuthActorChanged(() => {
   actorCacheResets += 1;
 });
 cacheClient.setQueryData(["unscoped-sensitive-body"], { actor: "a" });
-api.setAccessToken("test-token-cache-a-rotated", "actor-cache-a");
+api.setSessionAuth("stamp-cache-a-rotated", "actor-cache-a", "actor-cache-a");
 assert.equal(actorCacheResets, 0, "same-actor token rotation cleared the QueryClient");
 assert.equal(
   api.isAuthActorSynchronized("actor-cache-a"),
@@ -299,7 +303,7 @@ assert.equal(
   "same-actor token rotation crossed the render gate",
 );
 assert.deepEqual(cacheClient.getQueryData(["unscoped-sensitive-body"]), { actor: "a" });
-api.setAccessToken("test-token-cache-b", "actor-cache-b");
+api.setSessionAuth("stamp-cache-b", "actor-cache-b", "actor-cache-b");
 assert.equal(actorCacheResets, 1, "A -> B did not replace the QueryClient");
 assert.equal(cacheClient.getQueryData(["unscoped-sensitive-body"]), undefined);
 assert.equal(retiredClient.getQueryData(["unscoped-sensitive-body"]), undefined);
@@ -465,29 +469,26 @@ const authSessionImporters = sourceFiles(join(root, "frontend/src"))
   .map((path) => path.slice(join(root, "frontend/src").length + 1));
 const hydrateReader = authSession.slice(authSession.indexOf("export async function readHydratableSession"));
 
-// The masked token round trip against the real module. Masking keeps a bearer next to echoed
-// attacker text in a compressed document from leaking through its length (BREACH).
-// The frontend runs on Node 24 and in browsers, both with a global WebCrypto; the host's Node 18
-// only exposes it as a module.
+// The browser learns that the token rotated from a stamp of it (lib/token-stamp.ts), never the
+// token. The real module, against the host's WebCrypto: the frontend runs on Node 24 and in
+// browsers, both with a global one; the host's Node 18 only exposes it as a module.
 globalThis.crypto ??= (await import("node:crypto")).webcrypto;
-const hydratedSession = compileCommonJs("frontend/src/lib/hydrated-session.ts", {});
+const { tokenStamp } = compileCommonJs("frontend/src/lib/token-stamp.ts", {});
 {
   const token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJxYS1hZG1pbiJ9.c2lnbmF0dXJl-_x";
-  const first = hydratedSession.maskToken(token);
-  const second = hydratedSession.maskToken(token);
-  assert.notEqual(first, second, "two masks of one token must differ");
-  assert.ok(!first.includes(token) && !first.includes("eyJ"), "a masked token must not carry the token");
-  assert.equal(hydratedSession.unmaskToken(first), token);
-  assert.equal(hydratedSession.unmaskToken(second), token);
-  for (const bad of ["", "abc", "a.b.c", "!!.??", "AA.AAAA"]) {
-    assert.equal(hydratedSession.unmaskToken(bad), undefined, `malformed mask accepted: ${bad}`);
-  }
-  const session = hydratedSession.unmaskSession({ expires: "x", user: { id: "u" }, maskedAccessToken: first });
-  assert.equal(session.accessToken, token);
-  assert.equal("maskedAccessToken" in session, false);
-  assert.equal(hydratedSession.unmaskSession(undefined), undefined);
-  assert.equal(hydratedSession.unmaskSession({ expires: "x", user: { id: "u" }, maskedAccessToken: "bad" }), undefined);
+  const stamp = await tokenStamp(token);
+  assert.match(stamp, /^[0-9a-f]{24}$/);
+  assert.equal(await tokenStamp(token), stamp, "one token, one stamp");
+  assert.notEqual(await tokenStamp(`${token}2`), stamp, "a rotated token gets another stamp");
+  assert.ok(!token.includes(stamp) && !stamp.includes("eyJ"), "a stamp carries nothing of the token");
+  assert.equal(await tokenStamp(undefined), undefined);
+  assert.equal(await tokenStamp(""), undefined);
 }
+const authConfigSource = readFileSync(join(root, "frontend/src/auth.ts"), "utf8");
+const sessionCallback = authConfigSource.slice(
+  authConfigSource.indexOf("async session({ session, token })"),
+  authConfigSource.indexOf("authorized({ auth, request })"),
+);
 
 // Every Cache-Control rule next.config.js declares, evaluated rather than pattern-matched: a
 // hydrated document must keep Next's own private, no-store, which any configured rule replaces.
@@ -508,16 +509,23 @@ const structuralChecks = [
   ],
   [
     !/return null/.test(hydrateReader) &&
-      /maskedAccessToken: maskToken\(session\.accessToken\)/.test(hydrateReader) &&
-      !/accessToken: session\.accessToken/.test(hydrateReader) &&
+      /tokenStamp: session\.tokenStamp/.test(hydrateReader) &&
+      !/accessToken/.test(hydrateReader) &&
       !/\.\.\.session\b/.test(hydrateReader),
-    "readHydratableSession can return null, an unmasked token, or more than its projection",
+    "readHydratableSession can return null, the access token, or more than its projection",
   ],
   [
-    /const session = React\.useMemo\(\(\) => unmaskSession\(initialSession\), \[initialSession\]\)/.test(providers) &&
+    sessionCallback.length > 0 &&
+      /tokenStamp: await tokenStamp\(token\.accessToken\)/.test(sessionCallback) &&
+      !/accessToken:/.test(sessionCallback) &&
+      !/refreshToken/.test(sessionCallback),
+    "the session callback hands the browser the access or refresh token instead of the stamp",
+  ],
+  [
+    /const session = initialSession;/.test(providers) &&
       /<AuthProvider session=\{session\}>/.test(providers) &&
       /<Providers [^>]*initialSession=\{initialSession\}/.test(rootLayout),
-    "the layout's masked session is not unmasked in memory before SessionProvider",
+    "the layout's session does not reach SessionProvider as it was read",
   ],
   [
     JSON.stringify(authSessionImporters) === JSON.stringify(["app/layout.tsx"]) &&
@@ -529,7 +537,7 @@ const structuralChecks = [
       /<TokenSync hydrated=\{session !== undefined\}>/.test(authProvider) &&
       /if \(!hydrated \|\| alignedRef\.current \|\| !authenticatedContextReady\) return;/.test(authProvider) &&
       /__NEXTAUTH\._getSession\(\{ event: "storage" \}\)/.test(authProvider),
-    "a hydrated session is not refreshed once in the background after the bearer is installed",
+    "a hydrated session is not refreshed once in the background after the session is installed",
   ],
   [
     pageCacheRules.length === 0,
@@ -542,7 +550,7 @@ const structuralChecks = [
   ],
   [
     /getActorQueryScope\(session\)/.test(authProvider) &&
-      /setAccessToken\(token, scope\)/.test(authProvider) &&
+      /setSessionAuth\(token, scope, actor\)/.test(authProvider) &&
       /isAuthActorSynchronized\(actorScope\)/.test(authProvider),
     "TokenSync does not install and verify the complete actor auth context",
   ],
@@ -556,7 +564,7 @@ const structuralChecks = [
   [
     /if \(!cancelled && !confirmed\)/.test(authProvider) &&
       /cancelled = true/.test(authProvider),
-    "a stale sign-out confirmation can clear a newer actor's bearer",
+    "a stale sign-out confirmation can clear a newer actor's session",
   ],
   [
     // The write epoch keeps a post-write read from joining a GET that predates the write
@@ -568,7 +576,7 @@ const structuralChecks = [
   [
     /_authActorGeneration !== requestActorGeneration/.test(apiSource) &&
       /same actor's potentially refreshed token/.test(apiSource),
-    "401 recovery can replay a previous actor's request with the current bearer",
+    "401 recovery can replay a previous actor's request as the current actor",
   ],
   [
     /onAuthActorChanged\(\(\) =>/.test(providers) &&

@@ -2,6 +2,7 @@
  * Client for the Orcastra backend API.
  */
 
+import { actorHeaders } from "@/lib/auth-headers";
 import type { ByteUnitSystem } from "@/lib/byte-units";
 import {
   IPAMListResponse,
@@ -103,12 +104,17 @@ const API_BASE_URL = "";
 export const API_URL = API_PREFIX;
 
 /**
- * Token store for Bearer auth.
- * Components call setAccessToken() after session load;
- * fetchAPI() automatically attaches it to all backend requests.
+ * The session the API client acts for.
+ *
+ * important: the access token never reaches page JavaScript. The /api/v1 proxy attaches it from the
+ * session cookie (lib/api-proxy-auth.ts). The client keeps a non-secret stamp of it, which changes
+ * when the token rotates, and the account it acts for, which every request names in
+ * X-Orcastra-Actor so the proxy refuses it once another account has signed in on this browser.
+ * TokenSync (components/auth-provider.tsx) installs both after the session loads.
  */
-let _accessToken: string | null = null;
+let _sessionStamp: string | null = null;
 let _authActorScope: string | null = null;
+let _authActorId: string | null = null;
 // The account's byte units, sent as X-Byte-Units so the size text the server writes into a
 // refusal or a check follows them. PersonalizationProvider sets it.
 // A type-only import above: this transport takes no runtime dependency (check-instance-create-orchestration).
@@ -150,13 +156,15 @@ export function onAuthActorChanged(fn: () => void): () => void {
   };
 }
 
-export function setAccessToken(
-  token: string | null | undefined,
+export function setSessionAuth(
+  stamp: string | null | undefined,
   actorScope?: string | null,
+  actorId?: string | null,
 ) {
-  const next = token ?? null;
+  const next = stamp ?? null;
   const nextActorScope = next === null ? null : actorScope ?? _authActorScope;
-  const tokenChanged = next !== _accessToken;
+  const nextActorId = next === null ? null : actorId ?? _authActorId;
+  const tokenChanged = next !== _sessionStamp;
   const actorChanged = nextActorScope !== _authActorScope;
   // A silent rotation belongs to the same actor. A direct A -> B sign-in is an identity
   // boundary, not a reason to refetch A's failed queries under B's credentials.
@@ -164,11 +172,10 @@ export function setAccessToken(
     tokenChanged &&
     !actorChanged &&
     next !== null &&
-    _accessToken !== null;
+    _sessionStamp !== null;
 
   if (tokenChanged || actorChanged) {
-    // A monotonically increasing, non-secret request scope. Never put a bearer token in a map
-    // key: keys are inspectable in a debugger and are too easy to include in diagnostics.
+    // A monotonically increasing request scope, so a map key never has to carry the stamp.
     _authGeneration += 1;
   }
   if (actorChanged) {
@@ -180,8 +187,9 @@ export function setAccessToken(
     _sessionRefreshInFlight = false;
   }
 
-  _accessToken = next;
+  _sessionStamp = next;
   _authActorScope = nextActorScope;
+  _authActorId = nextActorId;
   if (actorChanged) {
     for (const listener of _authActorChangedListeners) listener();
   }
@@ -190,13 +198,22 @@ export function setAccessToken(
   }
 }
 
-export function getAccessToken(): string | null {
-  return _accessToken;
+/** The installed session's stamp: non-secret, and different after every token rotation. */
+export function getSessionStamp(): string | null {
+  return _sessionStamp;
 }
 
-/** True while the installed bearer still belongs to this actor, including during rotation. */
+/**
+ * Headers every request to /api/v1 carries for the installed session. A raw fetch() to the API
+ * spreads these in; fetchAPI does it itself.
+ */
+export function authHeaders(): Record<string, string> {
+  return actorHeaders(_authActorId);
+}
+
+/** True while the installed session still belongs to this actor, including during rotation. */
 export function isAuthActorSynchronized(actorScope: string): boolean {
-  return _accessToken !== null && _authActorScope === actorScope;
+  return _sessionStamp !== null && _authActorScope === actorScope;
 }
 
 /** Monotonic identity-boundary token. Same-actor access-token rotation does not advance it. */
@@ -206,12 +223,12 @@ export function getAuthActorGeneration(): number {
 
 /** True only after TokenSync has installed the session's complete auth context. */
 export function isAuthContextSynchronized(
-  token: string | null | undefined,
+  stamp: string | null | undefined,
   actorScope: string | null,
 ): boolean {
-  const expectedToken = token ?? null;
-  const expectedActorScope = expectedToken === null ? null : actorScope;
-  return _accessToken === expectedToken && _authActorScope === expectedActorScope;
+  const expectedStamp = stamp ?? null;
+  const expectedActorScope = expectedStamp === null ? null : actorScope;
+  return _sessionStamp === expectedStamp && _authActorScope === expectedActorScope;
 }
 
 /**
@@ -294,7 +311,7 @@ function handle401() {
     const refreshActorGeneration = _authActorGeneration;
     _sessionRefreshInFlight = true;
     _sessionRefreshFn().finally(() => {
-      // A direct account transition makes this A refresh irrelevant to B. setAccessToken()
+      // A direct account transition makes this A refresh irrelevant to B. setSessionAuth()
       // already released B's in-flight gate, so the old promise must not close it again.
       if (_authActorGeneration !== refreshActorGeneration) return;
       _sessionRefreshInFlight = false;
@@ -690,9 +707,7 @@ async function _fetchAPIInternal<T>(
       "Content-Type": "application/json",
       ...(options.headers as Record<string, string>),
     };
-    if (_accessToken) {
-      headers["Authorization"] = `Bearer ${_accessToken}`;
-    }
+    Object.assign(headers, authHeaders());
     if (typeof window !== "undefined") headers["X-Byte-Units"] = _byteUnits;
 
     const { response, body, bodyError } = await fetchJSONWithTimeout(url, {
@@ -1877,11 +1892,7 @@ function isoAuthHeaders(
   actorScope?: string,
 ): Record<string, string> {
   assertUploadActor(actorScope);
-  const token = getAccessToken();
-  return {
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(extra || {}),
-  };
+  return { ...authHeaders(), ...(extra || {}) };
 }
 
 export interface IsoUploadCreateBody {
@@ -2361,9 +2372,7 @@ export const myKeysAPI = {
   download: async (keyId: string) => {
     const url = `${API_BASE_URL}${API_PREFIX}/my-keys/${keyId}/download`;
     const response = await fetch(url, {
-      headers: {
-        ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
-      },
+      headers: authHeaders(),
     });
     if (!response.ok) {
       throw new Error("Could not download key.");

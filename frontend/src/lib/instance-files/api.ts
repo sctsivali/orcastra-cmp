@@ -1,8 +1,8 @@
 import {
   API_URL,
   fetchAPI,
+  authHeaders,
   fetchJSONWithTimeout,
-  getAccessToken,
   recoverFrom401,
 } from "@/lib/api";
 import { APIError } from "@/types/api";
@@ -102,9 +102,8 @@ async function raw(
   fallback: string,
 ): Promise<{ response: Response; body?: unknown }> {
   for (let attempt = 0; ; attempt += 1) {
-    const token = getAccessToken();
     const headers = new Headers(init.headers);
-    if (token) headers.set("Authorization", `Bearer ${token}`);
+    for (const [name, value] of Object.entries(authHeaders())) headers.set(name, value);
     const { response, body } = await fetchJSONWithTimeout(url, { ...init, headers }, timeoutMs);
     if (response.ok) return { response, body };
     if (response.status === 401 && attempt === 0 && (await recoverFrom401(init.signal))) continue;
@@ -221,13 +220,9 @@ export const instanceFilesAPI = {
 
   /** An image's bytes as a blob. Only for a preview, and only ever shown through `<img>`. */
   previewImage: async (target: GuestTarget, path: string, signal: AbortSignal): Promise<Blob> => {
-    const token = getAccessToken();
     const response = await fetch(`${API_URL}/instance-files/preview-image?${query(target)}`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify({ path }),
       signal,
     });

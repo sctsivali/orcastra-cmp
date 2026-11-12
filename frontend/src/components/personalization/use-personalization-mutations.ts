@@ -14,7 +14,6 @@ import type { ThemeOrigin } from "./use-personalization-sync";
 
 interface MutationOptions {
   userId: string | null;
-  accessToken?: string;
   scopeKey: string;
   setSettings: React.Dispatch<React.SetStateAction<PersonalizationSettings>>;
   themeOrigin: ThemeOrigin;
@@ -31,7 +30,7 @@ interface MutationOptions {
  * choices in a personal row (routers/user_preferences.py).
  */
 export function usePersonalizationMutations({
-  userId, accessToken, scopeKey, setSettings, themeOrigin, setThemeOrigin, byteUnits, setByteUnits, lastLocalEditRef,
+  userId, scopeKey, setSettings, themeOrigin, setThemeOrigin, byteUnits, setByteUnits, lastLocalEditRef,
 }: MutationOptions) {
   const queryClient = useQueryClient();
   const [isSaving, setIsSaving] = React.useState(false);
@@ -49,7 +48,7 @@ export function usePersonalizationMutations({
     try {
       const outcome = await dispatchActorMutation(
         actorFence,
-        () => personalizationAPI.update(body, accessToken),
+        () => personalizationAPI.update(body),
       );
       if (outcome.retired) return true;
       await reconcileMutationImpact(queryClient, "personalization.write");
@@ -60,7 +59,7 @@ export function usePersonalizationMutations({
       // A write whose outcome is unknown must not be repeated automatically.
       return false;
     }
-  }, [accessToken, queryClient, scopeKey]);
+  }, [queryClient, scopeKey]);
 
   const persistTheme = React.useCallback(async (theme: ThemePreference | null) => {
     const actorFence = captureActorMutationFence(scopeKey);

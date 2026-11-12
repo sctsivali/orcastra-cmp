@@ -15,7 +15,6 @@ export type ThemeOrigin = { personal: boolean; organizationTheme: ThemePreferenc
 interface SyncOptions {
   userId: string | null;
   scopeKey: string;
-  accessToken?: string;
   authenticated: boolean;
   sessionLoading: boolean;
   personalRowRef: SettingsRef;
@@ -32,7 +31,7 @@ const ORG_PREF_POLL_INTERVAL_MS = 45_000;
 // deployment default for an Administrator without the partner role, and the personal row holds
 // only the theme and the byte units for everyone.
 export function usePersonalizationSync({
-  userId, scopeKey, accessToken, authenticated, sessionLoading,
+  userId, scopeKey, authenticated, sessionLoading,
   personalRowRef, lastLocalEditRef, setSettings, setIsLoading, setThemeOrigin, setByteUnits,
 }: SyncOptions) {
   const appliedVersionRef = React.useRef<OrgPreferencesVersion | null>(null);
@@ -41,11 +40,6 @@ export function usePersonalizationSync({
   const previousScopeRef = React.useRef<string | null>(null);
   const checkInFlightRef = React.useRef(false);
   currentScopeRef.current = scopeKey;
-  // important: read the bearer through a ref. As a dependency every silent rotation (about every
-  // four minutes) would re-run all three preference reads and restart the poll. An actor change
-  // is fenced by scopeKey and onAuthActorChanged.
-  const accessTokenRef = React.useRef(accessToken);
-  accessTokenRef.current = accessToken;
 
   const refreshSettings = React.useCallback(async (expectedVersion?: OrgPreferencesVersion): Promise<boolean> => {
     if (!userId || !authenticated) return false;
@@ -56,13 +50,13 @@ export function usePersonalizationSync({
     const canApply = () => isCurrent() && lastLocalEditRef.current === localEdit;
 
     const [organization, personal] = await Promise.all([
-      readOrgPreferences(accessTokenRef.current, isCurrent),
-      readPersonalPreferences(accessTokenRef.current, isCurrent),
+      readOrgPreferences(userId, isCurrent),
+      readPersonalPreferences(userId, isCurrent),
     ]);
     if (!organization.ok || !personal.ok || !canApply()) return false;
     // important: membership or preferences may change while the payload is in flight. Read the
     // version after the payload and only apply the organization/version pair still current.
-    const current = await readOrgVersion(accessTokenRef.current, isCurrent);
+    const current = await readOrgVersion(userId, isCurrent);
     if (!current.ok || !sameOrgVersion(organization.value, current.value) || !canApply()) return false;
     if (expectedVersion && !sameOrgVersion(expectedVersion, current.value)) return false;
     const base = organization.value.settings;
@@ -123,7 +117,7 @@ export function usePersonalizationSync({
       const actorFence = captureActorMutationFence(scopeKey);
       const isCurrent = () => !retired && currentScopeRef.current === scopeKey && isActorMutationFenceCurrent(actorFence);
       try {
-        const current = await readOrgVersion(accessTokenRef.current, isCurrent);
+        const current = await readOrgVersion(userId, isCurrent);
         if (current.ok && isCurrent() && !sameOrgVersion(appliedVersionRef.current, current.value)) {
           await refreshSettings(current.value);
         }

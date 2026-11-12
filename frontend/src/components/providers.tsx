@@ -28,12 +28,12 @@ import { registerExternalMutationQueryClient } from "@/lib/mutation-coherence";
 import { PendingCreateFollower } from "@/components/pending-create-follower";
 import type { PersonalizationSettings } from "@/types/personalization";
 import type { ByteUnitSystem } from "@/lib/byte-units";
-import { unmaskSession, type HydratedSession } from "@/lib/hydrated-session";
+import type { Session } from "next-auth";
 
 /**
  * Refetches queries that errored under an expired token once the access token
  * is silently refreshed. Lives inside QueryClientProvider so it can reach the
- * client; api.ts fires onTokenRefreshed when the Bearer token rotates.
+ * client; api.ts fires onTokenRefreshed when the session's token rotates.
  */
 function QueryInvalidationBridge() {
   const queryClient = useQueryClient();
@@ -156,12 +156,11 @@ export function Providers({
   // pass.
   initialPersonalization?: PersonalizationSettings | null;
   initialByteUnits?: ByteUnitSystem;
-  // A comfortably valid session read by the root layout (auth-session.ts), its token masked, or
-  // undefined to let the browser fetch one. Never null.
-  initialSession?: HydratedSession;
+  // A comfortably valid session read by the root layout (auth-session.ts), or undefined to let the
+  // browser fetch one. Never null.
+  initialSession?: Session;
 }) {
-  // Unmasked in memory only; the document carries the masked form (lib/hydrated-session.ts).
-  const session = React.useMemo(() => unmaskSession(initialSession), [initialSession]);
+  const session = initialSession;
   const [queryClient, setQueryClient] = React.useState(getQueryClient);
   const queryClientRef = React.useRef(queryClient);
 

@@ -1,5 +1,5 @@
 const { expect } = require("@playwright/test");
-const { expectCleanHarness, installApiFixtures } = require("./fixtures.cjs");
+const { expectCleanHarness, installApiFixtures, namesActor } = require("./fixtures.cjs");
 
 // Plans, jobs and settings come from a golden file the backend generates from its real
 // presenters (backend/tests/test_migration_e2e_contract.py), so these fixtures cannot drift
@@ -131,8 +131,6 @@ async function installMigrationFixtures(page, role, options = {}) {
     settingsFailuresLeft: options.settingsFailures ?? 0,
     settingsReads: 0,
   };
-  const expectedBearer = `Bearer e2e-${role}-access-token`;
-
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -143,6 +141,7 @@ async function installMigrationFixtures(page, role, options = {}) {
       path,
       search: url.search,
       authorization: request.headers().authorization ?? null,
+      namesActor: namesActor(request, role),
     };
     const handled = path === "/system/settings" ||
       path === "/clusters" ||
@@ -160,7 +159,7 @@ async function installMigrationFixtures(page, role, options = {}) {
     }
 
     state.requests.push(entry);
-    if (entry.authorization !== expectedBearer) state.authFailures.push(entry);
+    if (!entry.namesActor) state.authFailures.push(entry);
     if (method !== "GET") {
       let body = null;
       try {

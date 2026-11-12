@@ -172,6 +172,7 @@ function world() {
     '@/lib/refresh-grants': load('frontend/src/lib/refresh-grants.ts'),
     '@/lib/auth-refresh': refreshLib,
     '@/types/rbac': load('frontend/src/types/rbac.ts'),
+    '@/lib/token-stamp': load('frontend/src/lib/token-stamp.ts'),
   });
   return { jwt: auth.authConfig.callbacks.jwt, authorized: auth.authConfig.callbacks.authorized };
 }

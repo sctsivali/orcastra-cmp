@@ -183,10 +183,8 @@ export function ConsoleResourceBar({
       // Skipped while the tab is hidden; the next visible poll catches up.
       if (document.hidden) return;
       try {
-        const { getAccessToken } = await import("@/lib/api");
-        const token = getAccessToken();
-        const headers: Record<string, string> = {};
-        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const { authHeaders } = await import("@/lib/api");
+        const headers = authHeaders();
 
         if (sessionId) {
           const response = await fetch(

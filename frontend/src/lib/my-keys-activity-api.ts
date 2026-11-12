@@ -1,4 +1,4 @@
-import { fetchRead, getAccessToken, type ReadOptions } from "@/lib/api";
+import { authHeaders, fetchRead, type ReadOptions } from "@/lib/api";
 import type { KeyActivityPage, KeyActivityParams, KeyLastUsed } from "@/types/my-keys";
 
 function query(params: KeyActivityParams): string {
@@ -25,9 +25,8 @@ export const myKeysActivityAPI = {
 
   /** The same rows as a CSV file, at most 10,000. */
   exportCsv: async (params: KeyActivityParams): Promise<Blob> => {
-    const token = getAccessToken();
     const response = await fetch(`/api/v1/my-keys/activity/export.csv${query({ ...params, limit: undefined, offset: undefined })}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers: authHeaders(),
     });
     if (!response.ok) throw new Error("The activity export failed. Try again.");
     return response.blob();

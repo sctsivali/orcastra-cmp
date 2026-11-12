@@ -19,7 +19,6 @@ import {
   type ThemePreference,
 } from "@/types/personalization";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { getAccessToken } from "@/lib/api";
 import { personalizationAPI } from "@/lib/personalization-api";
 import { formatDateTime } from "@/lib/utils";
 import { useByteFormat } from "@/hooks/use-byte-format";
@@ -73,8 +72,7 @@ async function fileToBase64(file: File): Promise<string> {
 }
 
 async function fetchImageAsBase64(url: string): Promise<string> {
-  const token = getAccessToken();
-  const data = await personalizationAPI.proxyImage(url, token ?? undefined);
+  const data = await personalizationAPI.proxyImage(url);
   return data.data; // base64 data URI
 }
 

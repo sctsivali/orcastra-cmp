@@ -64,7 +64,7 @@ export function PersonalizationProvider({ children, initialSettings, initialByte
   initialByteUnits?: ByteUnitSystem;
 }) {
   const { data: session, status } = useSession();
-  const { scopeKey, accessToken, isAuthenticated } = useActorQueryScope();
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   const seededRef = React.useRef<PersonalizationSettings | null>(null);
   if (seededRef.current === null) {
     // The server prop precedes the cookie fallback so SSR and hydration agree on first paint.
@@ -86,7 +86,6 @@ export function PersonalizationProvider({ children, initialSettings, initialByte
   });
   const actor = {
     userId: session?.user?.id ?? null,
-    accessToken: accessToken ?? undefined,
     scopeKey,
   };
   // A caller with no role sees only the access notice and the backend refuses its reads, so
