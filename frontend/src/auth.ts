@@ -26,6 +26,9 @@ declare module "next-auth" {
     // A stamp of the access token, which changes when it rotates (lib/token-stamp.ts). The token
     // itself stays in the cookie and is attached by the /api/v1 proxy.
     tokenStamp?: string;
+    // Unix seconds the session's token was granted, so a client holding several copies of the
+    // session (another tab, a test harness) can tell which is newest. Not a secret.
+    tokenIssuedAt?: number;
     error?: string;
   }
 
@@ -303,6 +306,7 @@ export const authConfig: NextAuthConfig = {
         // important: never the access token. Everything this returns reaches page JavaScript through
         // /api/auth/session and the layout's hydrated session.
         tokenStamp: await tokenStamp(token.accessToken),
+        tokenIssuedAt: token.groupsReadAt,
         error: token.error,
       };
     },
