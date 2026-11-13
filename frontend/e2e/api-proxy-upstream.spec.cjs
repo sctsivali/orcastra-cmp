@@ -15,8 +15,11 @@ test.beforeAll(async ({}, testInfo) => {
   // One project owns the fake backend's port; the others would collide on it.
   if (testInfo.project.name !== "desktop-light") return;
   server = http.createServer((req, res) => {
-    seen.push({ method: req.method, url: req.url, headers: req.headers });
-    req.resume();
+    const entry = { method: req.method, url: req.url, headers: req.headers, bytes: 0 };
+    seen.push(entry);
+    req.on("data", (chunk) => {
+      entry.bytes += chunk.length;
+    });
     req.on("end", () => {
       res.writeHead(200, {
         "content-type": "application/json",
@@ -127,6 +130,35 @@ test("an integration's own key passes through when no session cookie is sent", a
   } finally {
     await client.dispose();
   }
+});
+
+test("a script's Expect: 100-continue upload reaches the backend whole", async () => {
+  // curl adds this header to any body over 1 MB. Node answers the 100 Continue to the caller, and
+  // the header must not reach the backend fetch, which fails on it.
+  const body = Buffer.alloc(2 * 1024 * 1024, 0x61);
+  const target = new URL("/api/v1/proxy-probe/expect", BASE_URL);
+  const status = await new Promise((resolve, reject) => {
+    const req = http.request(target, {
+      method: "PUT",
+      headers: {
+        authorization: "Bearer key-id:key-secret",
+        "content-type": "application/octet-stream",
+        "content-length": String(body.length),
+        expect: "100-continue",
+      },
+    });
+    req.on("continue", () => req.end(body));
+    req.on("response", (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode));
+    });
+    req.on("error", reject);
+  });
+  expect(status).toBe(200);
+  const upstream = lastUpstream("/proxy-probe/expect");
+  expect(upstream, "the upload reached the backend").toBeTruthy();
+  expect(upstream.headers.expect, "the caller's Expect stays at the proxy").toBeUndefined();
+  expect(upstream.bytes).toBe(body.length);
 });
 
 test("a tab acting for another account is told so and reaches nothing", async ({ page }) => {

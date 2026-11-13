@@ -68,6 +68,9 @@ const UPSTREAM_DELETE_HEADERS_TIMEOUT_MS = 300_000;
 const HOP_BY_HOP_HEADERS = [
   "connection",
   "content-length",
+  // Node answers a caller's 100-continue itself, and the backend fetch fails on the header. curl
+  // sends it with any body over 1 MB.
+  "expect",
   "keep-alive",
   "proxy-authenticate",
   "proxy-authorization",
