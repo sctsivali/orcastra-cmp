@@ -14,7 +14,7 @@ Security updates are prioritized for the latest active code line.
 
 Please do not open a public GitHub issue for vulnerabilities.
 
-Send a private report to: ops@sivali.co.id
+Send a private report to: dev@orca.id
 
 Include:
 

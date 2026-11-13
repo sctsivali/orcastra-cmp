@@ -4,7 +4,7 @@ contact_links:
     url: https://discourse.orca.id
     about: Use forum for general discussions, ideas, and non-urgent Q&A.
   - name: Security Report (Private)
-    url: mailto:ops@sivali.co.id
+    url: mailto:dev@orca.id
     about: Report vulnerabilities privately. Do not open public security issues.
   - name: Product and Deployment Documentation
     url: https://docs.orcastra.io

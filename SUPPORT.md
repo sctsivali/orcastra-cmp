@@ -17,7 +17,7 @@ This is the preferred public support channel for open-source collaboration.
 
 ### 2. Private Email (sensitive cases)
 
-Use ops@sivali.co.id for:
+Use dev@orca.id for:
 
 - Potential security incidents
 - Sensitive operational context not suitable for public issue threads
