@@ -72,6 +72,12 @@ from app.services.lxd.cloud_init_reach import cloud_init_changes, proxy_cloud_in
 from app.services.lxd.operation_metadata import redact_operation_response
 from app.core.tenant_visibility import used_by_in_projects
 from app.services.key_default_view_only import refuse_key_default_operation
+from app.core.key_default_image_pull import (
+    ALREADY_HELD,
+    ImageStoreUnknown,
+    image_already_held,
+    trusted_image_pull_fingerprint,
+)
 from app.services.key_paid_term import (
     narrow_to_paid_term,
     refuse_guest_reach_in_retention,
@@ -4922,14 +4928,22 @@ async def raw_proxy(
         # important: `default` on a cluster another party holds is view only for a key a partner
         # created, as it is in the browser and on /proxy. A `?project=` in the path cannot move
         # the call elsewhere: request_target replaces it with the authorised project below.
+        # The one write a view-only `default` admits is an exactly shaped pull of an ORCA build by fingerprint
+        # (core/key_default_image_pull.py, owner 14/11/2026). It is let through only where the rule refuses,
+        # and only once the store is read below and found not to hold that image.
+        orca_pull = trusted_image_pull_fingerprint(method, request.path, request.body)
+        exempt_from_view_only = False
         try:
             await refuse_key_default_operation(
                 api_key, request.cluster_id, _raw_proxy_default_reach(request, project)
             )
         except HTTPException as refusal:
-            if refusal.status_code == 403:
-                _audit_raw_refusal(api_key, request, method, project, refusal, "default_view_only")
-            raise
+            if refusal.status_code == 403 and orca_pull is not None:
+                exempt_from_view_only = True
+            else:
+                if refusal.status_code == 403:
+                    _audit_raw_refusal(api_key, request, method, project, refusal, "default_view_only")
+                raise
 
         write_target = _raw_proxy_fenced_write_target(request)
         if write_target is not None:
@@ -5019,14 +5033,48 @@ async def raw_proxy(
                 _audit_raw_refusal(api_key, request, method, project, refusal, "project_not_isolated")
                 raise
 
-        landing = _raw_proxy_landing(request, project, client, endpoint)
+        landing = None if exempt_from_view_only else _raw_proxy_landing(request, project, client, endpoint)
         if landing is not None:
             try:
                 await refuse_key_default_operation(api_key, request.cluster_id, [], lands_in=landing)
             except HTTPException as refusal:
-                if refusal.status_code == 403:
-                    _audit_raw_refusal(api_key, request, method, project, refusal, "default_view_only")
-                raise
+                if refusal.status_code == 403 and orca_pull is not None:
+                    exempt_from_view_only = True
+                else:
+                    if refusal.status_code == 403:
+                        _audit_raw_refusal(api_key, request, method, project, refusal, "default_view_only")
+                    raise
+        if exempt_from_view_only:
+            # important: LXD answers a pull of a fingerprint it already holds by rewriting that image's record
+            # (public, auto_update, profiles, cached) instead of downloading. In a store another party holds
+            # that record is theirs, so a held image is never forwarded.
+            try:
+                held = await run_blocking(
+                    image_already_held,
+                    client.api.session,
+                    endpoint,
+                    orca_pull,
+                    project,
+                    socket_timeout_for(client),
+                    timeout=RAW_PROXY_TIMEOUT,
+                    label=f"raw_proxy[image held {request.cluster_id}]",
+                    executor=proxy_executor,
+                    max_in_flight=PROXY_MAX_IN_FLIGHT,
+                )
+            except (ImageStoreUnknown, BlockingTimeout) as unknown:
+                _audit_raw_refusal(api_key, request, method, project, unknown, "image_store_unknown")
+                return RawProxyResponse(
+                    status_code=502, data=None,
+                    error="The cluster did not say whether it holds this image, so nothing was sent",
+                )
+            if held:
+                already = HTTPException(status_code=409, detail=dict(ALREADY_HELD))
+                _audit_raw_refusal(api_key, request, method, project, already, "image_already_held")
+                raise already
+            logger.info(
+                "Raw proxy: admitted an ORCA image pull into a view-only default on %s (fingerprint %s)",
+                request.cluster_id, orca_pull[:12],
+            )
 
         # The raw path inspects no body at all, so this is the only place a policy-key write
         # through it is visible to anyone.

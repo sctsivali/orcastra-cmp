@@ -29,6 +29,7 @@ BODY_NAMES = APP / "core" / "lxd_body_names.py"
 ROUTER = APP / "routers" / "integrations.py"
 RAW_PROJECT_DELETE = APP / "services" / "raw_project_delete.py"
 STRANDED_RULES = APP / "services" / "stranded_rules.py"
+DEFAULT_IMAGE_PULL = APP / "core" / "key_default_image_pull.py"
 
 # Functions that take a raw-proxy path string, per file.
 GUARDS: Dict[Path, Tuple[str, ...]] = {
@@ -56,6 +57,8 @@ GUARDS: Dict[Path, Tuple[str, ...]] = {
     # The project DELETE and the writes that strand an access rule are recognised by the same parser.
     RAW_PROJECT_DELETE: ("raw_project_delete_target",),
     STRANDED_RULES: ("raw_stranding_target",),
+    # The one write a view-only `default` admits is recognised by the same parser.
+    DEFAULT_IMAGE_PULL: ("trusted_image_pull_fingerprint",),
 }
 
 # The raw-proxy functions in the router that read `request.path`.

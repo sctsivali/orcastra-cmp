@@ -167,3 +167,37 @@ def test_only_the_exact_https_orca_stream_is_trusted(monkeypatch, server):
 def test_trusting_the_orca_stream_does_not_open_url_sources():
     body = {"source": {"type": "url", "url": "https://images.orca.id/streams/v1/index.json"}}
     assert pull_source_refusal("POST", body) is not None
+
+
+@pytest.mark.parametrize(
+    "server",
+    [
+        "https://images.orca.id:8443",
+        "https://images.lxd.canonical.com:8443",
+        "https://cloud-images.ubuntu.com:9443/releases",
+        "https://images.orca.id:abc",
+        "https://images.orca.id:99999",
+        "https://user@images.orca.id",
+        "https://user:pw@images.lxd.canonical.com",
+        "https://@cloud-images.ubuntu.com/releases",
+    ],
+)
+def test_a_trusted_host_is_reached_on_443_only(monkeypatch, server):
+    """The hypervisor must not be pointed at another port on a trusted host (security review, 14/11/2026)."""
+    from app.core import config
+
+    monkeypatch.setattr(config.get_settings(), "key_image_servers_allow", "")
+    body = {"source": {"type": "image", "server": server, "alias": "a"}}
+    assert pull_source_refusal("POST", body) is not None
+
+
+def test_443_spelled_out_is_still_a_trusted_host():
+    for server in ("https://images.orca.id:443", "https://images.lxd.canonical.com:443"):
+        assert pull_source_refusal("POST", {"source": {"type": "image", "server": server, "alias": "a"}}) is None
+
+
+def test_a_registered_cluster_keeps_its_own_port(monkeypatch):
+    from app.core import key_pull_sources
+
+    monkeypatch.setattr(key_pull_sources, "_is_registered_cluster", lambda server: server == "https://10.9.8.242:8443")
+    assert pull_source_refusal("POST", {"source": {"type": "image", "fingerprint": "a" * 64, "server": "https://10.9.8.242:8443", "protocol": "lxd"}}) is None

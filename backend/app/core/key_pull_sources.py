@@ -57,17 +57,31 @@ def _source_refusal(source: Any) -> Optional[str]:
         from app.services.remote_image_catalog import image_server_refusal
 
         refusal = image_server_refusal(str(server))
+        # The catalogue check reads the host alone; a key naming a catalogue host on another port would make
+        # the hypervisor open TLS to any port there. Only a registered cluster is reached on its own port.
+        if refusal is None and (not _default_https_port(str(server)) or "@" in urlparse(str(server)).netloc):
+            refusal = "Invalid image_server: a catalogue is reached on 443, without credentials"
         if refusal and not _key_host_allowed(str(server)) and not _is_registered_cluster(str(server)):
             return f"{refusal}, or a cluster registered in this dashboard."
     return None
 
 
+def _default_https_port(server: str) -> bool:
+    """No port, or 443. A port that does not parse is not a default one."""
+    try:
+        return urlparse(server).port in (None, 443)
+    except ValueError:
+        return False
+
+
 def _key_host_allowed(server: str) -> bool:
-    """ORCA's appliance stream, or a host the operator admitted with KEY_IMAGE_SERVERS_ALLOW, over https."""
+    """ORCA's appliance stream, or a host the operator admitted with KEY_IMAGE_SERVERS_ALLOW, over https on 443."""
     from app.core.config import get_settings
 
     parsed = urlparse(server)
-    if parsed.scheme != "https" or not parsed.hostname:
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        return False
+    if not _default_https_port(server):
         return False
     host = parsed.hostname.lower()
     if host in TRUSTED_KEY_IMAGE_HOSTS:
