@@ -76,9 +76,10 @@ make ci-local STAGES="guards frontend"     # a subset of: commits guards backend
 make ci-local E2E_PROJECTS=desktop-light   # one browser project instead of all four
 ```
 
-GitHub runs CI only for pull requests (with one browser project) and when someone starts it from
-the Actions tab, where "Run workflow" can ask for all four browser projects. A push straight to a
-branch is not checked there, so `make ci-local` is the gate for it.
+GitHub runs CI on every push to `dev` and `main` and on pull requests, with one browser project,
+and when someone starts it from the Actions tab, where "Run workflow" can ask for all four browser
+projects. The push run reports after the commit has landed, so `make ci-local` stays the gate
+before a direct push.
 
 The runner reads the guard list, the toolchain versions and the browser job's environment from
 `ci.yml`, so it cannot fall behind the pipeline. The pinned Node and Playwright are installed once
