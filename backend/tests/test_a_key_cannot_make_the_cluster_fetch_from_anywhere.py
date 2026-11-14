@@ -180,6 +180,7 @@ def test_trusting_the_orca_stream_does_not_open_url_sources():
         "https://user@images.orca.id",
         "https://user:pw@images.lxd.canonical.com",
         "https://@cloud-images.ubuntu.com/releases",
+        "https://@images.orca.id",
     ],
 )
 def test_a_trusted_host_is_reached_on_443_only(monkeypatch, server):

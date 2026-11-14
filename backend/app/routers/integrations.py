@@ -5061,8 +5061,12 @@ async def raw_proxy(
                     executor=proxy_executor,
                     max_in_flight=PROXY_MAX_IN_FLIGHT,
                 )
-            except (ImageStoreUnknown, BlockingTimeout) as unknown:
-                _audit_raw_refusal(api_key, request, method, project, unknown, "image_store_unknown")
+            except (ImageStoreUnknown, BlockingTimeout, BlockingPoolFull, requests.exceptions.RequestException) as unknown:
+                # A transport error's text names the cluster's own endpoint, so only the class is recorded.
+                recorded = unknown if isinstance(unknown, ImageStoreUnknown) else RuntimeError(
+                    f"The image store read failed ({type(unknown).__name__})"
+                )
+                _audit_raw_refusal(api_key, request, method, project, recorded, "image_store_unknown")
                 return RawProxyResponse(
                     status_code=502, data=None,
                     error="The cluster did not say whether it holds this image, so nothing was sent",

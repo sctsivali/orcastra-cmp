@@ -79,7 +79,7 @@ def _key_host_allowed(server: str) -> bool:
     from app.core.config import get_settings
 
     parsed = urlparse(server)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+    if parsed.scheme != "https" or not parsed.hostname or "@" in parsed.netloc:
         return False
     if not _default_https_port(server):
         return False

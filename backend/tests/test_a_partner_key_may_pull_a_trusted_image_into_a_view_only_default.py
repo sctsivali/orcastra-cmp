@@ -191,6 +191,25 @@ async def test_an_unreadable_store_sends_nothing(view_only) -> None:
     assert not store.sent
 
 
+async def test_a_store_read_that_never_answers_sends_nothing_and_names_no_endpoint(view_only, monkeypatch) -> None:
+    from app.routers import integrations
+
+    recorded = []
+    monkeypatch.setattr(integrations, "_audit_key_action", lambda *_a, **kw: recorded.append(kw))
+
+    class Unreachable(ImageStore):
+        def get(self, url: str, **kwargs: Any) -> requests.Response:
+            self.calls.append(("GET", url))
+            raise requests.exceptions.ConnectionError(f"HTTPSConnectionPool(host='10.1.2.3', port=8443): {url}")
+
+    store = Unreachable()
+    result, _ = await raw_write("POST", "/1.0/images", "default", ORCA_PULL, api_key=PARTNER_KEY, session=store)
+    assert getattr(result, "status_code", None) == 502
+    assert not store.sent
+    assert recorded and recorded[-1]["details"]["refused"] == "image_store_unknown"
+    assert "10.1.2.3" not in recorded[-1]["error_message"] and "ConnectionError" in recorded[-1]["error_message"]
+
+
 async def test_orcahubs_alias_pull_stays_refused_on_a_view_only_default(view_only) -> None:
     alias_pull = {"source": {"type": "image", "mode": "pull", "protocol": "simplestreams", "server": "https://images.orca.id",
                              "alias": "n8n/2.32.5", "image_type": "virtual-machine"},
