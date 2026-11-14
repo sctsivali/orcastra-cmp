@@ -3,8 +3,8 @@
 important: a create or rebuild can name a source the daemon fetches itself (an image server, a URL,
 another daemon's migration). Through the raw proxy that is request forgery from the hypervisor and
 a way to feed a crafted image or instance to an unpatched daemon. A key may name only the image
-picker's servers (services/remote_image_catalog.py), a host in KEY_IMAGE_SERVERS_ALLOW, or a cluster
-registered here; never a URL, migration or conversion source. Likewise a body `target` is a host the
+picker's servers (services/remote_image_catalog.py), ORCA's appliance stream, a host in
+KEY_IMAGE_SERVERS_ALLOW, or a cluster registered here; never a URL, migration or conversion source. Likewise a body `target` is a host the
 daemon sends to (push migration, image export receiver, Incus backup S3 URL), so a key may not name
 one. The rule reads the body, not a path list: no LXD or Incus endpoint takes a `source` or `target`
 object it does not act on. Migrations go through Migration Center; a move inside one cluster names
@@ -20,6 +20,13 @@ from fastapi import HTTPException
 
 # Sources the daemon fetches from, or receives from, somewhere the dashboard did not choose.
 _REFUSED_SOURCE_TYPES = {"url", "migration", "conversion"}
+
+# important: ORCA's own appliance stream. OrcaHub pre-caches appliances on a cluster and creates an order's
+# instance through an API key naming this server, so on a deployment that never set KEY_IMAGE_SERVERS_ALLOW
+# every ORCA download and every order for an appliance the cluster does not hold yet was refused (OrcaHub
+# production, 14/11/2026). Trusted for keys only and over https only: the image picker's list and its
+# engine check (services/remote_image_catalog.py) are unchanged.
+TRUSTED_KEY_IMAGE_HOSTS = frozenset({"images.orca.id"})
 
 _TARGET_REFUSAL = (
     "An API key cannot name a target host: the cluster would send an instance, volume, image or "
@@ -50,18 +57,23 @@ def _source_refusal(source: Any) -> Optional[str]:
         from app.services.remote_image_catalog import image_server_refusal
 
         refusal = image_server_refusal(str(server))
-        if refusal and not _operator_allowed(str(server)) and not _is_registered_cluster(str(server)):
+        if refusal and not _key_host_allowed(str(server)) and not _is_registered_cluster(str(server)):
             return f"{refusal}, or a cluster registered in this dashboard."
     return None
 
 
-def _operator_allowed(server: str) -> bool:
-    """A host the operator admitted with KEY_IMAGE_SERVERS_ALLOW, over https."""
+def _key_host_allowed(server: str) -> bool:
+    """ORCA's appliance stream, or a host the operator admitted with KEY_IMAGE_SERVERS_ALLOW, over https."""
     from app.core.config import get_settings
 
     parsed = urlparse(server)
+    if parsed.scheme != "https" or not parsed.hostname:
+        return False
+    host = parsed.hostname.lower()
+    if host in TRUSTED_KEY_IMAGE_HOSTS:
+        return True
     allowed = {h.strip().lower() for h in (get_settings().key_image_servers_allow or "").split(",") if h.strip()}
-    return parsed.scheme == "https" and bool(parsed.hostname) and parsed.hostname.lower() in allowed
+    return host in allowed
 
 
 def _is_registered_cluster(server: str) -> bool:

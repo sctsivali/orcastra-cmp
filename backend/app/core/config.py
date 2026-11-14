@@ -348,7 +348,8 @@ class Settings(BaseSettings):
         alias="KEY_IMAGE_SERVERS_ALLOW",
         description=(
             "Comma-separated https hosts an API key may name as an image server, in addition to the "
-            "public catalogues and the registered clusters (core/key_pull_sources.py), ex; an "
+            "public catalogues, ORCA's appliance stream (images.orca.id) and the registered clusters "
+            "(core/key_pull_sources.py), ex; an "
             "integrator's own simplestreams mirror."
         ),
     )

@@ -6,8 +6,8 @@ with source `type: url`, or a pull migration naming a remote operation. That is 
 from the hypervisor to any address it can reach (metadata services, internal APIs), and a way to
 feed a crafted image or instance to an unpatched daemon, which
 core/engine_baseline.py's image_import floor exists to stop. A key may name only the public
-catalogues the dashboard trusts (services/remote_image_catalog.py), and never a URL, migration or
-conversion source; migrations go through Migration Center.
+catalogues the dashboard trusts (services/remote_image_catalog.py) and ORCA's appliance stream, and
+never a URL, migration or conversion source; migrations go through Migration Center.
 """
 
 import pytest
@@ -127,4 +127,43 @@ def test_an_operator_can_admit_its_own_mirror(monkeypatch):
     body = {"source": {"type": "image", "server": "https://images.orca.example", "alias": "a"}}
     assert pull_source_refusal("POST", body) is None
     body["source"]["server"] = "http://images.orca.example"
+    assert pull_source_refusal("POST", body) is not None
+
+
+def test_orcas_appliance_stream_passes_without_any_operator_setting(monkeypatch):
+    """OrcaHub pre-caches an appliance and creates an order's instance by naming images.orca.id. Before it was
+    trusted by default, every such call was refused on a deployment without KEY_IMAGE_SERVERS_ALLOW."""
+    from app.core import config
+    from app.core.key_pull_sources import create_params_refusal
+
+    monkeypatch.setattr(config.get_settings(), "key_image_servers_allow", "")
+    pull = {"source": {"type": "image", "mode": "pull", "protocol": "simplestreams", "server": "https://images.orca.id", "alias": "n8n/2.32.5", "image_type": "container"}}
+    assert pull_source_refusal("POST", pull) is None
+    order = {"name": "x", "source": {"type": "image", "mode": "pull", "protocol": "simplestreams", "server": "https://images.orca.id", "fingerprint": "a" * 64}}
+    assert pull_source_refusal("POST", order) is None
+    assert create_params_refusal(order) is None
+    assert pull_source_refusal("POST", {"name": "x", "source": {**order["source"], "server": "https://IMAGES.ORCA.ID"}}) is None
+
+
+@pytest.mark.parametrize(
+    "server",
+    [
+        "http://images.orca.id",
+        "https://images.orca.id.evil.example",
+        "https://evil.example/images.orca.id",
+        "https://ximages.orca.id",
+        "https://inventory.orca.id",
+        "images.orca.id",
+    ],
+)
+def test_only_the_exact_https_orca_stream_is_trusted(monkeypatch, server):
+    from app.core import config
+
+    monkeypatch.setattr(config.get_settings(), "key_image_servers_allow", "")
+    body = {"source": {"type": "image", "server": server, "alias": "n8n/2.32.5"}}
+    assert pull_source_refusal("POST", body) is not None
+
+
+def test_trusting_the_orca_stream_does_not_open_url_sources():
+    body = {"source": {"type": "url", "url": "https://images.orca.id/streams/v1/index.json"}}
     assert pull_source_refusal("POST", body) is not None
