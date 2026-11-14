@@ -107,6 +107,9 @@ LXD_PATH_HELPERS = {
     # Reached from POST /integrations/raw-proxy for a limited key's call to one operation. The id
     # goes through lxd_segment, which the encoder scan above checks.
     ("app/services/lxd/raw_proxy_operations.py", "operation_is_visible"),
+    # Reached from POST /integrations/raw-proxy for the ORCA pull a view-only `default` admits. The
+    # fingerprint goes through lxd_segment.
+    ("app/core/key_default_image_pull.py", "image_already_held"),
     ("app/services/lxd/utils.py", "InstanceWrapper"),
     ("app/services/lxd/utils.py", "find_instance_in_projects"),
     ("app/services/lxd/utils.py", "wait_for_lxd_operation"),

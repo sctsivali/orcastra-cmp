@@ -2,10 +2,9 @@
 
 On a cluster another party holds, `default` is view only for such a key
 (test_a_key_cannot_change_a_view_only_default.py). LXD keeps images in `default`'s store, so the rule also
-refused OrcaHub pre-caching an ORCA appliance on a shared cluster. The one write admitted (owner,
-14/11/2026) is a pull of a full fingerprint from exactly https://images.orca.id, with no alias, and only
-when the store does not hold that image already: LXD answers a pull of a held fingerprint by rewriting the
-existing record (security review, 14/11/2026).
+refuses OrcaHub pre-caching an ORCA appliance on a shared cluster. The one write admitted is a pull of a
+full fingerprint from exactly https://images.orca.id, with no alias, and only when the store does not hold
+that image already: LXD answers a pull of a held fingerprint by rewriting the existing record.
 """
 
 from typing import Any, Dict, List, Set, Tuple

@@ -2,11 +2,11 @@
 
 important: on a cluster another party holds, `default` is view only for a key a partner created
 (services/key_default_view_only.py). LXD keeps images in `default`'s store for every project that does
-not isolate them, so that rule also refused OrcaHub pre-caching an ORCA appliance on a shared cluster
-(dev nuc2, 14/11/2026). The owner chose to admit exactly that write (14/11/2026), for ORCA's appliance
-stream only and without a quota.
+not isolate them, so that rule also refuses OrcaHub pre-caching an ORCA appliance on a shared cluster.
+This admits exactly that write, for ORCA's appliance stream only and without a quota: the disk it can
+take is bounded by the builds that stream publishes.
 
-What is admitted is narrow because a pull is more than a download (security review, 14/11/2026):
+What is admitted is narrow because a pull is more than a download:
 - only `POST /1.0/images` with `source` and an optional `public: false`, nothing else;
 - source type `image`, mode `pull`, protocol `simplestreams`, all three spelled out (LXD's own default
   protocol is `lxd`), from exactly `https://images.orca.id`;

@@ -22,9 +22,8 @@ from fastapi import HTTPException
 _REFUSED_SOURCE_TYPES = {"url", "migration", "conversion"}
 
 # important: ORCA's own appliance stream. OrcaHub pre-caches appliances on a cluster and creates an order's
-# instance through an API key naming this server, so on a deployment that never set KEY_IMAGE_SERVERS_ALLOW
-# every ORCA download and every order for an appliance the cluster does not hold yet was refused (OrcaHub
-# production, 14/11/2026). Trusted for keys only and over https only: the image picker's list and its
+# instance through an API key naming this server, so without this every ORCA download and every order for an
+# appliance the cluster does not hold yet is refused on a deployment that never set KEY_IMAGE_SERVERS_ALLOW. Trusted for keys only and over https only: the image picker's list and its
 # engine check (services/remote_image_catalog.py) are unchanged.
 TRUSTED_KEY_IMAGE_HOSTS = frozenset({"images.orca.id"})
 

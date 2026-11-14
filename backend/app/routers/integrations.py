@@ -4929,7 +4929,7 @@ async def raw_proxy(
         # created, as it is in the browser and on /proxy. A `?project=` in the path cannot move
         # the call elsewhere: request_target replaces it with the authorised project below.
         # The one write a view-only `default` admits is an exactly shaped pull of an ORCA build by fingerprint
-        # (core/key_default_image_pull.py, owner 14/11/2026). It is let through only where the rule refuses,
+        # (core/key_default_image_pull.py). It is let through only where the rule refuses,
         # and only once the store is read below and found not to hold that image.
         orca_pull = trusted_image_pull_fingerprint(method, request.path, request.body)
         exempt_from_view_only = False

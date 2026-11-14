@@ -131,8 +131,8 @@ def test_an_operator_can_admit_its_own_mirror(monkeypatch):
 
 
 def test_orcas_appliance_stream_passes_without_any_operator_setting(monkeypatch):
-    """OrcaHub pre-caches an appliance and creates an order's instance by naming images.orca.id. Before it was
-    trusted by default, every such call was refused on a deployment without KEY_IMAGE_SERVERS_ALLOW."""
+    """OrcaHub pre-caches an appliance and creates an order's instance by naming images.orca.id, so it is
+    trusted by default rather than only on a deployment that sets KEY_IMAGE_SERVERS_ALLOW."""
     from app.core import config
     from app.core.key_pull_sources import create_params_refusal
 
@@ -184,7 +184,7 @@ def test_trusting_the_orca_stream_does_not_open_url_sources():
     ],
 )
 def test_a_trusted_host_is_reached_on_443_only(monkeypatch, server):
-    """The hypervisor must not be pointed at another port on a trusted host (security review, 14/11/2026)."""
+    """The hypervisor must not be pointed at another port, or handed credentials, on a trusted host."""
     from app.core import config
 
     monkeypatch.setattr(config.get_settings(), "key_image_servers_allow", "")
