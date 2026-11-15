@@ -20,6 +20,8 @@ const FILES = {
   css: 'frontend/src/app/globals.css',
   types: 'frontend/src/types/personalization.ts',
   provider: 'frontend/src/components/personalization-provider.tsx',
+  // The sidebar text pairs and muted tiers the provider derives from, and the accent foreground.
+  colors: 'frontend/src/lib/personalization-colors.ts',
   layout: 'frontend/src/app/layout.tsx',
   // This file only. The default hex also appears in alembic revisions and other backend
   // modules, which a backend-wide grep would report as drift.
@@ -206,17 +208,17 @@ for (const [varBase, hex] of [
   }
 }
 
-// frontend/src/components/personalization-provider.tsx and the pre-paint script in layout.tsx
-// both spell the muted tiers. They must agree with each other and with the CSS seed.
+// frontend/src/lib/personalization-colors.ts (read by the provider) and the pre-paint script in
+// layout.tsx both spell the muted tiers. They must agree with each other and with the CSS seed.
 {
-  const provider = read('provider');
+  const provider = read('colors');
   const layout = read('layout');
   const onDark = /SIDEBAR_MUTED_ON_DARK\s*=\s*"([^"]+)"/.exec(provider)?.[1] ?? null;
   const onLight = /SIDEBAR_MUTED_ON_LIGHT\s*=\s*"([^"]+)"/.exec(provider)?.[1] ?? null;
-  if (!onDark || !onLight) fail(`${FILES.provider}: SIDEBAR_MUTED_ON_DARK/LIGHT not found`);
+  if (!onDark || !onLight) fail(`${FILES.colors}: SIDEBAR_MUTED_ON_DARK/LIGHT not found`);
   if (onDark && onDark !== shipped.sidebarMuted) {
     fail(
-      `${FILES.provider}: SIDEBAR_MUTED_ON_DARK is ${onDark} but globals.css seeds ` +
+      `${FILES.colors}: SIDEBAR_MUTED_ON_DARK is ${onDark} but globals.css seeds ` +
         `--personalization-sidebar-muted as ${shipped.sidebarMuted}. The shipped ground is dark, ` +
         `so those are the same value in two files.`,
     );
@@ -232,7 +234,7 @@ for (const [varBase, hex] of [
   const textDark = /SIDEBAR_TEXT_ON_DARK\s*=\s*"([^"]+)"/.exec(provider)?.[1] ?? null;
   if (textDark && textDark !== shipped.sidebarText) {
     fail(
-      `${FILES.provider}: autoTextColor derives ${textDark} for a dark ground, but the seed for ` +
+      `${FILES.colors}: autoTextColor derives ${textDark} for a dark ground, but the seed for ` +
         `the shipped (dark) ground is ${shipped.sidebarText}. First paint and hydration disagree.`,
     );
   }
@@ -252,11 +254,19 @@ if (rgb(shipped.sidebarBg) && rgb(shipped.sidebarText)) {
     shipped.sidebarMuted ?? '',
   );
 
+  // The active pill is the accent itself under the accent's own text (globals.css .sidebar-active,
+  // personalization-colors.accentForeground), the colour an operator set rather than a
+  // contrast-adjusted one. So the pill is held to the 3:1 floor for a UI component against the
+  // ground, and its text to the 4.17:1 white on the shipped accent already carried by Badge
+  // `default` in check-semantic-colour.mjs KNOWN_CONTRAST_FAILURES: it may not get worse.
+  const white = [255, 255, 255];
+  const darkText = rgb('#1e293b');
+  const pillText = contrast(darkText, accent) > contrast(white, accent) ? darkText : white;
   const checks = [
     ['sidebar text on the sidebar ground', text, bg, 4.5],
     // The rules these two model live in globals.css; if one moves, the other must.
-    ['the active pill against the sidebar ground', mix(text, accent, 0.88), bg, 4.5],
-    ['the active pill under its own text', mix(text, accent, 0.88), bg, 4.5],
+    ['the active pill against the sidebar ground', accent, bg, 3],
+    ['the active pill under its own text', pillText, accent, 4.16],
     ['a count chip under the sidebar text', text, mix(text, bg, 0.18), 4.5],
   ];
   if (alpha) {

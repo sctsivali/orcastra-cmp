@@ -108,26 +108,38 @@ const personalizationInitScript = `
       var f = function(v){ return v <= 0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4); };
       return 0.2126*f(c[0]) + 0.7152*f(c[1]) + 0.0722*f(c[2]);
     };
-    if (h.ac) {
+    var ratio = function(x, y){ var a = lum(x), b = lum(y); return (Math.max(a,b)+0.05)/(Math.min(a,b)+0.05); };
+    var ac = rgb(h.ac);
+    if (ac) {
       r.style.setProperty('--personalization-accent', h.ac);
-      var ac = rgb(h.ac);
-      if (ac) {
-        var a = hsl(ac);
-        r.style.setProperty('--personalization-accent-h', String(a[0]));
-        r.style.setProperty('--personalization-accent-s', a[1] + '%');
-        r.style.setProperty('--personalization-accent-l', a[2] + '%');
-      }
+      var a = hsl(ac);
+      r.style.setProperty('--personalization-accent-h', String(a[0]));
+      r.style.setProperty('--personalization-accent-s', a[1] + '%');
+      r.style.setProperty('--personalization-accent-l', a[2] + '%');
+      // The accent's own text (personalization-colors.accentForeground) and the hue brand
+      // artwork turns by (accentHueShift), as the provider sets them after hydration.
+      var dark = rgb('#1e293b');
+      var fg = ratio(dark, ac) > ratio([1,1,1], ac) ? '#1e293b' : '#ffffff';
+      var f = hsl(rgb(fg));
+      r.style.setProperty('--personalization-accent-foreground', fg);
+      r.style.setProperty('--primary-foreground', f[0] + ' ' + f[1] + '% ' + f[2] + '%');
+      var shift = a[0] - hsl(rgb('#8467e4'))[0];
+      if (shift > 180) shift -= 360;
+      if (shift <= -180) shift += 360;
+      r.style.setProperty('--personalization-accent-hue-shift', shift + 'deg');
     }
-    if (h.sb) r.style.setProperty('--personalization-sidebar-bg', h.sb);
-    if (h.st) {
-      r.style.setProperty('--personalization-sidebar-text', h.st);
-      var st = rgb(h.st);
-      if (st) {
-        r.style.setProperty(
-          '--personalization-sidebar-muted',
-          lum(st) > 0.5 ? 'rgba(248,250,252,0.6)' : 'rgba(30,41,59,0.5)'
-        );
-      }
+    var sb = rgb(h.sb);
+    if (sb) r.style.setProperty('--personalization-sidebar-bg', h.sb);
+    // The text the sidebar renders: auto picks from the ground (resolvedSidebarText), so a light
+    // ground does not paint white text until React mounts.
+    var text = (h.atc !== false && !h.ust && sb) ? (lum(sb) < 0.5 ? '#f8fafc' : '#1e293b') : h.st;
+    var st = rgb(text);
+    if (st) {
+      r.style.setProperty('--personalization-sidebar-text', text);
+      r.style.setProperty(
+        '--personalization-sidebar-muted',
+        lum(st) > 0.5 ? 'rgba(248,250,252,0.6)' : 'rgba(30,41,59,0.5)'
+      );
     }
   } catch(e) {}
 })();

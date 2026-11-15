@@ -298,7 +298,7 @@ export function TagManager({
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-5 px-1 text-xs text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 hover:bg-transparent"
+                  className="h-5 px-1 text-xs text-primary hover:bg-transparent hover:text-primary"
                 >
                   +{plural(hiddenCount, "more tag")}
                 </Button>
@@ -312,7 +312,7 @@ export function TagManager({
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-5 px-1 gap-1 text-xs text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300"
+                    className="h-5 px-1 gap-1 text-xs text-primary hover:text-primary"
                   >
                     <Plus className="h-3 w-3" />
                     add tag

@@ -34,9 +34,9 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 //
 // Radix's modal Content (@radix-ui/react-dialog 1.1.15) defaults onCloseAutoFocus to
 // `event.preventDefault(); context.triggerRef.current?.focus();`, which cancels FocusScope's own
-// restore and focuses the DialogTrigger. No dialog here uses DialogTrigger: each is controlled
-// through `open`/`onOpenChange` with its opener elsewhere, usually a TableLink in a cell, so
-// triggerRef is null and nothing gets focus.
+// restore and focuses the DialogTrigger. Most dialogs here use no DialogTrigger: they are
+// controlled through `open`/`onOpenChange` with their opener elsewhere, usually a TableLink in a
+// cell, so triggerRef is null and nothing would get focus.
 //
 // So the opener is captured here. onOpenAutoFocus fires before FocusScope moves focus into the
 // content, the last moment document.activeElement is still the control the user pressed.

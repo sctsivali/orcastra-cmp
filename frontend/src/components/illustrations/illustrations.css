@@ -1,8 +1,10 @@
 /* Card illustrations.
 
    The palette is the orcastra.io brand: indigo #321D71, its lavender accent #B7A6FF for dark
-   panels, and the tints between them. It is brand artwork, so it does not follow the
-   personalization accent, which has no contrast clamp.
+   panels, and the tints between them. Every hue turns by --personalization-accent-hue-shift (0deg
+   for the shipped accent, so the default draws exactly these values), so a deployment branded red
+   gets red scenes. Saturation and lightness stay as drawn; the contrast figures below are measured
+   on the shipped hue and move a little with another one.
 
    Each object has three faces lit from the top left (top lightest, right darkest) and a hairline
    one step past its darkest face, so a pale face does not dissolve into the card and a dark object
@@ -13,49 +15,49 @@
    its hairline through --illo-e. Values are HSL triplets, with the source hex beside each. */
 
 :root {
-  --illo-paper-top: 256.4 64.7% 96.7%; /* #F4F1FC */
-  --illo-paper-left: 255 52.2% 91%; /* #E2DCF4 */
-  --illo-paper-right: 254.2 45.2% 83.5%; /* #CBC2E8 */
-  --illo-paper-edge: 252.6 41% 72.7%; /* #A99DD6 */
-  --illo-tint-top: 253.8 64.9% 85.5%; /* #CDC2F2 */
-  --illo-tint-left: 252.4 52.3% 74.5%; /* #AA9CE0 */
-  --illo-tint-right: 252.3 41.9% 63.5%; /* #8B7BC9 */
-  --illo-tint-edge: 252.4 36.7% 53.5%; /* #6F5DB4 */
-  --illo-ink-top: 252.5 44.7% 48.2%; /* #5B44B2 */
-  --illo-ink-left: 252.5 52.5% 39.6%; /* #46309A */
-  --illo-ink-right: 255 59.2% 27.8%; /* #321D71, the brand indigo is the darkest face */
-  --illo-ink-edge: 253.7 63.6% 21.6%; /* #24145A */
-  --illo-detail: 254 56.6% 32.5%; /* #3A2482 */
-  --illo-panel: 254 56.6% 32.5%; /* #3A2482 */
-  --illo-screen: 254.1 63% 84.1%; /* #C9BDF0 */
-  --illo-cut: 254.1 63% 84.1%; /* #C9BDF0 */
-  --illo-ghost: 254.1 16.3% 59.2%; /* #8E86A8 */
-  --illo-link: 252.6 41% 72.7%; /* #A99DD6 */
-  --illo-shadow: 256.4 28.2% 92.4%; /* #E9E6F1 */
+  --illo-paper-top: calc(256.4deg + var(--personalization-accent-hue-shift, 0deg)) 64.7% 96.7%; /* #F4F1FC */
+  --illo-paper-left: calc(255deg + var(--personalization-accent-hue-shift, 0deg)) 52.2% 91%; /* #E2DCF4 */
+  --illo-paper-right: calc(254.2deg + var(--personalization-accent-hue-shift, 0deg)) 45.2% 83.5%; /* #CBC2E8 */
+  --illo-paper-edge: calc(252.6deg + var(--personalization-accent-hue-shift, 0deg)) 41% 72.7%; /* #A99DD6 */
+  --illo-tint-top: calc(253.8deg + var(--personalization-accent-hue-shift, 0deg)) 64.9% 85.5%; /* #CDC2F2 */
+  --illo-tint-left: calc(252.4deg + var(--personalization-accent-hue-shift, 0deg)) 52.3% 74.5%; /* #AA9CE0 */
+  --illo-tint-right: calc(252.3deg + var(--personalization-accent-hue-shift, 0deg)) 41.9% 63.5%; /* #8B7BC9 */
+  --illo-tint-edge: calc(252.4deg + var(--personalization-accent-hue-shift, 0deg)) 36.7% 53.5%; /* #6F5DB4 */
+  --illo-ink-top: calc(252.5deg + var(--personalization-accent-hue-shift, 0deg)) 44.7% 48.2%; /* #5B44B2 */
+  --illo-ink-left: calc(252.5deg + var(--personalization-accent-hue-shift, 0deg)) 52.5% 39.6%; /* #46309A */
+  --illo-ink-right: calc(255deg + var(--personalization-accent-hue-shift, 0deg)) 59.2% 27.8%; /* #321D71, the brand indigo is the darkest face */
+  --illo-ink-edge: calc(253.7deg + var(--personalization-accent-hue-shift, 0deg)) 63.6% 21.6%; /* #24145A */
+  --illo-detail: calc(254deg + var(--personalization-accent-hue-shift, 0deg)) 56.6% 32.5%; /* #3A2482 */
+  --illo-panel: calc(254deg + var(--personalization-accent-hue-shift, 0deg)) 56.6% 32.5%; /* #3A2482 */
+  --illo-screen: calc(254.1deg + var(--personalization-accent-hue-shift, 0deg)) 63% 84.1%; /* #C9BDF0 */
+  --illo-cut: calc(254.1deg + var(--personalization-accent-hue-shift, 0deg)) 63% 84.1%; /* #C9BDF0 */
+  --illo-ghost: calc(254.1deg + var(--personalization-accent-hue-shift, 0deg)) 16.3% 59.2%; /* #8E86A8 */
+  --illo-link: calc(252.6deg + var(--personalization-accent-hue-shift, 0deg)) 41% 72.7%; /* #A99DD6 */
+  --illo-shadow: calc(256.4deg + var(--personalization-accent-hue-shift, 0deg)) 28.2% 92.4%; /* #E9E6F1 */
 }
 
 /* Dark: every face is lighter than --card so an object reads as solid, the hairline is a step
    lighter than its face, and the hero turns the brand lavender. A mark cut into it turns dark. */
 .dark {
-  --illo-paper-top: 253.3 20.7% 34.1%; /* #4D4569 */
-  --illo-paper-left: 252.4 24.6% 27.1%; /* #3B3456 */
-  --illo-paper-right: 252.4 26.1% 21.8%; /* #2F2946 */
-  --illo-paper-edge: 252.5 20% 47.1%; /* #6A6090 */
-  --illo-tint-top: 250.4 46.9% 61.6%; /* #7F6FCB */
-  --illo-tint-left: 250.8 35.5% 50.8%; /* #6555AE */
-  --illo-tint-right: 249.9 37.8% 41%; /* #4E4190 */
-  --illo-tint-edge: 250.4 56.6% 72%; /* #9D8FE0 */
-  --illo-ink-top: 252 100% 87.3%; /* #CBBEFF, below the card's text so the hero does not outshine it */
-  --illo-ink-left: 251.5 100% 82.5%; /* #B7A6FF */
-  --illo-ink-right: 250.4 61.3% 68.6%; /* #8F7EE0 */
-  --illo-ink-edge: 252.3 100% 91.4%; /* #DCD3FF */
-  --illo-detail: 251.5 100% 82.5%; /* #B7A6FF */
-  --illo-panel: 256.4 33.3% 6.5%; /* #0E0B16 */
-  --illo-screen: 251.5 100% 82.5%; /* #B7A6FF */
-  --illo-cut: 253.8 25.5% 20%; /* #2C2640 */
-  --illo-ghost: 253.5 12.7% 52%; /* #7C7594 */
-  --illo-link: 252.5 20% 47.1%; /* #6A6090 */
-  --illo-shadow: 266.7 22% 8%; /* #141019 */
+  --illo-paper-top: calc(253.3deg + var(--personalization-accent-hue-shift, 0deg)) 20.7% 34.1%; /* #4D4569 */
+  --illo-paper-left: calc(252.4deg + var(--personalization-accent-hue-shift, 0deg)) 24.6% 27.1%; /* #3B3456 */
+  --illo-paper-right: calc(252.4deg + var(--personalization-accent-hue-shift, 0deg)) 26.1% 21.8%; /* #2F2946 */
+  --illo-paper-edge: calc(252.5deg + var(--personalization-accent-hue-shift, 0deg)) 20% 47.1%; /* #6A6090 */
+  --illo-tint-top: calc(250.4deg + var(--personalization-accent-hue-shift, 0deg)) 46.9% 61.6%; /* #7F6FCB */
+  --illo-tint-left: calc(250.8deg + var(--personalization-accent-hue-shift, 0deg)) 35.5% 50.8%; /* #6555AE */
+  --illo-tint-right: calc(249.9deg + var(--personalization-accent-hue-shift, 0deg)) 37.8% 41%; /* #4E4190 */
+  --illo-tint-edge: calc(250.4deg + var(--personalization-accent-hue-shift, 0deg)) 56.6% 72%; /* #9D8FE0 */
+  --illo-ink-top: calc(252deg + var(--personalization-accent-hue-shift, 0deg)) 100% 87.3%; /* #CBBEFF, below the card's text so the hero does not outshine it */
+  --illo-ink-left: calc(251.5deg + var(--personalization-accent-hue-shift, 0deg)) 100% 82.5%; /* #B7A6FF */
+  --illo-ink-right: calc(250.4deg + var(--personalization-accent-hue-shift, 0deg)) 61.3% 68.6%; /* #8F7EE0 */
+  --illo-ink-edge: calc(252.3deg + var(--personalization-accent-hue-shift, 0deg)) 100% 91.4%; /* #DCD3FF */
+  --illo-detail: calc(251.5deg + var(--personalization-accent-hue-shift, 0deg)) 100% 82.5%; /* #B7A6FF */
+  --illo-panel: calc(256.4deg + var(--personalization-accent-hue-shift, 0deg)) 33.3% 6.5%; /* #0E0B16 */
+  --illo-screen: calc(251.5deg + var(--personalization-accent-hue-shift, 0deg)) 100% 82.5%; /* #B7A6FF */
+  --illo-cut: calc(253.8deg + var(--personalization-accent-hue-shift, 0deg)) 25.5% 20%; /* #2C2640 */
+  --illo-ghost: calc(253.5deg + var(--personalization-accent-hue-shift, 0deg)) 12.7% 52%; /* #7C7594 */
+  --illo-link: calc(252.5deg + var(--personalization-accent-hue-shift, 0deg)) 20% 47.1%; /* #6A6090 */
+  --illo-shadow: calc(266.7deg + var(--personalization-accent-hue-shift, 0deg)) 22% 8%; /* #141019 */
 }
 
 [data-slot="card-illustration"] {

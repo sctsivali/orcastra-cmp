@@ -93,6 +93,10 @@
        ground to derive from before the cookie exists. */
     --personalization-sidebar-text: #f8fafc;
     --personalization-sidebar-muted: rgba(248,250,252,0.6);
+    /* Text on the accent (white on the shipped accent), and how far brand artwork turns from its
+       drawn hue (none for the shipped accent). The provider and the pre-paint script set both. */
+    --personalization-accent-foreground: #ffffff;
+    --personalization-accent-hue-shift: 0deg;
   }
 
   /* Dark ground #14111c, in the primary's purple hue family. --border at 19% separates at 1.32:1
@@ -169,46 +173,35 @@
    so an unset variable makes the property compute to its initial value, a transparent
    background, instead of falling back to the inline style on the aside. */
 
-/* Active item, default branch: the bg-card sidebar and the collapsed rail's flyout, whose rows
-   render in a Radix portal on bg-popover outside the aside. The accent measures 3.99:1 on the
-   light popover and 4.18:1 on the dark one, above the 3:1 WCAG 1.4.11 floor. */
+/* Active item, every branch: the accent itself, as on buttons, so the colour an operator sets is
+   the colour the menu shows (the dialog says "Buttons and active menu items"). The text is the
+   accent's own foreground (personalization-colors.accentForeground: white unless the accent is
+   light). Covers the bg-card sidebar, a custom-coloured sidebar and the collapsed rail's flyout,
+   whose rows render in a Radix portal on bg-popover outside the aside.
+   important: on a custom ground the pill can sit below 3:1 against it (red #ED1C24 on yellow
+   #FFCB05 is 2.9:1). The exact accent is kept over a contrast-adjusted one so the menu shows the
+   colour that was set; the shipped pair (#8467e4 on #321f6f) measures 3.23:1. */
 .sidebar-active,
-.sidebar-active:hover {
+.sidebar-active:hover,
+.sidebar-custom-bg .sidebar-active,
+.sidebar-custom-bg .sidebar-active:hover {
   background-color: var(--personalization-accent, #8467e4) !important;
-  color: white !important;
+  color: var(--personalization-accent-foreground, #ffffff) !important;
 }
 
 .sidebar-active span:not(.sidebar-count):not(.sidebar-count-solid),
 .sidebar-active svg,
-.sidebar-active p {
-  color: white !important;
+.sidebar-active p,
+.sidebar-custom-bg .sidebar-active span:not(.sidebar-count):not(.sidebar-count-solid),
+.sidebar-custom-bg .sidebar-active svg,
+.sidebar-custom-bg .sidebar-active p {
+  color: var(--personalization-accent-foreground, #ffffff) !important;
 }
 
 /* Sidebar with a custom background: text colour for every descendant. */
 .sidebar-custom-bg {
   background-color: var(--personalization-sidebar-bg, #321f6f) !important;
   color: var(--personalization-sidebar-text, #f8fafc) !important;
-}
-
-/* Active item, custom-ground branch. The pill is mixed from the sidebar's text and accent, since
-   one mid-tone accent cannot stand 3:1 off a dark ground and carry 4.5:1 text at once. On #321f6f
-   it resolves to #eae8f9 at 11.15:1; on a white sidebar, to #2a304f with white text at 12.85:1.
-   important: keep :hover listed. Without it this ties with the unscoped `.sidebar-active:hover`
-   at (0,2,0), source order decides, and a :hover that sticks after a tap leaves the wrong pill. */
-.sidebar-custom-bg .sidebar-active,
-.sidebar-custom-bg .sidebar-active:hover {
-  background-color: color-mix(
-    in srgb,
-    var(--personalization-sidebar-text, #f8fafc) 88%,
-    var(--personalization-accent, #8467e4)
-  ) !important;
-  color: var(--personalization-sidebar-bg, #321f6f) !important;
-}
-
-.sidebar-custom-bg .sidebar-active span:not(.sidebar-count):not(.sidebar-count-solid),
-.sidebar-custom-bg .sidebar-active svg,
-.sidebar-custom-bg .sidebar-active p {
-  color: var(--personalization-sidebar-bg, #321f6f) !important;
 }
 
 /* Text elements in the sidebar; buttons and links are handled below. */

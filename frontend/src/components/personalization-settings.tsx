@@ -4,6 +4,9 @@ import * as React from "react";
 import Image from "next/image";
 import { useBrandingEditor } from "./branding/branding-editor-context";
 import { IllustrationsDefaultField } from "./personalization/illustrations-default-field";
+import { CustomColorDialog } from "./personalization/custom-color-dialog";
+import { LoadingLottie } from "./loading-lottie";
+import { resolvedSidebarText, sameColor } from "@/lib/personalization-colors";
 import { useTheme } from "./theme-provider";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -35,7 +38,6 @@ import {
   Redo2,
   Sun,
   Moon,
-  Palette,
   Type,
   Layout,
   Trash2,
@@ -43,8 +45,6 @@ import {
   AlertCircle,
   Eye,
   Paintbrush,
-  Settings,
-  Monitor,
 } from "lucide-react";
 import {
   Dialog,
@@ -481,8 +481,8 @@ export function PersonalizationSettings() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      <div className="flex items-center justify-center py-12" role="status" aria-label="Loading personalization">
+        <LoadingLottie size={64} />
       </div>
     );
   }
@@ -756,16 +756,20 @@ export function PersonalizationSettings() {
               <p className="text-xs text-muted-foreground">Quick theme combinations (includes optimized text colors)</p>
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
                 {THEME_PRESETS.map((preset) => {
-                  const isSelected = 
-                    settings.colors.accentColor === preset.accentColor && 
-                    settings.colors.sidebarBgColor === preset.sidebarBgColor &&
-                    settings.colors.sidebarTextColor === preset.sidebarTextColor;
-                  
+                  // What the sidebar actually renders: a preset is only "on" while the custom
+                  // ground is in use, and the text compared is the one auto would pick.
+                  const isSelected =
+                    settings.colors.useCustomSidebarBg &&
+                    sameColor(settings.colors.accentColor, preset.accentColor) &&
+                    sameColor(settings.colors.sidebarBgColor, preset.sidebarBgColor) &&
+                    sameColor(resolvedSidebarText(settings.colors), preset.sidebarTextColor);
+
                   return (
                     <button
                       key={preset.name}
                       type="button"
-                      className={`relative p-2 rounded-lg border-2 transition-all hover:scale-105 ${
+                      aria-pressed={isSelected}
+                      className={`relative p-2 rounded-lg border-2 transition-transform hover:scale-105 motion-reduce:transition-none motion-reduce:hover:scale-100 ${
                         isSelected
                           ? "border-foreground ring-2 ring-offset-2 ring-offset-background ring-foreground/20"
                           : "border-muted hover:border-muted-foreground/50"
@@ -819,344 +823,7 @@ export function PersonalizationSettings() {
             </div>
 
             <div className="border-t pt-4">
-              <Dialog>
-                <DialogTrigger asChild>
-                  <Button variant="outline" className="w-full gap-2">
-                    <Palette className="h-4 w-4" />
-                    Customize Colors
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-                  <DialogHeader>
-                    <DialogTitle>
-                      Custom Color Settings
-                    </DialogTitle>
-                    <DialogDescription>
-                      Fine-tune individual color settings for your dashboard
-                    </DialogDescription>
-                  </DialogHeader>
-                  
-                  <div className="space-y-6 py-4">
-                    <div className="space-y-3">
-                      <div>
-                        <Label className="text-sm font-medium">Accent Color</Label>
-                        <p className="text-xs text-muted-foreground">Buttons and active menu items</p>
-                      </div>
-                      
-                      <div className="space-y-2">
-                        <Label className="text-xs text-muted-foreground">Presets</Label>
-                        <div className="flex flex-wrap gap-2">
-                          {COLOR_PRESETS.map((preset) => (
-                            <button
-                              key={preset.value}
-                              type="button"
-                              className={`w-8 h-8 rounded-md border-2 transition-all hover:scale-110 ${
-                                settings.colors.accentColor === preset.value && !settings.colors.useCustomAccent
-                                  ? "border-foreground ring-2 ring-offset-2 ring-offset-background ring-foreground/20"
-                                  : "border-transparent"
-                              }`}
-                              style={{ backgroundColor: preset.value }}
-                              onClick={() => updateColors({ accentColor: preset.value, useCustomAccent: false })}
-                              title={preset.name}
-                            />
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-3">
-                        <Label className="text-xs text-muted-foreground">Custom</Label>
-                        <input
-                          type="color"
-                          value={settings.colors.accentColor || DEFAULTS.accentColor}
-                          onChange={(e) => updateColors({ accentColor: e.target.value, useCustomAccent: true })}
-                          className="w-10 h-8 rounded cursor-pointer border-0 p-0"
-                        />
-                        <Input
-                          value={settings.colors.accentColor || DEFAULTS.accentColor}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            if (/^#[0-9A-Fa-f]{0,6}$/.test(val)) {
-                              updateColors({ accentColor: val, useCustomAccent: true });
-                            }
-                          }}
-                          placeholder={DEFAULTS.accentColor}
-                          className="w-28 font-mono text-sm"
-                          maxLength={7}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="border-t pt-6">
-                      <div className="space-y-3">
-                        <div>
-                          <Label className="text-sm font-medium">Sidebar Background</Label>
-                          <p className="text-xs text-muted-foreground">
-                            {!settings.colors.useCustomSidebarBg 
-                              ? "Using system theme (follows dark/light mode)" 
-                              : "Custom sidebar background color"}
-                          </p>
-                        </div>
-
-                        <div className="flex items-center gap-3">
-                          <Button
-                            variant={!settings.colors.useCustomSidebarBg ? "default" : "outline"}
-                            size="sm"
-                            onClick={() => updateColors({ useCustomSidebarBg: false, autoTextColor: true })}
-                            className="gap-2"
-                          >
-                            <Monitor className="h-4 w-4" />
-                            Use System Theme
-                          </Button>
-                        </div>
-                        
-                        <div className="space-y-2">
-                          <Label className="text-xs text-muted-foreground">Or choose a custom color</Label>
-                          <div className="flex flex-wrap gap-2">
-                            {SIDEBAR_BG_PRESETS.map((preset) => {
-                              const isDark = parseInt(preset.value.slice(1), 16) < 0x888888;
-                              return (
-                                <button
-                                  key={preset.value}
-                                  type="button"
-                                  className={`w-8 h-8 rounded-md border-2 transition-all hover:scale-110 ${
-                                    settings.colors.useCustomSidebarBg && settings.colors.sidebarBgColor === preset.value
-                                      ? "border-foreground ring-2 ring-offset-2 ring-offset-background ring-foreground/20"
-                                      : isDark ? "border-muted-foreground/30" : "border-muted"
-                                  }`}
-                                  style={{ backgroundColor: preset.value }}
-                                  onClick={() => updateColors({ sidebarBgColor: preset.value, useCustomSidebarBg: true, autoTextColor: true })}
-                                  title={preset.name}
-                                />
-                              );
-                            })}
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-3">
-                          <Label className="text-xs text-muted-foreground">Custom</Label>
-                          <input
-                            type="color"
-                            value={settings.colors.sidebarBgColor || DEFAULTS.sidebarBgColor}
-                            onChange={(e) => updateColors({ sidebarBgColor: e.target.value, useCustomSidebarBg: true, autoTextColor: true })}
-                            className="w-10 h-8 rounded cursor-pointer border-0 p-0"
-                          />
-                          <Input
-                            value={settings.colors.sidebarBgColor || DEFAULTS.sidebarBgColor}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              if (/^#[0-9A-Fa-f]{0,6}$/.test(val)) {
-                                updateColors({ sidebarBgColor: val, useCustomSidebarBg: true, autoTextColor: true });
-                              }
-                            }}
-                            placeholder={DEFAULTS.sidebarBgColor}
-                            className="w-28 font-mono text-sm"
-                            maxLength={7}
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="border-t pt-6">
-                      <div className="space-y-3">
-                        {(() => {
-                          const hasCustomLogo = !!(settings.logo.lightModeLogo || settings.logo.darkModeLogo);
-                          
-                          return (
-                            <>
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <Label className="text-sm font-medium">Sidebar Logo Color</Label>
-                                  <p className="text-xs text-muted-foreground">
-                                    {hasCustomLogo 
-                                      ? "Disabled when using custom logo"
-                                      : "Choose logo color variant for the sidebar"}
-                                  </p>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <div className="flex gap-1">
-                                    <div className={`w-6 h-6 rounded bg-white border flex items-center justify-center ${hasCustomLogo ? "opacity-50" : ""}`}>
-                                      <Image src="/orca-logo-black.png" alt="Black logo" width={20} height={20} className="object-contain" />
-                                    </div>
-                                    <div className={`w-6 h-6 rounded bg-slate-800 border border-slate-700 flex items-center justify-center ${hasCustomLogo ? "opacity-50" : ""}`}>
-                                      <Image src="/orca-logo-white.png" alt="White logo" width={20} height={20} className="object-contain" />
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-                              
-                              <div className="flex items-center gap-3">
-                                <Button
-                                  variant={(!settings.colors.sidebarLogoColor || settings.colors.sidebarLogoColor === "auto") ? "default" : "outline"}
-                                  size="sm"
-                                  onClick={() => updateColors({ sidebarLogoColor: "auto" })}
-                                  className="gap-2"
-                                  disabled={hasCustomLogo}
-                                >
-                                  <Check className={`h-4 w-4 ${(!settings.colors.sidebarLogoColor || settings.colors.sidebarLogoColor === "auto") ? "opacity-100" : "opacity-0"}`} />
-                                  Auto
-                                </Button>
-                                <Button
-                                  variant={settings.colors.sidebarLogoColor === "black" ? "default" : "outline"}
-                                  size="sm"
-                                  onClick={() => updateColors({ sidebarLogoColor: "black" })}
-                                  className="gap-2"
-                                  disabled={hasCustomLogo}
-                                >
-                                  <Check className={`h-4 w-4 ${settings.colors.sidebarLogoColor === "black" ? "opacity-100" : "opacity-0"}`} />
-                                  Black
-                                </Button>
-                                <Button
-                                  variant={settings.colors.sidebarLogoColor === "white" ? "default" : "outline"}
-                                  size="sm"
-                                  onClick={() => updateColors({ sidebarLogoColor: "white" })}
-                                  className="gap-2"
-                                  disabled={hasCustomLogo}
-                                >
-                                  <Check className={`h-4 w-4 ${settings.colors.sidebarLogoColor === "white" ? "opacity-100" : "opacity-0"}`} />
-                                  White
-                                </Button>
-                              </div>
-                              
-                              <p className="text-xs text-muted-foreground">
-                                {hasCustomLogo 
-                                  ? "Remove custom logos to use default logo color variants"
-                                  : "Auto: follows sidebar background brightness (or system theme when using default sidebar)"}
-                              </p>
-                            </>
-                          );
-                        })()}
-                      </div>
-                    </div>
-
-                    <div className="border-t pt-6">
-                      <div className="space-y-3">
-                        <div>
-                          <Label className="text-sm font-medium">Sidebar Text Color</Label>
-                          <p className="text-xs text-muted-foreground">
-                            {settings.colors.autoTextColor !== false && !settings.colors.useCustomSidebarText
-                              ? "Auto-calculated based on background brightness"
-                              : "Custom text color for sidebar labels and icons"}
-                          </p>
-                        </div>
-                        
-                        <div className="flex items-center gap-4">
-                          <Button
-                            variant={settings.colors.autoTextColor !== false && !settings.colors.useCustomSidebarText ? "default" : "outline"}
-                            size="sm"
-                            onClick={() => updateColors({ autoTextColor: true, useCustomSidebarText: false })}
-                            className="gap-2"
-                          >
-                            <Check className={`h-4 w-4 ${settings.colors.autoTextColor !== false && !settings.colors.useCustomSidebarText ? "opacity-100" : "opacity-0"}`} />
-                            Auto
-                          </Button>
-                          <Button
-                            variant={settings.colors.useCustomSidebarText ? "default" : "outline"}
-                            size="sm"
-                            onClick={() => updateColors({ useCustomSidebarText: true, autoTextColor: false })}
-                            className="gap-2"
-                          >
-                            <Check className={`h-4 w-4 ${settings.colors.useCustomSidebarText ? "opacity-100" : "opacity-0"}`} />
-                            Manual
-                          </Button>
-                        </div>
-
-                        {settings.colors.useCustomSidebarText && (
-                          <>
-                            <div className="space-y-2">
-                              <Label className="text-xs text-muted-foreground">Presets</Label>
-                              <div className="flex flex-wrap gap-2">
-                                {[
-                                  { name: "Dark", value: "#1e293b" },
-                                  { name: "Black", value: "#0f172a" },
-                                  { name: "Slate", value: "#334155" },
-                                  { name: "Gray", value: "#4b5563" },
-                                  { name: "White (Default)", value: "#f8fafc" },
-                                  { name: "Light", value: "#e2e8f0" },
-                                  { name: "Indigo", value: "#e0e7ff" },
-                                  { name: "Cyan", value: "#cffafe" },
-                                ].map((preset) => {
-                                  const isLight = parseInt(preset.value.slice(1), 16) > 0x888888;
-                                  return (
-                                    <button
-                                      key={preset.value}
-                                      type="button"
-                                      className={`w-8 h-8 rounded-md border-2 transition-all hover:scale-110 flex items-center justify-center ${
-                                        settings.colors.sidebarTextColor === preset.value
-                                          ? "border-foreground ring-2 ring-offset-2 ring-offset-background ring-foreground/20"
-                                          : isLight ? "border-muted-foreground/30" : "border-muted"
-                                      }`}
-                                      style={{ backgroundColor: isLight ? "#1e293b" : "#f8fafc" }}
-                                      onClick={() => updateColors({ sidebarTextColor: preset.value })}
-                                      title={preset.name}
-                                    >
-                                      <Type className="h-4 w-4" style={{ color: preset.value }} />
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-3">
-                              <Label className="text-xs text-muted-foreground">Custom</Label>
-                              <input
-                                type="color"
-                                value={settings.colors.sidebarTextColor || DEFAULTS.sidebarTextColor}
-                                onChange={(e) => updateColors({ sidebarTextColor: e.target.value, useCustomSidebarText: true, autoTextColor: false })}
-                                className="w-10 h-8 rounded cursor-pointer border-0 p-0"
-                              />
-                              <Input
-                                value={settings.colors.sidebarTextColor || DEFAULTS.sidebarTextColor}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  if (/^#[0-9A-Fa-f]{0,6}$/.test(val)) {
-                                    updateColors({ sidebarTextColor: val, useCustomSidebarText: true, autoTextColor: false });
-                                  }
-                                }}
-                                placeholder={DEFAULTS.sidebarTextColor}
-                                className="w-28 font-mono text-sm"
-                                maxLength={7}
-                              />
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="border-t pt-6">
-                      <div className="p-3 rounded-lg border">
-                        <p className="text-xs text-muted-foreground mb-2">Live Preview</p>
-                        <div 
-                          className="p-4 rounded-md flex items-center gap-3"
-                          style={{ 
-                            backgroundColor: settings.colors.sidebarBgColor || DEFAULTS.sidebarBgColor,
-                          }}
-                        >
-                          <div 
-                            className="w-8 h-8 rounded-md flex items-center justify-center"
-                            style={{ backgroundColor: settings.colors.accentColor || DEFAULTS.accentColor }}
-                          >
-                            <Settings className="h-4 w-4 text-white" />
-                          </div>
-                          <div>
-                            <p 
-                              className="text-sm font-medium"
-                              style={{ color: settings.colors.sidebarTextColor || DEFAULTS.sidebarTextColor }}
-                            >
-                              Settings
-                            </p>
-                            <p 
-                              className="text-xs opacity-60"
-                              style={{ color: settings.colors.sidebarTextColor || DEFAULTS.sidebarTextColor }}
-                            >
-                              Personalization
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </DialogContent>
-              </Dialog>
+              <CustomColorDialog settings={settings} updateColors={updateColors} />
             </div>
           </CardContent>
         </Card>

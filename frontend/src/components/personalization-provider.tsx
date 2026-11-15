@@ -5,6 +5,15 @@ import { useSession } from "next-auth/react";
 import { DEFAULT_PERSONALIZATION, type PersonalizationSettings, type PersonalizationContextType } from "@/types/personalization";
 import { hasMappedRole } from "@/types/rbac";
 import { hexToHSL } from "@/lib/color";
+import {
+  accentForeground,
+  accentHueShift,
+  hslTriplet,
+  isHexColor,
+  mutedForText,
+  relativeLuminance,
+  resolvedSidebarText,
+} from "@/lib/personalization-colors";
 import { PERSONALIZATION_COOKIE, parseByteUnitsHint, parsePersonalizationHint, toPersonalizationHint } from "@/lib/personalization-cookie";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { ByteUnitsContext } from "@/hooks/use-byte-format";
@@ -12,21 +21,6 @@ import type { ByteUnitSystem } from "@/lib/byte-units";
 import { setRequestByteUnits } from "@/lib/api";
 import { usePersonalizationSync, type ThemeOrigin } from "./personalization/use-personalization-sync";
 import { usePersonalizationMutations } from "./personalization/use-personalization-mutations";
-
-// The two sidebar text pairs autoTextColor picks between, and the alpha tiers that go with
-// them. Named because app/globals.css seeds the same values for the pre-paint path and
-// scripts/checks/check-personalization-defaults.mjs holds the two copies equal.
-const SIDEBAR_TEXT_ON_DARK = "#f8fafc";
-const SIDEBAR_TEXT_ON_LIGHT = "#1e293b";
-const SIDEBAR_MUTED_ON_DARK = "rgba(248,250,252,0.6)";
-const SIDEBAR_MUTED_ON_LIGHT = "rgba(30,41,59,0.5)";
-
-/** The muted tier that belongs with a given sidebar text colour. */
-function mutedForText(textColor: string): string {
-  const hsl = hexToHSL(textColor);
-  if (!hsl) return SIDEBAR_MUTED_ON_DARK;
-  return hsl.l < 50 ? SIDEBAR_MUTED_ON_LIGHT : SIDEBAR_MUTED_ON_DARK;
-}
 
 export const PersonalizationContext = React.createContext<PersonalizationContextType | undefined>(undefined);
 
@@ -118,45 +112,50 @@ export function PersonalizationProvider({ children, initialSettings, initialByte
     if (typeof document === "undefined") return;
     
     const root = document.documentElement;
-    const accentColor = settings.colors.accentColor || DEFAULT_PERSONALIZATION.colors.accentColor;
-    const sidebarBgColor =
-      settings.colors.sidebarBgColor || DEFAULT_PERSONALIZATION.colors.sidebarBgColor;
-    
-    // The accent drives buttons and the sidebar active state.
-    root.style.setProperty("--personalization-accent", accentColor);
-    root.style.setProperty("--personalization-sidebar-bg", sidebarBgColor);
-    
-    // shadcn/ui tokens take HSL components.
-    const accentHSL = hexToHSL(accentColor);
-    const sidebarBgHSL = hexToHSL(sidebarBgColor);
-    
-    if (accentHSL) {
-      root.style.setProperty("--personalization-accent-h", String(accentHSL.h));
-      root.style.setProperty("--personalization-accent-s", `${accentHSL.s}%`);
-      root.style.setProperty("--personalization-accent-l", `${accentHSL.l}%`);
-    }
-    
-    // Pick the text colour from the background brightness.
-    let textColor =
-      settings.colors.sidebarTextColor || DEFAULT_PERSONALIZATION.colors.sidebarTextColor;
+    // important: only a complete #RRGGBB reaches the variables. The editor's hex field hands over
+    // what is typed, and a partial value would paint the sidebar pill transparent while the
+    // buttons, which read the triplet, kept the previous accent.
+    const accentColor = isHexColor(settings.colors.accentColor)
+      ? settings.colors.accentColor
+      : null;
+    const sidebarBgColor = isHexColor(settings.colors.sidebarBgColor)
+      ? settings.colors.sidebarBgColor
+      : null;
 
-    if (settings.colors.autoTextColor !== false && !settings.colors.useCustomSidebarText) {
+    // The accent drives buttons and the active menu item, with text that reads on it.
+    if (accentColor) {
+      root.style.setProperty("--personalization-accent", accentColor);
+      const accentHSL = hexToHSL(accentColor);
+      if (accentHSL) {
+        root.style.setProperty("--personalization-accent-h", String(accentHSL.h));
+        root.style.setProperty("--personalization-accent-s", `${accentHSL.s}%`);
+        root.style.setProperty("--personalization-accent-l", `${accentHSL.l}%`);
+      }
+      const foreground = accentForeground(accentColor);
+      root.style.setProperty("--personalization-accent-foreground", foreground);
+      const foregroundTriplet = hslTriplet(foreground);
+      if (foregroundTriplet) root.style.setProperty("--primary-foreground", foregroundTriplet);
+      // Brand artwork (loader, card illustrations) turns by this many degrees.
+      root.style.setProperty("--personalization-accent-hue-shift", `${accentHueShift(accentColor)}deg`);
+    }
+
+    if (sidebarBgColor) {
+      root.style.setProperty("--personalization-sidebar-bg", sidebarBgColor);
+      const sidebarBgHSL = hexToHSL(sidebarBgColor);
       if (sidebarBgHSL) {
-        const isDarkBg = calculateRelativeLuminance(sidebarBgColor) < 0.5;
-        textColor = isDarkBg ? SIDEBAR_TEXT_ON_DARK : SIDEBAR_TEXT_ON_LIGHT;
+        root.style.setProperty("--personalization-sidebar-bg-h", String(sidebarBgHSL.h));
+        root.style.setProperty("--personalization-sidebar-bg-s", `${sidebarBgHSL.s}%`);
+        root.style.setProperty("--personalization-sidebar-bg-l", `${sidebarBgHSL.l}%`);
       }
     }
-    // Derived from whichever text colour won above, in every branch, so an unparseable sidebar
-    // colour cannot leave near-white text over a near-black muted tier.
-    const mutedTextColor = mutedForText(textColor);
-    
-    root.style.setProperty("--personalization-sidebar-text", textColor);
-    root.style.setProperty("--personalization-sidebar-muted", mutedTextColor);
-    
-    if (sidebarBgHSL) {
-      root.style.setProperty("--personalization-sidebar-bg-h", String(sidebarBgHSL.h));
-      root.style.setProperty("--personalization-sidebar-bg-s", `${sidebarBgHSL.s}%`);
-      root.style.setProperty("--personalization-sidebar-bg-l", `${sidebarBgHSL.l}%`);
+
+    // The text colour the sidebar renders (auto picks from the ground), and its muted tier, derived
+    // from whichever colour won so an unparseable ground cannot leave near-white text over a
+    // near-black muted tier.
+    const textColor = resolvedSidebarText(settings.colors);
+    if (isHexColor(textColor)) {
+      root.style.setProperty("--personalization-sidebar-text", textColor);
+      root.style.setProperty("--personalization-sidebar-muted", mutedForText(textColor));
     }
   }, [settings.colors]);
 
@@ -179,20 +178,6 @@ export function PersonalizationProvider({ children, initialSettings, initialByte
       </ByteUnitsContext.Provider>
     </PersonalizationContext.Provider>
   );
-}
-
-/** WCAG relative luminance of a hex colour; 0.5 when it does not parse. */
-function calculateRelativeLuminance(hex: string): number {
-  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  if (!result) return 0.5;
-  
-  const sRGB = [
-    parseInt(result[1], 16) / 255,
-    parseInt(result[2], 16) / 255,
-    parseInt(result[3], 16) / 255,
-  ].map((c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)));
-  
-  return 0.2126 * sRGB[0] + 0.7152 * sRGB[1] + 0.0722 * sRGB[2];
 }
 
 /** The personalization context. Throws outside a PersonalizationProvider. */
@@ -230,10 +215,10 @@ export function useCurrentLogo(theme: "light" | "dark" | "system") {
     
     // Auto: a custom sidebar background decides first.
     if (settings.colors.useCustomSidebarBg) {
-      const bgLuminance = calculateRelativeLuminance(
+      const bgLuminance = relativeLuminance(
         settings.colors.sidebarBgColor || DEFAULT_PERSONALIZATION.colors.sidebarBgColor,
       );
-      const isDarkBg = bgLuminance < 0.5;
+      const isDarkBg = (bgLuminance ?? 0.5) < 0.5;
       if (isDarkBg) {
         return settings.logo.darkModeLogo || "/orca-logo-white.png";
       }
