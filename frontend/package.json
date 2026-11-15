@@ -101,7 +101,7 @@
     "minimatch@9": "9.0.9",
     "nanoid": "3.3.19",
     "postcss": "8.5.28",
-    "postcss-selector-parser": "6.1.4",
+    "postcss-selector-parser": "6.1.6",
     "readdirp": {
       "picomatch": "2.3.2"
     },
