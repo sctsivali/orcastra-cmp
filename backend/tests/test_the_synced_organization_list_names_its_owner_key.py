@@ -236,3 +236,39 @@ async def test_a_buyer_founder_does_not_see_the_sellers_owner_key(listing: Dict[
     assert (selling["org-expiring"]["owner_key_name"], selling["org-expiring"]["owner_key_state"]) == (
         "oak_expiring name", "expiring",
     )
+
+
+# How each cluster is bound, and who may change the bindings (Synced Organizations > Clusters).
+
+async def test_each_binding_says_how_it_came_to_be(listing: Dict[str, Any]) -> None:
+    db, ids = listing["db"], listing["ids"]
+    db.add_all([
+        OrganizationCluster(organization_id=ids["org-expiring"], cluster_id="reg", registered_by="p@example.test"),
+        OrganizationCluster(organization_id=ids["org-expiring"], cluster_id="lent", granted_by="admin@example.test"),
+        OrganizationCluster(organization_id=ids["org-expiring"], cluster_id="sold"),
+    ])
+    db.sync.commit()
+    rows = {row["slug"]: row for row in await get(listing, ADMIN)}
+    kinds = {b["cluster_id"]: b["kind"] for b in rows["org-expiring"]["cluster_bindings"]}
+    assert kinds == {"reg": "registered", "lent": "granted", "sold": "purchase"}
+    assert "granted_by" not in str(rows["org-expiring"]["cluster_bindings"]), "the grantor's email stays out"
+
+
+async def test_an_admin_and_a_running_partner_may_manage_and_a_member_may_not(listing: Dict[str, Any]) -> None:
+    db, ids = listing["db"], listing["ids"]
+    db.add(OrganizationMember(organization_id=ids["org-active"], user_email=PARTNER.email, role="tenant"))
+    db.sync.commit()
+    admin_rows = {row["slug"]: row for row in await get(listing, ADMIN)}
+    assert all(row["can_manage_clusters"] for row in admin_rows.values())
+    partner_rows = {row["slug"]: row for row in await get(listing, PARTNER)}
+    assert partner_rows["org-revoked"]["can_manage_clusters"] is True, "a partner row runs the organization"
+    assert partner_rows["org-active"]["can_manage_clusters"] is False, "a member row does not"
+
+
+async def test_the_owner_keys_action_follows_the_setting(listing: Dict[str, Any], monkeypatch) -> None:
+    monkeypatch.setattr(integrations, "multi_owner_enabled", lambda: False)
+    rows = await get(listing, ADMIN)
+    assert rows and all(row["owner_sets_enabled"] is False for row in rows)
+    monkeypatch.setattr(integrations, "multi_owner_enabled", lambda: True)
+    rows = await get(listing, ADMIN)
+    assert all(row["owner_sets_enabled"] is True for row in rows)

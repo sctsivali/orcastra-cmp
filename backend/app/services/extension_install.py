@@ -42,6 +42,7 @@ from app.services.extension_scope import (
 )
 from app.services.extension_teardown import teardown_install
 from app.services.integration_key_ownership import (
+    SYNC_CAPABILITIES,
     carry_owned_organizations,
     record_carried_organizations,
     refuse_if_key_owns_organizations,
@@ -353,9 +354,30 @@ async def rescope_install(
     # leave the new one on the old scope, which the sweep cannot detect: it compares the row with itself.
     install = await lock_installation(db, install)
     keys = live_credentials(install)
+    handed_off: Dict[str, List[Any]] = {}
     async with AsyncExitStack() as held:
         for key_id in keys:
             await held.enter_async_context(serialize_key_ownership(db, key_id))
+        # important: a narrower consent that drops org.sync (or inventory.read) leaves the add-on's
+        # credential unable to sync the organizations it owns, as a capability edit would. The same
+        # refusal runs here, before the row or the credential changes; an organization another
+        # owner can still sync moves its primary there (uninstall does this with remove=True).
+        withdrawn = tuple(
+            name for name in SYNC_CAPABILITIES
+            if name in set(install.granted_capabilities or []) and name not in set(capabilities)
+        )
+        if withdrawn:
+            from app.routers.integrations import _owner_metadata_reader
+            from app.services.integration_key_ownership import apply_owner_handoffs, owned_org_ids_to_lock
+
+            org_ids = sorted({org_id for key_id in keys for org_id in await owned_org_ids_to_lock(db, key_id)})
+            await held.enter_async_context(serialize_org_owners(db, org_ids))
+            for key_id in keys:
+                handoffs = await refuse_if_key_owns_organizations(
+                    db, key_id, action="capabilities", user=user, metadata={"extension_install_id": install.id},
+                    withdrawn=withdrawn, read_metadata=_owner_metadata_reader(vault_client),
+                )
+                handed_off[key_id] = await apply_owner_handoffs(db, key_id, handoffs, remove=False)
         install.granted_capabilities = sorted(set(capabilities))
         install.granted_scope = grant_dicts
         install.consent_version = consent_version
@@ -377,6 +399,12 @@ async def rescope_install(
         )
         await db.commit()
     await db.refresh(install)
+    if handed_off:
+        from app.services.integration_key_ownership import record_owner_handoffs
+
+        for key_id, changes in handed_off.items():
+            record_owner_handoffs(changes, key_id=key_id, action="capabilities",
+                                  actor_email=getattr(user, "email", None), remove=False)
     for key_id in keys:
         evict_install_cache(key_id)
     return install

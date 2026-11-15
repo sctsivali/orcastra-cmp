@@ -17,7 +17,8 @@ KNOWN_RULE_WRITERS = {
     ("routers/tenant_access.py", "create_policy"),
     ("routers/tenant_access.py", "update_policy"),
     ("routers/integrations.py", "provision_tenant_access"),
-    ("routers/integrations.py", "sync_policies_from_external"),
+    # The policy sync writes each policy through one helper, inside its own savepoint.
+    ("routers/integrations.py", "_write_synced_policy"),
     ("services/project_grants.py", "grant_project_to_creator"),
 }
 

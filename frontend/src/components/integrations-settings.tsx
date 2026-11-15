@@ -768,7 +768,11 @@ function IntegrationsSettingsContent() {
         onClose={() => setRotatedKeys((queue) => queue.slice(1))}
         response={rotatedKeys[0] ?? null}
         title="Secret Rotated"
-        description="The previous secret no longer works, and the key's callback URL was cleared until the connection syncs again. Update the integration that uses this key, such as the OrcaHub connection, with this secret now. It will not be shown again."
+        description={
+          rotatedKeys[0]?.callback_url_cleared
+            ? "The previous secret no longer works, and the key's callback URL was cleared until the connection syncs again. Update the integration that uses this key, such as the OrcaHub connection, with this secret now. It will not be shown again."
+            : "The previous secret no longer works. Update the integration that uses this key, such as the OrcaHub connection, with this secret now. It will not be shown again."
+        }
       />
     </div>
   );

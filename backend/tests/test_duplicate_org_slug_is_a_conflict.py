@@ -71,6 +71,9 @@ class _ExistingOrg:
         self.slug = slug
         self.api_key_id = api_key_id
         self.id = 1
+        self.is_active = True
+        self.provider_organization_id = None
+        self.provider_link_source = None
 
 
 class _OwnedElsewhereSession(_SlugTakenSession):
@@ -203,17 +206,30 @@ class ForeignKeyOwnershipTests(_RegistryKnowsNuc2):
             db.added, [], "nothing may be staged once the organisation is known to be owned"
         )
 
-    def test_an_unclaimed_org_still_provisions(self):
-        """A row no key has claimed must not be refused, which is sync's rule too."""
+    def test_an_unclaimed_org_is_claimed_not_created_again(self):
+        """A row no key has claimed is claimed by the provisioning key, as sync claims it.
+
+        It used to fall through to the create and answer a misleading slug conflict, since the
+        external id was already taken by the unclaimed row itself.
+        """
         owner = _ExistingOrg(slug="sundial", api_key_id=None)
         db = _OwnedElsewhereSession(owner)
 
-        # Reaches the create, so the fake's flush raises the duplicate-slug IntegrityError
-        # and the conflict path answers rather than the ownership one.
-        with self.assertRaises(HTTPException) as caught:
+        try:
             asyncio.run(provision_tenant_access(body=_Body(), api_key=_api_key(), db=db))
+        except HTTPException as refused:
+            self.assertNotIn("different integration key", str(refused.detail))
+            self.assertNotIn("already belongs to a different organization", str(refused.detail))
+        except IntegrityError:
+            # The fake session fails every flush, so the rest of the provision cannot run here;
+            # only the claim is judged.
+            pass
 
-        self.assertNotIn("different integration key", str(caught.exception.detail))
+        self.assertEqual(owner.api_key_id, "key-1", "the unclaimed organization is claimed")
+        self.assertFalse(
+            any(type(obj).__name__ == "Organization" for obj in db.added),
+            "no second organization row is staged",
+        )
 
 
 

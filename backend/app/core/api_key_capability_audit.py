@@ -19,6 +19,20 @@ from app.core.api_key_capabilities import (
 )
 
 CAPABILITIES_UPDATE_ACTION = "integration.api_key.capabilities.update"
+PERMISSIONS_UPDATE_ACTION = "integration.api_key.permissions.update"
+
+
+def grant_summary(grants: Any) -> List[Dict[str, Any]]:
+    """A key's cluster grants reduced to cluster id, levels and projects, for an audit record."""
+    out: List[Dict[str, Any]] = []
+    for grant in grants or []:
+        if isinstance(grant, dict):
+            out.append({
+                "cluster_id": grant.get("cluster_id"),
+                "permissions": list(grant.get("permissions") or []),
+                "projects": list(grant.get("projects") or ["default"]),
+            })
+    return out
 
 
 def _known(names: Optional[set[str]]) -> Optional[List[str]]:

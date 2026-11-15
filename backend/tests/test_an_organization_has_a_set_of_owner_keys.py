@@ -81,7 +81,9 @@ async def test_every_claim_path_puts_its_key_in_the_set(sale: Dict[str, Any]) ->
     await assert_owner_invariants(db)
 
 
-async def test_a_co_owner_syncs_without_moving_the_primary(hub: Dict[str, Any]) -> None:  # noqa: F811
+async def test_a_co_owner_syncs_without_moving_the_primary(hub: Dict[str, Any], monkeypatch) -> None:  # noqa: F811
+    # A co-owner owns the organization only while owner sets are on.
+    monkeypatch.setattr("app.services.organization_owners.multi_owner_enabled", lambda: True)
     db = world_db()
     await sync(db, (SELLER,), [(F, SELLER, "PARTNER")])
     await co_own(db, "acme-cloud", K_NEW)
@@ -183,7 +185,9 @@ async def test_reconcile_judges_the_organization_as_it_stands_now(hub: Dict[str,
     assert await members_of(db, "acme-cloud") == [F]
 
 
-async def test_a_co_owner_provisions_and_an_outsider_does_not(sale: Dict[str, Any]) -> None:  # noqa: F811
+async def test_a_co_owner_provisions_and_an_outsider_does_not(sale: Dict[str, Any], monkeypatch) -> None:  # noqa: F811
+    # Co-owners own the organization only while owner sets are on.
+    monkeypatch.setattr("app.services.organization_owners.multi_owner_enabled", lambda: True)
     db = world_db()
     await sync(db, (SELLER,), [(F, SELLER, "PARTNER")])
     await co_own(db, "acme-cloud", K_NEW)
@@ -206,7 +210,9 @@ async def test_a_transfer_replaces_the_whole_set(hub: Dict[str, Any]) -> None:  
     await assert_owner_invariants(db)
 
 
-async def test_a_carry_swaps_the_key_and_keeps_the_primary(hub: Dict[str, Any]) -> None:  # noqa: F811
+async def test_a_carry_swaps_the_key_and_keeps_the_primary(hub: Dict[str, Any], monkeypatch) -> None:  # noqa: F811
+    # Co-owners own the organization only while owner sets are on.
+    monkeypatch.setattr("app.services.organization_owners.multi_owner_enabled", lambda: True)
     db = world_db()
     await sync(db, (SELLER,), [(F, SELLER, "PARTNER")])
     await co_own(db, "acme-cloud", K_NEW)

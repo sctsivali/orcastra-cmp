@@ -205,3 +205,13 @@ def redact_query_secrets(text: str) -> str:
         return match.group(0)
 
     return _QUERY_PAIR.sub(replace, text)
+
+
+def client_error_body(detail: Any) -> Dict[str, Any]:
+    """The JSON body of a 4xx. An object detail with a string `message` also carries that message
+    at the top level: coded refusals keep `detail.code` for clients that branch on it, and a client
+    that reads only text no longer shows a bare status."""
+    body: Dict[str, Any] = {"detail": detail}
+    if isinstance(detail, dict) and isinstance(detail.get("message"), str) and detail["message"]:
+        body["message"] = detail["message"]
+    return body

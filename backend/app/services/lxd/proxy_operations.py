@@ -174,6 +174,7 @@ PROXY_WAIT_OPERATIONS: FrozenSet[str] = frozenset({
 PROXY_ERROR_CODES = (
     "not_found",
     "conflict",
+    "forbidden",
     "cluster_unavailable",
     "timeout",
     "invalid_request",
@@ -204,6 +205,21 @@ def classify_proxy_error(error: Exception) -> str:
     if "timed out" in text or "timeout" in text:
         return "timeout"
     if any(hint in text for hint in ("connect", "unreachable", "certificate", "refused")):
+        return "cluster_unavailable"
+    return "operation_failed"
+
+
+def classify_lxd_status(status_code: int) -> str:
+    """The PROXY_ERROR_CODES name for a status LXD itself answered (raw proxy)."""
+    if status_code == 404:
+        return "not_found"
+    if status_code == 409:
+        return "conflict"
+    if status_code in (401, 403):
+        return "forbidden"
+    if status_code in (400, 422):
+        return "invalid_request"
+    if status_code in (502, 503, 504):
         return "cluster_unavailable"
     return "operation_failed"
 

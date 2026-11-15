@@ -423,11 +423,38 @@ def validate_target_project_isolation(
         )
 
 
+# The limits the browser writes after this policy (services/lxd/projects.py, max_cpu, max_ram and
+# max_storage). A key sends them in the config itself, so its path admits exactly these, validated.
+_PROJECT_CREATE_LIMITS = {
+    "limits.cpu": _CPU_COUNT_RE,
+    "limits.memory": _POSITIVE_SIZE_RE,
+    "limits.disk": _POSITIVE_SIZE_RE,
+}
+
+
+def _shared_project_refusal(findings: Sequence[PolicyFinding], *, limits_allowed: bool) -> str:
+    refused = ", ".join(sorted({finding.field for finding in findings}))
+    allowed = ["restricted=true", "features.* (images, networks, profiles, storage.volumes stay true)"]
+    if limits_allowed:
+        allowed.append(", ".join(_PROJECT_CREATE_LIMITS))
+    allowed.append("user.*")
+    return (
+        "This project configuration is not allowed on a shared cluster. "
+        f"Refused: {refused}. Allowed: {'; '.join(allowed)}."
+    )
+
+
 def prepare_project_create_config(
     policy: ClusterWritePolicy,
     config: Mapping[str, str],
+    *,
+    limits_allowed: bool = False,
 ) -> dict[str, str]:
-    """Return the project config with shared-cluster isolation fixed by the server."""
+    """Return the project config with shared-cluster isolation fixed by the server.
+
+    `limits_allowed` is the key path's: it admits the three limits the browser sets from its own
+    fields after this check, so the two doors create the same project.
+    """
 
     ensure_write_role(policy)
     result = dict(config)
@@ -448,12 +475,15 @@ def prepare_project_create_config(
                 findings.append(PolicyFinding("restricted_project_required", field))
         elif key.startswith("user."):
             continue
+        elif limits_allowed and key in _PROJECT_CREATE_LIMITS:
+            if not _PROJECT_CREATE_LIMITS[key].fullmatch(str(value).strip()):
+                findings.append(PolicyFinding("invalid_limit_value", field))
         else:
             findings.append(PolicyFinding("project_config_key_not_allowed", field))
     if findings:
         raise InstanceSecurityPolicyViolation(
             "shared_cluster_project_policy_violation",
-            "This project configuration is not allowed on a shared cluster.",
+            _shared_project_refusal(findings, limits_allowed=limits_allowed),
             findings=findings,
         )
     for key in _REQUIRED_SHARED_PROJECT_FEATURES:

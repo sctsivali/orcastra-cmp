@@ -172,3 +172,9 @@ export function openSyncedOrganizations(): void {
   panel.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
   panel.focus({ preventScroll: true });
 }
+
+
+/** The sentence that names clusters a key's grant misses and where to add them. */
+export function uncoveredClustersNote(clusterIds: readonly string[]): string {
+  return `This key is not granted ${clusterIds.length === 1 ? "cluster" : "clusters"} ${clusterIds.join(", ")}, which the organization is on. Grant ${clusterIds.length === 1 ? "it" : "them"} in API Keys > Edit Access so the key can sync and provision there.`;
+}

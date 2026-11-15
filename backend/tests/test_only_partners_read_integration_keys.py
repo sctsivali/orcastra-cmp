@@ -47,7 +47,7 @@ async def _owns_nothing(_db: Any, _user: Any, keys: List[Any]) -> List[Any]:
 def vault(monkeypatch):
     monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: object())
     monkeypatch.setattr(integrations, "_authorize_api_key", _returns_metadata)
-    monkeypatch.setattr(integrations, "get_api_key_from_vault", lambda _v, _k: (dict(METADATA), "h"))
+    monkeypatch.setattr(integrations, "get_api_key_from_vault", lambda _v, _k, use_cache=True: (dict(METADATA), "h"))
     monkeypatch.setattr(integrations, "list_api_keys_from_vault", lambda _v: [dict(METADATA)])
     monkeypatch.setattr(integrations, "get_user_mappings_from_vault", lambda _v, _k: [])
     monkeypatch.setattr(integrations, "get_cache_manager", lambda: _Cache())

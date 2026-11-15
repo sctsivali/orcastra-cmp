@@ -234,7 +234,7 @@ def test_the_tombstone_outlives_a_validation_still_in_flight(world) -> None:
 def _legacy_validation(world: Dict[str, Any], monkeypatch, verified_hash: str) -> None:
     """A key with a callback base whose secret document has no raw copy yet."""
     metadata = {**world["metadata"], "app_url": "https://hub.example.test"}
-    monkeypatch.setattr(integrations, "get_api_key_from_vault", lambda _v, _k: (dict(metadata), verified_hash))
+    monkeypatch.setattr(integrations, "get_api_key_from_vault", lambda _v, _k, use_cache=True: (dict(metadata), verified_hash))
     integrations._validate_api_key_blocking(KEY, world["old"])
 
 
@@ -276,6 +276,7 @@ async def test_a_callback_url_planted_with_the_old_secret_never_receives_the_new
     (record,) = _rotations(world)
     assert record["details"]["callback_url_cleared"] is True and ATTACKER not in repr(record)
     assert answer.api_key_secret not in repr(record)
+    assert answer.callback_url_cleared is True, "the dialog says the callback URL was dropped"
 
 
 async def test_a_url_set_while_the_secret_is_written_never_receives_the_new_one(world, monkeypatch) -> None:
@@ -315,9 +316,10 @@ async def test_a_callback_url_that_cannot_be_cleared_stops_the_rotation(world, m
 
 
 async def test_a_key_without_a_callback_url_is_rotated_without_touching_its_metadata(world) -> None:
-    await _rotate()
+    answer = await _rotate()
     assert world["vault"].writes == [f"{BASE}/secret"]
     assert _rotations(world)[0]["details"]["callback_url_cleared"] is False
+    assert answer.callback_url_cleared is False, "the dialog must not claim a URL was dropped"
 
 
 # Who may rotate. Managing a key needs its side (_authorize_api_key), and a rotation hands

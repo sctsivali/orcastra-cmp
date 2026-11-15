@@ -47,4 +47,5 @@ def test_the_refusal_names_the_organizations_that_count(monkeypatch):
     assert "not a member" not in detail
     assert "None of the organizations you created or hold as Partner is bound to cluster 'console-lab'" in detail
     assert "A member role in another organization does not count." in detail
+    assert "Settings > Integrations > Synced Organizations > Manage clusters" in detail, "where to bind one"
     assert service.created == []

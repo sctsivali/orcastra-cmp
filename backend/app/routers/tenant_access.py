@@ -20,6 +20,7 @@ from sqlalchemy import select, and_, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.tenant_permissions import TENANT_RULE_PERMISSIONS
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.core.dependencies import require_partner, require_tenant, check_read_only_mode
 from app.core.org_scope import (
@@ -59,7 +60,7 @@ def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
-VALID_PERMISSIONS = {"view", "operate", "console", "snapshot", "file_transfer"}
+VALID_PERMISSIONS = set(TENANT_RULE_PERMISSIONS)
 
 
 def _invalidate_acl_caches():

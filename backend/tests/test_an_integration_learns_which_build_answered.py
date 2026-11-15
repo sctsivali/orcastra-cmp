@@ -83,7 +83,7 @@ def _validate(
     monkeypatch.setattr(
         integrations,
         "get_api_key_from_vault",
-        lambda _client, _key_id: (metadata, stored_hash),
+        lambda _client, _key_id, use_cache=True: (metadata, stored_hash),
     )
     return asyncio.run(
         validate_api_key_endpoint(

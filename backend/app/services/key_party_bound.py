@@ -35,6 +35,9 @@ NOT_RECORDED = (
     ". Access to it could not be recorded; ask an administrator to add it to your organization's policy"
 )
 HELD = "_held_cluster_permissions"
+# Clusters bounded only because the creator's admin role could not be read (fail closed).
+ROLE_UNKNOWN = "_party_role_unknown_clusters"
+BIND_SCREEN = "Settings > Integrations > Synced Organizations > Manage clusters"
 
 # A project create or delete on one worker tells every worker through the shared cache.
 _CHANGED_NS = "key_party_bound_changed"
@@ -180,22 +183,28 @@ async def narrow_to_party_bound(
         return api_key
     narrowed: List[Dict[str, Any]] = []
     bounded: List[str] = []
+    unknown: List[str] = []
     for grant in grants:
         cluster_id = str(grant.get("cluster_id") or "")
-        bound, _unknown = await party_bound(api_key, cluster_id, db=db, roles=roles)
+        bound, role_unknown = await party_bound(api_key, cluster_id, db=db, roles=roles)
         if bound is None:
             narrowed.append(grant)
             continue
         bounded.append(cluster_id)
+        if role_unknown:
+            unknown.append(cluster_id)
         narrowed.append(held_to(grant, bound))
     if not bounded:
         return api_key
-    return {
+    narrowed_key = {
         **api_key,
         "cluster_permissions": narrowed,
         HELD: api_key.get(HELD) or grants,
         PARTY_BOUNDED: bounded,
     }
+    if unknown:
+        narrowed_key[ROLE_UNKNOWN] = unknown
+    return narrowed_key
 
 
 def held_to(grant: Mapping[str, Any], bound: FrozenSet[str]) -> Dict[str, Any]:
@@ -240,14 +249,70 @@ async def project_change_refusal(
     except HTTPException as refusal:
         return refusal
     if await org_to_hold_project_grant(creator, cluster_id, db) is None:
-        return HTTPException(
-            status_code=403,
-            detail=(
-                "None of the organizations this key's creator created or holds as Partner is bound to "
-                f"cluster '{cluster_id}', so a project created there could not be recorded to them."
-            ),
-        )
+        try:
+            named: Optional[Tuple[List[str], int]] = await creator_organizations_for_refusal(
+                db, creator, str(api_key.get("id") or "")
+            )
+        except Exception as exc:  # noqa: BLE001 - the names only explain the refusal; never turn it into a 500
+            logger.warning("Could not name the creator's organizations for a refusal on %s: %s", cluster_id, type(exc).__name__)
+            named = None
+        return HTTPException(status_code=403, detail=_unbound_creator_detail(api_key, cluster_id, named))
     return None
+
+
+async def creator_organizations_owned_by_key(db: Any, creator: str, key_id: str) -> Tuple[List[Tuple[int, str]], int]:
+    """((id, name) of each organization the creator runs that this key owns, how many others the
+    creator runs). Only the key's own organizations are named: the key holder syncs those already,
+    and the creator's other organizations belong to integrations the holder may not see."""
+    from app.models.db_models import Organization
+    from app.services.cluster_parties import run_orgs
+
+    from sqlalchemy import select
+
+    runs = await run_orgs(db, creator)
+    owned = sorted(org_id for org_id, owners in runs.items() if key_id and key_id in owners)
+    if not owned:
+        return [], len(runs)
+    rows = (await db.execute(select(Organization.id, Organization.name).where(Organization.id.in_(owned)))).all()
+    names = {org_id: name for org_id, name in rows}
+    return [(org_id, names.get(org_id, "organization")) for org_id in owned], len(runs) - len(owned)
+
+
+async def creator_organizations_for_refusal(db: Any, creator: str, key_id: str) -> Tuple[List[str], int]:
+    """The same, with each organization written as "Name (id)" for a refusal."""
+    owned, others = await creator_organizations_owned_by_key(db, creator, key_id)
+    return [f"{name} ({org_id})" for org_id, name in owned], others
+
+
+def _unbound_creator_detail(
+    api_key: Mapping[str, Any], cluster_id: str, organizations: Optional[Tuple[List[str], int]],
+) -> str:
+    """The refusal for a create no organization of the creator can hold: the missing layer is the
+    organization-to-cluster binding, not the key's grant (Edit Access) or its owner rows."""
+    named, others = organizations if organizations is not None else ([], -1)
+    if others < 0:
+        whose = "The creator's organizations could not be read just now."
+    elif named:
+        whose = f"Organizations this key owns: {', '.join(named)}."
+        if others:
+            whose += f" The creator runs {others} other organization{'s' if others != 1 else ''}."
+    elif others:
+        whose = f"The key's creator runs {others} organization{'s' if others != 1 else ''}; this key owns none of them."
+    else:
+        whose = "The key's creator runs no organization."
+    detail = (
+        "None of the organizations this key's creator runs (created, or holds as Partner) is bound to "
+        f"cluster '{cluster_id}', so a project created there could not be recorded to them. The key's "
+        "cluster grant and its owner keys are a separate layer and do not record a project. "
+        f"{whose} To fix it, bind one of them to '{cluster_id}' in {BIND_SCREEN} (an administrator, or "
+        "a Partner of that organization whose party holds the cluster whole)."
+    )
+    if cluster_id in (api_key.get(ROLE_UNKNOWN) or []):
+        detail += (
+            " The creator's administrator role could not be confirmed because the identity provider "
+            "did not answer, so the key was held to the creator's organizations. Retry in a moment."
+        )
+    return detail
 
 
 async def record_key_created_project(
@@ -310,7 +375,7 @@ def shared_project_config(cluster_id: str, config: Mapping[str, Any]) -> Dict[st
     from app.services.instance_security_policy import InstanceSecurityPolicyViolation, prepare_project_create_config
 
     try:
-        return prepare_project_create_config(_shared_policy(cluster_id), config or {})
+        return prepare_project_create_config(_shared_policy(cluster_id), config or {}, limits_allowed=True)
     except InstanceSecurityPolicyViolation as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.as_detail()) from exc
 

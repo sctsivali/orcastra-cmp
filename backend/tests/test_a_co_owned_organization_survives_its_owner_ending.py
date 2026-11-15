@@ -157,7 +157,9 @@ async def test_withdrawing_org_sync_keeps_the_key_but_moves_the_primary(co_owned
     await assert_owner_invariants(db)
 
 
-async def test_two_revokes_of_a_two_key_set_cannot_both_pass(co_owned: Dict[str, Any]) -> None:
+async def test_two_revokes_of_a_two_key_set_cannot_both_pass(co_owned: Dict[str, Any], monkeypatch) -> None:
+    # Co-owners own the organization only while owner sets are on.
+    monkeypatch.setattr("app.services.organization_owners.multi_owner_enabled", lambda: True)
     db = co_owned["db"]
     await co_own(db, co_owned["acme"], CO)
     await co_own(db, co_owned["globex"], CO)
@@ -178,11 +180,12 @@ def multi(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.routers.integrations.multi_owner_enabled", lambda: True)
 
 
+# Removing an owner row is not listed: it answers with the setting off too, so rows enrolled while
+# it was on can be cleaned up (test_multi_owner_off_means_one_owner.py).
 @pytest.mark.parametrize("method, path, body", [
     ("POST", "/{org}/owner-keys", {"api_key_id": CO, "reason": "r"}),
-    ("DELETE", "/{org}/owner-keys/" + CO + "?reason=r", None),
     ("PUT", "/{org}/primary-key", {"api_key_id": CO, "reason": "r"}),
-], ids=["add", "remove", "primary"])
+], ids=["add", "primary"])
 async def test_the_owner_set_routes_do_not_exist_while_the_flag_is_off(
     co_owned: Dict[str, Any], method: str, path: str, body: Any
 ) -> None:

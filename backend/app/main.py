@@ -11,7 +11,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.core.error_sanitizer import public_server_detail, reference_for, sanitize_error
+from app.core.error_sanitizer import client_error_body, public_server_detail, reference_for, sanitize_error
 from app.middleware.byte_units import ByteUnitsMiddleware
 from app.middleware.stream_cut import StreamCutMiddleware
 from app.middleware.security import apply_security_headers
@@ -1412,6 +1412,12 @@ Ensure your client certificates are properly configured.
         client is given.
         """
         if exc.status_code < 500:
+            if isinstance(exc.detail, dict):
+                return JSONResponse(
+                    client_error_body(exc.detail),
+                    status_code=exc.status_code,
+                    headers=getattr(exc, "headers", None),
+                )
             return await http_exception_handler(request, exc)
 
         reference, full = reference_for(exc)

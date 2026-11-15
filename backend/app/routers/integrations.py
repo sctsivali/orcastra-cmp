@@ -106,6 +106,7 @@ from app.services.lxd.raw_proxy_operations import (
     operation_is_visible,
 )
 from app.services.lxd.proxy_operations import (
+    classify_lxd_status,
     CLUSTER_WIDE_OPERATIONS,
     GUEST_ACCESS_OPERATIONS,
     operation_pool,
@@ -163,7 +164,12 @@ from app.core.guest_data_export import (
     guest_data_path_capability_for,
 )
 from app.core.cloud_init_config import assert_cloud_init_paid_for, cloud_init_keys_in
-from app.core.api_key_capability_audit import CAPABILITIES_UPDATE_ACTION, capability_audit_fields
+from app.core.api_key_capability_audit import (
+    CAPABILITIES_UPDATE_ACTION,
+    PERMISSIONS_UPDATE_ACTION,
+    capability_audit_fields,
+    grant_summary,
+)
 from app.core.limited_key_writes import (
     assert_body_within_grant,
     assert_limited_body,
@@ -181,6 +187,7 @@ from app.core.url_safety import assert_url_is_fetchable
 from app.core.error_sanitizer import sanitize_error
 from app.core.json_body import body_spec, read_json_body
 from app.middleware.security import consume_api_key_budget, consume_api_key_budget_state
+from app.core.tenant_permissions import TENANT_RULE_PERMISSIONS
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
 from app.core.org_scope import (
     get_current_allowed_clusters,
@@ -521,6 +528,9 @@ class APIKeyCreateResponse(BaseModel):
     api_key: APIKeyInfo
     api_key_id: str = Field(..., description="The API Key ID (public, can be stored)")
     api_key_secret: str = Field(..., description="The API Key Secret (STORE SECURELY, shown only once)")
+    # Rotation only: whether a stored callback URL was dropped, so the integration must sync again
+    # with the new secret before callbacks resume. Null on create.
+    callback_url_cleared: Optional[bool] = Field(None, description="Rotation only: a stored callback URL was dropped")
 
 
 class APIKeyListResponse(BaseModel):
@@ -578,6 +588,10 @@ class APIKeyValidateResponse(BaseModel):
         description="Granted capabilities, or null for a legacy key with unrestricted access",
     )
     cluster_permissions: List[ClusterPermission] = Field(default_factory=list)
+    # What the key may do now: the stored grants after the narrowing every door applies (an ended
+    # registration, the creator's bound on a cluster another party holds, a purchase past its
+    # term). cluster_permissions stays the stored grant, as published.
+    effective_cluster_permissions: List[ClusterPermission] = Field(default_factory=list)
     # Set only when a credential was verified. A refusal carries null, so the build stays hidden
     # from anyone who cannot authenticate.
     server: Optional[ServerIdentity] = Field(
@@ -727,7 +741,20 @@ class RawProxyResponse(BaseModel):
     status_code: int = Field(..., description="HTTP status code from LXD")
     data: Optional[Dict[str, Any]] = Field(None, description="Response data from LXD")
     headers: Dict[str, str] = Field(default_factory=dict, description="Response headers")
-    error: Optional[str] = Field(None, description="Error message if request failed")
+    error: Optional[str] = Field(None, description="Error message if the cluster could not be reached")
+    # Only when LXD itself answered 4xx/5xx; `error` keeps meaning a failure to reach the cluster.
+    lxd_error: Optional[str] = Field(None, description="LXD's own error message when LXD refused the request")
+    error_code: Optional[str] = Field(None, description="not_found, conflict, forbidden, invalid_request, ... when LXD refused")
+
+
+def _lxd_refusal_fields(status_code: int, data: Any) -> Dict[str, Optional[str]]:
+    """lxd_error and error_code for an answer LXD gave with a 4xx or 5xx status, else nothing."""
+    if status_code < 400:
+        return {}
+    message = data.get("error") if isinstance(data, dict) else None
+    if not isinstance(message, str) or not message.strip():
+        message = f"LXD answered {status_code}"
+    return {"lxd_error": message[:500], "error_code": classify_lxd_status(status_code)}
 
 
 def _raw_proxy_fenced_write_target(request: RawProxyRequest) -> Optional[str]:
@@ -1761,10 +1788,16 @@ def _validate_api_key_blocking(key_id: str, key_secret: str) -> Dict[str, Any]:
     if not _KEY_ID_SHAPE.fullmatch(key_id or ""):
         raise HTTPException(status_code=404, detail="API key not found")
     vault_client = get_vault_integrations_client()
-    metadata, secret_hash = get_api_key_from_vault(vault_client, key_id)
+    # important: Vault itself, not the shared mirror. A read that began before a revoke can refill
+    # the mirror with the unrevoked copy (get_api_key_from_vault), and a worker that missed its
+    # local cache would then accept the revoked key until the mirror expires. The per-process
+    # cache (_cached_key_metadata) keeps the usual request off Vault.
+    metadata, secret_hash = get_api_key_from_vault(vault_client, key_id, use_cache=False)
 
     if not verify_api_key_secret(key_secret, secret_hash):
-        raise HTTPException(status_code=401, detail="Invalid API key secret")
+        # The same answer as an unknown id (validate_api_key maps that 404), so a caller cannot
+        # learn which key ids exist.
+        raise HTTPException(status_code=401, detail="Invalid API key")
 
     # important: the recoverable copy of the secret exists only because the outbound OrcaHub
     # callbacks in services/orcahub_sync.py re-present it to the partner, and its only reader
@@ -2843,13 +2876,23 @@ async def _with_ownership(db: AsyncSession, user: AuthenticatedUser, keys: List[
     except Exception as exc:  # noqa: BLE001 - the list still renders, without ownership
         logger.warning("Could not read which organizations the listed keys own: %s", type(exc).__name__)
         return keys
+    # important: an organization stays syncing after this key ends only if another owner could still
+    # sync it, the server's own rule on revoke and delete (refuse_if_key_owns_organizations). An
+    # expired co-owner, or one without org.sync, keeps nothing alive; with owner sets off a co-owner
+    # owns nothing at all. An owner key that cannot be read counts as unable, as the refusal does.
+    co_owners = multi_owner_enabled()
+    others = {row.api_key_id for rows in sets.values() for row in rows if row.api_key_id} if co_owners else set()
+    verdicts = await able_owners(others, _owner_metadata_reader(get_vault_integrations_client())) if others else {}
     for info in keys:
         rows = owned.get(info.id, [])
         shown = [slug for org_id, slug in rows if visible is None or org_id in visible]
         info.owned_organization_count = len(rows)
         info.owned_organization_slugs = shown[:MAX_LISTED_SLUGS]
         info.owned_organization_hidden_count = len(rows) - len(shown)
-        info.sole_owned_organization_count = sum(1 for org_id, _slug in rows if len(sets.get(org_id, [])) <= 1)
+        info.sole_owned_organization_count = sum(
+            1 for org_id, _slug in rows
+            if not any(verdicts.get(row.api_key_id) for row in sets.get(org_id, []) if row.api_key_id != info.id)
+        )
     return keys
 
 
@@ -3048,6 +3091,7 @@ async def update_api_key_permissions(
             metadata, secret_hash = await asyncio.to_thread(
                 get_api_key_from_vault, vault_client, key_id, use_cache=False
             )
+            grants_before = grant_summary(metadata.get("cluster_permissions"))
             await _refuse_new_grants_to_unregistered_clusters(
                 (p.cluster_id for p in permissions),
                 frozenset(
@@ -3073,6 +3117,13 @@ async def update_api_key_permissions(
         # important: also drop the process-local validation cache, otherwise the previous
         # cluster_permissions keep authorising proxy calls until its TTL expires.
         evict_api_key_cache(key_id)
+        _audit_credential_lifecycle(
+            action=PERMISSIONS_UPDATE_ACTION, key_id=key_id, metadata=metadata,
+            extra_details={
+                "cluster_permissions_before": grants_before,
+                "cluster_permissions_after": grant_summary(metadata.get("cluster_permissions")),
+            },
+        )
 
         user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
         return (await _with_usage([_key_info(metadata, len(user_mappings))]))[0]
@@ -3141,10 +3192,15 @@ async def update_api_key_capabilities(
             )
             refuse_grant_edit(metadata)
             # A key holding grants on purchased clusters keeps them, but gains no capability
-            # through them.
-            refuse_grants_on_purchased_clusters(
-                p.get("cluster_id") for p in (metadata.get("cluster_permissions") or []) if isinstance(p, dict)
-            )
+            # through them. A narrowing gains nothing, so it goes through. A legacy key holds every
+            # capability except guest access (api_key_capabilities.GUEST_ACCESS_CAPABILITIES), so
+            # exec, files or desktop control is a gain for it.
+            held = granted_capabilities(metadata)
+            effective = held if held is not None else set(CAPABILITIES) - GUEST_ACCESS_CAPABILITIES
+            if set(request.capabilities) - effective:
+                refuse_grants_on_purchased_clusters(
+                    p.get("cluster_id") for p in (metadata.get("cluster_permissions") or []) if isinstance(p, dict)
+                )
             previous = dict(metadata)
             was_legacy = "capabilities" not in metadata
             metadata["capabilities"] = sorted(set(request.capabilities))
@@ -3394,7 +3450,9 @@ async def rotate_api_key_secret(
         extra_details={"callback_url_cleared": bool(forgot)},
     )
     logger.info("API key %s secret rotated", key_id)
-    return APIKeyCreateResponse(api_key=key_info, api_key_id=key_id, api_key_secret=key_secret)
+    return APIKeyCreateResponse(
+        api_key=key_info, api_key_id=key_id, api_key_secret=key_secret, callback_url_cleared=bool(forgot),
+    )
 
 
 @router.delete(
@@ -3553,6 +3611,20 @@ async def delete_user_mapping(
 # These use API key auth (headers or body), NOT JWT auth
 # ============================================
 
+async def _effective_grants(narrowed: Dict[str, Any]) -> List[ClusterPermission]:
+    """The grants a key acts with after the request-time narrowing, as reported grants."""
+    grants = [g for g in narrowed.get("cluster_permissions") or [] if isinstance(g, dict) and "cluster_id" in g]
+    unregistered = await _unregistered_cluster_ids(grant["cluster_id"] for grant in grants)
+    return [ClusterPermission(**_reported_grant(dict(grant), unregistered)) for grant in grants]
+
+
+async def _as_it_acts(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """A copy of the key narrowed as validate_api_key narrows it for every other door."""
+    narrowed = await _bound_to_registrations(dict(metadata))
+    narrowed = await narrow_to_party_bound(narrowed)
+    return await narrow_to_paid_term(narrowed)
+
+
 @external_router.post(
     "/validate",
     response_model=APIKeyValidateResponse,
@@ -3564,7 +3636,10 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
     vault_client = get_vault_integrations_client()
     
     try:
-        metadata, secret_hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, request.api_key_id)
+        # Vault itself, not the shared mirror, for the reason _validate_api_key_blocking gives.
+        metadata, secret_hash = await asyncio.to_thread(
+            get_api_key_from_vault, vault_client, request.api_key_id, use_cache=False
+        )
         
         if not verify_api_key_secret(request.api_key_secret, secret_hash):
             return APIKeyValidateResponse(valid=False, error="Invalid API key or secret")
@@ -3580,6 +3655,22 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
         expires_at = metadata.get("expires_at")
         if is_expired(expires_at):
             return APIKeyValidateResponse(valid=False, error="API key expired")
+
+        # As every other door: a suspended add-on's credential is refused (validate_api_key).
+        if metadata.get("extension_install_id") is not None:
+            from app.core import database
+            from app.services import extension_scope
+
+            try:
+                async with database.async_session_maker() as session:
+                    await extension_scope.assert_install_is_live(session, request.api_key_id)
+            except HTTPException as refused:
+                if refused.status_code >= 500:
+                    raise
+                return APIKeyValidateResponse(valid=False, error=str(refused.detail))
+            except Exception as exc:  # noqa: BLE001 - an unreadable installation is not a verdict
+                logger.warning("Installation check unavailable on validate: %s", type(exc).__name__)
+                raise HTTPException(status_code=503, detail="Authentication backend unavailable") from None
         
         raw_permissions = metadata.get("cluster_permissions", [])
         grant_ids = [perm.get("cluster_id") for perm in raw_permissions if perm.get("cluster_id")]
@@ -3623,6 +3714,7 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
         # null. An integrator reads this to discover what it may call before it calls it, so it
         # must not be flattened into an empty list.
         granted = granted_capabilities(metadata)
+        effective = await _effective_grants(await _as_it_acts({**metadata, "id": request.api_key_id}))
         return APIKeyValidateResponse(
             valid=True,
             app_name=metadata.get("app_name"),
@@ -3631,6 +3723,7 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
             expires_at=metadata.get("expires_at"),
             expires_in_days=days_remaining(metadata.get("expires_at")),
             cluster_permissions=enriched_permissions,
+            effective_cluster_permissions=effective,
             server=ServerIdentity(**build_identity.full()),
             features=_integration_features(),
         )
@@ -4406,6 +4499,8 @@ async def whoami(api_key: Dict[str, Any] = Depends(validate_api_key)):
             ClusterPermission(**_reported_grant(grant, unregistered))
             for grant in grants
         ],
+        # validate_api_key has already narrowed the key this route was handed.
+        effective_cluster_permissions=await _effective_grants(api_key),
         server=ServerIdentity(**build_identity.full()),
         features=_integration_features(),
     )
@@ -5163,7 +5258,10 @@ async def raw_proxy(
                         api_key, request, method, project, LookupError("Operation not found"),
                         "operation_not_visible",
                     )
-                    return RawProxyResponse(status_code=404, data=dict(LXD_OPERATION_NOT_FOUND), headers={})
+                    return RawProxyResponse(
+                        status_code=404, data=dict(LXD_OPERATION_NOT_FOUND), headers={},
+                        **_lxd_refusal_fields(404, LXD_OPERATION_NOT_FOUND),
+                    )
             # important: a project DELETE goes through the shared deletion core, which revokes the
             # access rules naming the project once it is gone. Sent straight to LXD it would leave
             # them behind, and a buyer whose project was removed would keep the cluster in scope.
@@ -5263,6 +5361,7 @@ async def raw_proxy(
                 status_code=status_code,
                 data=data,
                 headers={},
+                **_lxd_refusal_fields(status_code, data),
             )
 
         except BlockingTimeout as timeout_error:
@@ -6386,9 +6485,33 @@ class IntegrationOrgResponse(BaseModel):
     owner_key_expires_at: Optional[str] = None
     owner_key_expiry_state: Optional[str] = None
     cluster_ids: List[str] = Field(default_factory=list)
+    # How each binding came to be: registered (a partner of the organization registered the
+    # cluster), granted (an administrator bound it), purchase (provisioning bound it for a sale), or
+    # bound (no registrant or grantor recorded, a local organization or a bind from before 1.0.1).
+    cluster_bindings: List["ClusterBindingEntry"] = Field(default_factory=list)
+    # Whether this caller may bind and unbind clusters here: an administrator, or a partner who
+    # runs the organization (created it, or holds a partner row). The bind itself still checks
+    # each cluster (organizations.bind_decision).
+    can_manage_clusters: bool = False
+    # INTEGRATION_MULTI_OWNER_ENABLED: the Owner Keys action exists only while it is on.
+    owner_sets_enabled: bool = False
     # Every key in the owner set, primary first; empty when the caller may not see the owner keys
     # (the same rule as the owner_key_* fields) or the organization has no owner.
     owner_keys: List["OwnerKeyEntry"] = Field(default_factory=list)
+
+
+class ClusterBindingEntry(BaseModel):
+    cluster_id: str
+    kind: str = Field(..., description="registered, granted, purchase or bound")
+
+
+def binding_kind(registered_by: Optional[str], granted_by: Optional[str], source: Optional[str]) -> str:
+    """How a binding came to be, as core/sale_term.py reads the same columns."""
+    if registered_by:
+        return "registered"
+    if granted_by:
+        return "granted"
+    return "purchase" if source == "orcahub" else "bound"
 
 
 class OwnerKeyEntry(BaseModel):
@@ -6468,14 +6591,24 @@ async def list_synced_organizations(
         orgs = result.scalars().all()
 
         clusters: Dict[int, List[str]] = {}
+        kinds: Dict[int, Dict[str, str]] = {}
+        sources = {org.id: org.source for org in orgs}
         if orgs:
             bound = await db.execute(
-                select(OrganizationCluster.organization_id, OrganizationCluster.cluster_id)
+                select(
+                    OrganizationCluster.organization_id,
+                    OrganizationCluster.cluster_id,
+                    OrganizationCluster.registered_by,
+                    OrganizationCluster.granted_by,
+                )
                 .where(OrganizationCluster.organization_id.in_([org.id for org in orgs]))
             )
-            for org_id, cluster_id in bound.all():
+            for org_id, cluster_id, registered_by, granted_by in bound.all():
                 if cluster_id:
                     clusters.setdefault(org_id, []).append(cluster_id)
+                    kinds.setdefault(org_id, {})[cluster_id] = binding_kind(
+                        registered_by, granted_by, sources.get(org_id)
+                    )
 
         # important: the owner key's name, state and expiry only for an Admin or a current partner of
         # that key's home organization (keys_whose_home_the_user_partners). Membership lists the
@@ -6527,6 +6660,14 @@ async def list_synced_organizations(
                 owner_key_expires_at=meta.get("expires_at") if shown else None,
                 owner_key_expiry_state=expiry_state(meta.get("expires_at")) if meta and shown else None,
                 cluster_ids=sorted(set(clusters.get(org.id, []))),
+                cluster_bindings=[
+                    ClusterBindingEntry(cluster_id=cluster_id, kind=kind)
+                    for cluster_id, kind in sorted(kinds.get(org.id, {}).items())
+                ],
+                can_manage_clusters=(
+                    running is None or org.id in running or (org.created_by or "").lower() == user.email.lower()
+                ),
+                owner_sets_enabled=multi_owner_enabled(),
                 owner_keys=[
                     OwnerKeyEntry(
                         api_key_id=row.api_key_id,
@@ -6987,12 +7128,11 @@ async def add_organization_owner(
 @router.delete(
     "/organizations/{org_id}/owner-keys/{key_id}",
     response_model=OwnerSetResponse,
-    dependencies=_MULTI_OWNER_ONLY,
     summary="Remove a key from a synced organization's owner set",
     description=(
-        "Admin only, when INTEGRATION_MULTI_OWNER_ENABLED is on. Removing the primary makes the oldest "
-        "owner that can still sync the organization the primary. The last owner cannot be removed: "
-        "transfer the organization instead."
+        "Admin only. Removing the primary makes the oldest owner that can still sync the organization "
+        "the primary. The last owner cannot be removed: transfer the organization instead. Answers with "
+        "INTEGRATION_MULTI_OWNER_ENABLED off too, so owner rows left from when it was on can be removed."
     ),
 )
 async def remove_organization_owner(
@@ -7431,12 +7571,7 @@ async def sync_policies_from_external(
     are stored as HMAC-SHA256 keyed with SECRET_KEY (generate_api_key_pair), and the dependency
     also applies the expiry check and the cross-worker revocation tombstone.
     """
-    from app.models.db_models import (
-        TenantAccessPolicy,
-        TenantPolicyRule,
-        TenantPolicyAssignment,
-        OrganizationMember,
-    )
+    from app.models.db_models import TenantAccessPolicy
 
     api_key_id = api_key.get("id", "")
 
@@ -7535,88 +7670,38 @@ async def sync_policies_from_external(
                 errors.append(f"Policy '{sync_policy.name}': {detail.get('message')}")
                 continue
 
-            if policy:
-                policy.name = sync_policy.name
-                policy.description = sync_policy.description
-                policy.updated_at = datetime.utcnow()
-            else:
-                policy = TenantAccessPolicy(
-                    organization_id=org.id,
-                    name=sync_policy.name,
-                    description=sync_policy.description,
-                    source="orcahub",
-                    external_id=sync_policy.external_id,
-                    created_by=f"orcahub:{api_key_id}",
-                )
-                db.add(policy)
-                await db.flush()
-            if merged_term is not None:
-                policy.term_ended_at = merged_term.term_ended_at
-                policy.access_ends_at = merged_term.access_ends_at
-                policy.term_as_of = merged_term.as_of
-
-            # Replace the rules.
-            await db.execute(
-                delete(TenantPolicyRule).where(TenantPolicyRule.policy_id == policy.id)
+            # Checked before anything is written, so a bad policy is skipped whole.
+            unknown_permissions = sorted(
+                {p for rule in sync_policy.rules for p in rule.permissions} - TENANT_RULE_PERMISSIONS
             )
-            for rule_data in sync_policy.rules:
-                db.add(TenantPolicyRule(
-                    policy_id=policy.id,
-                    cluster_id=rule_data.cluster_id,
-                    project_name=rule_data.project_name,
-                    instance_name=rule_data.instance_name,
-                    permissions=rule_data.permissions,
-                ))
-            # The branding link a provision makes, for an organization only ever synced (fill-only).
-            sold_on = next((r.cluster_id for r in sync_policy.rules if r.cluster_id and r.cluster_id != "*"), None)
-            if sold_on:
-                await provider_link.link_on_provision(
-                    db, org, cluster_id=sold_on, key_minter=api_key.get("created_by"), api_key_id=api_key_id,
+            if unknown_permissions:
+                errors.append(
+                    f"Policy '{sync_policy.name}': unknown permission '{unknown_permissions[0]}'. "
+                    f"Allowed: {', '.join(sorted(TENANT_RULE_PERMISSIONS))}"
                 )
+                continue
+            try:
+                expiries = {a.user_email: _assignment_expiry(a.expires_at) for a in sync_policy.assignments}
+            except ValueError:
+                errors.append(f"Policy '{sync_policy.name}': an assignment expires_at is not an ISO 8601 time")
+                continue
 
-            # Assignments merge: local ones are never removed.
-            for assign_data in sync_policy.assignments:
-                member_stmt = select(OrganizationMember).where(
-                    and_(
-                        OrganizationMember.organization_id == org.id,
-                        OrganizationMember.user_email == assign_data.user_email,
-                    )
-                )
-                result = await db.execute(member_stmt)
-                member = result.scalar_one_or_none()
-
-                if not member:
-                    continue  # skip unknown users
-
-                existing_assign = await db.execute(
-                    select(TenantPolicyAssignment).where(
-                        and_(
-                            TenantPolicyAssignment.policy_id == policy.id,
-                            TenantPolicyAssignment.org_member_id == member.id,
-                        )
-                    )
-                )
-                assignment = existing_assign.scalar_one_or_none()
-                expires_at = _assignment_expiry(assign_data.expires_at)
-                if not assignment:
-                    db.add(TenantPolicyAssignment(
-                        policy_id=policy.id,
-                        org_member_id=member.id,
-                        assigned_by=f"orcahub:{api_key_id}",
-                        source="orcahub",
-                        external_id=sync_policy.external_id,
-                        expires_at=expires_at,
-                    ))
-                elif assignment.source == "orcahub" and assignment.expires_at != expires_at:
-                    # An assignment OrcaHub made follows OrcaHub's expiry; one a partner made here
-                    # keeps its own.
-                    assignment.expires_at = expires_at
-
+            # important: one savepoint per policy. A write that fails (a duplicate name, a lost
+            # row) rolls back this policy alone and leaves the session usable for the rest; without
+            # it the failed flush poisoned every later policy and the final commit lost the push.
+            async with db.begin_nested():
+                await _write_synced_policy(db, sync_policy, org, policy, merged_term, expiries, api_key, api_key_id)
             synced_count += 1
 
+        except IntegrityError as e:
+            logger.error(f"Error syncing policy '{sync_policy.name}': {type(e).__name__}: {e}")
+            errors.append(
+                f"Policy '{sync_policy.name}' was not saved: it conflicts with a stored policy "
+                "(the same name in this organization, or the same external id)."
+            )
         except Exception as e:
-            logger.error(f"Error syncing policy '{sync_policy.name}': {e}")
-            errors.append(f"Failed to sync '{sync_policy.name}': {str(e)}")
+            logger.error(f"Error syncing policy '{sync_policy.name}': {type(e).__name__}: {e}")
+            errors.append(f"Policy '{sync_policy.name}' was not saved.")
 
     await db.commit()
 
@@ -7629,6 +7714,103 @@ async def sync_policies_from_external(
         "synced": synced_count,
         "errors": errors,
     }
+
+
+async def _write_synced_policy(
+    db: AsyncSession,
+    sync_policy: "SyncPolicy",
+    org: Organization,
+    policy: Any,
+    merged_term: Optional[TermDates],
+    expiries: Dict[str, Optional[datetime]],
+    api_key: Dict[str, Any],
+    api_key_id: str,
+) -> None:
+    """One synced policy's writes: the policy row, its rules replaced, its assignments merged."""
+    from app.models.db_models import (
+        OrganizationMember,
+        TenantAccessPolicy,
+        TenantPolicyAssignment,
+        TenantPolicyRule,
+    )
+
+    if policy:
+        policy.name = sync_policy.name
+        policy.description = sync_policy.description
+        policy.updated_at = datetime.utcnow()
+    else:
+        policy = TenantAccessPolicy(
+            organization_id=org.id,
+            name=sync_policy.name,
+            description=sync_policy.description,
+            source="orcahub",
+            external_id=sync_policy.external_id,
+            created_by=f"orcahub:{api_key_id}",
+        )
+        db.add(policy)
+        await db.flush()
+    if merged_term is not None:
+        policy.term_ended_at = merged_term.term_ended_at
+        policy.access_ends_at = merged_term.access_ends_at
+        policy.term_as_of = merged_term.as_of
+
+    # Replace the rules.
+    await db.execute(
+        delete(TenantPolicyRule).where(TenantPolicyRule.policy_id == policy.id)
+    )
+    for rule_data in sync_policy.rules:
+        db.add(TenantPolicyRule(
+            policy_id=policy.id,
+            cluster_id=rule_data.cluster_id,
+            project_name=rule_data.project_name,
+            instance_name=rule_data.instance_name,
+            permissions=rule_data.permissions,
+        ))
+    # The branding link a provision makes, for an organization only ever synced (fill-only).
+    sold_on = next((r.cluster_id for r in sync_policy.rules if r.cluster_id and r.cluster_id != "*"), None)
+    if sold_on:
+        await provider_link.link_on_provision(
+            db, org, cluster_id=sold_on, key_minter=api_key.get("created_by"), api_key_id=api_key_id,
+        )
+
+    # Assignments merge: local ones are never removed.
+    for assign_data in sync_policy.assignments:
+        member_stmt = select(OrganizationMember).where(
+            and_(
+                OrganizationMember.organization_id == org.id,
+                OrganizationMember.user_email == assign_data.user_email,
+            )
+        )
+        result = await db.execute(member_stmt)
+        member = result.scalar_one_or_none()
+
+        if not member:
+            continue  # skip unknown users
+
+        existing_assign = await db.execute(
+            select(TenantPolicyAssignment).where(
+                and_(
+                    TenantPolicyAssignment.policy_id == policy.id,
+                    TenantPolicyAssignment.org_member_id == member.id,
+                )
+            )
+        )
+        assignment = existing_assign.scalar_one_or_none()
+        expires_at = expiries.get(assign_data.user_email)
+        if not assignment:
+            db.add(TenantPolicyAssignment(
+                policy_id=policy.id,
+                org_member_id=member.id,
+                assigned_by=f"orcahub:{api_key_id}",
+                source="orcahub",
+                external_id=sync_policy.external_id,
+                expires_at=expires_at,
+            ))
+        elif assignment.source == "orcahub" and assignment.expires_at != expires_at:
+            # An assignment OrcaHub made follows OrcaHub's expiry; one a partner made here
+            # keeps its own.
+            assignment.expires_at = expires_at
+    await db.flush()
 
 
 @external_router.get(
@@ -7772,7 +7954,7 @@ class ProvisionTenantAccessRequest(BaseModel):
     @classmethod
     def _known_permissions(cls, value: List[str]) -> List[str]:
         # important: validated here, before the organization and member rows are written.
-        unknown = set(value) - {"view", "operate", "console", "snapshot", "file_transfer"}
+        unknown = set(value) - TENANT_RULE_PERMISSIONS
         if unknown:
             raise ValueError(f"Invalid permissions: {sorted(unknown)}")
         return value
@@ -7947,25 +8129,19 @@ async def provision_tenant_access(
         # project, so it is refused before the first member, cluster or policy row.
         await refuse_a_project_another_party_holds(db, api_key, body.cluster_id, body.project_name)
     if not org:
-        if not body.organization_name or not body.organization_slug:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    f"Organization with external_id={body.organization_external_id} not found. "
-                    "Provide organization_name and organization_slug for auto-creation."
-                ),
-            )
         # important: the lookup above folds api_key_id in, so a caller whose key does not own
-        # an existing org misses it and falls through to this create. The database would then
-        # refuse on uq_org_source_external_id or ix_organizations_slug with a conflict about a
+        # an existing org misses it and falls through to here. The database would then refuse
+        # the create on uq_org_source_external_id or ix_organizations_slug with a conflict about a
         # slug, when the reason is that another integration owns the organisation. Say so here,
         # as sync() does at its own ownership guard. This denies nothing the constraints allow.
+        # FOR UPDATE (PostgreSQL; SQLite omits it), as sync reads it: two keys claiming one unclaimed
+        # organization at once take turns, and the second sees the first's claim.
         owner_stmt = select(Organization).where(
             and_(
                 Organization.source == "orcahub",
                 Organization.external_id == body.organization_external_id,
             )
-        )
+        ).with_for_update()
         owner = (await db.execute(owner_stmt)).scalar_one_or_none()
         if owner is not None and owner.api_key_id and not await is_owner(db, owner, api_key_id):
             logger.warning(
@@ -7981,8 +8157,22 @@ async def provision_tenant_access(
                     "key has claimed."
                 ),
             )
-        # important: as in a sync, only an add-on installation's current credential may claim a new
-        # organization (add_on_credential_edits.is_current_add_on_credential).
+        if owner is None and (not body.organization_name or not body.organization_slug):
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Organization with external_id={body.organization_external_id} not found. "
+                    "Provide organization_name and organization_slug for auto-creation."
+                ),
+            )
+        # important: as in a sync, only an add-on installation's current credential may claim or
+        # create an organization (add_on_credential_edits.is_current_add_on_credential), and it
+        # decides under the credential's ownership lock, as a sync does. On PostgreSQL that lock is a
+        # transaction lock held to this request's commit, so a rotation of the credential waits for
+        # the claim or the create below and then carries the organization to the new credential.
+        if is_add_on_credential(api_key):
+            async with serialize_key_ownership(db, api_key_id):
+                pass
         if is_add_on_credential(api_key) and not await is_current_add_on_credential(db, api_key_id):
             raise HTTPException(status_code=409, detail={
                 "error": "superseded_credential",
@@ -7995,6 +8185,18 @@ async def provision_tenant_access(
         # still hears that, and before the organization row is written (see the found branch).
         await refuse_a_project_another_party_holds(db, api_key, body.cluster_id, body.project_name)
 
+    if not org and owner is not None:
+        # An organization no key has claimed is claimed by this key, as a sync claims it. Inserting
+        # a second row instead hit uq_org_source_external_id and answered with a slug conflict.
+        # One this key already owns (is_owner passed above) keeps its primary.
+        if not owner.api_key_id:
+            mark_entry(owner, "provision")
+            owner.api_key_id = api_key_id
+        owner.is_active = True
+        org = owner
+        logger.info(f"Provisioning claimed unowned org {owner.slug} (external_id={body.organization_external_id})")
+
+    if not org:
         org = Organization(
             name=body.organization_name,
             slug=body.organization_slug,

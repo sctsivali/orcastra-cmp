@@ -362,8 +362,11 @@ def test_only_these_paths_write_a_claim() -> None:
     # rotation (carry), a removal or a lost capability that moves the primary to the next able owner
     # (remove_owner, drop_unable_primary) and an Administrator's choice (set_primary). None of them
     # sets the owner back to NULL.
+    # Provisioning claims an organization no key has claimed (`owner`), as a sync does, rather than
+    # inserting a second row for the same external id.
     assert assigns == {("routers/integrations.py:_upsert_synced_organizations", "existing"),
                        ("routers/integrations.py:_upsert_synced_organizations", "slug_owner"),
+                       ("routers/integrations.py:provision_tenant_access", "owner"),
                        ("services/organization_owners.py:replace_owners", "org"),
                        ("services/organization_owners.py:carry", "org"),
                        ("services/organization_owners.py:remove_owner", "org"),

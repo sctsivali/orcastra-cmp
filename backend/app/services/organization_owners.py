@@ -67,8 +67,15 @@ class OwnerRow:
 
 
 def owned_by_clause(key_ids: Iterable[str]) -> Any:
-    """A WHERE term on Organization: one of these keys is in its owner set."""
+    """A WHERE term on Organization: one of these keys is in its owner set.
+
+    important: with owner sets off an organization has one owner, its primary, the same rule as
+    is_owner. Every lookup that authorizes by ownership (provisioning, revoke, the policy read, the
+    rebind count) goes through here, so a key enrolled while the setting was on owns nothing.
+    """
     keys = sorted({key for key in key_ids if key})
+    if not multi_owner_enabled():
+        return Organization.api_key_id.in_(keys)
     return exists().where(
         OrganizationOwnerKey.organization_id == Organization.id,
         OrganizationOwnerKey.api_key_id.in_(keys),
@@ -124,6 +131,10 @@ async def is_owner(db: AsyncSession, org: Organization, key_id: Optional[str]) -
     if org.api_key_id == key_id:
         return True
     if not key_id or not org.api_key_id:
+        return False
+    # important: with owner sets off an organization has one owner, its primary. Rows enrolled while
+    # the setting was on stay in the table (an administrator can remove them) but own nothing.
+    if not multi_owner_enabled():
         return False
     row = await db.execute(
         select(OrganizationOwnerKey.id).where(

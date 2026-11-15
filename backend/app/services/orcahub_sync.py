@@ -3,6 +3,7 @@
 Calls go to OrcaHub's external API, authenticated with the organization's API key credentials.
 """
 
+import asyncio
 import json
 import logging
 from typing import Any, Dict, List, Optional, Sequence
@@ -17,6 +18,10 @@ from app.models.db_models import Organization, OrganizationMember
 from app.services.integration_callback_url import bound_callback_url
 
 logger = logging.getLogger(__name__)
+
+# How long a callback waits for the Vault reads behind its credentials. The Vault client has its
+# own per-call timeouts and retries; this bounds the whole lookup per key.
+CREDENTIAL_READ_SECONDS = 15.0
 
 _ROLE_TO_ORCAHUB = {
     "admin": "partner",    # an admin managing the org is pushed as a partner
@@ -36,14 +41,23 @@ async def _get_orcahub_credentials(org: Organization, owner_keys: Sequence[str] 
     """
     if org.source != "orcahub" or not org.api_key_id:
         return None
+    org_id = org.id
     for key_id in [org.api_key_id, *[k for k in owner_keys if k and k != org.api_key_id]]:
-        creds = _credentials_of(org, key_id)
+        # important: the reads are blocking Vault calls; on the event loop a slow Vault would stall
+        # every request this worker serves while a webhook or member push waited.
+        try:
+            creds = await asyncio.wait_for(
+                asyncio.to_thread(_credentials_of, org_id, key_id), timeout=CREDENTIAL_READ_SECONDS
+            )
+        except asyncio.TimeoutError:
+            logger.warning("OrcaHub credentials for org %s timed out on key %s", org_id, key_id)
+            creds = None
         if creds:
             return creds
     return None
 
 
-def _credentials_of(org: Organization, key_id: str) -> Optional[Dict[str, Any]]:
+def _credentials_of(org_id: int, key_id: str) -> Optional[Dict[str, Any]]:
     try:
         from app.routers.integrations import (
             get_vault_integrations_client,
@@ -85,7 +99,7 @@ def _credentials_of(org: Organization, key_id: str) -> Optional[Dict[str, Any]]:
             "api_key_secret": raw_secret,
         }
     except Exception as e:
-        logger.warning(f"Failed to retrieve OrcaHub credentials for org {org.id}: {e}")
+        logger.warning(f"Failed to retrieve OrcaHub credentials for org {org_id}: {e}")
         return None
 
 

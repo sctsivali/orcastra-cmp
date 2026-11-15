@@ -78,6 +78,8 @@ async def test_a_second_end_decides_on_the_primary_the_first_one_moved(
     three: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Revoking CO waits for the organization lock while PLAIN's revoke moves the primary to CO."""
+    # Co-owners own the organization only while owner sets are on.
+    monkeypatch.setattr("app.services.organization_owners.multi_owner_enabled", lambda: True)
     db = three["db"]
     await _co_own_all(three)
     other = _second_session(db)

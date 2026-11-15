@@ -64,6 +64,7 @@ from app.core.org_scope import (
     visible_projects_for,
 )
 from app.services import project_deletion, project_grants
+from app.services.key_party_bound import BIND_SCREEN
 from app.core.host_detail import project_for_tier
 from app.core.task_scope import caller_tier
 from app.core.registry_guard import require_known_registry
@@ -624,7 +625,9 @@ async def create_project(
                         detail=(
                             "None of the organizations you created or hold as Partner is bound to "
                             f"cluster '{request.host}', so a project created there could not be "
-                            "shown to you. A member role in another organization does not count."
+                            "shown to you. A member role in another organization does not count. "
+                            f"To fix it, bind one of your organizations to '{request.host}' in "
+                            f"{BIND_SCREEN}, or ask an administrator to."
                         ),
                     )
 

@@ -181,7 +181,8 @@ export function TransferOwnerKeyDialog({ organization, keys, onOpenChange }: Tra
                   <AlertTriangle aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-pending" />
                   <p className="text-muted-foreground">
                     This key&apos;s access does not include {uncovered.join(", ")}, so provisioning
-                    tenant access there is refused until it does.
+                    tenant access there is refused until it does. Add {uncovered.length === 1 ? "it" : "them"} in
+                    API Keys &gt; Edit Access.
                   </p>
                 </div>
               )}

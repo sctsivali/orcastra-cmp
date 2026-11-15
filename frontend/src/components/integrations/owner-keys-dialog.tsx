@@ -21,7 +21,13 @@ import { SearchableSelect, type SearchableSelectOption } from "@/components/ui/s
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
-import { OWNER_KEY_STATE, canOwnOrganizations, formatKeyDate } from "@/lib/key-ownership-display";
+import {
+  OWNER_KEY_STATE,
+  canOwnOrganizations,
+  formatKeyDate,
+  uncoveredClusters,
+  uncoveredClustersNote,
+} from "@/lib/key-ownership-display";
 import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import type { APIKeyInfo, IntegrationOrganization, OwnerSetResponse } from "@/types/api";
 
@@ -142,6 +148,13 @@ export function OwnerKeysDialog({ organization, keys, onOpenChange }: OwnerKeysD
                     <p className="font-mono text-xs text-muted-foreground">
                       <OverflowText value={owner.api_key_id} label={`owner key id of ${organization.slug}`} />
                     </p>
+                    {(() => {
+                      const ownerKey = keys.find((key) => key.id === owner.api_key_id);
+                      const missing = ownerKey ? uncoveredClusters(organization, ownerKey) : [];
+                      return missing.length > 0 ? (
+                        <p className="mt-1 text-xs text-muted-foreground">{uncoveredClustersNote(missing)}</p>
+                      ) : null;
+                    })()}
                   </div>
                   {owner.is_primary && <Badge variant="outline">Primary</Badge>}
                   <Badge variant={OWNER_KEY_STATE[owner.state].tone}>{OWNER_KEY_STATE[owner.state].label}</Badge>
