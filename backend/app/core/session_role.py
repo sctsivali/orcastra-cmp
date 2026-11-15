@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 # A removed membership stops counting within this long. The tenant scope itself is read on every
 # request, so in that window the account reaches nothing it no longer holds.
 MEMBERSHIP_CACHE_SECONDS = 15.0
+# A "no" is remembered only long enough to absorb one page load's burst: a buyer who opened the
+# dashboard just before OrcaHub's provisioning landed must count within seconds of the membership,
+# not after the whole window above. Concurrent callers already share one read (_in_flight).
+NO_MEMBERSHIP_CACHE_SECONDS = 2.0
 # Bounds the process-local cache against a flood of distinct signed-in accounts.
 MAX_CACHED_ACCOUNTS = 4096
 
@@ -56,34 +60,45 @@ async def _read(email: str, db: Any) -> bool:
 
 
 def _remember(email: str, held: bool, now: float) -> None:
+    known = _answers.get(email)
+    if known is not None and known[0] > now:
+        # A read that started before the one already stored finished after it: keep the newer answer.
+        return
     if email not in _answers and len(_answers) >= MAX_CACHED_ACCOUNTS:
-        for stale in [key for key, (at, _) in _answers.items() if now - at >= MEMBERSHIP_CACHE_SECONDS]:
+        for stale in [key for key, (at, yes) in _answers.items()
+                      if now - at >= (MEMBERSHIP_CACHE_SECONDS if yes else NO_MEMBERSHIP_CACHE_SECONDS)]:
             del _answers[stale]
         while len(_answers) >= MAX_CACHED_ACCOUNTS:
             del _answers[next(iter(_answers))]
     _answers[email] = (now, held)
 
 
-async def holds_membership(email: Optional[str], db: Any = None, *, strict: bool = False) -> bool:
+async def holds_membership(
+    email: Optional[str], db: Any = None, *, strict: bool = False, fresh: bool = False
+) -> bool:
     """Whether an active organization lists this email as a member.
 
     Opens its own session when `db` is not given. A failed read answers False and is not cached:
     the account is refused as before, never admitted on an error. With `strict` the failure is
     raised instead, for a caller that counts failures before acting on them (the minute re-check
-    of an open shell, which must not end every buyer's session on one database blip).
+    of an open shell, which must not end every buyer's session on one database blip). With `fresh`
+    the cache is skipped and the answer read now replaces it, for the access verdict that Check
+    again asks for.
     """
     if not email or not email.strip():
         return False
     now = _now()
-    cached = _answers.get(email)
-    if cached is not None and now - cached[0] < MEMBERSHIP_CACHE_SECONDS:
-        return cached[1]
-    pending = None if strict else _in_flight.get(email)
+    cached = None if fresh else _answers.get(email)
+    if cached is not None:
+        window = MEMBERSHIP_CACHE_SECONDS if cached[1] else NO_MEMBERSHIP_CACHE_SECONDS
+        if now - cached[0] < window:
+            return cached[1]
+    pending = None if (strict or fresh) else _in_flight.get(email)
     if pending is not None:
         # A failed shared read answers None here: refused, as for the caller that made it.
         return bool(await asyncio.shield(pending))
     shared: "Optional[asyncio.Future[Optional[bool]]]" = None
-    if not strict:
+    if not (strict or fresh):
         shared = asyncio.get_running_loop().create_future()
         _in_flight[email] = shared
     try:

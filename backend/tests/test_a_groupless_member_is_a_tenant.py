@@ -115,14 +115,53 @@ def test_an_answer_is_cached_briefly_then_read_again(rows, monkeypatch) -> None:
     assert _holds("stranger@example.test", rows) is False
     asked = len(rows.statements)
 
-    clock[0] += session_role.MEMBERSHIP_CACHE_SECONDS - 1
+    clock[0] += session_role.NO_MEMBERSHIP_CACHE_SECONDS / 2
     assert _holds(BUYER, rows) is True
     assert _holds("stranger@example.test", rows) is False
-    assert len(rows.statements) == asked, "a yes and a no are both answered from the cache"
+    assert len(rows.statements) == asked, "a yes and a no are both answered from the cache at first"
 
-    clock[0] += 2
+    clock[0] += session_role.MEMBERSHIP_CACHE_SECONDS - 1
     assert _holds(BUYER, rows) is True
     assert len(rows.statements) == asked + 1, "an expired answer is read again"
+
+
+def test_a_no_is_remembered_only_briefly(rows, monkeypatch) -> None:
+    clock = [1000.0]
+    monkeypatch.setattr(session_role, "_now", lambda: clock[0])
+    assert _holds("stranger@example.test", rows) is False
+    asked = len(rows.statements)
+    clock[0] += session_role.NO_MEMBERSHIP_CACHE_SECONDS + 0.1
+    assert _holds("stranger@example.test", rows) is False
+    assert len(rows.statements) == asked + 1, "a no is read again once its short window ends"
+    assert session_role.NO_MEMBERSHIP_CACHE_SECONDS < session_role.MEMBERSHIP_CACHE_SECONDS
+
+
+def test_a_membership_made_after_a_refusal_counts_once_the_short_no_expires(rows, monkeypatch) -> None:
+    """A buyer who opens the dashboard just before OrcaHub's provisioning lands is refused; the
+    membership it then writes counts within seconds, not after the whole membership window."""
+    clock = [1000.0]
+    monkeypatch.setattr(session_role, "_now", lambda: clock[0])
+    late = "late-buyer@example.test"
+    assert _holds(late, rows) is False
+    active_id = rows.sync.query(Organization.id).filter_by(slug="bought").scalar()
+    rows.sync.add(OrganizationMember(organization_id=active_id, user_email=late, role="tenant"))
+    rows.sync.commit()
+    clock[0] += session_role.NO_MEMBERSHIP_CACHE_SECONDS + 0.1
+    assert _holds(late, rows) is True
+
+
+def test_a_fresh_read_skips_a_cached_no_and_remembers_the_answer(rows, monkeypatch) -> None:
+    clock = [1000.0]
+    monkeypatch.setattr(session_role, "_now", lambda: clock[0])
+    late = "late-buyer@example.test"
+    assert _holds(late, rows) is False
+    active_id = rows.sync.query(Organization.id).filter_by(slug="bought").scalar()
+    rows.sync.add(OrganizationMember(organization_id=active_id, user_email=late, role="tenant"))
+    rows.sync.commit()
+    assert asyncio.run(session_role.holds_membership(late, rows, fresh=True)) is True
+    asked = len(rows.statements)
+    assert _holds(late, rows) is True
+    assert len(rows.statements) == asked, "the fresh answer is what the next caller reads"
 
 
 def test_a_removed_membership_stops_counting_once_the_answer_expires(rows, monkeypatch) -> None:
@@ -133,6 +172,13 @@ def test_a_removed_membership_stops_counting_once_the_answer_expires(rows, monke
     rows.sync.commit()
     clock[0] += session_role.MEMBERSHIP_CACHE_SECONDS + 1
     assert _holds(BUYER, rows) is False
+
+
+def test_a_read_that_started_earlier_never_overwrites_a_newer_answer() -> None:
+    """A slow read that began before a fresh one finishes after it; the newer answer stays."""
+    session_role._remember(BUYER, True, 1010.0)
+    session_role._remember(BUYER, False, 1005.0)
+    assert session_role._answers[BUYER] == (1010.0, True)
 
 
 def test_the_cache_stays_bounded(rows, monkeypatch) -> None:

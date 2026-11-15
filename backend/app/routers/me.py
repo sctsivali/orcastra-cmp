@@ -77,7 +77,7 @@ async def get_my_access_verdict(
     if not roles:
         # A groupless member of an active organization is a Tenant, as on every session route
         # (rbac.session_has_role); its verdict below is the Tenant one, scope and term included.
-        if not await session_role.holds_membership(user.email, db):
+        if not await session_role.holds_membership(user.email, db, fresh=True):
             return MyAccessVerdict(
                 email=user.email, role=None, has_role=False, blocked_reason=NO_ROLE_ASSIGNED
             )

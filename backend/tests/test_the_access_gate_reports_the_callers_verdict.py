@@ -203,6 +203,14 @@ def test_real_rows_a_groupless_buyer_with_a_policy_is_let_in_as_a_tenant(world) 
     assert (verdict.tenant_access.total_clusters, verdict.tenant_access.total_rules) == (1, 1)
 
 
+def test_real_rows_check_again_admits_a_buyer_refused_a_moment_ago(world) -> None:
+    """Check again and the gate ask for the verdict; a no this process remembered from a moment
+    before the purchase landed must not answer it (the verdict is never cached)."""
+    session_role._answers["granted@example.test"] = (session_role._now(), False)
+    verdict = _verdict(_user("granted@example.test"), world)
+    assert (verdict.has_role, verdict.role, verdict.blocked_reason) == (True, "tenant", None)
+
+
 def test_real_rows_a_groupless_member_with_nothing_assigned_sees_the_access_notice(world) -> None:
     verdict = _verdict(_user("waiting@example.test", "Everyone"), world)
     assert (verdict.has_role, verdict.role, verdict.blocked_reason) == (True, "tenant", "no_tenant_access")
