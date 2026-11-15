@@ -43,7 +43,7 @@ def db():
         for ddl in (
             "CREATE TABLE organizations (id INTEGER PRIMARY KEY, is_active BOOLEAN NOT NULL, source TEXT NOT NULL DEFAULT 'local')",
             "CREATE TABLE organization_members (id INTEGER PRIMARY KEY, organization_id INTEGER, user_email TEXT)",
-            "CREATE TABLE organization_clusters (id INTEGER PRIMARY KEY, organization_id INTEGER, cluster_id TEXT, registered_by TEXT)",
+            "CREATE TABLE organization_clusters (id INTEGER PRIMARY KEY, organization_id INTEGER, cluster_id TEXT, registered_by TEXT, granted_by TEXT)",
             "CREATE TABLE tenant_access_policies (id INTEGER PRIMARY KEY, organization_id INTEGER, name TEXT, "
             "source TEXT NOT NULL, term_ended_at DATETIME, access_ends_at DATETIME)",
             "CREATE TABLE tenant_policy_assignments (id INTEGER PRIMARY KEY, policy_id INTEGER, org_member_id INTEGER, "

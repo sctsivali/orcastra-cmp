@@ -1,7 +1,7 @@
 """A purchase's paid term, applied to everything the purchase reaches, its own rules included.
 
 Provisioning binds the seller's cluster to the buyer's OrcaHub organization with no registrant
-(`organization_clusters.registered_by IS NULL`): a sale-only binding. The buyer's reach there
+(`organization_clusters.registered_by IS NULL`, and no `granted_by`): a sale-only binding. The buyer's reach there
 follows that organization's OrcaHub policies naming the cluster: `active` while a live one's paid
 term runs, `read_only` (retention, view only) once every live one is past it, `ended` with none.
 
@@ -79,6 +79,7 @@ async def _reach(db: AsyncSession, email: str) -> Tuple[Set[str], Dict[str, Set[
             OrganizationCluster.cluster_id,
             OrganizationCluster.organization_id,
             OrganizationCluster.registered_by,
+            OrganizationCluster.granted_by,
             Organization.source,
             Organization.created_by,
         )
@@ -94,8 +95,10 @@ async def _reach(db: AsyncSession, email: str) -> Tuple[Set[str], Dict[str, Set[
         select(OrganizationCluster.cluster_id).where(func.lower(OrganizationCluster.registered_by) == lower)
     )).scalars().all())
     sale_only: Dict[str, Set[int]] = {}
-    for cluster_id, org_id, registered_by, source, created_by in rows:
-        if registered_by is not None or source != "orcahub" or (created_by or "").lower() == lower:
+    for cluster_id, org_id, registered_by, granted_by, source, created_by in rows:
+        # An administrator's grant is not a purchase, though it carries no registrant either.
+        if (registered_by is not None or granted_by is not None or source != "orcahub"
+                or (created_by or "").lower() == lower):
             full.add(cluster_id)
         else:
             sale_only.setdefault(cluster_id, set()).add(org_id)
@@ -183,6 +186,7 @@ async def sold_to_without_registering(
             OrganizationCluster.organization_id == organization_id,
             OrganizationCluster.cluster_id.in_(wanted),
             OrganizationCluster.registered_by.is_(None),
+            OrganizationCluster.granted_by.is_(None),
             Organization.source == "orcahub",
         )
     )).scalars().all())

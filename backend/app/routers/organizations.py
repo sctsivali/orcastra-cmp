@@ -6,6 +6,7 @@ Scoped by RBAC: Admin sees all, Partner sees its own, Tenant sees the ones it be
 
 import logging
 from collections.abc import AsyncIterator
+from dataclasses import asdict
 from contextlib import asynccontextmanager
 from typing import Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -27,6 +28,9 @@ from app.core import org_scope
 from app.core.org_scope import get_owned_clusters_ignoring_admin, verify_cluster_access
 from app.core.sale_term import reaches_only_by_purchase
 from app.core.whole_cluster_access import SHARED_CLUSTER_DETAIL, the_party_holds_it_whole
+from app.services import cluster_bind_preview
+from app.services.key_party_bound import forget_cluster_bounds
+from app.services.lxd.registry import registered_cluster_ids
 from app.services.organization_service import OrganizationService
 from app.services.organization_roster import refuse_a_synced_partner, user_runs_org
 from app.services.shared_cluster_audit import (
@@ -108,6 +112,7 @@ class ClusterBindingResponse(BaseModel):
     organization_id: int
     cluster_id: str
     registered_by: Optional[str]
+    granted_by: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -457,11 +462,83 @@ async def list_cluster_bindings(
         acl, _grants, _visible = await org_scope.get_tenant_scope(user, db)
         scope = org_scope._narrow_by_tenant_acl(allowed, acl) or set()
         return [
-            ClusterBindingResponse(id=c.id, organization_id=c.organization_id, cluster_id=c.cluster_id, registered_by=None)
+            ClusterBindingResponse(
+                id=c.id, organization_id=c.organization_id, cluster_id=c.cluster_id,
+                registered_by=None, granted_by=None,
+            )
             for c in clusters
             if c.cluster_id in scope
         ]
+    # important: seeing an organization takes any member row, and a buyer's founder is a partner
+    # of the buyer. Who registered or granted a binding is told only to an administrator or a
+    # partner who runs the organization; Synced Organizations shows everyone the binding's kind.
+    if role != Role.ADMIN.value and not await user_runs_org(db, org_id, user.email, role):
+        return [
+            ClusterBindingResponse(
+                id=c.id, organization_id=c.organization_id, cluster_id=c.cluster_id,
+                registered_by=None, granted_by=None,
+            )
+            for c in clusters
+        ]
     return [ClusterBindingResponse.model_validate(c) for c in clusters]
+
+
+class BindDecision(BaseModel):
+    """Whether this caller may bind the cluster to the organization, and with which stamps."""
+    refusal: Optional[str] = None
+    registrant: Optional[str] = None
+    granter: Optional[str] = None
+
+
+async def bind_decision(db: AsyncSession, user: AuthenticatedUser, role: str, org_id: int, cluster_id: str) -> BindDecision:
+    """The bind's own authorization, shared by the bind, its preview and the candidate list.
+
+    important: user_runs_org checks the organization, which is the caller's own, and org scope is
+    derived from exactly the row a bind writes (org_scope._query_owned_clusters). Without a check
+    on the cluster, a partner could bind another party's cluster id to its own organization and
+    gain full org scope over it. As on the API-key routes, only what the caller already holds may
+    be granted. Personally registered clusters count as owned, so the org-less partner bootstrap
+    (reconcile_personal_clusters) still works.
+    """
+    if not await user_runs_org(db, org_id, user.email, role):
+        return BindDecision(refusal="No access to this organization")
+    owned = await get_owned_clusters_ignoring_admin(user, db)
+    if role != "admin":
+        if cluster_id not in owned:
+            return BindDecision(refusal=f"Not permitted to bind cluster {cluster_id}")
+        # important: a cluster reached only by purchase is the seller's. Bound here, the new row
+        # would carry the buyer as registrant and outlive the purchase and its term
+        # (core/sale_term.py).
+        if await reaches_only_by_purchase(db, user.email, cluster_id):
+            return BindDecision(refusal=(
+                f"Cluster {cluster_id} reaches you through a purchase, so it cannot be bound to "
+                "another organization."
+            ))
+    # important: owned counts any membership, and a tenant row reaches a cluster but never owns it.
+    # A binding needs the whole cluster through the caller's party (core/whole_cluster_access), and
+    # registered_by is itself an ownership claim (org_scope._query_owned_clusters), so only such an
+    # owner is stamped. An admin binding a cluster it does not own writes no registrant, so
+    # break-glass still treats that cluster as foreign to the admin, and records the admin as the
+    # grantor so the row is not read as a sale provisioning made (core/sale_term.py).
+    whole = cluster_id in owned and await the_party_holds_it_whole(cluster_id, db, user)
+    if role != "admin" and not whole:
+        return BindDecision(refusal=SHARED_CLUSTER_DETAIL)
+    registrant = user.email if whole else None
+    return BindDecision(registrant=registrant, granter=user.email if registrant is None else None)
+
+
+def _access_changed() -> None:
+    try:
+        get_cache_manager().invalidate_after_access_change()
+    except Exception as exc:  # noqa: BLE001 - the binding stands; scoped keys already hash the scope
+        logger.warning("Cache invalidation after a binding change failed: %s", type(exc).__name__)
+
+
+def _binding_changed(cluster_id: str) -> None:
+    """A binding decides cluster scope, the party and every key's bound on the cluster, so the
+    shared lists and the keys' cached bounds are dropped at once rather than after their TTLs."""
+    forget_cluster_bounds(cluster_id)
+    _access_changed()
 
 
 @router.post("/{org_id}/clusters", response_model=ClusterBindingResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(check_read_only_mode)])
@@ -471,59 +548,102 @@ async def bind_cluster(
     user: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
 ):
-    """Bind a cluster to this organization. Partner (own org) or Admin."""
+    """Bind a cluster to this organization. Partner (own org, whole cluster) or Admin."""
     svc = OrganizationService(db)
     role = _get_user_role(user)
 
     if not await user_runs_org(db, org_id, user.email, role):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
     await _require_organization(svc, org_id)
-
-    # important: user_runs_org checks the organization, which is the caller's own, and org
-    # scope is derived from exactly the row this writes (org_scope._query_owned_clusters).
-    # Without a check on the cluster, a partner could bind another party's cluster id to its own
-    # organization and gain full org scope over it. As on the API-key routes, only what the
-    # caller already holds may be granted. Personally registered clusters count as owned, so
-    # the org-less partner bootstrap (reconcile_personal_clusters) still works.
-    owned = await get_owned_clusters_ignoring_admin(user, db)
-    if role != "admin":
-        if body.cluster_id not in owned:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Not permitted to bind cluster {body.cluster_id}",
-            )
-        # important: a cluster reached only by purchase is the seller's. Bound here, the new row
-        # would carry the buyer as registrant and outlive the purchase and its term
-        # (core/sale_term.py).
-        if await reaches_only_by_purchase(db, user.email, body.cluster_id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    f"Cluster {body.cluster_id} reaches you through a purchase, so it cannot be bound to "
-                    "another organization."
-                ),
-            )
-    # important: owned counts any membership, and a tenant row reaches a cluster but never owns it.
-    # A binding needs the whole cluster through the caller's party (core/whole_cluster_access), and
-    # registered_by is itself an ownership claim (org_scope._query_owned_clusters), so only such an
-    # owner is stamped. An admin binding a cluster it does not own writes no registrant, so
-    # break-glass still treats that cluster as foreign to the admin.
-    whole = body.cluster_id in owned and await the_party_holds_it_whole(body.cluster_id, db, user)
-    if role != "admin" and not whole:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=SHARED_CLUSTER_DETAIL)
-    registrant = user.email if whole else None
+    decision = await bind_decision(db, user, role, org_id, body.cluster_id)
+    if decision.refusal:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=decision.refusal)
 
     async with _guard_cluster_write(db, body.cluster_id):
         if not await user_runs_org(db, org_id, user.email, role):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
         try:
-            binding = await svc.bind_cluster(org_id, body.cluster_id, registered_by=registrant)
+            binding = await svc.bind_cluster(
+                org_id, body.cluster_id, registered_by=decision.registrant, granted_by=decision.granter,
+            )
         except SharedClusterGuardError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.as_detail()) from exc
         except ValueError as e:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
+    _binding_changed(body.cluster_id)
     return ClusterBindingResponse.model_validate(binding)
+
+
+class OrganizationOnClusterResponse(BaseModel):
+    id: int
+    name: str
+
+
+class ClusterBindPreviewResponse(BaseModel):
+    cluster_id: str
+    organization_id: int
+    allowed: bool
+    refusal: Optional[str] = None
+    binding_kind: Optional[str] = None
+    already_bound: Optional[bool] = None
+    several_organizations_before: Optional[bool] = None
+    several_organizations_after: Optional[bool] = None
+    holders_lose_whole_cluster_tools: Optional[bool] = None
+    organizations_on_cluster: Optional[list[OrganizationOnClusterResponse]] = None
+    share_audit: Optional[Dict] = None
+    notes: list[str] = []
+
+
+@router.get("/{org_id}/cluster-candidates", response_model=list[str])
+async def list_cluster_bind_candidates(
+    org_id: int,
+    user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
+):
+    """The clusters this caller may bind to the organization and that are not bound to it yet."""
+    role = _get_user_role(user)
+    if not await user_runs_org(db, org_id, user.email, role):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
+    bound = await cluster_bind_preview.bound_cluster_ids(db, org_id)
+    if role == "admin":
+        registry = await registered_cluster_ids()
+        known = set(registry) if registry is not None else await cluster_bind_preview.every_bound_cluster_id(db)
+        return sorted(known - bound)
+    owned = await get_owned_clusters_ignoring_admin(user, db)
+    candidates = []
+    for cluster_id in sorted(owned - bound):
+        if not (await bind_decision(db, user, role, org_id, cluster_id)).refusal:
+            candidates.append(cluster_id)
+    return candidates
+
+
+@router.get("/{org_id}/clusters/preview", response_model=ClusterBindPreviewResponse)
+async def preview_cluster_bind(
+    org_id: int,
+    cluster_id: str,
+    user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
+):
+    """What binding `cluster_id` to the organization would change. Nothing is written.
+
+    A caller the bind would refuse gets the same refusal and nothing else about the cluster.
+    """
+    role = _get_user_role(user)
+    decision = await bind_decision(db, user, role, org_id, cluster_id)
+    if decision.refusal:
+        return ClusterBindPreviewResponse.model_validate(
+            asdict(cluster_bind_preview.refused(cluster_id, org_id, decision.refusal))
+        )
+    preview = await cluster_bind_preview.preview_bind(
+        db,
+        organization_id=org_id,
+        cluster_id=cluster_id,
+        registrant=decision.registrant,
+        granter=decision.granter,
+        show_organizations=role == "admin",
+    )
+    return ClusterBindPreviewResponse.model_validate(asdict(preview))
 
 
 @router.delete("/{org_id}/clusters/{cluster_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(check_read_only_mode)])
@@ -546,3 +666,4 @@ async def unbind_cluster(
 
         if not await svc.unbind_cluster(org_id, cluster_id):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster binding not found")
+    _binding_changed(cluster_id)

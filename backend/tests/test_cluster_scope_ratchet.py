@@ -38,6 +38,7 @@ EXEMPT = {
     # Org-level membership check (user_has_access) is the correct boundary here.
     ("organizations.py", "bind_cluster"): "org membership checked via user_has_access",
     ("organizations.py", "unbind_cluster"): "org membership checked via user_has_access",
+    ("organizations.py", "preview_cluster_bind"): "bind_decision: the bind's own org and cluster checks",
     # Break-glass reaches a cluster the caller does not own and has its own gate.
     ("break_glass.py", "*"): "enforce_sensitive_access / require_admin is the gate",
 }

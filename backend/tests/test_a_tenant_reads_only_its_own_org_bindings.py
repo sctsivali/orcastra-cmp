@@ -77,7 +77,13 @@ async def test_a_tenant_is_not_told_who_created_the_organization() -> None:
     assert org.created_by == ""
 
 
-async def test_a_partner_still_reads_the_whole_organization() -> None:
+async def test_a_partner_still_reads_the_whole_organization(monkeypatch) -> None:
+    async def runs(*_a) -> bool:
+        return True
+
+    # Every binding is listed to a partner; who registered or granted it only to one who runs the
+    # organization (test_a_binding_list_names_people_only_to_those_who_run_the_organization.py).
+    monkeypatch.setattr(organizations, "user_runs_org", runs)
     partner = _user("role_partner", "staff@seller.test")
     assert len(await organizations.list_members(7, user=partner, db=None)) == 3
     assert len(await organizations.list_cluster_bindings(7, user=partner, db=None)) == 2

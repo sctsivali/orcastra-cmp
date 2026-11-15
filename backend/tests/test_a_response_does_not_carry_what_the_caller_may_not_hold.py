@@ -109,20 +109,22 @@ def test_binding_a_cluster_checks_the_cluster_and_not_only_the_organization() ->
     Org scope is derived from the row this handler writes, so an unchecked cluster id here is
     self-service scope expansion onto someone else's cluster.
     """
-    tree = ast.parse(inspect.getsource(organizations.bind_cluster).lstrip())
-    source = ast.unparse(tree)
-    assert "get_owned_clusters_ignoring_admin" in source, (
-        "bind_cluster does not check that the caller owns body.cluster_id"
+    decision = ast.unparse(ast.parse(inspect.getsource(organizations.bind_decision).lstrip()))
+    assert "get_owned_clusters_ignoring_admin" in decision, (
+        "bind_decision does not check that the caller owns the cluster"
     )
-    # The check must run before the write.
-    assert source.index("get_owned_clusters_ignoring_admin") < source.index("svc.bind_cluster"), (
+    # The check must run before the write, and the preview must ask the same question.
+    source = ast.unparse(ast.parse(inspect.getsource(organizations.bind_cluster).lstrip()))
+    assert source.index("bind_decision") < source.index("svc.bind_cluster"), (
         "the ownership check runs after the binding is written"
     )
+    preview = inspect.getsource(organizations.preview_cluster_bind)
+    assert "bind_decision" in preview, "the preview must refuse exactly what the bind refuses"
 
 
 def test_the_cluster_check_does_not_apply_to_admin() -> None:
     """Admin binds on behalf of partners during onboarding; narrowing that would break setup."""
-    source = inspect.getsource(organizations.bind_cluster)
+    source = inspect.getsource(organizations.bind_decision)
     assert 'if role != "admin"' in source
 
 

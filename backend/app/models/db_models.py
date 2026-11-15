@@ -374,6 +374,9 @@ class OrganizationCluster(Base):
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
     cluster_id = Column(String(255), nullable=False)  # vault key
     registered_by = Column(String(255), nullable=True)
+    # The administrator who granted a binding it did not register. A row with neither registrant
+    # nor grantor on an OrcaHub organization is a sale provisioning made (core/sale_term.py).
+    granted_by = Column(String(255), nullable=True)
 
     registered_at = Column(
         DateTime(timezone=True),

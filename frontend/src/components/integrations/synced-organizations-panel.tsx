@@ -2,13 +2,14 @@
 
 import { Suspense, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRightLeft, Building2, KeyRound } from "lucide-react";
+import { AlertTriangle, ArrowRightLeft, Building2, KeyRound, Server } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { EmptyState } from "@/components/ui/empty-state";
+import { NodeLink } from "@/components/ui/node-link";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { ReadErrorState } from "@/components/ui/read-error-state";
 import { RowActions, type RowAction } from "@/components/ui/row-actions";
@@ -17,6 +18,7 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { TableEmptyRow, TableSubText } from "@/components/ui/table-text";
 import { TableToolbar } from "@/components/ui/table-toolbar";
+import { OrganizationClustersDialog } from "@/components/integrations/organization-clusters-dialog";
 import { OwnerKeysDialog } from "@/components/integrations/owner-keys-dialog";
 import { TransferOwnerKeyDialog } from "@/components/integrations/transfer-owner-key-dialog";
 import { usePermissions } from "@/hooks/use-permissions";
@@ -36,8 +38,10 @@ import type { IntegrationOrganization } from "@/types/api";
 import { plural } from "@/lib/utils";
 import { OrganizationsIllustration } from "@/components/illustrations/scenes/onboarding";
 
-/** Organization, Slug, Owner Key, Owner State, and Actions for an administrator. */
-const columnCount = (withActions: boolean) => (withActions ? 5 : 4);
+/** Organization, Slug, Clusters, Owner Key, Owner State, and Actions when the caller has any. */
+const columnCount = (withActions: boolean) => (withActions ? 6 : 5);
+
+const BINDING_KIND_LABEL = { registered: "registered", granted: "granted", purchase: "purchase", bound: "bound" } as const;
 
 function ownerLabel(org: IntegrationOrganization): string {
   return org.owner_key_name || org.api_key_id || "(no owner key)";
@@ -87,12 +91,14 @@ const SYNCED_ORGANIZATIONS = defineTable<IntegrationOrganization>()({
  *
  * Only an owner key may sync an organization, update its members and policies and provision
  * tenant access for it, so an owner that is revoked, expired or deleted freezes it. Administrators
- * move such an organization to another key here; a Partner sees its own organizations read-only.
+ * move such an organization to another key here. Administrators, and partners who run an
+ * organization, manage the clusters it is bound to; other partners read the list.
  */
 function SyncedOrganizationsContent() {
   const { isAdmin } = usePermissions();
   const [transferring, setTransferring] = useState<IntegrationOrganization | null>(null);
   const [managing, setManaging] = useState<IntegrationOrganization | null>(null);
+  const [bindingFor, setBindingFor] = useState<IntegrationOrganization | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const resetPage = () => setPage(1);
@@ -138,22 +144,34 @@ function SyncedOrganizationsContent() {
     : keysQuery.error && !keysQuery.data
       ? "The key list could not be read; refresh to try again"
       : undefined;
+  // A partner who runs an organization manages its clusters; owner keys stay an administrator's.
+  // Owner Keys exists only while owner sets are on (INTEGRATION_MULTI_OWNER_ENABLED): with them off
+  // every action in that dialog would answer 404.
   const actionsFor = (org: IntegrationOrganization): RowAction[] => [
-    {
-      id: "owner-keys",
-      label: "Owner Keys",
-      icon: KeyRound,
-      onSelect: () => setManaging(org),
-      unavailableReason: org.api_key_id ? keysUnavailable : "No owner yet: transfer it to a key first",
-    },
-    {
-      id: "transfer-owner",
-      label: "Transfer Owner",
-      icon: ArrowRightLeft,
-      onSelect: () => setTransferring(org),
-      unavailableReason: keysUnavailable,
-    },
+    ...(org.can_manage_clusters
+      ? [{ id: "clusters", label: "Manage Clusters", icon: Server, onSelect: () => setBindingFor(org) }]
+      : []),
+    // A backend from before 1.0.1 sends no owner_sets_enabled; it shows the action as it always did.
+    ...(isAdmin && org.owner_sets_enabled !== false
+      ? [{
+          id: "owner-keys",
+          label: "Owner Keys",
+          icon: KeyRound,
+          onSelect: () => setManaging(org),
+          unavailableReason: org.api_key_id ? keysUnavailable : "No owner yet: transfer it to a key first",
+        }]
+      : []),
+    ...(isAdmin
+      ? [{
+          id: "transfer-owner",
+          label: "Transfer Owner",
+          icon: ArrowRightLeft,
+          onSelect: () => setTransferring(org),
+          unavailableReason: keysUnavailable,
+        }]
+      : []),
   ];
+  const withActions = isAdmin || rows.some((org) => org.can_manage_clusters);
 
   let body: React.ReactNode;
   if (orgsQuery.isLoading) {
@@ -182,12 +200,13 @@ function SyncedOrganizationsContent() {
                 direction={sortDirection} onSort={handleSort} />
               <SortableTableHead label="Slug" field="slug" currentField={sortField}
                 direction={sortDirection} onSort={handleSort} />
+              <TableHead>Clusters</TableHead>
               <SortableTableHead label="Owner Key" field="owner" currentField={sortField}
                 direction={sortDirection} onSort={handleSort} />
               <SortableTableHead label="Owner State" field="state" currentField={sortField}
                 direction={sortDirection} onSort={handleSort} />
-              {/* Partners read this list without actions, so they get no empty column. */}
-              {isAdmin && (
+              {/* A caller with no action on any row gets no empty column. */}
+              {withActions && (
                 <TableHead pinned="end" className="w-12 text-right">
                   <span className="sr-only">Actions</span>
                 </TableHead>
@@ -197,7 +216,7 @@ function SyncedOrganizationsContent() {
           <TableBody>
             {paginated.length === 0 ? (
               <TableEmptyRow
-                colSpan={columnCount(isAdmin)}
+                colSpan={columnCount(withActions)}
                 icon={Building2}
                 title="No organization matches the current filters"
                 description={`${plural(filters.activeFilterCount, "filter")} active`}
@@ -209,6 +228,22 @@ function SyncedOrganizationsContent() {
                   <TableRow key={org.id}>
                     <TableCell className="font-medium">{org.name}</TableCell>
                     <TableCell className="font-mono">{org.slug}</TableCell>
+                    <TableCell className="max-w-[14rem]">
+                      {(org.cluster_bindings ?? []).length === 0 ? (
+                        <span className="text-muted-foreground">None</span>
+                      ) : (
+                        <ul className="space-y-0.5" aria-label={`Clusters of ${org.slug}`}>
+                          {(org.cluster_bindings ?? []).map((binding) => (
+                            <li key={binding.cluster_id} className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
+                              <NodeLink clusterId={binding.cluster_id} className="break-all font-mono" wrap />
+                              <span className="shrink-0 text-xs text-muted-foreground">
+                                {BINDING_KIND_LABEL[binding.kind]}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </TableCell>
                     <TableCell className="max-w-[16rem]">
                       <OverflowText value={ownerLabel(org)} label={`owner key of ${org.slug}`} />
                       {org.api_key_id && org.owner_key_name && (
@@ -234,9 +269,11 @@ function SyncedOrganizationsContent() {
                         <TableSubText wrap>Only administrators see this owner key, and partners of the key&apos;s own organization once it has provisioned a buyer.</TableSubText>
                       )}
                     </TableCell>
-                    {isAdmin && (
+                    {withActions && (
                       <TableCell pinned="end" className="text-right">
-                        <RowActions triggerLabel={`Actions for ${org.slug}`} actions={actionsFor(org)} />
+                        {actionsFor(org).length > 0 && (
+                          <RowActions triggerLabel={`Actions for ${org.slug}`} actions={actionsFor(org)} />
+                        )}
                       </TableCell>
                     )}
                   </TableRow>
@@ -269,7 +306,8 @@ function SyncedOrganizationsContent() {
         <CardTitle className="text-lg">Synced Organizations</CardTitle>
         <CardDescription>
           The OrcaHub organizations synced into this control plane. Only the owner key may sync an
-          organization, update its members and policies, and provision tenant access for it.
+          organization, update its members and policies, and provision tenant access for it. A project
+          created on a cluster is recorded to an organization only where that cluster is bound to it.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -284,6 +322,15 @@ function SyncedOrganizationsContent() {
         )}
         {body}
       </CardContent>
+      {bindingFor && (
+        <OrganizationClustersDialog
+          // The current row, so a bind made here shows in the list it was made from.
+          organization={rows.find((org) => org.id === bindingFor.id) ?? bindingFor}
+          onOpenChange={(open) => {
+            if (!open) setBindingFor(null);
+          }}
+        />
+      )}
       {managing && (
         <OwnerKeysDialog
           organization={rows.find((org) => org.id === managing.id) ?? managing}

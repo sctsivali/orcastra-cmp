@@ -65,6 +65,7 @@ import {
   OrganizationUpdateRequest,
   OrganizationMember,
   OrganizationCluster,
+  ClusterBindPreview,
   UserGroupEntry,
   UserGroupAssignRequest,
   UserGroupAssignResponse,
@@ -2976,7 +2977,7 @@ export const api = {
     updateMember: (orgId: string, email: string, data: Record<string, unknown>) =>
       fetchAPI<OrganizationMember>(
         `/organizations/${orgId}/members/${encodeURIComponent(email)}`,
-        { method: "PUT", body: JSON.stringify(data) }
+        { method: "PATCH", body: JSON.stringify(data) }
       ),
     removeMember: (orgId: string, email: string) =>
       fetchAPI<{ message: string }>(
@@ -2992,10 +2993,18 @@ export const api = {
         body: JSON.stringify(data),
       }),
     unbindCluster: (orgId: string, clusterId: string) =>
-      fetchAPI<{ message: string }>(
+      fetchAPI<void>(
         `/organizations/${orgId}/clusters/${encodeURIComponent(clusterId)}`,
         { method: "DELETE" }
       ),
+    // What a bind would change, read before it (nothing is written), and the clusters this caller
+    // may bind to the organization.
+    previewClusterBind: (orgId: string, clusterId: string) =>
+      fetchAPI<ClusterBindPreview>(
+        `/organizations/${orgId}/clusters/preview?cluster_id=${encodeURIComponent(clusterId)}`,
+      ),
+    listClusterCandidates: (orgId: string) =>
+      fetchAPI<string[]>(`/organizations/${orgId}/cluster-candidates`),
     // org-level branding: the organization's own row, what it inherits, and who it inherits from
     getPreferences: (orgId: string) =>
       fetchAPI<OrgBranding>(`/organizations/${orgId}/preferences`),

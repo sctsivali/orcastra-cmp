@@ -40,8 +40,9 @@ def binding(monkeypatch: pytest.MonkeyPatch) -> List[Dict[str, Any]]:
     async def _lock(_db: Any, _cluster: str):
         yield
 
-    async def _bind(self: Any, org_id: int, cluster_id: str, registered_by: Any) -> Any:
-        written.append({"org": org_id, "cluster": cluster_id, "registered_by": registered_by})
+    async def _bind(self: Any, org_id: int, cluster_id: str, registered_by: Any, granted_by: Any = None) -> Any:
+        written.append({"org": org_id, "cluster": cluster_id, "registered_by": registered_by,
+                        "granted_by": granted_by})
         return {"id": 1, "organization_id": org_id, "cluster_id": cluster_id, "registered_by": registered_by}
 
     async def _not_bought(*_a: Any, **_k: Any) -> bool:
@@ -66,7 +67,7 @@ async def _bind(cluster: str, user: AuthenticatedUser) -> Any:
 
 async def test_the_seller_binds_its_own_cluster_after_a_sale_and_is_stamped(binding) -> None:
     await _bind(OWN, _user(SELLER))
-    assert binding == [{"org": 9, "cluster": OWN, "registered_by": SELLER}]
+    assert binding == [{"org": 9, "cluster": OWN, "registered_by": SELLER, "granted_by": None}]
 
 
 @pytest.mark.parametrize("cluster", [SOLO, MIXED], ids=["reached-by-a-member-row", "held-beside-another-party"])
@@ -79,7 +80,8 @@ async def test_a_cluster_another_party_holds_is_never_bound(binding, cluster: st
 
 async def test_an_admin_binding_a_cluster_it_does_not_own_stamps_no_registrant(binding) -> None:
     await _bind(SOLO, _user(ADMIN, "role_admin"))
-    assert binding == [{"org": 9, "cluster": SOLO, "registered_by": None}]
+    # The admin is recorded as the grantor, so the binding does not read as a sale.
+    assert binding == [{"org": 9, "cluster": SOLO, "registered_by": None, "granted_by": ADMIN}]
 
 
 async def _register(cluster: str, user: AuthenticatedUser) -> Any:

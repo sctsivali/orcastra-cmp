@@ -493,7 +493,7 @@ async def audit_shared_cluster(
         return _unavailable_report(cluster_id)
 
 
-def _owner_identity(
+def owner_identity(
     organization_id: Optional[int],
     registered_by: Optional[str],
     row_id: Optional[int] = None,
@@ -530,10 +530,10 @@ async def assert_cluster_safe_to_share(
         )
     ).all()
     existing = {
-        _owner_identity(row[1], row[2], row[0])
+        owner_identity(row[1], row[2], row[0])
         for row in rows
     }
-    prospective = _owner_identity(
+    prospective = owner_identity(
         prospective_organization_id,
         prospective_registered_by,
     )

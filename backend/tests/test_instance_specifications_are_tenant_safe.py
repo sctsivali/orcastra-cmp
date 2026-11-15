@@ -313,7 +313,7 @@ def test_tenant_acl_query_revokes_inactive_unbound_and_cross_org_grants():
                 self.statements = []
             self.statements.append(statement)
             if len(self.statements) == 1:
-                return _Result(rows=[(rule, 7, "tenant-policy", "local", None, None, "local", "partner@example.test")])
+                return _Result(rows=[(rule, 7, "tenant-policy", "local", None, None, "local", "partner@example.test", None)])
             return _Result(scalar_rows=[])
 
     db = _DB()
@@ -363,7 +363,7 @@ def test_tenant_acl_join_semantically_excludes_inactive_unbound_and_cross_org_ro
             text(
                 "CREATE TABLE organization_clusters "
                 "(id INTEGER PRIMARY KEY, organization_id INTEGER, cluster_id TEXT NOT NULL, "
-                "registered_by TEXT)"
+                "registered_by TEXT, granted_by TEXT)"
             )
         )
         connection.execute(

@@ -1467,7 +1467,8 @@ export interface ClusterAvailability {
   /** Cluster id. The exact value a create request sends as its node. */
   name: string;
   display_name: string;
-  endpoint: string;
+  /** Absent for a tenant: the backend strips it (nodes._availability_for_user). */
+  endpoint?: string | null;
   status: ClusterStatus;
   reason_code: AvailabilityReason;
   reason?: string | null;
@@ -2378,6 +2379,8 @@ export interface APIKeyCreateResponse {
   api_key: APIKeyInfo;
   api_key_id: string;
   api_key_secret: string;
+  /** Rotation only: a stored callback URL was dropped. Null on create. */
+  callback_url_cleared?: boolean | null;
 }
 
 export interface APIKeyListResponse {
@@ -2811,8 +2814,43 @@ export interface IntegrationOrganization {
   owner_key_expires_at?: string | null;
   owner_key_expiry_state?: "never" | "active" | "expiring" | "expired" | null;
   cluster_ids?: string[];
+  // How each binding came to be (see ClusterBindingKind).
+  cluster_bindings?: ClusterBindingEntry[];
+  // Whether this caller may bind and unbind clusters here: an administrator, or a partner who runs
+  // the organization. Each bind is still checked per cluster.
+  can_manage_clusters?: boolean;
+  // INTEGRATION_MULTI_OWNER_ENABLED: the Owner Keys action exists only while it is on.
+  owner_sets_enabled?: boolean;
   // Every key in the owner set, primary first. Empty when the caller may not see the owner keys.
   owner_keys?: OwnerKeyEntry[];
+}
+
+/**
+ * registered: a partner of the organization registered the cluster. granted: an administrator
+ * bound it. purchase: provisioning bound it for a sale. bound: neither recorded (a local
+ * organization, or a bind made before 1.0.1).
+ */
+export type ClusterBindingKind = "registered" | "granted" | "purchase" | "bound";
+
+export interface ClusterBindingEntry {
+  cluster_id: string;
+  kind: ClusterBindingKind;
+}
+
+/** What binding a cluster to an organization would change. Nothing is written to read it. */
+export interface ClusterBindPreview {
+  cluster_id: string;
+  organization_id: number;
+  allowed: boolean;
+  refusal?: string | null;
+  binding_kind?: "registered" | "granted" | null;
+  already_bound?: boolean | null;
+  several_organizations_before?: boolean | null;
+  several_organizations_after?: boolean | null;
+  holders_lose_whole_cluster_tools?: boolean | null;
+  organizations_on_cluster?: { id: number; name: string }[] | null;
+  share_audit?: { safe: boolean | null; complete: boolean; findings: { scope: string; code: string; field: string; count: number }[] } | null;
+  notes?: string[];
 }
 
 // One key in a synced organization's owner set. Any of them may sync the organization, update its
@@ -2881,11 +2919,11 @@ export interface OrganizationMember {
 }
 
 export interface OrganizationCluster {
-  id: string;
-  organization_id: string;
+  id: number;
+  organization_id: number;
   cluster_id: string;
-  registered_by: string;
-  registered_at: string;
+  registered_by: string | null;
+  granted_by?: string | null;
 }
 
 // ── User Groups types ──

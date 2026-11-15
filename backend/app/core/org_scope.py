@@ -497,6 +497,7 @@ async def get_tenant_policy_grants(
             TenantAccessPolicy.access_ends_at,
             Organization.source,
             OrganizationCluster.registered_by,
+            OrganizationCluster.granted_by,
         )
         .join(
             TenantAccessPolicy,
@@ -555,13 +556,15 @@ async def get_tenant_policy_grants(
     if enforce_term:
         bought = {
             row[1] for row in rows
-            if row[3] != "orcahub" and row[6] == "orcahub" and row[7] is None
+            if row[3] != "orcahub" and row[6] == "orcahub" and row[7] is None and row[8] is None
         }
         sale_terms = await orcahub_terms(db, bought)
     grants = []
-    for rule, organization_id, policy_name, source, term_ended_at, access_ends_at, org_source, registered_by in rows:
+    for (rule, organization_id, policy_name, source, term_ended_at, access_ends_at, org_source, registered_by,
+         granted_by) in rows:
         stored = frozenset(rule.permissions if isinstance(rule.permissions, list) else [])
-        if enforce_term and source != "orcahub" and org_source == "orcahub" and registered_by is None:
+        if (enforce_term and source != "orcahub" and org_source == "orcahub" and registered_by is None
+                and granted_by is None):
             terms = sale_terms.get((organization_id, rule.cluster_id), [])
             phase = sale_phase(terms, now)
             if phase == SALE_ENDED:
@@ -741,6 +744,7 @@ async def _query_owned_clusters(user_email: str, db: AsyncSession) -> set[str]:
                     ),
                     or_(
                         OrganizationCluster.registered_by.is_not(None),
+                        OrganizationCluster.granted_by.is_not(None),
                         Organization.source != "orcahub",
                         Organization.created_by == user_email,
                         sale_still_live,

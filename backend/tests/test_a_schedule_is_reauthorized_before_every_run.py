@@ -69,7 +69,7 @@ def _run_with_database_authority(
         connection.execute(text(
             "CREATE TABLE organization_clusters "
             "(id INTEGER PRIMARY KEY, organization_id INTEGER, cluster_id TEXT NOT NULL, "
-            "registered_by TEXT)"
+            "registered_by TEXT, granted_by TEXT)"
         ))
         connection.execute(text(
             "CREATE TABLE tenant_access_policies "

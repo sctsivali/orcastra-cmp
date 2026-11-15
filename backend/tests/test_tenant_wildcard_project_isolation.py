@@ -59,7 +59,7 @@ def _database():
             text(
                 "CREATE TABLE organization_clusters ("
                 "id INTEGER PRIMARY KEY, organization_id INTEGER, cluster_id TEXT NOT NULL, "
-                "registered_by TEXT)"
+                "registered_by TEXT, granted_by TEXT)"
             )
         )
         connection.execute(
@@ -104,7 +104,7 @@ def _database():
             ],
         )
         connection.execute(
-            text("INSERT INTO organization_clusters VALUES (:id, :org, :cluster, NULL)"),
+            text("INSERT INTO organization_clusters VALUES (:id, :org, :cluster, NULL, NULL)"),
             [
                 {"id": 21, "org": 1, "cluster": HOST},
                 {"id": 22, "org": 2, "cluster": HOST},

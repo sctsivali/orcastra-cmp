@@ -175,7 +175,8 @@ def test_removed_org_binding_semantically_revokes_its_partner_project():
         connection.execute(
             text(
                 "CREATE TABLE organization_clusters "
-                "(id INTEGER PRIMARY KEY, organization_id INTEGER, cluster_id TEXT NOT NULL)"
+                "(id INTEGER PRIMARY KEY, organization_id INTEGER, cluster_id TEXT NOT NULL, "
+                "registered_by TEXT, granted_by TEXT)"
             )
         )
         connection.execute(
@@ -216,7 +217,7 @@ def test_removed_org_binding_semantically_revokes_its_partner_project():
         )
         # Org A has a policy on shared-c but no binding. B and unrelated D share it.
         connection.execute(
-            text("INSERT INTO organization_clusters VALUES (:id, :org, :cluster)"),
+            text("INSERT INTO organization_clusters VALUES (:id, :org, :cluster, NULL, NULL)"),
             [
                 {"id": 21, "org": 2, "cluster": "shared-c"},
                 {"id": 22, "org": 3, "cluster": "shared-c"},

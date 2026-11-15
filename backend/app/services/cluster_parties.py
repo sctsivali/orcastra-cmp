@@ -166,6 +166,7 @@ async def home_partner_keys(db: AsyncSession, email: str, *, settled_before: Opt
             sold.cluster_id == binding.cluster_id,
             sold.organization_id != binding.organization_id,
             sold.registered_by.is_(None),
+            sold.granted_by.is_(None),
         ))
         .join(buyer_owner, and_(
             buyer_owner.organization_id == sold.organization_id,

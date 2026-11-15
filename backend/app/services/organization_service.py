@@ -249,9 +249,10 @@ class OrganizationService:
         return list(result.scalars().all())
 
     async def bind_cluster(
-        self, org_id: int, cluster_id: str, registered_by: str
+        self, org_id: int, cluster_id: str, registered_by: Optional[str], granted_by: Optional[str] = None,
     ) -> OrganizationCluster:
-        """Bind a Vault cluster to an organization."""
+        """Bind a Vault cluster to an organization. `granted_by` names the administrator who bound a
+        cluster it does not register, so the row never reads as a sale (core/sale_term.py)."""
         async with serialize_cluster_share(self.db, cluster_id):
             await assert_cluster_safe_to_share(
                 self.db,
@@ -272,6 +273,7 @@ class OrganizationService:
                 organization_id=org_id,
                 cluster_id=cluster_id,
                 registered_by=registered_by,
+                granted_by=None if registered_by else granted_by,
             )
             self.db.add(binding)
             await self.db.commit()
