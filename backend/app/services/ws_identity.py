@@ -8,13 +8,15 @@ minute per account reaches Authentik however many sessions it holds.
 
 The session guard re-reads scope (organization, grants, ownership) from the database; this module
 supplies the current roles so a demoted caller's session ends. The ticket's groups are frozen at
-mint time and would keep a demoted Admin an Admin.
+mint time and would keep a demoted Admin an Admin. An account with no role group stays a Tenant
+while an active organization lists it as a member, as on the REST routes (rbac.session_has_role).
 """
 
 import time
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, Optional, Tuple
 
+from app.core import session_role
 from app.core.auth import AuthenticatedUser
 from app.core.rbac import Role
 from app.services.authentik_role_reading import ENDED_REASONS, RoleReading  # noqa: F401 - re-exported
@@ -56,7 +58,10 @@ async def check_identity(user: AuthenticatedUser) -> IdentityCheck:
     if reading.roles is None:
         return IdentityCheck(reading.reason in ENDED_REASONS, reading.reason)
     if not reading.has_role:
-        # The account is live but every role group was removed.
+        # The account is live but holds no role group. A member of an active organization is still
+        # a Tenant (a federated partner buyer never holds one); anyone else lost every role.
+        if await session_role.holds_membership(user.email, strict=True):
+            return IdentityCheck(False, "active", frozenset({Role.TENANT}))
         return IdentityCheck(True, "no_role_assigned")
     return IdentityCheck(False, "active", reading.roles)
 

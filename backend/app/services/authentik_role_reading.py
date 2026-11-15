@@ -31,7 +31,7 @@ class RoleReading:
     roles: Optional[frozenset[Role]]
     reason: str
     # False when the groups map to no role and `roles` holds only the Tenant default. A session
-    # needs a mapped role (rbac.refuse_unmapped); a key rebind reads `roles` and ignores this.
+    # then needs a membership (rbac.session_has_role); a key rebind reads `roles` and ignores this.
     has_role: bool = True
 
 

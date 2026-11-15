@@ -1,9 +1,10 @@
 """A signed-in caller whose groups map to no Orcastra role is refused with 403.
 
-Authentik signs in anyone it knows. Resolving a caller with no role_* group to Tenant would answer
-every scoped route with 200 and nothing in it, which reads as an emptied deployment. Each RBAC
-dependency refuses such a caller with 403 and a machine-readable reason the dashboard turns into
-its access notice.
+Authentik signs in anyone it knows. Resolving a caller with no role_* group and no membership to
+Tenant would answer every scoped route with 200 and nothing in it, which reads as an emptied
+deployment. Each RBAC dependency refuses such a caller with 403 and a machine-readable reason the
+dashboard turns into its access notice. A groupless member of an active organization is a Tenant
+(test_a_groupless_member_is_a_tenant.py).
 
 The refusal is pinned on all three dependencies and through the real application, so the
 structured detail survives the error sanitizer.
@@ -22,7 +23,7 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("APP_VERSION", "0.0.0-test")
 os.environ.setdefault("CORS_ORIGINS", "http://localhost")
 
-from app.core import rbac  # noqa: E402
+from app.core import rbac, session_role  # noqa: E402
 from app.core.auth import AuthenticatedUser, get_current_user  # noqa: E402
 from app.core.rbac import (  # noqa: E402
     NO_ROLE_ASSIGNED,
@@ -50,6 +51,15 @@ DEPENDENCIES = {
     "require_permissions(instance:read)": require_permissions(Permission.INSTANCE_READ),
     "require_authenticated()": require_authenticated(),
 }
+
+
+@pytest.fixture(autouse=True)
+def no_membership(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These callers hold no membership either; a groupless member is a Tenant (its own module)."""
+    async def holds(_email, _db=None, **_kwargs):
+        return False
+
+    monkeypatch.setattr(session_role, "holds_membership", holds)
 
 
 @pytest.fixture
@@ -99,8 +109,8 @@ def test_the_tenant_default_is_unchanged_for_everything_but_sessions() -> None:
     assert has_mapped_role(_user("Everyone")) is False
 
 
-@pytest.fixture(scope="module")
-def client():
+@pytest.fixture
+def client(no_membership):
     from app.main import create_app
 
     app = create_app()

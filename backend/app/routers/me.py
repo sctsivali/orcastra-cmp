@@ -5,7 +5,8 @@ empty dashboard that reads as a broken deployment. The frontend asks this before
 shell and shows a notice instead when the answer is a known denial.
 
 important: mounted without a require_* dependency. Every other session route refuses a caller
-with no role (rbac.refuse_unmapped), and this is the one place that caller can learn why.
+with no role (rbac.refuse_unmapped), and this is the one place that caller can learn why. A caller
+with no role group that an active organization lists as a member is a Tenant here as there.
 It answers about the caller only and reads nothing the caller could not already see.
 """
 
@@ -20,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.core.database import get_db
-from app.core import org_scope
+from app.core import org_scope, session_role
 from app.core.rbac import NO_ROLE_ASSIGNED, Role, get_highest_role, mapped_roles
 from app.core.tenant_term import policy_phase
 
@@ -74,9 +75,13 @@ async def get_my_access_verdict(
 
     roles = mapped_roles(user.groups)
     if not roles:
-        return MyAccessVerdict(
-            email=user.email, role=None, has_role=False, blocked_reason=NO_ROLE_ASSIGNED
-        )
+        # A groupless member of an active organization is a Tenant, as on every session route
+        # (rbac.session_has_role); its verdict below is the Tenant one, scope and term included.
+        if not await session_role.holds_membership(user.email, db):
+            return MyAccessVerdict(
+                email=user.email, role=None, has_role=False, blocked_reason=NO_ROLE_ASSIGNED
+            )
+        roles = [Role.TENANT]
 
     highest = get_highest_role(roles)
     if highest != Role.TENANT:

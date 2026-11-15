@@ -20,7 +20,7 @@ from fastapi import Depends, WebSocket, WebSocketException, status
 from app.core.auth import AuthenticatedUser, get_ws_user
 from app.core import ws_close
 from app.core.config import Settings, get_settings
-from app.core.rbac import has_mapped_role
+from app.core.rbac import session_has_role
 from app.core.ws_ticket import TICKET_TTL_SECONDS, TicketClaims, socket_target
 from app.core.ws_ticket_store import get_ws_ticket_store
 
@@ -110,7 +110,7 @@ def ws_user(kind: str) -> Callable[..., Awaitable[Optional[AuthenticatedUser]]]:
                 logger.warning("WebSocket refused: a %s socket presented a token beside its ticket", kind)
                 _refuse_as(websocket, ws_close.AUTH, "token_refused")
                 return None
-            return None if _refused_without_role(kind, user, websocket) else user
+            return None if await _refused_without_role(kind, user, websocket) else user
         if presented_token:
             if not settings.ws_query_token_enabled:
                 logger.warning("WebSocket refused: a %s socket presented ?token=, which is no longer accepted", kind)
@@ -119,7 +119,7 @@ def ws_user(kind: str) -> Callable[..., Awaitable[Optional[AuthenticatedUser]]]:
             user = await get_ws_user(websocket, settings)
             if user is None:
                 _refuse_as(websocket, ws_close.AUTH, "token_refused")
-            return None if _refused_without_role(kind, user, websocket) else user
+            return None if await _refused_without_role(kind, user, websocket) else user
         logger.warning("WebSocket refused: a %s socket presented no ticket", kind)
         _refuse_as(websocket, ws_close.AUTH, "auth_required")
         return None
@@ -128,13 +128,14 @@ def ws_user(kind: str) -> Callable[..., Awaitable[Optional[AuthenticatedUser]]]:
     return dependency
 
 
-def _refused_without_role(kind: str, user: Optional[AuthenticatedUser], websocket: WebSocket) -> bool:
+async def _refused_without_role(kind: str, user: Optional[AuthenticatedUser], websocket: WebSocket) -> bool:
     """Whether a caller identified for a socket has no Orcastra role and must be refused.
 
     important: the REST routes refuse such a caller (rbac.refuse_unmapped); a socket that let one in
-    would hand it the live feeds the access notice is meant to keep from it.
+    would hand it the live feeds the access notice is meant to keep from it. A groupless member of
+    an active organization is a Tenant there and here (rbac.session_has_role).
     """
-    if user is None or has_mapped_role(user):
+    if user is None or await session_has_role(user):
         return False
     logger.warning("WebSocket refused: a %s socket opened by a caller with no role", kind)
     _refuse_as(websocket, ws_close.FORBIDDEN, "forbidden")

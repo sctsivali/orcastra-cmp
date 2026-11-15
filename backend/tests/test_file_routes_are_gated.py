@@ -205,7 +205,7 @@ def test_the_ticket_route_redeems_through_its_own_gate():
         source.index(needle)
         for needle in (
             "file_ticket.redeem",
-            "has_mapped_role",
+            "session_has_role",
             "_populate_request_state",
             "set_org_scope_for_ws",
             "verify_file_access",

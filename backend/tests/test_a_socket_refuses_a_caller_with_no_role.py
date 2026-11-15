@@ -12,7 +12,7 @@ from typing import Optional
 
 import pytest
 
-from app.core import ws_auth
+from app.core import session_role, ws_auth
 from app.core.auth import AuthenticatedUser
 from app.core.rbac import Role
 from app.services import ws_identity
@@ -73,6 +73,15 @@ def _fresh_identities():
     ws_identity.forget_identities()
     yield
     ws_identity.forget_identities()
+
+
+@pytest.fixture(autouse=True)
+def _no_membership(monkeypatch: pytest.MonkeyPatch) -> None:
+    # These callers hold no membership; a groupless member stays a Tenant (its own module).
+    async def holds(_email, _db=None, **_kwargs):
+        return False
+
+    monkeypatch.setattr(session_role, "holds_membership", holds)
 
 
 def _reading(monkeypatch: pytest.MonkeyPatch, groups: list) -> None:

@@ -170,8 +170,8 @@ def _resolve_roles_uncached(user: AuthenticatedUser) -> list[Role]:
     """Map Authentik groups to roles.
 
     A caller with no role group resolves to TENANT: tenant grants, the integration rebind and the
-    role reader resolve through here, and a key or membership row is not a session. Whether a
-    session may act at all is decided by refuse_unmapped.
+    role reader resolve through here. Whether a session may act at all is decided by
+    refuse_unmapped (a role group, or a membership in an active organization).
     """
     return mapped_roles(user.groups) or [Role.TENANT]
 
@@ -233,14 +233,30 @@ def has_mapped_role(user: AuthenticatedUser) -> bool:
     return bool(mapped_roles(user.groups))
 
 
-def refuse_unmapped(request: Request, user: AuthenticatedUser) -> None:
-    """Refuse a signed-in caller whose groups map to no role.
+async def session_has_role(user: AuthenticatedUser) -> bool:
+    """Whether a session may act: a role group, or a membership in an active organization.
 
-    important: resolve_roles reads such a caller as Tenant, which would answer 200 with empty lists
-    and look like a broken or emptied deployment, so a session route needs a mapped role first.
-    Integration keys and MCP authenticate elsewhere and never reach this.
+    important: a partner deployment's buyers sign in through a federated IdP that sends no groups,
+    and their access is the membership OrcaHub provisioned. Such an account acts as Tenant (what
+    resolve_roles already answers for it), never more. Groups are read first, so a caller with a
+    role group never costs a database read.
     """
     if has_mapped_role(user):
+        return True
+    from app.core import session_role  # reads the database; imported here to keep rbac import-light
+
+    return await session_role.holds_membership(user.email)
+
+
+async def refuse_unmapped(request: Request, user: AuthenticatedUser) -> None:
+    """Refuse a signed-in caller with no role group and no membership.
+
+    important: resolve_roles reads such a caller as Tenant, which would answer 200 with empty lists
+    and look like a broken or emptied deployment, so a session route needs a role first: a mapped
+    group, or a membership in an active organization (session_has_role). Integration keys and MCP
+    authenticate elsewhere and never reach this.
+    """
+    if await session_has_role(user):
         return
     request.state.user_role = None
     logger.warning(f"RBAC denied (no role): user={user.user_id} path={request.url.path}")
@@ -293,7 +309,7 @@ def require_roles(*allowed_roles: Role):
                 groups=["admin"], roles=["role_admin"],
             )
         _populate_request_state(request, user)
-        refuse_unmapped(request, user)
+        await refuse_unmapped(request, user)
         user_roles = resolve_roles(user)
         user_max = max(ROLE_HIERARCHY.get(r, 0) for r in user_roles)
         required_min = min(ROLE_HIERARCHY.get(r, 0) for r in allowed_roles)
@@ -335,7 +351,7 @@ def require_permissions(*required_permissions: Permission):
                 groups=["admin"], roles=["role_admin"],
             )
         _populate_request_state(request, user)
-        refuse_unmapped(request, user)
+        await refuse_unmapped(request, user)
         user_roles = resolve_roles(user)
         user_perms = get_user_permissions(user_roles)
         missing = set(required_permissions) - user_perms
@@ -377,7 +393,7 @@ def require_authenticated():
                 groups=["admin"], roles=["role_admin"],
             )
         _populate_request_state(request, user)
-        refuse_unmapped(request, user)
+        await refuse_unmapped(request, user)
         return user
     return _dependency
 

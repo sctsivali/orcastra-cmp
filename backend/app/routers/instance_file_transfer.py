@@ -16,7 +16,7 @@ from app.core.config import get_settings
 from app.core.dependencies import check_read_only_mode, require_tenant
 from app.core.instance_access import verify_file_access
 from app.core.org_scope import org_scope_dependency, set_org_scope_for_ws
-from app.core.rbac import _populate_request_state, has_mapped_role
+from app.core.rbac import _populate_request_state, session_has_role
 from app.core.ws_ticket import TICKET_TTL_SECONDS
 from app.core.ws_ticket_store import TicketBudgetExceeded, TicketStoreUnavailable
 from app.middleware.stream_cut import mark_cut
@@ -453,7 +453,7 @@ async def redeem_download(
         )
     user = download.identity.user() if get_settings().auth_enabled else None
     if user is not None:
-        if not has_mapped_role(user):
+        if not await session_has_role(user):
             raise HTTPException(status_code=403, detail={"error": "permission_denied", "message": "No role."})
         _populate_request_state(request, user)
     # important: `interactive` so that a partner past the paid term is refused here as at mint:
