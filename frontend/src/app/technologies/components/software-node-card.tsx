@@ -38,17 +38,23 @@ export function SoftwareNodeCard({ node }: { node: NodeStatus }) {
   return (
     <Card>
       <CardHeader className="pb-3">
-        <div className="flex flex-wrap items-center gap-2">
+        {/* The title owns its row and the category chips sit on the row under it, so a long
+            name never pushes them to a different place than on the card beside it. */}
+        <div className="flex min-w-0 items-center gap-2">
           <Server className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-          <CardTitle className="text-lg">{node.display_name || node.name}</CardTitle>
-          {node.node_type ? (
-            <Badge variant="outline" className="font-normal">
-              {formatHypervisorType(node.node_type)}
-            </Badge>
-          ) : null}
-          {env?.server_lts ? <Badge variant="secondary">LTS</Badge> : null}
-          {env?.server_clustered ? <Badge variant="outline">Clustered</Badge> : null}
+          <CardTitle className="min-w-0 break-words text-lg">{node.display_name || node.name}</CardTitle>
         </div>
+        {node.node_type || env?.server_lts || env?.server_clustered ? (
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {node.node_type ? (
+              <Badge variant="outline" className="font-normal">
+                {formatHypervisorType(node.node_type)}
+              </Badge>
+            ) : null}
+            {env?.server_lts ? <Badge variant="secondary">LTS</Badge> : null}
+            {env?.server_clustered ? <Badge variant="outline">Clustered</Badge> : null}
+          </div>
+        ) : null}
       </CardHeader>
 
       <CardContent className="space-y-5">

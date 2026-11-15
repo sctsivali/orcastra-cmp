@@ -182,12 +182,12 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
     // and the card itself is not a control.
     <Card data-slot="cluster-card" className="overflow-hidden">
       <CardContent className="p-3 md:p-4">
-        {/* flex-wrap with a basis-48 title block. At xl the grid is three-up, a 309px card at
-            1280 with the sidebar open, and the badge group (status, Clustered, kebab) is about
-            190px, so a fixed row would leave the title about 35px. Wrapping drops the badges
-            under the title on a narrow card. */}
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0 flex-1 basis-48">
+        {/* One row that never wraps: the status chip and the menu hold the top-right corner on
+            every card, standalone or clustered, and the title block takes what is left and
+            truncates. "Clustered" is a category, not a state, so it sits in the info row below
+            rather than beside the status (one subject per card). */}
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
             <div
               className={cn(
                 "flex h-10 w-10 items-center justify-center rounded-lg shrink-0 bg-muted",
@@ -198,7 +198,9 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="font-semibold truncate">{node.display_name || node.name}</h3>
+                {/* Wraps rather than truncates: the corner slot is fixed, so on a three-up grid a
+                    name would otherwise lose its end to the status chip. */}
+                <h3 className="min-w-0 break-words font-semibold">{node.display_name || node.name}</h3>
               </div>
               {node.display_name && (
                 <p className="text-xs text-muted-foreground truncate">
@@ -222,7 +224,6 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
               <StatusIcon className="h-3 w-3" />
               {statusMeta.label}
             </Badge>
-            {node.clustered && <Badge variant="muted">Clustered</Badge>}
             {/* The endpoint behind this is require_partner() (backend nodes.py), so a tenant
                 would only ever get a 403. */}
             {isPartner && (
@@ -252,20 +253,23 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
             )}
           </div>
         </div>
-        {node.connected && node.server_version && (
+        {((node.connected && node.server_version) || node.clustered) && (
           <div className="mt-3 flex flex-wrap gap-2 md:gap-4 text-xs text-muted-foreground items-center">
-            <span>
-              <span className="font-medium">Hypervisor Version:</span>{" "}
-              {versionRange(node.hypervisor_release, node.server_version)}
-            </span>
-            {node.api_version && (
+            {node.clustered && <span className="font-medium text-foreground">Clustered</span>}
+            {node.connected && node.server_version && (
+              <span>
+                <span className="font-medium">Hypervisor Version:</span>{" "}
+                {versionRange(node.hypervisor_release, node.server_version)}
+              </span>
+            )}
+            {node.connected && node.server_version && node.api_version && (
               <span>
                 <span className="font-medium">API Version:</span> {node.api_version}
               </span>
             )}
             {/* The backend's verdict against the cluster's own release track. Partner+ only: it
                 carries the upgrade command, which a tenant cannot run. */}
-            {isPartner && (
+            {isPartner && node.connected && node.server_version && (
               <HypervisorReleaseStatus
                 release={node.hypervisor_release}
                 currentVersion={node.server_version}
@@ -274,7 +278,7 @@ export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatus
             )}
             {/* Partner+ for the same reason: an open kernel CVE is a maintenance finding. The chip
                 renders nothing while every member reads as patched. */}
-            {isPartner && <KernelAdvisoryBadge clusterId={node.name} />}
+            {isPartner && node.connected && node.server_version && <KernelAdvisoryBadge clusterId={node.name} />}
           </div>
         )}
         {node.connected && node.resources && (
