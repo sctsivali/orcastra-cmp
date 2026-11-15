@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { vaultStatusAPI, type VaultState, type VaultStatus } from "@/lib/vault-status-api";
-import { hasMappedRole } from "@/types/rbac";
+import { useSessionHasRole } from "@/hooks/use-access-gate";
 
 const VAULT_STATUS_KEY = ["vault-status"] as const;
 const HEALTHY_POLL_MS = 60_000;
@@ -31,7 +31,9 @@ export function useVaultStatus() {
   const { data: session, status } = useSession();
   const groups = session?.user?.groups;
   // A retained session during a refresh still counts, or the notice blinks every 4 minutes.
-  const enabled = Boolean(session) && status !== "unauthenticated" && Array.isArray(groups) && hasMappedRole(groups);
+  // A caller with no role must not poll a route that refuses it; a groupless member has one.
+  const sessionHasRole = useSessionHasRole();
+  const enabled = Boolean(session) && status !== "unauthenticated" && Array.isArray(groups) && sessionHasRole;
   const queryClient = useQueryClient();
   const [checking, setChecking] = useState(false);
   const [streak, setStreak] = useState(0);

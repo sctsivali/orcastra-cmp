@@ -45,7 +45,7 @@ assert.ok(notice > gate && gate > 0, "the Vault notice belongs inside the shell,
 assert.ok(notice > layout.indexOf("<Header />"), "the notice sits below the header");
 
 const hook = readFileSync(join(root, "frontend/src/hooks/use-vault-status.ts"), "utf8");
-assert.match(hook, /hasMappedRole\(groups\)/, "a caller with no role must not poll a route that refuses it");
+assert.match(hook, /&& sessionHasRole;/, "a caller with no role must not poll a route that refuses it");
 assert.match(hook, /!query\.isError/, "a failed status read must not raise the notice");
 assert.match(hook, /Boolean\(session\) && status !== "unauthenticated"/, "the notice must not blink on a session refresh");
 

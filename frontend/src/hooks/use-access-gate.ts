@@ -14,35 +14,35 @@ const ACCESS_GATE_KEY = ["access-gate"] as const;
 const BLOCKED_POLL_MS = 60_000;
 const ALLOWED_POLL_MS = 5 * 60_000;
 
+function verdictSignature(verdict: MyAccessVerdict | undefined): string {
+  return verdict ? `${verdict.has_role}:${verdict.role}:${verdict.blocked_reason}` : "none";
+}
+
 /**
- * Whether the signed-in caller may see the dashboard.
+ * The session's role as the backend enforces it, shared by the gate and the role-dependent shell.
  *
- * A caller whose groups map to no role is known from the session alone. A Tenant asks the backend,
- * because "no cluster access yet" is decided by the same scope the API enforces. Admin and
- * Partner never ask and are never blocked.
- *
- * important: only a known denial blocks, so a failed read and an unreadable session render the
- * dashboard. A Tenant's first verdict is "checking": rendering the shell before it lands lets pages
- * cache the empty scope of a Tenant with no access and keep showing it after access is granted.
+ * Groups that map to Admin or Partner settle it from the session alone. A Tenant by groups asks
+ * the backend whether it has access. A session whose groups map to no role asks too: an account an
+ * active organization lists as a member is a Tenant (a partner deployment's buyer signs in through
+ * a federated IdP that sends no groups), and only the backend can see the membership.
  */
-export function useAccessGate({ enabled }: { enabled: boolean }) {
-  const { data: session, status, update } = useSession();
-  const queryClient = useQueryClient();
-  const [rechecking, setRechecking] = useState(false);
+function useSessionVerdict({ enabled }: { enabled: boolean }) {
+  const { data: session, status } = useSession();
   const groups = session?.user?.groups;
   // important: a session refresh (the 4 minute poll, or Check again itself) reports "loading" while
   // it keeps the session. The retained session counts, as it does for useActorQueryScope; reading
   // it as "not known" flashes the shell and unmounts the notice with its Check again result.
   const known = enabled && Boolean(session) && status !== "unauthenticated" && Array.isArray(groups);
-  const noRole = known && !hasMappedRole(groups);
-  const isTenant = known && !noRole && getHighestRole(resolveMappedRoles(groups)) === Role.TENANT;
+  const groupless = known && !hasMappedRole(groups);
+  const tenantByGroups = known && !groupless && getHighestRole(resolveMappedRoles(groups)) === Role.TENANT;
+  const asksVerdict = groupless || tenantByGroups;
 
   const actorScope = getActorQueryScope(session);
   const verdictKey = [...ACCESS_GATE_KEY, actorScope] as const;
   const verdict = useQuery({
     queryKey: verdictKey,
     queryFn: ({ signal }) => accessAPI.myAccess(signal),
-    enabled: isTenant,
+    enabled: asksVerdict,
     staleTime: 30_000,
     retry: 1,
     refetchOnWindowFocus: true,
@@ -58,8 +58,54 @@ export function useAccessGate({ enabled }: { enabled: boolean }) {
   const knownVerdict =
     verdict.data ?? (lastVerdictRef.current?.scope === actorScope ? lastVerdictRef.current.value : undefined);
 
+  const tenantByMembership = groupless && knownVerdict?.has_role === true && knownVerdict.role === "tenant";
+  return {
+    session,
+    groups,
+    known,
+    groupless,
+    tenantByGroups,
+    tenantByMembership,
+    isTenant: tenantByGroups || tenantByMembership,
+    hasRole: (known && !groupless) || tenantByMembership,
+    asksVerdict,
+    actorScope,
+    verdictKey,
+    verdict,
+    knownVerdict,
+  };
+}
+
+/**
+ * Whether this session holds a role the backend honours: a mapped group, or a membership.
+ *
+ * For the parts of the shell that read role-gated routes (branding, the Vault notice), so a
+ * groupless member gets them and a caller with no role does not poll routes that refuse it.
+ */
+export function useSessionHasRole(): boolean {
+  return useSessionVerdict({ enabled: true }).hasRole;
+}
+
+/**
+ * Whether the signed-in caller may see the dashboard.
+ *
+ * important: only a known denial blocks, so a Tenant's failed read and an unreadable session render
+ * the dashboard. A session with no role group stays on the notice until the backend says it is a
+ * Tenant, so a failed read keeps it there. A first verdict is "checking": rendering the shell
+ * before it lands lets pages cache the empty scope of a Tenant with no access and keep showing it
+ * after access is granted.
+ */
+export function useAccessGate({ enabled }: { enabled: boolean }) {
+  const { update } = useSession();
+  const queryClient = useQueryClient();
+  const [rechecking, setRechecking] = useState(false);
+  const {
+    session, groups, groupless, tenantByGroups, isTenant, asksVerdict, verdictKey, verdict, knownVerdict,
+  } = useSessionVerdict({ enabled });
+
   let state: AccessGateState = "allowed";
-  if (noRole || (isTenant && knownVerdict?.has_role === false)) state = "no_role";
+  if (groupless && !isTenant) state = !knownVerdict && verdict.isPending ? "checking" : "no_role";
+  else if (tenantByGroups && knownVerdict?.has_role === false) state = "no_role";
   else if (isTenant && knownVerdict?.blocked_reason === "no_tenant_access") state = "no_tenant_access";
   else if (isTenant && !knownVerdict && verdict.isPending) state = "checking";
 
@@ -75,8 +121,8 @@ export function useAccessGate({ enabled }: { enabled: boolean }) {
   }, [state, queryClient]);
 
   // "Check again": ask the IdP for the groups now rather than at the next refresh, then ask the
-  // backend. A session whose groups change remounts the whole tree (TokenSync keys the actor on
-  // them), so a granted role lands on a fresh dashboard rather than on this notice.
+  // backend, which also sees a membership granted since. A session whose groups change remounts
+  // the whole tree (TokenSync keys the actor on them), so a granted role lands on a fresh dashboard.
   const checkAgain = useCallback(async (): Promise<AccessRecheck> => {
     setRechecking(true);
     try {
@@ -84,20 +130,20 @@ export function useAccessGate({ enabled }: { enabled: boolean }) {
       const refreshed = await update({ refreshRoles: true });
       if (!refreshed) return "failed";
       if (JSON.stringify(refreshed.user?.groups ?? null) !== before) return "changed";
-      if (!isTenant) return "unchanged";
-      const previous = verdict.data?.blocked_reason ?? null;
+      if (!asksVerdict) return "unchanged";
+      const previous = verdictSignature(knownVerdict);
       const next = await queryClient.fetchQuery({
         queryKey: verdictKey,
         queryFn: ({ signal }) => accessAPI.myAccess(signal),
         staleTime: 0,
       });
-      return next.blocked_reason === previous ? "unchanged" : "changed";
+      return verdictSignature(next) === previous ? "unchanged" : "changed";
     } catch {
       return "failed";
     } finally {
       setRechecking(false);
     }
-  }, [groups, isTenant, queryClient, update, verdict.data?.blocked_reason, verdictKey]);
+  }, [groups, asksVerdict, knownVerdict, queryClient, update, verdictKey]);
 
   return {
     state,

@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useSession } from "next-auth/react";
 import { DEFAULT_PERSONALIZATION, type PersonalizationSettings, type PersonalizationContextType } from "@/types/personalization";
-import { hasMappedRole } from "@/types/rbac";
+import { useSessionHasRole } from "@/hooks/use-access-gate";
 import { hexToHSL } from "@/lib/color";
 import {
   accentForeground,
@@ -84,7 +84,8 @@ export function PersonalizationProvider({ children, initialSettings, initialByte
   };
   // A caller with no role sees only the access notice and the backend refuses its reads, so
   // there is nothing to fetch and every attempt would be a 403.
-  const mayRead = !Array.isArray(session?.user?.groups) || hasMappedRole(session.user.groups);
+  const sessionHasRole = useSessionHasRole();
+  const mayRead = !Array.isArray(session?.user?.groups) || sessionHasRole;
   // The illustrations choice on screen is the organization's, and only an account whose branding is
   // read carries it. Signed out, or without a role, the server already rendered the deployment's
   // choice (app/layout.tsx) and the defaults held here would overwrite it.

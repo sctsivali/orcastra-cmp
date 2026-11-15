@@ -362,14 +362,17 @@ async function installApiFixtures(page, role, options = {}) {
         ...(options.releaseStatus || {}),
       };
     } else if (path === "/me/access") {
-      // Asked only by a Tenant session, which a fixture actor can become mid-test by a downgrade;
-      // the fixture Tenant has access.
+      // Asked by a Tenant session (a fixture actor can become one mid-test by a downgrade) and by a
+      // session whose groups map to no role. The default is a Tenant with access; `accessVerdict`
+      // (an object, or a function called per request) answers otherwise, for example NO_ROLE_VERDICT.
+      const verdict = typeof options.accessVerdict === "function" ? options.accessVerdict() : options.accessVerdict;
       body = {
         email: `${role}@e2e.invalid`,
         role: "tenant",
         has_role: true,
         blocked_reason: null,
         tenant_access: { total_clusters: 1, total_rules: 1 },
+        ...(verdict || {}),
       };
     } else if (path === "/tenant-access/orphan-rules") {
       // Tenant Access lists the rules the audit found naming nothing; none here.
@@ -632,8 +635,12 @@ async function expectServerRedirectHome(page, path) {
   expect(new URL(response.headers().location, BASE_URL).pathname, path).toBe("/");
 }
 
+// What /me/access answers an account with no role group and no membership.
+const NO_ROLE_VERDICT = Object.freeze({ role: null, has_role: false, blocked_reason: "no_role_assigned", tenant_access: null });
+
 module.exports = {
   ACTOR_HEADER,
+  NO_ROLE_VERDICT,
   BASE_URL,
   actorOf,
   authenticate,

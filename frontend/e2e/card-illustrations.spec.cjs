@@ -7,6 +7,7 @@ const {
   expectNoHorizontalOverflow,
   installApiFixtures,
   namesActor,
+  NO_ROLE_VERDICT,
 } = require("./support/fixtures.cjs");
 const { installSettingsFixtures, expectCleanSettingsHarness } = require("./support/settings-fixtures.cjs");
 
@@ -565,7 +566,7 @@ test("an account with no role sees the access gate with its scene", async ({ pag
   // A roleless account reads no branding, so the page keeps what the server rendered: here a
   // hint carrying a deployment that turned scenes on.
   await hint(page.context(), "show");
-  await installApiFixtures(page, "tenant");
+  await installApiFixtures(page, "tenant", { accessVerdict: NO_ROLE_VERDICT });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
 

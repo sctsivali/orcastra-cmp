@@ -71,6 +71,29 @@ assert.doesNotMatch(gateHook, /status === "authenticated"/);
 // A Tenant's pending verdict holds the shell back: rendering it would let pages read the empty
 // scope of a Tenant with no access, and those zeros would stay cached after access is granted.
 assert.match(gateHook, /else if \(isTenant && !knownVerdict && verdict\.isPending\) state = "checking"/);
+
+// A session whose groups map to no role asks the backend too: an account an active organization
+// lists as a member is a Tenant (a partner's federated buyer never holds a role group). Deciding
+// "no role" from the groups alone locked every such buyer out.
+assert.match(gateHook, /const asksVerdict = groupless \|\| tenantByGroups/);
+assert.match(gateHook, /enabled: asksVerdict/, "the verdict must be asked for a groupless session");
+assert.match(
+  gateHook,
+  /tenantByMembership = groupless && knownVerdict\?\.has_role === true && knownVerdict\.role === "tenant"/,
+  "a groupless session is a Tenant only when the backend says so",
+);
+assert.match(
+  gateHook,
+  /if \(groupless && !isTenant\) state = !knownVerdict && verdict\.isPending \? "checking" : "no_role"/,
+  "a groupless session waits for its verdict, then stays on the notice unless the backend admits it",
+);
+assert.match(gateHook, /if \(!asksVerdict\) return "unchanged"/, "Check again must ask the backend for a groupless session");
+assert.doesNotMatch(gateHook, /if \(!isTenant\) return "unchanged"/, "Check again must not skip a groupless session");
+for (const consumer of ["frontend/src/components/personalization-provider.tsx", "frontend/src/hooks/use-vault-status.ts"]) {
+  const source = readFileSync(join(root, consumer), "utf8");
+  assert.match(source, /useSessionHasRole\(\)/, `${consumer} must read the role the backend honours, not the groups alone`);
+  assert.doesNotMatch(source, /hasMappedRole\(/, `${consumer} decides from the groups alone`);
+}
 assert.match(gateHook, /removeQueries/, "reads made before a denial must not survive into the granted dashboard");
 assert.match(gateHook, /lastVerdictRef\.current\?\.scope === actorScope/, "Clear Browser Cache must not send a known Tenant back to the loader");
 const checking = layout.indexOf('access.state === "checking"');
