@@ -23,7 +23,8 @@ bounded with the verdict:
   cannot reach the project it created.
 
 Nothing is written (the preview tries its row inside a savepoint it rolls back). Key ids are
-printed truncated.
+printed truncated. A listed key Vault no longer holds or cannot read, and a key whose evaluation
+fails, is counted at the end and skipped, so one such key never hides the others.
 """
 
 from __future__ import annotations
@@ -79,6 +80,8 @@ async def run(use_idp: bool, audit: bool) -> int:
     key_ids = await asyncio.to_thread(key_grant_hygiene.list_key_ids_strict, vault_client)
     rows: List[tuple] = []
     counts: Dict[str, int] = {}
+    skipped: Dict[str, int] = {}
+    failed: Dict[str, int] = {}
     admin_cache: Dict[str, Any] = {}
     async with async_session_maker() as db:
         from sqlalchemy import select
@@ -90,54 +93,68 @@ async def run(use_idp: bool, audit: bool) -> int:
         )).all() if k}
         live = 0
         for key_id in key_ids:
-            metadata = await asyncio.to_thread(key_grant_hygiene.read_key_metadata, vault_client, key_id)
+            metadata, why = await asyncio.to_thread(key_grant_hygiene.read_key_metadata_for_report, vault_client, key_id)
+            if metadata is None:
+                skipped[why] = skipped.get(why, 0) + 1
+                continue
             if classify_key(metadata) != "active" or not _proxies(metadata):
                 continue
             live += 1
-            addon = metadata.get("extension_install_id") is not None
-            creator = (installers.get(key_id) if addon else None) or str(metadata.get("created_by") or "")
-            phases = await purchase_phases(db, creator)
-            for grant in metadata.get("cluster_permissions") or []:
-                if not isinstance(grant, dict):
-                    continue
-                cluster_id = str(grant.get("cluster_id") or "")
-                if cluster_id not in await clusters_held_by_another_party(db, creator, {cluster_id}):
-                    continue
-                if use_idp:
-                    if creator not in admin_cache:
-                        admin_cache[creator] = await creator_is_admin(creator)
-                    if admin_cache[creator]:
-                        counts["admin creator"] = counts.get("admin creator", 0) + 1
+            key_rows: List[tuple] = []
+            key_counts: Dict[str, int] = {}
+            try:
+                addon = metadata.get("extension_install_id") is not None
+                creator = (installers.get(key_id) if addon else None) or str(metadata.get("created_by") or "")
+                phases = await purchase_phases(db, creator)
+                for grant in metadata.get("cluster_permissions") or []:
+                    if not isinstance(grant, dict):
                         continue
-                phase = phases.get(cluster_id)
-                holder = await org_to_hold_project_grant(creator, cluster_id, db)
-                owned, others = await creator_organizations_owned_by_key(db, creator, key_id)
-                named = [f"{name} ({org_id})" for org_id, name in owned]
-                stored = list(grant.get("projects") or ["default"])
-                impact = ""
-                if phase and phase != "active":
-                    verdict = f"purchase {phase}"
-                elif holder is None:
-                    verdict = "create refused"
-                    if owned:
-                        impact = await _impact(db, owned[0][0], cluster_id, audit)
-                elif "*" not in stored:
-                    verdict = f"unreachable (recorded to {holder}; grant names {','.join(stored)})"
-                else:
-                    verdict = f"ok (recorded to {holder})"
-                if not use_idp:
-                    verdict += "; creator role not asked"
-                counts[verdict.split(" (")[0].split(";")[0]] = counts.get(verdict.split(" (")[0].split(";")[0], 0) + 1
-                rows.append((
-                    key_id[:12] + "…",
-                    str(metadata.get("app_name") or metadata.get("name") or ""),
-                    "add-on" if addon else "key",
-                    creator or "(none)",
-                    cluster_id,
-                    ", ".join(named) or (f"{others} not owned by this key" if others else "(none)"),
-                    verdict,
-                    impact,
-                ))
+                    cluster_id = str(grant.get("cluster_id") or "")
+                    if cluster_id not in await clusters_held_by_another_party(db, creator, {cluster_id}):
+                        continue
+                    if use_idp:
+                        if creator not in admin_cache:
+                            admin_cache[creator] = await creator_is_admin(creator)
+                        if admin_cache[creator]:
+                            key_counts["admin creator"] = key_counts.get("admin creator", 0) + 1
+                            continue
+                    phase = phases.get(cluster_id)
+                    holder = await org_to_hold_project_grant(creator, cluster_id, db)
+                    owned, others = await creator_organizations_owned_by_key(db, creator, key_id)
+                    named = [f"{name} ({org_id})" for org_id, name in owned]
+                    stored = list(grant.get("projects") or ["default"])
+                    impact = ""
+                    if phase and phase != "active":
+                        verdict = f"purchase {phase}"
+                    elif holder is None:
+                        verdict = "create refused"
+                        if owned:
+                            impact = await _impact(db, owned[0][0], cluster_id, audit)
+                    elif "*" not in stored:
+                        verdict = f"unreachable (recorded to {holder}; grant names {','.join(stored)})"
+                    else:
+                        verdict = f"ok (recorded to {holder})"
+                    if not use_idp:
+                        verdict += "; creator role not asked"
+                    label = verdict.split(" (")[0].split(";")[0]
+                    key_counts[label] = key_counts.get(label, 0) + 1
+                    key_rows.append((
+                        key_id[:12] + "…",
+                        str(metadata.get("app_name") or metadata.get("name") or ""),
+                        "add-on" if addon else "key",
+                        creator or "(none)",
+                        cluster_id,
+                        ", ".join(named) or (f"{others} not owned by this key" if others else "(none)"),
+                        verdict,
+                        impact,
+                    ))
+            except Exception as exc:  # noqa: BLE001 - one key must not end the report on every other key
+                await db.rollback()
+                failed[type(exc).__name__] = failed.get(type(exc).__name__, 0) + 1
+                continue
+            rows.extend(key_rows)
+            for label, count in key_counts.items():
+                counts[label] = counts.get(label, 0) + count
         await db.rollback()
 
     print(f"live proxy keys read: {live} of {len(key_ids)}; identity provider: {'asked' if use_idp else 'not asked'}; "
@@ -150,6 +167,12 @@ async def run(use_idp: bool, audit: bool) -> int:
     print()
     for verdict, count in sorted(counts.items()):
         print(f"{verdict}: {count}")
+    if skipped.get("missing"):
+        print(f"listed keys Vault no longer holds: {skipped['missing']} (removed by an earlier release; nothing to fix)")
+    if skipped.get("unreadable"):
+        print(f"listed keys Vault could not read: {skipped['unreadable']} (run the report again; if it stays, check Vault)")
+    for name, count in sorted(failed.items()):
+        print(f"keys not evaluated ({name}): {count}")
     print("\nFix a 'create refused' row by binding one of the named organizations to the cluster in "
           "Settings > Integrations > Synced Organizations > Manage clusters (or POST /api/v1/organizations/{id}/clusters).")
     return 0

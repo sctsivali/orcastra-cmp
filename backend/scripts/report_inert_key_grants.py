@@ -28,6 +28,13 @@ def _print_table(rows: Sequence[Sequence[object]], header: Sequence[str]) -> Non
         print("  ".join(str(cell).ljust(widths[i]) for i, cell in enumerate(row)))
 
 
+def _print_skipped(skipped: Dict[str, int]) -> None:
+    if skipped.get("missing"):
+        print(f"listed keys Vault no longer holds: {skipped['missing']} (removed by an earlier release; nothing to fix)")
+    if skipped.get("unreadable"):
+        print(f"listed keys Vault could not read: {skipped['unreadable']} (run it again; if it stays, check Vault)")
+
+
 def _registered_ids() -> List[str]:
     from app.services.lxd_service import get_lxd_service
 
@@ -79,8 +86,12 @@ async def run() -> int:
     vault_client = get_vault_integrations_client()
     key_ids = await asyncio.to_thread(key_grant_hygiene.list_key_ids_strict, vault_client)
     rows = []
+    skipped: Dict[str, int] = {}
     for key_id in key_ids:
-        metadata = await asyncio.to_thread(key_grant_hygiene.read_key_metadata, vault_client, key_id)
+        metadata, why = await asyncio.to_thread(key_grant_hygiene.read_key_metadata_for_report, vault_client, key_id)
+        if metadata is None:
+            skipped[why] = skipped.get(why, 0) + 1
+            continue
         grants = [g for g in (metadata.get("cluster_permissions") or []) if isinstance(g, dict)]
         inert = [g for g in grants if not matches(g)]
         if not inert:
@@ -93,9 +104,10 @@ async def run() -> int:
         ))
     if not rows:
         print(f"nothing pauses: every grant of {len(key_ids)} keys reaches its registration")
-        return 0
-    _print_table(rows, ["key", "app", "paused grants", "grants still live"])
-    print(f"\n{len(rows)} of {len(key_ids)} keys hold a grant that reaches nothing")
+    else:
+        _print_table(rows, ["key", "app", "paused grants", "grants still live"])
+        print(f"\n{len(rows)} of {len(key_ids)} keys hold a grant that reaches nothing")
+    _print_skipped(skipped)
     return 0
 
 

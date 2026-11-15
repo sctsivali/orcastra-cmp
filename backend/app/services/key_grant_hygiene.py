@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +100,19 @@ def read_key_metadata(vault_client: Any, key_id: str) -> Dict[str, Any]:
 
     metadata, _ = get_api_key_from_vault(vault_client, key_id, use_cache=False)
     return metadata
+
+
+def read_key_metadata_for_report(vault_client: Any, key_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """read_key_metadata for a read-only report that must go on past one key.
+
+    Returns (metadata, None), (None, "missing") for a key the LIST still names but Vault no longer
+    holds (releases before 1.0.0 removed keys with a KV v2 data delete, which leaves them listed),
+    or (None, "unreadable") for any other failure.
+    """
+    try:
+        return read_key_metadata(vault_client, key_id), None
+    except Exception as exc:  # noqa: BLE001 - one key must not end a report on every other key
+        return None, "missing" if getattr(exc, "status_code", None) == 404 else "unreadable"
 
 
 async def apply_cleanup(db: Any, vault_client: Any, key_id: str, stale: Stale, reason: str) -> List[str]:

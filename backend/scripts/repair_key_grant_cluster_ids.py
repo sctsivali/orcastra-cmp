@@ -17,7 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from typing import List, Sequence
+from typing import Dict, List, Sequence
 
 
 def _print_table(rows: Sequence[Sequence[object]], header: Sequence[str]) -> None:
@@ -29,6 +29,13 @@ def _print_table(rows: Sequence[Sequence[object]], header: Sequence[str]) -> Non
     print("  ".join("-" * w for w in widths))
     for row in rows:
         print("  ".join(str(cell).ljust(widths[i]) for i, cell in enumerate(row)))
+
+
+def _print_skipped(skipped: Dict[str, int]) -> None:
+    if skipped.get("missing"):
+        print(f"listed keys Vault no longer holds: {skipped['missing']} (removed by an earlier release; nothing to fix)")
+    if skipped.get("unreadable"):
+        print(f"listed keys Vault could not read: {skipped['unreadable']} (run it again; if it stays, check Vault)")
 
 
 def _registered_ids() -> List[str]:
@@ -53,12 +60,17 @@ async def run(apply: bool) -> int:
     vault_client = get_vault_integrations_client()
     key_ids = await asyncio.to_thread(key_grant_hygiene.list_key_ids_strict, vault_client)
     plans = []
+    skipped: Dict[str, int] = {}
     for key_id in key_ids:
-        metadata = await asyncio.to_thread(key_grant_hygiene.read_key_metadata, vault_client, key_id)
+        metadata, why = await asyncio.to_thread(key_grant_hygiene.read_key_metadata_for_report, vault_client, key_id)
+        if metadata is None:
+            skipped[why] = skipped.get(why, 0) + 1
+            continue
         plan = key_grant_hygiene.plan_cleanup(key_id, metadata, stale)
         if plan is not None:
             plans.append(plan)
 
+    _print_skipped(skipped)
     if not plans:
         print(f"nothing to change: none of {len(key_ids)} key grants names an unregistered cluster")
         return 0

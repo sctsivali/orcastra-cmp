@@ -13,6 +13,8 @@ answer, or --no-idp). It also lists the tenant rules naming `default` or `*` on 
 organizations hold, which a Partner cannot write and which are left in place, and the grants a
 creator's bound narrows (services/key_party_bound.py): `*` becomes the creator's own projects and a
 named project another party holds is dropped. Nothing is written; key ids are printed truncated.
+A listed key Vault no longer holds or cannot read, and a key whose evaluation fails, is counted at
+the end and skipped, so one such key never hides the others.
 """
 
 from __future__ import annotations
@@ -82,47 +84,61 @@ async def run(use_idp: bool) -> int:
     key_rows: List[tuple] = []
     bound_rows: List[tuple] = []
     schedule_rows: List[tuple] = []
+    skipped: Dict[str, int] = {}
+    failed: Dict[str, int] = {}
     async with async_session_maker() as db:
         installers = await _installers(db)
         live = 0
         for key_id in key_ids:
-            metadata = await asyncio.to_thread(key_grant_hygiene.read_key_metadata, vault_client, key_id)
+            metadata, why = await asyncio.to_thread(key_grant_hygiene.read_key_metadata_for_report, vault_client, key_id)
+            if metadata is None:
+                skipped[why] = skipped.get(why, 0) + 1
+                continue
             if classify_key(metadata) != "active":
                 continue
             live += 1
-            creator = installers.get(key_id) if metadata.get("extension_install_id") is not None else None
-            creator = creator or str(metadata.get("created_by") or "")
-            for grant in metadata.get("cluster_permissions") or []:
-                if not isinstance(grant, dict) or not _reaches_default(grant):
-                    continue
-                cluster_id = str(grant.get("cluster_id") or "")
-                verdict = await _verdict(db, creator, cluster_id, use_idp, cache)
-                if verdict is not None:
-                    key_rows.append((
-                        key_id[:12] + "…",
-                        str(metadata.get("app_name") or metadata.get("name") or ""),
-                        "add-on" if metadata.get("extension_install_id") is not None else "key",
-                        creator or "(none)",
-                        cluster_id,
-                        ",".join(grant.get("permissions") or []),
-                        ",".join(grant.get("projects") or ["default"]),
-                        verdict,
-                    ))
-            for grant in metadata.get("cluster_permissions") or []:
-                if not isinstance(grant, dict):
-                    continue
-                cluster_id = str(grant.get("cluster_id") or "")
-                verdict = await _verdict(db, creator, cluster_id, use_idp, cache)
-                if verdict is None or verdict == "admin-exempt":
-                    continue
-                stored = list(grant.get("projects", ["default"]))
-                from app.core.org_scope import partner_projects_on
+            own_key_rows: List[tuple] = []
+            own_bound_rows: List[tuple] = []
+            try:
+                creator = installers.get(key_id) if metadata.get("extension_install_id") is not None else None
+                creator = creator or str(metadata.get("created_by") or "")
+                for grant in metadata.get("cluster_permissions") or []:
+                    if not isinstance(grant, dict) or not _reaches_default(grant):
+                        continue
+                    cluster_id = str(grant.get("cluster_id") or "")
+                    verdict = await _verdict(db, creator, cluster_id, use_idp, cache)
+                    if verdict is not None:
+                        own_key_rows.append((
+                            key_id[:12] + "…",
+                            str(metadata.get("app_name") or metadata.get("name") or ""),
+                            "add-on" if metadata.get("extension_install_id") is not None else "key",
+                            creator or "(none)",
+                            cluster_id,
+                            ",".join(grant.get("permissions") or []),
+                            ",".join(grant.get("projects") or ["default"]),
+                            verdict,
+                        ))
+                for grant in metadata.get("cluster_permissions") or []:
+                    if not isinstance(grant, dict):
+                        continue
+                    cluster_id = str(grant.get("cluster_id") or "")
+                    verdict = await _verdict(db, creator, cluster_id, use_idp, cache)
+                    if verdict is None or verdict == "admin-exempt":
+                        continue
+                    stored = list(grant.get("projects", ["default"]))
+                    from app.core.org_scope import partner_projects_on
 
-                bound = (await partner_projects_on(db, creator, {cluster_id})).get(cluster_id, {"default"})
-                kept = sorted(bound) if "*" in stored else sorted(p for p in stored if p in bound)
-                if kept != sorted(stored):
-                    bound_rows.append((key_id[:12] + "…", creator or "(none)", cluster_id,
-                                       ",".join(stored), ",".join(kept) or "(nothing)", verdict))
+                    bound = (await partner_projects_on(db, creator, {cluster_id})).get(cluster_id, {"default"})
+                    kept = sorted(bound) if "*" in stored else sorted(p for p in stored if p in bound)
+                    if kept != sorted(stored):
+                        own_bound_rows.append((key_id[:12] + "…", creator or "(none)", cluster_id,
+                                               ",".join(stored), ",".join(kept) or "(nothing)", verdict))
+            except Exception as exc:  # noqa: BLE001 - one key must not end the report on every other key
+                await db.rollback()
+                failed[type(exc).__name__] = failed.get(type(exc).__name__, 0) + 1
+                continue
+            key_rows.extend(own_key_rows)
+            bound_rows.extend(own_bound_rows)
 
         schedules = (await db.execute(
             select(SnapshotSchedule).where(SnapshotSchedule.project == "default", SnapshotSchedule.state == "active")
@@ -166,6 +182,12 @@ async def run(use_idp: bool) -> int:
         print(f"\n{len(rules)} tenant rule(s) name default or * on a cluster several organizations hold")
     else:
         print("no tenant rule names default or * on a cluster several organizations hold")
+    if skipped.get("missing"):
+        print(f"\nlisted keys Vault no longer holds: {skipped['missing']} (removed by an earlier release; nothing to fix)")
+    if skipped.get("unreadable"):
+        print(f"\nlisted keys Vault could not read: {skipped['unreadable']} (run the report again; if it stays, check Vault)")
+    for name, count in sorted(failed.items()):
+        print(f"\nkeys not evaluated ({name}): {count}")
     return 0
 
 
