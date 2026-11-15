@@ -403,3 +403,38 @@ def test_the_logs_carry_no_email(rows, caplog) -> None:
     for record in above_debug:
         assert BUYER not in record.getMessage()
         assert record.exc_info is None, "a traceback would carry the bound email"
+
+
+# --- a burst of one account's requests on a cold cache -------------------------------------------
+
+
+def test_a_burst_on_a_cold_cache_reads_the_membership_once(rows) -> None:
+    class Slow:
+        def __init__(self) -> None:
+            self.reads = 0
+
+        async def execute(self, statement, *args, **kwargs):
+            self.reads += 1
+            await asyncio.sleep(0.05)
+            return await rows.execute(statement, *args, **kwargs)
+
+    slow = Slow()
+
+    async def burst():
+        return await asyncio.gather(*(session_role.holds_membership(BUYER, slow) for _ in range(25)))
+
+    assert set(asyncio.run(burst())) == {True}
+    assert slow.reads == 1, "concurrent requests of one account share one read"
+
+
+def test_a_failed_shared_read_refuses_every_waiter_and_is_not_remembered(rows) -> None:
+    class SlowDown:
+        async def execute(self, *_args, **_kwargs):
+            await asyncio.sleep(0.05)
+            raise ConnectionError("database down")
+
+    async def burst():
+        return await asyncio.gather(*(session_role.holds_membership(BUYER, SlowDown()) for _ in range(5)))
+
+    assert set(asyncio.run(burst())) == {False}
+    assert _holds(BUYER, rows) is True

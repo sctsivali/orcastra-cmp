@@ -12,6 +12,7 @@ briefly, and never in Redis: an unsigned shared entry would let anyone who can w
 an account (see rbac.resolve_roles).
 """
 
+import asyncio
 import logging
 import time
 from contextlib import AbstractAsyncContextManager
@@ -28,6 +29,8 @@ MEMBERSHIP_CACHE_SECONDS = 15.0
 MAX_CACHED_ACCOUNTS = 4096
 
 _answers: Dict[str, Tuple[float, bool]] = {}
+# One read in flight per account and process: a page load or a burst on a cold cache shares it.
+_in_flight: Dict[str, "asyncio.Future[Optional[bool]]"] = {}
 _now = time.monotonic
 
 
@@ -75,6 +78,14 @@ async def holds_membership(email: Optional[str], db: Any = None, *, strict: bool
     cached = _answers.get(email)
     if cached is not None and now - cached[0] < MEMBERSHIP_CACHE_SECONDS:
         return cached[1]
+    pending = None if strict else _in_flight.get(email)
+    if pending is not None:
+        # A failed shared read answers None here: refused, as for the caller that made it.
+        return bool(await asyncio.shield(pending))
+    shared: "Optional[asyncio.Future[Optional[bool]]]" = None
+    if not strict:
+        shared = asyncio.get_running_loop().create_future()
+        _in_flight[email] = shared
     try:
         if db is not None:
             held = await _read(email, db)
@@ -84,10 +95,22 @@ async def holds_membership(email: Optional[str], db: Any = None, *, strict: bool
     except Exception as exc:  # noqa: BLE001 - any failure refuses; the session routes answer no_role_assigned
         # The exception type only: a driver error carries the bound email in its text.
         logger.warning("Could not read whether a groupless account holds a membership: %s", type(exc).__name__)
+        if shared is not None:
+            shared.set_result(None)
         if strict:
             raise
         return False
-    _remember(email, held, now)
+    else:
+        _remember(email, held, now)
+        if shared is not None:
+            shared.set_result(held)
+    finally:
+        if shared is not None:
+            if _in_flight.get(email) is shared:
+                del _in_flight[email]
+            if not shared.done():
+                # Cancelled mid-read: waiters are refused rather than left hanging.
+                shared.set_result(None)
     if held:
         logger.debug("Groupless account admitted as Tenant by organization membership: user=%s", email)
     return held
@@ -96,3 +119,4 @@ async def holds_membership(email: Optional[str], db: Any = None, *, strict: bool
 def forget_memberships() -> None:
     """Drop the cached answers. For tests."""
     _answers.clear()
+    _in_flight.clear()
