@@ -69,7 +69,7 @@ const nodeRegisterSchema = z.object({
         }
       },
       {
-        message: "Endpoint must be a valid URL (for example, https://192.168.10.187:8443). Only http/https allowed, no commas or invalid characters."
+        message: "Endpoint must be a valid URL (for example, https://192.0.2.10:8443). Only http/https allowed, no commas or invalid characters."
       }
     ),
   region_id: z.string().min(1, "Region is required"),

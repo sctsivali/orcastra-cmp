@@ -387,6 +387,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-doc-index.mjs
 	@echo "$(COLOR_GREEN)Checking comments for change history...$(COLOR_RESET)"
 	@node scripts/checks/check-comment-hygiene.mjs
+	@echo "$(COLOR_GREEN)Checking for real host addresses...$(COLOR_RESET)"
+	@node scripts/checks/check-ip-literals.mjs
 	@echo "$(COLOR_GREEN)✓ Frontend checks passed$(COLOR_RESET)"
 
 # Every job of .github/workflows/ci.yml on this machine; the gate before a direct push.

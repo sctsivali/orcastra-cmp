@@ -1288,7 +1288,7 @@ class ClusterRegisterRequest(BaseModel):
         # so "*" here would wipe every org's cached cluster-member list.
         pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", description="Unique cluster identifier")
     display_name: str = Field(..., min_length=1, description="Human-readable display name for the Cluster")
-    endpoint: str = Field(..., min_length=1, description="LXD API endpoint (for example, https://192.168.10.187:8443)")
+    endpoint: str = Field(..., min_length=1, description="LXD API endpoint (for example, https://192.0.2.10:8443)")
     zone: Optional[str] = Field(None, description="Geographical or logical zone (legacy, use location instead)")
     merchant_id: Optional[str] = Field(None, description="Merchant/organization identifier")
     location: Optional[GeoLocationInput] = Field(None, description="Geographic location information")
@@ -1328,7 +1328,7 @@ class ClusterRegisterRequest(BaseModel):
             "example": {
                 "cluster_id": "node-jkt-01",
                 "display_name": "Jakarta DC1 Node",
-                "endpoint": "https://192.168.10.187:8443",
+                "endpoint": "https://192.0.2.10:8443",
                 "zone": "Jakarta-DC1",
                 "location": {
                     "region_id": "us-east-dc1",

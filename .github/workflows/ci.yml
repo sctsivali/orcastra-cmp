@@ -357,6 +357,11 @@ jobs:
       - name: Comment hygiene
         run: node scripts/checks/check-comment-hygiene.mjs .
 
+      # The repository is public: no new real host address and no tailnet hostname in any tracked
+      # file. Literals already present are listed in scripts/checks/ip-literals-baseline.json.
+      - name: Host addresses
+        run: node scripts/checks/check-ip-literals.mjs .
+
       # Table owns its scroll container; a second scrolling wrapper splits the axes and buries
       # the horizontal scrollbar. Clipping wrappers are allowed.
       - name: Table scroll containers
