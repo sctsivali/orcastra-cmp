@@ -145,6 +145,15 @@ def _client(monkeypatch, user=None, allowed=None):
     # test_whole_cluster_state_needs_the_whole_cluster.py.
     monkeypatch.setattr("app.services.cluster_parties.clusters_held_by_another_party", nobody_else_holds)
 
+    async def nothing_bought(*_args, **_kwargs):
+        return set()
+
+    async def not_bought(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr("app.core.sale_term.purchase_only_clusters", nothing_bought)
+    monkeypatch.setattr("app.core.sale_term.reaches_only_by_purchase", not_bought)
+
     async def no_generation(*_args, **_kwargs):
         return None
 

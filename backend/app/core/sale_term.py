@@ -153,6 +153,14 @@ async def _past_term(db: AsyncSession, candidates: Dict[str, Set[int]]) -> Set[s
     return {c for c, phase in (await _phases(db, candidates)).items() if phase == READ_ONLY}
 
 
+async def purchase_only_clusters(db: AsyncSession, email: Optional[str]) -> Set[str]:
+    """The clusters this account reaches through purchases and nothing else, whatever their term."""
+    if not email:
+        return set()
+    _full, candidates = await _reach(db, email)
+    return set(candidates)
+
+
 async def reaches_only_by_purchase(db: AsyncSession, email: Optional[str], cluster_id: str) -> bool:
     """Whether this account reaches the cluster through purchases and nothing else.
 

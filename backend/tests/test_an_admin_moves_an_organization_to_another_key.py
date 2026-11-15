@@ -120,6 +120,12 @@ def world(monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any]:
     monkeypatch.setattr(integrations, "get_cache_manager", lambda: cache)
     monkeypatch.setattr(integrations, "evict_api_key_cache", evicted.append)
     monkeypatch.setattr(integrations, "serialize_key_ownership", _seam)
+
+    async def _reach_safe(_cluster_id, _project_name):
+        # What a purchase hands the buyer is pinned in test_a_purchase_is_checked_for_host_reach_*.
+        return None
+
+    monkeypatch.setattr(integrations, "assert_purchase_reach_safe", _reach_safe)
     monkeypatch.setattr(rbac, "activity_logger", denials)
     directory = Directory({"partner@example.test": {ROLE_PARTNER}})
     monkeypatch.setattr(authentik_sync, "get_authentik_sync", lambda: directory)

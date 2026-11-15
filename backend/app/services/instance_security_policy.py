@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import AuthenticatedUser
 from app.core.rbac import Role, get_highest_role, resolve_roles
 from app.models.db_models import OrganizationCluster
+from app.core import sale_term
 from app.services import cluster_parties
 
 
@@ -125,6 +126,11 @@ async def resolve_cluster_write_policy(
         # important: one binding is not one owner. A Partner reaches a cluster another party holds
         # alone through a member row in an organization it bought from; EXCLUSIVE would hand it
         # host-level config (privileged containers, raw.lxc, host disks) on the seller's host.
+        ownership = ClusterOwnership.SHARED
+    elif await sale_term.reaches_only_by_purchase(db, user.email, cluster_id):
+        # important: a buyer founder runs its buyer organization, so once the seller unbinds its
+        # own organization the purchase is the only binding and no other party is visible. It is
+        # still the seller's host.
         ownership = ClusterOwnership.SHARED
     else:
         ownership = ClusterOwnership.EXCLUSIVE

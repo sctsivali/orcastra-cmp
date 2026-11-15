@@ -273,6 +273,7 @@ from app.services.add_on_credential_edits import (
     refuse_grant_edit,
     refuse_secret_rotation,
 )
+from app.services.purchase_reach_audit import assert_purchase_reach_safe
 from app.services.shared_cluster_audit import (
     ClusterConfigurationBusy,
     SharedClusterGuardError,
@@ -8004,14 +8005,47 @@ def _iso(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat() if value is not None else None
 
 
+async def _held_outside_the_key_party(db: AsyncSession, cluster_id: str, key_minter: Optional[str]) -> bool:
+    """Whether some holder of the cluster is outside the party of the provisioning key's minter.
+
+    A key with no known minter has no party, so every holder counts as outside it.
+    """
+    from app.services.cluster_parties import clusters_held_by_another_party
+
+    if not (key_minter or "").strip():
+        return True
+    return cluster_id in await clusters_held_by_another_party(db, key_minter, {cluster_id})
+
+
+async def _org_carries_the_key(db: AsyncSession, org_id: int, api_key_id: Optional[str]) -> bool:
+    """Whether the key is in the organization's owner set through a row that lends a party.
+
+    An enrolled or Administrator-added co-owner row does not (organization_owners.PARTY_ADDED_VIA),
+    so such a key gets the whole-cluster audit.
+    """
+    from app.services.organization_owners import PARTY_ADDED_VIA, owners_of
+
+    if not api_key_id:
+        return False
+    rows = (await owners_of(db, [org_id])).get(org_id, [])
+    return any(row.api_key_id == api_key_id and row.added_via in PARTY_ADDED_VIA for row in rows)
+
+
 async def _ensure_provision_cluster_mapping(
     db: AsyncSession,
     *,
     organization_id: int,
     cluster_id: str,
     registered_by: Optional[str],
+    key_minter: Optional[str],
+    project_name: Optional[str] = None,
+    carries_the_key: bool = False,
 ) -> bool:
-    """Add the provisioning binding under the shared ownership/configuration lock."""
+    """Add the provisioning binding under the shared ownership/configuration lock.
+
+    `carries_the_key`: the provisioning key is in the organization's owner set (never an add-on
+    credential), which is what makes the organization part of that key's party.
+    """
 
     from app.models.db_models import OrganizationCluster
 
@@ -8028,12 +8062,28 @@ async def _ensure_provision_cluster_mapping(
         ).scalar_one_or_none()
         if existing is not None:
             return False
-        await assert_cluster_safe_to_share(
-            db,
-            cluster_id,
-            prospective_organization_id=organization_id,
-            prospective_registered_by=registered_by,
+        # important: the whole-cluster share audit guards a cluster gaining a holder outside the
+        # parties that already hold it, and every stock cluster fails it. A buyer organization the
+        # provisioning key owns joins that key's party (services/cluster_parties.py), so on a
+        # cluster the party alone holds a purchase adds no outside holder and the whole-cluster audit
+        # is not run. What the buyer reaches is still checked: the purchased project's instances and
+        # the default profile they inherit must not reach the host (purchase_reach_audit). Another
+        # party on the cluster, an unbound registration by someone else, an unknown minter, an
+        # organization the key does not own, or no project named keeps the whole-cluster audit.
+        inside_the_party = (
+            carries_the_key
+            and bool((project_name or "").strip())
+            and not await _held_outside_the_key_party(db, cluster_id, key_minter)
         )
+        if inside_the_party:
+            await assert_purchase_reach_safe(cluster_id, project_name)
+        else:
+            await assert_cluster_safe_to_share(
+                db,
+                cluster_id,
+                prospective_organization_id=organization_id,
+                prospective_registered_by=registered_by,
+            )
         db.add(
             OrganizationCluster(
                 organization_id=organization_id,
@@ -8246,6 +8296,9 @@ async def provision_tenant_access(
             organization_id=org.id,
             cluster_id=body.cluster_id,
             registered_by=api_key.get("created_by"),
+            key_minter=api_key.get("created_by"),
+            project_name=body.project_name,
+            carries_the_key=(not is_add_on_credential(api_key)) and await _org_carries_the_key(db, org.id, api_key_id),
         )
     except SharedClusterGuardError as exc:
         await db.rollback()
@@ -8290,6 +8343,17 @@ async def provision_tenant_access(
     policy_result = await db.execute(policy_stmt)
     policy = policy_result.scalar_one_or_none()
     policy_created = policy is None
+
+    # important: a binding is checked once, when it is made. A later purchase of another project by
+    # the same organization on the same cluster lands in a project nothing has read, so what the
+    # buyer reaches there is checked now. Renewals and term updates of a project already bought are
+    # not re-checked: devices added since (an exposed service's proxy) must not end paid access.
+    if policy_created and not cluster_mapped:
+        try:
+            await assert_purchase_reach_safe(body.cluster_id, body.project_name)
+        except SharedClusterGuardError as exc:
+            await db.rollback()
+            raise HTTPException(status_code=exc.status_code, detail=exc.as_detail()) from exc
 
     if not policy:
         policy = TenantAccessPolicy(

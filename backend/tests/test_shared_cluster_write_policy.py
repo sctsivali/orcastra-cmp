@@ -80,7 +80,12 @@ def held_elsewhere(monkeypatch: pytest.MonkeyPatch) -> set:
     async def _held(_db, _email, cluster_ids):
         return set(cluster_ids) & held
 
+    async def _bought(_db, _email, _cluster_id):
+        # Purchase-only reach is pinned on real rows in test_a_buyer_founder_never_holds_a_cluster_exclusively.
+        return False
+
     monkeypatch.setattr(isp.cluster_parties, "clusters_held_by_another_party", _held)
+    monkeypatch.setattr(isp.sale_term, "reaches_only_by_purchase", _bought)
     return held
 
 

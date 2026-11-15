@@ -111,9 +111,15 @@ def sale(hub: Dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any]
     async def _share(_db: Any, cluster_id: str, **kwargs: Any) -> None:
         provisioned.append((cluster_id, kwargs.get("prospective_organization_id")))
 
+    reach_checked: List[Tuple[str, Any]] = []
+
+    async def _reach(cluster_id: str, project_name: Any) -> None:
+        reach_checked.append((cluster_id, project_name))
+
     monkeypatch.setattr(cluster_registry, "registered_cluster_ids", _registered)
     monkeypatch.setattr(integrations, "assert_cluster_safe_to_share", _share)
-    return {**hub, "provisioned": provisioned}
+    monkeypatch.setattr(integrations, "assert_purchase_reach_safe", _reach)
+    return {**hub, "provisioned": provisioned, "reach_checked": reach_checked}
 
 
 async def claims(db: AsyncSessionFacade) -> List[Tuple[str, Optional[str]]]:
@@ -187,7 +193,43 @@ async def test_a_sale_before_the_next_push_blocks_the_rebind(sale: Dict[str, Any
     await sync(db, (SELLER,), [(C, SELLER, "PARTNER")])
     assert await claims(db) == [("acme-cloud", K_PARTNER), ("buyer-co", K_PARTNER)]
     expect(sale, await placed(db), None, ("count", 2))
-    assert sale["provisioned"] == [(SALE, 1)]
+    # The sale cluster had no holder, so the buyer's binding is its first and inside the key's own
+    # party: no whole-cluster audit, only the check of what the buyer reaches.
+    assert sale["provisioned"] == []
+    assert sale["reach_checked"] == [(SALE, "orc-p-1")]
+
+
+async def test_a_second_project_on_a_bound_cluster_is_checked_and_a_renewal_is_not(sale: Dict[str, Any]) -> None:
+    """A binding is checked once when made; a later project nothing has read is checked when bought,
+    and a renewal of a project already bought is not (an exposed service must not end paid access)."""
+    db = world_db()
+    await personal_cluster(db, "c-cluster", C)
+    assert (await provision(db, provision_body(BUYER1, [BUYER_LOGIN]))).status_code == 200
+    assert (await provision(db, provision_body(BUYER1, [BUYER_LOGIN]))).status_code == 200
+    second = await provision(db, provision_body(BUYER1, [BUYER_LOGIN], project_name="orc-p-2"))
+    assert second.status_code == 200, second.text
+    assert sale["reach_checked"] == [(SALE, "orc-p-1"), (SALE, "orc-p-2")]
+
+
+async def test_a_second_project_that_reaches_the_host_is_refused_and_writes_nothing(
+    sale: Dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.shared_cluster_audit import SharedClusterAuditReport, SharedClusterGuardError
+
+    db = world_db()
+    await personal_cluster(db, "c-cluster", C)
+    assert (await provision(db, provision_body(BUYER1, [BUYER_LOGIN]))).status_code == 200
+
+    async def unsafe(cluster_id: str, project_name: Any) -> None:
+        report = SharedClusterAuditReport(cluster_id, False, True, 1, 1, 1, ())
+        raise SharedClusterGuardError("cluster_not_safe_to_share", "reaches the host", report, status_code=409)
+
+    monkeypatch.setattr(integrations, "assert_purchase_reach_safe", unsafe)
+    refused = await provision(db, provision_body(BUYER1, [BUYER_LOGIN], project_name="orc-p-2"))
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "cluster_not_safe_to_share"
+    names = (await db.execute(select(TenantAccessPolicy.name))).scalars().all()
+    assert "auto:orc-p-2" not in names
 
 
 async def test_onboarding_then_a_sale_then_a_later_cluster_waits_for_the_dashboard(sale: Dict[str, Any]) -> None:

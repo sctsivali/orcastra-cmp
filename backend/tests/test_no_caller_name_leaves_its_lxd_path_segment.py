@@ -104,6 +104,10 @@ LXD_PATH_HELPERS = {
     ("app/services/lxd/project_scope.py", "list_project_configs"),
     ("app/services/lxd/project_scope.py", "list_project_names"),
     ("app/services/lxd/proxy_path_params.py", "assert_path_params"),
+    # Reached from POST /integrations/provision-tenant-access. Reads the fixed /1.0/projects,
+    # /1.0/profiles and /1.0/instances paths; the project travels as a query parameter, which
+    # requests encodes, so no caller value reaches a path segment.
+    ("app/services/purchase_reach_audit.py", "_scan_purchase_sync"),
     # Reached from POST /integrations/raw-proxy for a limited key's call to one operation. The id
     # goes through lxd_segment, which the encoder scan above checks.
     ("app/services/lxd/raw_proxy_operations.py", "operation_is_visible"),

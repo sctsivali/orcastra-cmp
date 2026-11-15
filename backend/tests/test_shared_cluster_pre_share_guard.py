@@ -397,7 +397,9 @@ def test_all_four_binding_paths_enforce_a_clean_transition(monkeypatch):
         assert ids == [2]
         assert registration.commits == 0
 
-        # External provisioning uses the same guard before its flush.
+        # External provisioning uses the same guard before its flush. A key with no known minter
+        # has no party, so its purchase is audited like any new holder (a purchase inside the
+        # holding party is covered in test_a_purchase_inside_the_holding_party_needs_no_share_audit).
         provision = _Session(
             [
                 [],
@@ -409,6 +411,7 @@ def test_all_four_binding_paths_enforce_a_clean_transition(monkeypatch):
             organization_id=2,
             cluster_id="cluster-a",
             registered_by="second@example.test",
+            key_minter=None,
         )
         assert mapped is True
         assert provision.flushes == 1

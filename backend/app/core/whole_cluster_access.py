@@ -94,9 +94,24 @@ async def _refuse_where_another_party_holds(cluster_id: str, db: AsyncSession, u
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=SHARED_CLUSTER_DETAIL)
 
 
+async def _bought_only(db: AsyncSession, user: Optional[AuthenticatedUser], clusters: Set[str]) -> Set[str]:
+    """Clusters among `clusters` a non-admin reaches only through a purchase: the seller's, always.
+
+    important: a buyer founder runs its buyer organization, so once the seller unbinds or deletes its
+    own organization the party test sees no one else on the cluster. Storage pools, LXD auth and
+    the cluster's trust are still the seller's host.
+    """
+    if not clusters or user is None or get_highest_role(resolve_roles(user)) == Role.ADMIN:
+        return set()
+    from app.core.sale_term import purchase_only_clusters
+
+    return await purchase_only_clusters(db, getattr(user, "email", "")) & clusters
+
+
 async def _another_party_holds(cluster_id: str, db: AsyncSession, user: Optional[AuthenticatedUser]) -> bool:
     try:
         held = await cluster_parties.clusters_held_by_another_party(db, getattr(user, "email", ""), {cluster_id})
+        held = held | await _bought_only(db, user, {cluster_id} - held)
     except SQLAlchemyError as exc:
         # A database that cannot say who holds the cluster refuses the request with a 503, not a
         # 500.
@@ -119,7 +134,8 @@ async def clusters_held_elsewhere(nodes: Iterable[str], db: AsyncSession, user: 
         # about it only costs queries.
         wanted = [node for node in wanted if node in allowed]
     try:
-        return await cluster_parties.clusters_held_by_another_party(db, getattr(user, "email", ""), wanted)
+        held = await cluster_parties.clusters_held_by_another_party(db, getattr(user, "email", ""), wanted)
+        return held | await _bought_only(db, user, set(wanted) - held)
     except SQLAlchemyError as exc:
         # A fleet listing narrows rather than fails: every cluster it could not judge is left out,
         # which is never more than the caller may see.
