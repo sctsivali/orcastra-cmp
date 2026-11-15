@@ -8346,9 +8346,23 @@ async def provision_tenant_access(
 
     # important: a binding is checked once, when it is made. A later purchase of another project by
     # the same organization on the same cluster lands in a project nothing has read, so what the
-    # buyer reaches there is checked now. Renewals and term updates of a project already bought are
-    # not re-checked: devices added since (an exposed service's proxy) must not end paid access.
-    if policy_created and not cluster_mapped:
+    # buyer reaches there is checked now. The policy is named after the project alone, so the same
+    # project bought on another cluster the organization already holds finds it in place: what is
+    # new is a cluster and project this policy has no rule for yet. Renewals and term updates of a
+    # project already bought are not re-checked: devices added since (an exposed service's proxy)
+    # must not end paid access.
+    new_project_here = policy_created or (
+        await db.execute(
+            select(TenantPolicyRule.id).where(
+                and_(
+                    TenantPolicyRule.policy_id == policy.id,
+                    TenantPolicyRule.cluster_id == body.cluster_id,
+                    TenantPolicyRule.project_name == body.project_name,
+                )
+            ).limit(1)
+        )
+    ).scalar_one_or_none() is None
+    if new_project_here and not cluster_mapped:
         try:
             await assert_purchase_reach_safe(body.cluster_id, body.project_name)
         except SharedClusterGuardError as exc:
