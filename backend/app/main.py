@@ -763,6 +763,16 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down Orcastra CMP API...")
 
+    # First, while the database is open: a rebuild cut off here records its interruption, so its
+    # instance is not held until the stranded sweep (instance_rebuild.interrupt_running_rebuilds).
+    try:
+        from app.routers.instance_rebuild import interrupt_running_rebuilds
+        interrupted = await interrupt_running_rebuilds()
+        if interrupted:
+            logger.warning("Interrupted %d running rebuild(s) on shutdown", interrupted)
+    except Exception as exc:  # noqa: BLE001 - shutting down; the stranded sweep is the fallback
+        logger.warning("Could not interrupt running rebuilds on shutdown: %s", exc)
+
     if instance_operation_recovery_task is not None:
         instance_operation_recovery_task.cancel()
         await asyncio.gather(instance_operation_recovery_task, return_exceptions=True)

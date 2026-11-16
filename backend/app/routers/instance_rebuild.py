@@ -381,6 +381,29 @@ async def _run_rebuild(job_id: str, run_provisioning: bool) -> None:
         beat.cancel()
 
 
+def _spawn_rebuild(job_id: str, run_provisioning: bool) -> "asyncio.Task":
+    task = asyncio.create_task(_run_rebuild(job_id, run_provisioning))
+    _RUNNING_JOBS.add(task)
+    task.add_done_callback(_RUNNING_JOBS.discard)
+    return task
+
+
+async def interrupt_running_rebuilds(timeout: float = 10.0) -> int:
+    """Cancel the rebuilds this worker drives and wait for them to record it; returns how many.
+
+    important: the app's shutdown calls this. uvicorn raises the SIGTERM it caught again once the
+    app has shut down, so the process ends without cancelling what is left on the loop: a rebuild
+    left to that never reaches its interruption handler and its row waits for the stranded sweep.
+    Past the timeout the sweep is still the fallback.
+    """
+    running = [task for task in _RUNNING_JOBS if not task.done()]
+    for task in running:
+        task.cancel()
+    if running:
+        await asyncio.wait(running, timeout=timeout)
+    return len(running)
+
+
 async def _project_config(lxd_service: LXDService, host: str, project: str) -> Dict[str, Any]:
     from app.services.lxd.project_scope import list_project_configs
 
@@ -645,9 +668,7 @@ async def rebuild_instance(
         target_host=body.host, target_project=row.project, result="success",
         details={"mode": body.mode, "job_id": job_id, "image": row.requested_image, "project": row.project},
     )
-    task = asyncio.create_task(_run_rebuild(job_id, body.run_provisioning))
-    _RUNNING_JOBS.add(task)
-    task.add_done_callback(_RUNNING_JOBS.discard)
+    _spawn_rebuild(job_id, body.run_provisioning)
     # Readers hold a cached list; without this the change is invisible until the TTL.
     get_cache_manager().invalidate_instance_cache()
     return _job_payload(row)
