@@ -6,6 +6,7 @@ Each rule names a cluster, a project and an instance (or `*`) and grants permiss
   - console:       Open graphical console or terminal
   - snapshot:      Create, restore, delete snapshots
   - file_transfer: Browse, change, upload and download files in an instance, as root
+  - rebuild:       Reinstall an instance's root disk from an image, erasing what is on it
 """
 
 import logging
@@ -95,7 +96,7 @@ class PolicyRuleCreate(BaseModel):
     instance_name: str = Field(default="*", max_length=255, description="Instance name or '*' for all")
     permissions: List[str] = Field(
         default=["view"],
-        description="Permission list: view, operate, console, snapshot, file_transfer",
+        description="Permission list: view, operate, console, snapshot, file_transfer, rebuild",
     )
 
     @field_validator("permissions")

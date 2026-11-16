@@ -68,6 +68,9 @@ class SystemSettings(BaseModel):
     instance_files_enabled: bool = False
     instance_files_max_transfer_bytes: int = 0
     guest_credentials_enabled: bool = False
+    # Off when an operator set either tenant rebuild limit to 0; the console then hides Rebuild
+    # from Tenants instead of offering a dialog whose submit answers 403.
+    tenant_rebuild_enabled: bool = True
     # Migration rollout is staged. Each mutation class has its own gate, and the instance
     # stages are on by default. The recovery flags tell the console which retention actions,
     # automatic cleanup, and running-source behaviour to describe.
@@ -123,6 +126,10 @@ async def get_system_settings():
         instance_files_enabled=getattr(settings, "instance_files_enabled", False),
         instance_files_max_transfer_bytes=getattr(settings, "instance_files_max_transfer_bytes", 0),
         guest_credentials_enabled=getattr(settings, "guest_credentials_enabled", False),
+        tenant_rebuild_enabled=(
+            getattr(settings, "tenant_rebuild_per_instance_per_hour", 0) > 0
+            and getattr(settings, "tenant_rebuild_concurrent_per_org", 0) > 0
+        ),
         migration_center_enabled=getattr(settings, "migration_center_enabled", False),
         migration_durable_copy_enabled=getattr(
             settings, "migration_durable_copy_enabled", False

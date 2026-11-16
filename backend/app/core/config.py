@@ -204,6 +204,25 @@ class Settings(BaseSettings):
         description="Honour the per-project tenant 'snapshot' permission. Off means only Partner and Admin may act on snapshots."
     )
 
+    # Tenant rebuild limits (services/rebuild_admission.py). A rebuild pulls an image and rewrites a
+    # whole root disk, so a Tenant gets a rolling budget per instance and a cap on rebuilds running
+    # at once across its organization's projects on one cluster. Either at 0 turns tenant rebuild
+    # off. Partner and Admin are held only to one rebuild in flight per instance.
+    tenant_rebuild_per_instance_per_hour: int = Field(
+        default=3,
+        ge=0,
+        le=100,
+        alias="TENANT_REBUILD_PER_INSTANCE_PER_HOUR",
+        description="Rebuilds a Tenant may start per instance in a rolling hour. 0 turns tenant rebuild off.",
+    )
+    tenant_rebuild_concurrent_per_org: int = Field(
+        default=2,
+        ge=0,
+        le=100,
+        alias="TENANT_REBUILD_CONCURRENT_PER_ORG",
+        description="Tenant rebuilds that may run at once across one organization's projects on a cluster. 0 turns tenant rebuild off.",
+    )
+
     instance_files_enabled: bool = Field(
         default=True,
         alias="INSTANCE_FILES_ENABLED",

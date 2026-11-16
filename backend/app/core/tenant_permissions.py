@@ -6,4 +6,6 @@ One vocabulary for every writer of tenant rules: the dashboard's policy editor
 written instead of being stored and reported as synced.
 """
 
-TENANT_RULE_PERMISSIONS = frozenset({"view", "operate", "console", "snapshot", "file_transfer"})
+# `rebuild` reinstalls an instance's root disk and erases what is on it. It is its own grant, never
+# implied by `operate`, so no existing rule gains it.
+TENANT_RULE_PERMISSIONS = frozenset({"view", "operate", "console", "snapshot", "file_transfer", "rebuild"})

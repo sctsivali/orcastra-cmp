@@ -4,6 +4,7 @@ LXD instance operations: list, create, start, stop, restart, rebuild and delete.
 
 import logging
 import asyncio
+from urllib.parse import quote
 import time
 import secrets
 import socket
@@ -1757,28 +1758,35 @@ class InstanceManager:
         if snapshots:
             raise LXDSnapshotExistsError(snapshots)
 
+        def _set_user_data(value: str) -> None:
+            # PATCH merges config, so this touches cloud-init.user-data only; "" unsets the key.
+            client.api.instances[safe_segment(name)].patch(
+                json={"config": {"cloud-init.user-data": value}},
+                params={"project": project_name},
+            )
+
+        previous_user_data = str((getattr(instance, "config", None) or {}).get("cloud-init.user-data") or "")
         if cloud_init is not None:
-            # PATCH merges config, so this only sets cloud-init.user-data. The new
-            # root disk picks it up on first boot.
-            def _set_ci():
-                client.api.instances[safe_segment(name)].patch(
-                    json={"config": {"cloud-init.user-data": cloud_init}},
-                    params={"project": project_name},
-                )
-            await asyncio.to_thread(_set_ci)
+            # The new root disk picks it up on first boot.
+            await asyncio.to_thread(_set_user_data, cloud_init)
 
         endpoint = client.api._api_endpoint  # ex; https://host:8443/1.0
         session = client.api.session
-        project_q = f"?project={project_name}" if project_name and project_name != "default" else ""
+        project_q = (
+            f"?project={quote(project_name, safe='')}" if project_name and project_name != "default" else ""
+        )
+        # LXD answered: the rebuild was refused or failed. A timeout or a full pool is not this.
+        refused: list = []
 
         def _do_rebuild() -> str:
             resp = session.post(
-                f"{endpoint}/instances/{name}/rebuild{project_q}",
+                f"{endpoint}/instances/{safe_segment(name)}/rebuild{project_q}",
                 json={"source": source},
                 verify=False,
                 timeout=(5, 120),
             )
             if resp.status_code >= 400:
+                refused.append(True)
                 raise LXDOperationError(f"LXD rebuild failed: {resp.status_code} {resp.text[:300]}")
             op = resp.json()
             op_path = op.get("operation")  # /1.0/operations/<id>
@@ -1792,14 +1800,28 @@ class InstanceManager:
                                 timeout=(_REBUILD_CONNECT_TIMEOUT, wait_timeout))
             wbody = wresp.json() or {}
             if wbody.get("type") == "error" or wbody.get("error"):
+                refused.append(True)
                 raise LXDOperationError(f"LXD rebuild failed: {wbody.get('error') or 'unknown error'}")
             wdata = wbody.get("metadata") or {}
             if wdata.get("status") != "Success":
+                refused.append(True)
                 raise LXDOperationError(
                     f"LXD rebuild operation failed: {wdata.get('err') or wdata.get('status') or 'unknown'}"
                 )
             return op_id
 
+        async def _put_user_data_back() -> None:
+            # important: only when LXD said the rebuild did not happen. After a timeout the rebuild
+            # may still finish with the new user-data, and taking it away would leave a fresh root
+            # disk that never runs the cloud-init it was rebuilt for.
+            if cloud_init is None or not (refused or pool_full):
+                return
+            try:
+                await asyncio.to_thread(_set_user_data, previous_user_data)
+            except Exception as exc:  # noqa: BLE001 - the rebuild failure is the error to report
+                logger.warning("Could not restore cloud-init user-data on %s/%s: %s", host, name, type(exc).__name__)
+
+        pool_full = False
         try:
             op_id = await run_blocking(
                 _do_rebuild,
@@ -1816,9 +1838,14 @@ class InstanceManager:
                 f"Rebuild of {name} on {host} did not complete within {wait_timeout}s"
             ) from exc
         except BlockingPoolFull as exc:
+            pool_full = True
+            await _put_user_data_back()
             raise LXDOperationError(
                 f"Too many rebuilds in flight; retry {name} on {host} shortly"
             ) from exc
+        except LXDOperationError:
+            await _put_user_data_back()
+            raise
         logger.info("Rebuilt instance %s on %s (project=%s, op=%s)", name, host, project_name, op_id)
         return op_id
 

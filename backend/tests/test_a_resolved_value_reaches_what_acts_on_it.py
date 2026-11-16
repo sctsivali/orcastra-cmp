@@ -91,12 +91,10 @@ async def test_the_delete_wait_runs_off_the_event_loop_and_outlasts_the_pooled_r
 
 def test_the_rebuild_recovery_sweep_only_claims_what_no_worker_can_be_driving():
     """LXD's own rebuild wait runs to 1800s, so a younger row may still be live elsewhere."""
-    from app.routers.instance_rebuild import (
-        _IN_FLIGHT_STATUSES,
-        _REBUILD_STRANDED_AFTER_SECONDS,
-    )
+    from app.routers.instance_rebuild import _IN_FLIGHT_STATUSES
+    from app.services.rebuild_admission import STRANDED_AFTER
 
-    assert _REBUILD_STRANDED_AFTER_SECONDS > 1800, (
+    assert STRANDED_AFTER.total_seconds() > 1800, (
         "a window shorter than LXD's rebuild wait would fail jobs that are still running"
     )
     assert "ready" not in _IN_FLIGHT_STATUSES and "failed" not in _IN_FLIGHT_STATUSES, (

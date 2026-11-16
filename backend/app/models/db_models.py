@@ -522,7 +522,7 @@ class TenantPolicyRule(Base):
     """One rule in a policy: the cluster, project and instance it covers and what it permits.
 
     `project_name='*'` covers every project in the cluster and `instance_name='*'` every instance
-    in the project. Permissions: view, operate, console, snapshot, file_transfer.
+    in the project. Permissions: view, operate, console, snapshot, file_transfer, rebuild.
     """
     __tablename__ = "tenant_policy_rules"
 

@@ -42,6 +42,23 @@ def verify_file_access(host: str, project: Optional[str], instance_name: str) ->
     return scoped_project
 
 
+def verify_rebuild_access(host: str, project: Optional[str], instance_name: str) -> str:
+    """The project the caller may rebuild `instance_name` in; raises 403 when it may not.
+
+    important: `operate` and `rebuild` are checked whatever `tenant_perm_enforcement_enabled` says,
+    for the reason `verify_file_access` gives. A rebuild erases the root disk; a viewer, or an
+    operator who may only start and stop, must not gain it because a rollout flag is relaxed.
+    Partner and Admin hold no tenant ACL, so only the project bound and a view-only `default`
+    refuse them here.
+    """
+    scoped_project = verify_project_access(host, project)
+    refuse_default_operation(host, scoped_project)
+    verify_tenant_permission(host, scoped_project, instance_name, "view")
+    verify_tenant_permission(host, scoped_project, instance_name, "operate")
+    verify_tenant_permission(host, scoped_project, instance_name, "rebuild")
+    return scoped_project
+
+
 def verify_guest_access(host: str, project: Optional[str], instance_name: str) -> str:
     """The project the caller may manage `instance_name`'s logins in; raises 403 when it may not.
 

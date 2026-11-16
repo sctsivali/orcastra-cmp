@@ -256,6 +256,7 @@ ACTION_CATEGORIES = {
     "guest.authorized_key.add": EventCategory.ADMIN,
     "guest.authorized_key.remove": EventCategory.ADMIN,
     "instance.rebuild": EventCategory.LXD_INFRA,
+    "instance.rebuild.requested": EventCategory.LXD_INFRA,
     "instance.autostart": EventCategory.LXD_INFRA,
     "instance.nic.address": EventCategory.NETWORK,
     "integration.mcp.tool_call": EventCategory.ADMIN,
@@ -395,5 +396,7 @@ HIGH_SEVERITY_ACTIONS = {
     # Ends work another operator started.
     "task.cancel",
     "instance.rebuild",
+    # Erases a root disk; on record before the cluster sees the change.
+    "instance.rebuild.requested",
     "file.push",
 }

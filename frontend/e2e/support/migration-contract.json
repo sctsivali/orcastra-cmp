@@ -672,6 +672,7 @@
     "migration_running_source_enabled": true,
     "read_only_mode": false,
     "snapshot_schedules_enabled": false,
-    "task_journal_enabled": true
+    "task_journal_enabled": true,
+    "tenant_rebuild_enabled": true
   }
 }

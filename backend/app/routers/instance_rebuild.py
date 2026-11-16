@@ -8,8 +8,9 @@ progress in ``rebuild_jobs`` for the UI to poll. LXD refuses to rebuild an insta
 with snapshots, so that check runs synchronously and answers 409 up front.
 """
 import asyncio
+import re
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -22,16 +23,20 @@ from app.core.database import get_db, async_session_maker
 from app.core.dependencies import (
     check_read_only_mode,
     require_tenant,
-    require_partner,
     AuthenticatedUser,
 )
 from app.core.config import get_settings
+from app.core.instance_access import verify_rebuild_access
 from app.core.org_scope import (
+    check_tenant_permission,
+    get_tenant_acl,
     org_scope_dependency,
     verify_project_access,
     verify_tenant_permission,
+    visible_projects_for,
 )
 from app.models.db_models import RebuildJob
+from app.services import rebuild_admission
 from app.services.lxd_service import (
     LXDService,
     LXDOperationError,
@@ -85,18 +90,25 @@ _PROVISION_TIMEOUT_SECONDS = 180
 _PROVISION_POLL_SECONDS = 5
 
 
+# 64 KiB, as the larger public clouds cap instance user-data. The value lands in the instance config
+# and in this table, so an unbounded one would bloat both.
+CLOUD_INIT_MAX_CHARS = 64 * 1024
+
+
 class RebuildRequest(BaseModel):
-    host: str
-    project: str = "default"
+    host: str = Field(..., min_length=1, max_length=255)
+    project: str = Field("default", max_length=255)
     # "image": reinstall from a base image. "empty": blank root disk (install from
     # an ISO afterwards via the console). "cloud-init": image + apply cloud-init.
     mode: Literal["image", "empty", "cloud-init"]
-    image: Optional[str] = None            # alias or 64-char fingerprint (image/cloud-init)
-    image_server: Optional[str] = None     # remote simplestreams server (optional)
-    image_protocol: Optional[str] = None
-    cloud_init: Optional[str] = Field(None, description="cloud-init user-data (cloud-init mode)")
+    image: Optional[str] = Field(None, max_length=512)            # alias or 64-char fingerprint
+    image_server: Optional[str] = Field(None, max_length=2048)    # remote simplestreams server
+    image_protocol: Optional[Literal["simplestreams", "lxd"]] = None
+    cloud_init: Optional[str] = Field(
+        None, max_length=CLOUD_INIT_MAX_CHARS, description="cloud-init user-data (cloud-init mode)"
+    )
     # Destructive-action gate: the client must echo the instance name.
-    confirm_name: str
+    confirm_name: str = Field(..., max_length=255)
     run_provisioning: bool = True          # wait for cloud-init/agent after start
 
 
@@ -118,7 +130,18 @@ def _build_source(body: RebuildRequest) -> Dict[str, Any]:
     return source
 
 
+# A failed job's text is LXD's (storage paths, member names, whether an alias exists) or ours with
+# LXD's appended. An operator needs it; a Tenant reading its own job gets this, and its provider
+# reads the cause in the job row and the activity log.
+TENANT_FAILURE_TEXT = (
+    "The rebuild did not finish. Ask your provider to check the instance; the cause is in their activity log."
+)
+
+
 def _job_payload(row: RebuildJob) -> Dict[str, Any]:
+    error = row.error
+    if error and get_tenant_acl() is not None:
+        error = TENANT_FAILURE_TEXT
     return {
         "job_id": row.job_id,
         "instance_name": row.instance_name,
@@ -129,7 +152,7 @@ def _job_payload(row: RebuildJob) -> Dict[str, Any]:
         "old_image": row.old_image,
         "status": row.status,
         "operation_id": row.operation_id,
-        "error": row.error,
+        "error": error,
         "attached_volumes": list((row.attached_volumes or {}).keys()),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
@@ -200,12 +223,13 @@ async def _run_rebuild(job_id: str, run_provisioning: bool) -> None:
             # 1. Stop (rebuild requires the instance stopped). Force-stop covers a
             #    running or frozen guest.
             await _set_status(job_id, "stopping")
+            # stop_vm answers a Stopped instance without a request and reads the state after a
+            # refused stop, so whatever it raises is a real failure: rebuilding a guest that is
+            # still running would fail later with a less clear LXD error.
             try:
                 await lxd_service.stop_vm(name, host, force=True, project=project)
             except LXDOperationError as e:
-                # A not-running instance is fine; anything else is a real failure.
-                if "not found" in str(e).lower():
-                    raise
+                raise LXDOperationError(f"Could not stop the instance before the rebuild: {e}") from e
 
             # 2. Rebuild the root disk and wait for the accepted operation to settle.
             await _set_status(job_id, "rebuilding")
@@ -241,21 +265,83 @@ async def _run_rebuild(job_id: str, run_provisioning: bool) -> None:
         logger.error("Rebuild job %s failed: instance=%s error=%s", job_id, name, e)
 
 
+async def _project_config(lxd_service: LXDService, host: str, project: str) -> Dict[str, Any]:
+    from app.services.lxd.project_scope import list_project_configs
+
+    def project_config() -> Dict[str, Any]:
+        client = lxd_service.get_client_with_reconnect(host)
+        if client is None:
+            raise LXDConnectionError(f"Could not connect to {host}")
+        return list_project_configs(client).get(project) or {}
+
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(project_config), timeout=30)
+    except (asyncio.TimeoutError, LXDConnectionError) as exc:
+        raise HTTPException(
+            status_code=503, detail="Target project configuration could not be verified. No change was sent."
+        ) from exc
+
+
 async def _refuse_a_rebuild_in_an_unisolated_project(
-    lxd_service: LXDService, user: AuthenticatedUser, host: str, project: str, db: AsyncSession
+    lxd_service: LXDService,
+    user: AuthenticatedUser,
+    host: str,
+    project: str,
+    db: AsyncSession,
+    *,
+    tenant: bool = False,
 ) -> None:
-    """409 for a Partner's rebuild on a shared cluster in a project that does not isolate itself.
+    """409 for a rebuild on a shared cluster in a project that does not isolate itself.
 
     A rebuild takes its image from the project's store, which for a project without
     features.images is `default`'s, where another party's private images live. Instance create
     and config writes refuse it the same way.
+
+    important: a Tenant is judged here too. On a cluster bound to more than one organization (the
+    request's project bound is set, org_scope._clusters_with_several_orgs) its project must prove
+    isolation, and `default`, which every holder shares, is refused outright. The write policy
+    alone answers "no allowlist needed" for every Tenant, because Tenants may not write config at
+    all, and that would wave its rebuild through. The party rule Partners get
+    (services.cluster_parties) does not fit a Tenant: its own organization's rows carry role
+    `tenant`, which that rule does not count as the caller's side, so every cluster would read
+    as shared.
     """
     from app.services.instance_security_policy import (
         InstanceSecurityPolicyViolation,
         resolve_cluster_write_policy,
+        shared_project_findings,
         validate_target_project_isolation,
     )
-    from app.services.lxd.project_scope import list_project_configs
+
+    if tenant:
+        if visible_projects_for(host) is None:
+            return
+        if project == "default":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "shared_default_project",
+                    "message": (
+                        "Instances in the default project of a cluster shared with other organizations "
+                        "cannot be rebuilt from here. Ask your provider."
+                    ),
+                    "violations": [],
+                },
+            )
+        findings = shared_project_findings(await _project_config(lxd_service, host, project))
+        if findings:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "shared_cluster_project_not_isolated",
+                    "message": (
+                        "This project is not isolated from the other organizations on this cluster, so it "
+                        "cannot be rebuilt from here. Ask your provider."
+                    ),
+                    "violations": [{"code": f.code, "field": f.field} for f in findings],
+                },
+            )
+        return
 
     try:
         policy = await resolve_cluster_write_policy(user, host, db)
@@ -266,23 +352,62 @@ async def _refuse_a_rebuild_in_an_unisolated_project(
         raise HTTPException(status_code=503, detail="Cluster ownership could not be verified. No change was sent.") from exc
     if not policy.requires_safe_allowlist:
         return
-
-    def project_config() -> Dict[str, Any]:
-        client = lxd_service.get_client_with_reconnect(host)
-        if client is None:
-            raise LXDConnectionError(f"Could not connect to {host}")
-        return list_project_configs(client).get(project) or {}
-
     try:
-        config = await asyncio.wait_for(asyncio.to_thread(project_config), timeout=30)
-    except (asyncio.TimeoutError, LXDConnectionError) as exc:
-        raise HTTPException(
-            status_code=503, detail="Target project configuration could not be verified. No change was sent."
-        ) from exc
-    try:
-        validate_target_project_isolation(policy, config)
+        validate_target_project_isolation(policy, await _project_config(lxd_service, host, project))
     except InstanceSecurityPolicyViolation as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.as_detail()) from exc
+
+
+_FINGERPRINT = re.compile(r"[0-9a-f]{64}")
+
+
+async def _refuse_an_image_a_tenant_may_not_use(lxd_service: LXDService, body: "RebuildRequest") -> None:
+    """403 unless a Tenant rebuilds from a public catalogue or an image its own instances use.
+
+    A bare alias or fingerprint resolves in the project's store, which can hold the Partner's or,
+    through `default`, another party's private images. The tenant image list shows only images a
+    visible instance was built from (routers/images.py); the server holds the rebuild to the same set.
+    """
+    if body.mode == "empty" or body.image_server:
+        # The catalogue pull is held to the image server allowlist (_validate_image_server).
+        return
+    from app.routers.images import _allowed_image_fingerprints_by_host
+
+    fingerprint = (body.image or "").strip().lower()
+    allowed = await _allowed_image_fingerprints_by_host(lxd_service) or {}
+    if not _FINGERPRINT.fullmatch(fingerprint) or fingerprint not in {
+        str(f).lower() for f in allowed.get(body.host, set())
+    }:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "image_not_allowed",
+                "message": (
+                    "Choose an image from the list: a public catalogue image, or one an instance you "
+                    "can see was built from."
+                ),
+            },
+        )
+
+
+def _tenant_projects(host: str, project: str) -> Optional[set]:
+    """The projects whose rebuilds count against this Tenant's cap on `host`; None means every one.
+
+    The projects its rules name, within its organization's project bound. A `*` rule covers the
+    bound, or the whole cluster when there is none.
+    """
+    acl = get_tenant_acl() or {}
+    named = {rule_project for (rule_project, _instance) in (acl.get(host) or {})}
+    bound = visible_projects_for(host)
+    if bound is not None:
+        # Every holder shares `default` on a bound cluster, and a Tenant cannot rebuild there; its
+        # rebuilds would only make another organization's count against this one.
+        bound = set(bound) - {"default"}
+    if "*" in named:
+        return bound
+    if bound is not None:
+        named &= bound
+    return named or {project}
 
 
 @router.post("/{instance_name}/rebuild")
@@ -291,30 +416,65 @@ async def rebuild_instance(
     body: RebuildRequest,
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
-    user: AuthenticatedUser = Depends(require_partner()),
+    user: AuthenticatedUser = Depends(require_tenant()),
     db: AsyncSession = Depends(get_db),
 ):
-    project = _verify_instance_access(body.host, body.project, instance_name, "view")
-    await _refuse_a_rebuild_in_an_unisolated_project(lxd_service, user, body.host, project, db)
+    # A Tenant needs view, operate and rebuild on this instance, whatever the rollout flag says;
+    # Partner and Admin hold no tenant ACL and meet only the project bound here.
+    project = verify_rebuild_access(body.host, body.project, instance_name)
+    tenant = get_tenant_acl() is not None
 
-    # Destructive-action confirmation: the client must echo the instance name.
+    # Destructive-action confirmation: the client must echo the instance name. Checked before
+    # anything reaches the cluster.
     if body.confirm_name != instance_name:
         raise HTTPException(status_code=422, detail="Confirmation name does not match the instance name")
+    if tenant and body.mode == "empty":
+        # An empty root disk boots only from an install ISO, and attaching one is a Partner action
+        # (routers/console.py). A Tenant would be left with an instance it cannot start.
+        raise HTTPException(
+            status_code=422,
+            detail="An empty disk needs an install ISO, which only your provider can attach. Choose an image.",
+        )
     if body.mode in ("image", "cloud-init") and not (body.image or "").strip():
         raise HTTPException(status_code=422, detail="An image is required for this rebuild mode")
     if body.mode == "cloud-init" and not (body.cloud_init or "").strip():
         raise HTTPException(status_code=422, detail="cloud-init user-data is required for the cloud-init mode")
+    if tenant and body.mode == "cloud-init" and not check_tenant_permission(body.host, project, instance_name, "console"):
+        # User-data runs as root on first boot, which reaches everything a console would.
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "console_required",
+                "message": "Cloud-init runs as root inside the guest, so a cloud-init rebuild also needs the Console grant.",
+            },
+        )
     _validate_image_server(body.image_server, _target_engine(lxd_service, body.host))
+    if tenant:
+        await _refuse_an_image_a_tenant_may_not_use(lxd_service, body)
+    await _refuse_a_rebuild_in_an_unisolated_project(lxd_service, user, body.host, project, db, tenant=tenant)
 
+    settings = get_settings()
     try:
         # Admission is committed under the same advisory lock as migration execution. The
         # worker reacquires this guard before mutation, so a migration cannot fit between this
-        # fence read and a later stop/rebuild submission.
+        # fence read and a later stop/rebuild submission. The limits are counted under it too,
+        # so two requests cannot both pass a count and both start.
         async with guard_instance_mutation(
             cluster_id=body.host,
             project=project,
             instance_name=instance_name,
         ):
+            async with async_session_maker() as session:
+                await rebuild_admission.admit_rebuild(
+                    session,
+                    host=body.host,
+                    project=project,
+                    instance_name=instance_name,
+                    tenant=tenant,
+                    organization_projects=_tenant_projects(body.host, project) if tenant else None,
+                    per_hour=settings.tenant_rebuild_per_instance_per_hour,
+                    concurrent=settings.tenant_rebuild_concurrent_per_org,
+                )
             # Preflight: status + snapshots + config/volume snapshot. Snapshots block the
             # rebuild (LXD rejects it), so surface a clear 409 before doing anything.
             pf = await lxd_service.get_rebuild_preflight(
@@ -358,9 +518,17 @@ async def rebuild_instance(
         raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
         if "not found" in str(e).lower():
-            raise HTTPException(status_code=404, detail=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=404, detail="Instance not found" if tenant else str(e))
+        logger.warning("Rebuild of %s on %s refused at admission: %s", instance_name, body.host, e)
+        raise HTTPException(status_code=400, detail="The cluster refused the rebuild." if tenant else str(e))
 
+    # The request is on record before any change reaches the cluster; the finished job writes
+    # its own row with the result.
+    activity_logger.log_activity(
+        action="instance.rebuild.requested", target_type="instance", target_id=instance_name,
+        target_host=body.host, target_project=row.project, result="success",
+        details={"mode": body.mode, "job_id": job_id, "image": row.requested_image, "project": row.project},
+    )
     asyncio.create_task(_run_rebuild(job_id, body.run_provisioning))
     # Readers hold a cached list; without this the change is invisible until the TTL.
     get_cache_manager().invalidate_instance_cache()
@@ -382,14 +550,16 @@ async def rebuild_preflight(
     # important: normalised once, here, and the same value goes to the resolver. An empty
     # `?project=` is falsy, and the service reads a falsy project as "search every project".
     scoped_project = _verify_instance_access(host, project, instance_name, "view")
+    tenant = get_tenant_acl() is not None
     try:
         pf = await lxd_service.get_rebuild_preflight(instance_name, host, scoped_project)
     except LXDConnectionError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
         if "not found" in str(e).lower():
-            raise HTTPException(status_code=404, detail=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=404, detail="Instance not found" if tenant else str(e))
+        logger.warning("Rebuild preflight of %s on %s failed: %s", instance_name, host, e)
+        raise HTTPException(status_code=400, detail="The cluster could not be read." if tenant else str(e))
     return {
         "instance_name": instance_name,
         "host": host,
@@ -451,8 +621,7 @@ async def get_latest_rebuild_job(
 #
 # LXD's own rebuild wait is up to 1800s, so a younger row could still be a live job on another
 # worker. Only rows older than the longest a real rebuild can take are declared stranded.
-_REBUILD_STRANDED_AFTER_SECONDS = 2 * 3600
-_IN_FLIGHT_STATUSES = ("pending", "stopping", "rebuilding", "starting", "provisioning")
+_IN_FLIGHT_STATUSES = rebuild_admission.IN_FLIGHT_STATUSES
 
 
 async def recover_stranded_rebuilds() -> int:
@@ -464,7 +633,7 @@ async def recover_stranded_rebuilds() -> int:
     """
     from app.core.database import async_session_maker
 
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=_REBUILD_STRANDED_AFTER_SECONDS)
+    cutoff = datetime.now(timezone.utc) - rebuild_admission.STRANDED_AFTER
     async with async_session_maker() as db:
         rows = (
             await db.execute(
@@ -487,4 +656,11 @@ async def recover_stranded_rebuilds() -> int:
                 "Marked %d stranded rebuild job(s) failed", len(rows),
                 extra={"job_ids": [r.job_id for r in rows]},
             )
+            for row in rows:
+                activity_logger.log_activity(
+                    action="instance.rebuild", target_type="instance", target_id=row.instance_name,
+                    target_host=row.cluster_id, target_project=row.project, result="failure",
+                    error_message=row.error,
+                    details={"mode": row.mode, "job_id": row.job_id, "stranded": True, "project": row.project},
+                )
         return len(rows)
