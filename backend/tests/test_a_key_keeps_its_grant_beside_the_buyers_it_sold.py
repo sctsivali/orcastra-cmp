@@ -437,6 +437,7 @@ async def test_a_bind_on_another_worker_reaches_a_cached_unbounded_verdict(real_
     ("routers/cluster_registration.py", "register_cluster", "forget_cluster_bounds"),
     ("routers/organizations.py", "_binding_changed", "forget_cluster_bounds"),
     ("services/organization_service.py", "delete_organization", "forget_cluster_bounds"),
+    ("core/org_scope.py", "reconcile_personal_clusters", "forget_cluster_bounds"),
 ])
 def test_every_binding_create_or_removal_drops_the_bounds(module: str, function: str, call: str) -> None:
     assert call in _calls_in(_function(module, function)), f"{module}::{function}"
@@ -446,3 +447,224 @@ def test_a_deregistration_drops_the_bounds() -> None:
     source = (Path(integrations.__file__).resolve().parents[1] / "routers" / "cluster_registration.py").read_text()
     after_delete = source.split("deleted_rows = await asyncio.wait_for(_delete_binding()", 1)[1][:400]
     assert "forget_cluster_bounds(cluster_id)" in after_delete
+
+
+# ── an owner-set change, a missed stamp and the shapes this rule cannot tell apart ─────────────
+# A key that leaves a buyer's owner set loses it as a sale organization. Every owner-set change
+# publishes the stamp for the buyer's clusters once it commits, so an unbounded verdict another
+# worker cached is read again on its next request (simulated by putting this worker's stale entry
+# back after the local drop).
+
+def _admin() -> Any:
+    from app.core.auth import AuthenticatedUser
+
+    return AuthenticatedUser(user_id=f"role_admin:{ADMIN}", email=ADMIN, groups=["role_admin"])
+
+
+@pytest.fixture
+def shared_stamp(monkeypatch: pytest.MonkeyPatch) -> Dict[str, float]:
+    stamp: Dict[str, float] = {}
+
+    class _Cache:
+        def get(self, _ns: str, cluster_id: str) -> Optional[float]:
+            return stamp.get(cluster_id)
+
+        def set(self, _ns: str, cluster_id: str, value: float, ttl: Optional[int] = None) -> None:
+            stamp[cluster_id] = value
+
+        def delete_pattern(self, *_args: Any, **_kwargs: Any) -> int:
+            return 0
+
+    monkeypatch.setattr("app.core.cache.get_cache_manager", lambda: _Cache())
+    monkeypatch.setattr(integrations, "get_cache_manager", lambda: _Cache())
+    return stamp
+
+
+async def _co_owned_world(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """The base world, with buyer 2 also carried by another able key and reachable by external id."""
+    from app.services import organization_owners
+
+    monkeypatch.setattr(organization_owners, "multi_owner_enabled", lambda: True)
+    monkeypatch.setattr(integrations, "multi_owner_enabled", lambda: True)
+    db = await _world()
+    db.add(OrganizationOwnerKey(organization_id=2, api_key_id=OTHER_KEY, added_via="claim"))
+    buyer = await db.get(Organization, 2)
+    buyer.external_id = "ext-buyer-2"
+    await db.commit()
+
+    async def able(key_ids: Any, _reader: Any) -> Dict[str, bool]:
+        return {k: True for k in key_ids}
+
+    monkeypatch.setattr(integrations, "able_owners", able)
+    monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: object())
+    return db
+
+
+async def _cached_elsewhere_then(db: Any, change: Any) -> bool:
+    """Cache the key's unbounded verdict, run `change`, put the stale entry back as another worker
+    still holds it, and answer whether the key is bounded on its next request."""
+    assert await _unbounded(db)
+    stale = dict(kpb._bounds)
+    await change()
+    kpb._bounds.update(stale)
+    return kpb.is_party_bounded(await kpb.narrow_to_party_bound(dict(STAR), db=db), CLUSTER_ID)
+
+
+async def test_an_admin_removing_the_key_from_a_buyer_reaches_every_worker(real_bound, shared_stamp, monkeypatch) -> None:
+    db = await _co_owned_world(monkeypatch)
+
+    async def remove() -> None:
+        await integrations.remove_organization_owner(2, KEY, reason="buyer moved", _=None, _rbac=_admin(), db=db)
+
+    assert await _cached_elsewhere_then(db, remove) is True
+    assert CLUSTER_ID in shared_stamp
+
+
+async def test_the_key_leaving_a_buyer_itself_reaches_every_worker(real_bound, shared_stamp, monkeypatch) -> None:
+    db = await _co_owned_world(monkeypatch)
+
+    async def leave() -> None:
+        answer = await integrations.remove_own_owner_key("ext-buyer-2", api_key=dict(STAR), db=db)
+        assert answer.removed is True
+
+    assert await _cached_elsewhere_then(db, leave) is True
+
+
+async def test_an_admin_transfer_of_a_buyer_reaches_every_worker(real_bound, shared_stamp, monkeypatch) -> None:
+    db = await _co_owned_world(monkeypatch)
+    other = {"id": OTHER_KEY, "name": "other", "app_name": "orcahub", "is_active": True}
+    monkeypatch.setattr(integrations, "_read_key_metadata_blocking", lambda _client, _key: (dict(other), None))
+    monkeypatch.setattr(integrations, "owner_key_refusal", lambda _metadata, _failure: None)
+
+    async def nothing_uncovered(*_args: Any) -> List[str]:
+        return []
+
+    async def one(*_args: Any) -> int:
+        return 1
+
+    monkeypatch.setattr(integrations, "uncovered_clusters", nothing_uncovered)
+    monkeypatch.setattr(integrations, "claimed_organization_count", one)
+
+    async def transfer() -> None:
+        body = integrations.OwnerKeyTransferRequest(api_key_id=OTHER_KEY, reason="seller changed connection")
+        answer = await integrations.transfer_organization_owner(2, body, _=None, _rbac=_admin(), db=db)
+        assert answer.changed is True
+
+    assert await _cached_elsewhere_then(db, transfer) is True
+
+
+async def test_a_key_handing_off_its_buyers_reaches_every_worker(real_bound, shared_stamp, monkeypatch) -> None:
+    """Revoke, delete and a withdrawn sync capability hand the key's organizations on through one commit."""
+    db = await _co_owned_world(monkeypatch)
+    from app.services.organization_owners import remove_owner
+
+    async def hand_off() -> None:
+        buyer = await db.get(Organization, 2)
+        await remove_owner(db, buyer, KEY, able=lambda _key: True)
+        await integrations._write_key_then_commit(db, KEY, [(buyer, [KEY, OTHER_KEY], KEY, OTHER_KEY)], lambda: None)
+
+    assert await _cached_elsewhere_then(db, hand_off) is True
+
+
+async def test_an_add_on_carry_publishes_for_every_carried_organization(real_bound, shared_stamp, monkeypatch) -> None:
+    from app.services.integration_key_ownership import carry_owned_organizations
+
+    db = await _world()
+
+    async def carry() -> None:
+        carried = await carry_owned_organizations(db, from_key_id=KEY, to_key_id="oak_addon_new")
+        await db.commit()
+        await kpb.forget_organization_bounds(db, [org_id for org_id, _slug, _ext in carried])
+
+    assert await _cached_elsewhere_then(db, carry) is True
+    rotate = _function("services/extension_install.py", "rotate_credential")
+    source = ast.unparse(rotate)
+    assert source.index("await db.commit()") < source.index("forget_organization_bounds(")
+
+
+async def test_an_unreadable_binding_list_drops_this_workers_verdicts(real_bound) -> None:
+    class _Broken:
+        async def execute(self, *_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("database gone")
+
+    db = await _world()
+    await kpb._bound(STAR, CLUSTER_ID, db)
+    await kdv._held_by_another_party(db, SELLER, CLUSTER_ID, KEY)
+    await kpb.forget_organization_bounds(_Broken(), [2])
+    assert kpb._bounds == {} and kdv._held == {}
+
+
+@pytest.mark.parametrize("function", [
+    "transfer_organization_owner", "remove_organization_owner", "remove_own_owner_key", "_write_key_then_commit",
+])
+def test_every_owner_set_change_publishes_after_its_commit(function: str) -> None:
+    source = ast.unparse(_function("routers/integrations.py", function))
+    assert "forget_organization_bounds(" in source, function
+    assert source.rindex("await db.commit()") < source.index("forget_organization_bounds("), function
+
+
+class _UnreadableStamp:
+    def get(self, *_args: Any) -> Any:
+        raise RuntimeError("cache store gone")
+
+    def set(self, *_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("cache store gone")
+
+
+async def test_an_unreadable_stamp_re_reads_a_cached_unbounded_verdict(real_bound, monkeypatch) -> None:
+    db = await _world()
+    assert await _unbounded(db)
+    assert await kdv._held_by_another_party(db, SELLER, CLUSTER_ID, KEY) is False
+    # Another worker bound another party's buyer; this worker can neither hear it nor read the stamp.
+    db.add(_org(4, key_id=OTHER_KEY))
+    await db.commit()
+    db.add(_sale(4))
+    await db.commit()
+    monkeypatch.setattr("app.core.cache.get_cache_manager", lambda: _UnreadableStamp())
+    assert kpb.is_party_bounded(await kpb.narrow_to_party_bound(dict(STAR), db=db), CLUSTER_ID)
+    assert await kdv._held_by_another_party(db, SELLER, CLUSTER_ID, KEY) is True
+
+
+async def test_an_unreadable_stamp_serves_a_cached_held_verdict(real_bound, monkeypatch) -> None:
+    db = await _world(extra=[_org(4, key_id=OTHER_KEY), _sale(4)])
+    reads: List[str] = []
+    real_read = kpb._read_bound
+
+    async def counted(*args: Any) -> Any:
+        reads.append("read")
+        return await real_read(*args)
+
+    monkeypatch.setattr(kpb, "_read_bound", counted)
+    await kpb._bound(STAR, CLUSTER_ID, db)
+    monkeypatch.setattr("app.core.cache.get_cache_manager", lambda: _UnreadableStamp())
+    assert (await kpb._bound(STAR, CLUSTER_ID, db))[1] == BOUND
+    assert reads == ["read"], "the narrow verdict is served on"
+    assert kpb._changed_since(CLUSTER_ID, 0.0) is False
+    assert kpb._changed_since(CLUSTER_ID, 0.0, unreadable_is_change=True) is True
+
+
+async def test_a_pre_047_admin_bind_of_a_key_owned_organization_reads_as_a_sale(real_bound) -> None:
+    """Documents current behaviour. Before migration 047 an Administrator's bind of an OrcaHub
+    organization wrote neither a registrant nor a grantor, the shape a sale has; such a row on an
+    organization this key owns counts as the key's sale (core/sale_term.py reads it as one too)."""
+    db = await _world(extra=[_org(4), OrganizationCluster(organization_id=4, cluster_id=CLUSTER_ID)])
+    assert 4 in await cluster_parties.key_sale_orgs(db, KEY, {CLUSTER_ID})
+    assert await _unbounded(db)
+
+
+async def test_a_creator_with_no_reach_where_only_the_keys_buyers_hold_the_cluster(real_bound) -> None:
+    """Documents current behaviour. No organization of the creator holds the cluster (the home's
+    binding is gone) and nothing outside the key's own buyers does: the key is unbounded there. A
+    Partner can mint a grant only on a cluster it reaches (api_key_grant_bound), so this is a key
+    minted while the creator still did, or by an Administrator."""
+    stranger = "stranger@example.test"
+    db = sqlite_session(Organization, OrganizationMember, OrganizationCluster, OrganizationOwnerKey)
+    db.add_all([_org(2), _org(3)])
+    await db.commit()
+    db.add_all([_sale(2), _sale(3)])
+    await db.commit()
+    from app.core.sale_term import reaches_only_by_purchase
+
+    assert await reaches_only_by_purchase(db, stranger, CLUSTER_ID) is False
+    assert await cluster_parties.key_held_by_another_party(db, stranger, KEY, CLUSTER_ID) is False
+    assert await _unbounded(db, {**STAR, "created_by": stranger})

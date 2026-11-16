@@ -20,7 +20,7 @@ import asyncio
 import logging
 import threading
 import time
-from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -50,14 +50,20 @@ _lock = threading.Lock()
 _bounds: Dict[Tuple[str, str, str], Tuple[float, float, Optional[FrozenSet[str]]]] = {}
 
 
-def _changed_since(cluster_id: str, wall: float) -> bool:
-    """Whether a worker recorded a project create or delete on `cluster_id` after `wall`."""
+def _changed_since(cluster_id: str, wall: float, *, unreadable_is_change: bool = False) -> bool:
+    """Whether a worker recorded a change on `cluster_id` after `wall`: a project created or
+    deleted, a binding created or removed, or an owner set changed (forget_cluster_bounds).
+
+    `unreadable_is_change`: for a cached unbounded verdict, a stamp that cannot be read sends the
+    caller back to the database (fail closed), since the change it missed may be the one that bounds
+    the key. A held verdict is already the narrow one and is served on.
+    """
     try:
         from app.core.cache import get_cache_manager
 
         stamp = get_cache_manager().get(_CHANGED_NS, cluster_id)
     except Exception:  # noqa: BLE001 - a cache hiccup must never break authentication
-        return False
+        return unreadable_is_change
     try:
         return stamp is not None and float(stamp) >= wall
     except (TypeError, ValueError):
@@ -101,10 +107,12 @@ async def _bound(api_key: Mapping[str, Any], cluster_id: str, db: Any) -> Tuple[
     with _lock:
         cached = _bounds.get(cache_key)
     # important: every cached verdict is checked against the shared stamp, an unbounded one too. A
-    # binding created or removed on another worker (forget_cluster_bounds) can make the cluster
+    # binding or owner-set change on another worker (forget_cluster_bounds) can make the cluster
     # another party's, and an unbounded `*` key must not outlive that by the window. One shared
-    # cache read per granted cluster per request.
-    if cached is not None and now - cached[0] < BOUND_SECONDS and not _changed_since(cluster_id, cached[1]):
+    # cache read per granted cluster per request; an unreadable one re-reads an unbounded verdict.
+    if cached is not None and now - cached[0] < BOUND_SECONDS and not _changed_since(
+        cluster_id, cached[1], unreadable_is_change=cached[2] is None
+    ):
         return creator, cached[2]
     wall = time.time()
     bound = await _read_bound(db, creator, cluster_id, key_id)
@@ -371,6 +379,37 @@ def forget_cluster_bounds(cluster_id: str) -> None:
     _publish_change(cluster_id)
 
 
+async def forget_organization_bounds(db: Any, organization_ids: Iterable[int]) -> None:
+    """forget_cluster_bounds for every cluster these organizations are bound to.
+
+    Called once an owner-set change commits: a key that leaves an organization's owner set, or stops
+    being its primary while owner sets are off, loses it as a sale organization
+    (cluster_parties.key_sale_orgs), so its cached unbounded verdict must not outlive the change.
+    Never raises: the change stands. When the bindings cannot be read, this worker drops every
+    verdict and the others expire within BOUND_SECONDS.
+    """
+    from sqlalchemy import select
+
+    from app.models.db_models import OrganizationCluster
+
+    wanted = sorted({org_id for org_id in organization_ids if org_id is not None})
+    if not wanted:
+        return
+    try:
+        clusters = set((await db.execute(
+            select(OrganizationCluster.cluster_id).where(OrganizationCluster.organization_id.in_(wanted))
+        )).scalars().all())
+    except Exception as exc:  # noqa: BLE001 - the owner change is committed; never fail its answer
+        logger.warning("Could not read the clusters of organizations %s to drop key bounds: %s", wanted, type(exc).__name__)
+        from app.services.key_default_view_only import forget_key_default_verdicts
+
+        forget_party_bounds()
+        forget_key_default_verdicts()
+        return
+    for cluster_id in sorted(clusters):
+        forget_cluster_bounds(cluster_id)
+
+
 def forget_creator_bound_of(api_key: Mapping[str, Any], cluster_id: str) -> None:
     """After a key deleted a project on `cluster_id`."""
     forget_cluster_bounds(cluster_id)
@@ -418,6 +457,6 @@ def _shared_policy(cluster_id: str):
 
 
 def forget_party_bounds() -> None:
-    """Tests only: drop every cached bound."""
+    """Drop every cached bound on this worker (tests, and forget_organization_bounds' fallback)."""
     with _lock:
         _bounds.clear()

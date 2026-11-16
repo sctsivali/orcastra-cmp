@@ -78,7 +78,10 @@ async def _held_by_another_party(db: Any, creator: str, cluster_id: str, key_id:
     now = time.monotonic()
     with _lock:
         cached = _held.get(cache_key)
-    if cached is not None and now - cached[0] < PARTY_SECONDS and not _changed_since(cluster_id, cached[1]):
+    # A cached "not held" verdict is re-read when the stamp cannot be read (fail closed).
+    if cached is not None and now - cached[0] < PARTY_SECONDS and not _changed_since(
+        cluster_id, cached[1], unreadable_is_change=not cached[2]
+    ):
         return cached[2]
     wall = time.time()
     teammates = await member_orgs(db, creator)
@@ -163,6 +166,6 @@ def forget_cluster_verdicts(cluster_id: str) -> None:
 
 
 def forget_key_default_verdicts() -> None:
-    """Tests only: drop every cached party verdict."""
+    """Drop every cached party verdict on this worker (tests, and key_party_bound's fallback)."""
     with _lock:
         _held.clear()

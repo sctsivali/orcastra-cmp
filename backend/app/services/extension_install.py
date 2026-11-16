@@ -585,6 +585,11 @@ async def rotate_credential(
             carried = await carry_owned_organizations(db, from_key_id=old_key_id, to_key_id=new_key_id)
             await db.commit()
     await db.refresh(install)
+    if carried:
+        from app.services.key_party_bound import forget_organization_bounds
+
+        # The outgoing credential left these owner sets (services/key_party_bound.py).
+        await forget_organization_bounds(db, [org_id for org_id, _slug, _external_id in carried])
     evict_install_cache(old_key_id)
     record_carried_organizations(
         carried, from_key_id=old_key_id, to_key_id=new_key_id, trigger="extension.install.credential.rotate"

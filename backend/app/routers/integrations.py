@@ -85,6 +85,7 @@ from app.services.key_paid_term import (
 )
 from app.services.key_party_bound import (
     forget_creator_bound_of,
+    forget_organization_bounds,
     is_party_bounded,
     narrow_to_party_bound,
     project_change_refusal,
@@ -2849,6 +2850,7 @@ async def _write_key_then_commit(
         evict_api_key_cache(key_id)
     if not handed_off:
         return
+    handed_off_orgs = [org.id for org, *_rest in handed_off]
     try:
         await db.commit()
     except Exception as exc:  # noqa: BLE001 - Vault is written; the text names the database
@@ -2858,6 +2860,9 @@ async def _write_key_then_commit(
         except Exception:  # noqa: BLE001 - the answer below is the same either way
             pass
         raise HTTPException(status_code=503, detail=OWNER_SETS_NOT_SAVED) from None
+    # A key whose capability was withdrawn stays usable but may no longer own (be the primary of)
+    # these organizations, so its sale organizations shrink (services/key_party_bound.py).
+    await forget_organization_bounds(db, handed_off_orgs)
 
 
 async def _with_ownership(db: AsyncSession, user: AuthenticatedUser, keys: List[APIKeyInfo]) -> List[APIKeyInfo]:
@@ -6938,6 +6943,9 @@ async def transfer_organization_owner(
             # The co-owners only; the previous primary is reported as previous_api_key_id.
             removed = [key for key in owners_before if key not in (target, previous)]
             await db.commit()
+    if changed:
+        # The keys that left are no longer this organization's sellers (services/key_party_bound.py).
+        await forget_organization_bounds(db, [org.id])
 
     uncovered = await uncovered_clusters(db, org.id, metadata)
     claimed = await claimed_organization_count(db, target)
@@ -7172,6 +7180,8 @@ async def remove_organization_owner(
             raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL) from None
         await db.commit()
         after = await owner_key_ids(db, org.id)
+    # The removed key is no longer this organization's seller (services/key_party_bound.py).
+    await forget_organization_bounds(db, [org.id])
     get_cache_manager().delete_pattern("api_responses", "integrations:api_keys:list*")
     _evict_owner_keys(key_id, org.api_key_id)
     record_owner_change(REMOVE_ACTION, org, before=before, after=after, primary_before=primary_before,
@@ -7494,6 +7504,8 @@ async def remove_own_owner_key(
                 raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL) from None
             await db.commit()
             after = await owner_key_ids(db, org.id)
+    # The key that left is no longer this organization's seller (services/key_party_bound.py).
+    await forget_organization_bounds(db, [org.id])
     get_cache_manager().delete_pattern("api_responses", "integrations:api_keys:list*")
     evict_api_key_cache(key_id)
     record_owner_change(REMOVE_ACTION, org, before=before, after=after, primary_before=primary_before,

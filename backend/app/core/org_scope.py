@@ -1174,6 +1174,8 @@ async def reconcile_personal_clusters(
     )
     if not rows:
         return 0
+    # Read before the commit below expires the rows (and drops the deleted ones).
+    touched = sorted({row.cluster_id for row in rows})
 
     rebound = 0
     for row in rows:
@@ -1205,6 +1207,12 @@ async def reconcile_personal_clusters(
             # PostgreSQL the transaction advisory lock remains held through commit below.
             await db.flush()
     await db.commit()
+    from app.services.key_party_bound import forget_cluster_bounds
+
+    # Each row moved to an organization or was dropped, which moves who holds the cluster for every
+    # key's cached bound (services/key_party_bound.py).
+    for cluster_id in touched:
+        forget_cluster_bounds(cluster_id)
     if rebound:
         logger.info(
             f"Reconciled {rebound} unbound cluster(s) to org {primary} for {user_email}"
