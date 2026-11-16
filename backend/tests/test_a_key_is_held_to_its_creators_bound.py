@@ -374,6 +374,9 @@ async def test_a_bound_change_on_another_worker_is_seen_on_the_next_request(monk
         def get(self, ns, key):
             return stamp.get(key)
 
+        def get_entry(self, ns, key):
+            return stamp.get(key), True
+
         def set(self, ns, key, value, ttl=None):
             stamp[key] = value
 

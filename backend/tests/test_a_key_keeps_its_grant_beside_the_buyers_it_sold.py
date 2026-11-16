@@ -416,6 +416,9 @@ async def test_a_bind_on_another_worker_reaches_a_cached_unbounded_verdict(real_
         def get(self, _ns: str, cluster_id: str) -> Optional[float]:
             return stamp.get(cluster_id)
 
+        def get_entry(self, _ns: str, cluster_id: str) -> Any:
+            return stamp.get(cluster_id), True
+
         def set(self, _ns: str, cluster_id: str, value: float, ttl: Optional[int] = None) -> None:
             stamp[cluster_id] = value
 
@@ -468,6 +471,9 @@ def shared_stamp(monkeypatch: pytest.MonkeyPatch) -> Dict[str, float]:
     class _Cache:
         def get(self, _ns: str, cluster_id: str) -> Optional[float]:
             return stamp.get(cluster_id)
+
+        def get_entry(self, _ns: str, cluster_id: str) -> Any:
+            return stamp.get(cluster_id), True
 
         def set(self, _ns: str, cluster_id: str, value: float, ttl: Optional[int] = None) -> None:
             stamp[cluster_id] = value
@@ -605,6 +611,9 @@ def test_every_owner_set_change_publishes_after_its_commit(function: str) -> Non
 
 class _UnreadableStamp:
     def get(self, *_args: Any) -> Any:
+        raise RuntimeError("cache store gone")
+
+    def get_entry(self, *_args: Any) -> Any:
         raise RuntimeError("cache store gone")
 
     def set(self, *_args: Any, **_kwargs: Any) -> None:

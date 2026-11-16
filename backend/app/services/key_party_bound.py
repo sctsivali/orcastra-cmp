@@ -61,13 +61,16 @@ def _changed_since(cluster_id: str, wall: float, *, unreadable_is_change: bool =
     try:
         from app.core.cache import get_cache_manager
 
-        stamp = get_cache_manager().get(_CHANGED_NS, cluster_id)
+        stamp, authoritative = get_cache_manager().get_entry(_CHANGED_NS, cluster_id)
     except Exception:  # noqa: BLE001 - a cache hiccup must never break authentication
         return unreadable_is_change
     try:
-        return stamp is not None and float(stamp) >= wall
+        changed = stamp is not None and float(stamp) >= wall
     except (TypeError, ValueError):
         return True
+    # important: while a configured Redis fails, the answer comes from this worker's memory, which
+    # another worker's change never reached. It proves a change this worker made, never its absence.
+    return changed or (not authoritative and unreadable_is_change)
 
 
 def _publish_change(cluster_id: str) -> None:
