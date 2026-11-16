@@ -117,14 +117,22 @@ async def test_the_party_is_read_through_the_shared_rule_and_cached(monkeypatch)
     kdv.forget_key_default_verdicts()
     calls: List[Any] = []
 
-    async def shared(_db, email, cluster_ids):
-        calls.append((email, set(cluster_ids)))
-        return {CLUSTER_ID}
+    async def teammates(_db, email):
+        return {11}
 
-    monkeypatch.setattr(cluster_parties, "default_view_only_clusters", shared)
-    assert await kdv._held_by_another_party(object(), "P@Example.test", CLUSTER_ID) is True
-    assert await kdv._held_by_another_party(object(), "p@example.test", CLUSTER_ID) is True
-    assert calls == [("P@Example.test", {CLUSTER_ID})], "one read per creator and cluster in the window"
+    async def shared(_db, email, key_id, cluster_id, also_runs=()):
+        calls.append((email, key_id, cluster_id, set(also_runs)))
+        return True
+
+    # The key's own party rule (cluster_parties.key_held_by_another_party), with the creator's
+    # teammate member rows on its side as the browser rule counts them.
+    monkeypatch.setattr(cluster_parties, "member_orgs", teammates)
+    monkeypatch.setattr(cluster_parties, "key_held_by_another_party", shared)
+    assert await kdv._held_by_another_party(object(), "P@Example.test", CLUSTER_ID, "oak_k") is True
+    assert await kdv._held_by_another_party(object(), "p@example.test", CLUSTER_ID, "oak_k") is True
+    assert calls == [("P@Example.test", "oak_k", CLUSTER_ID, {11})], "one read per creator, key and cluster in the window"
+    assert await kdv._held_by_another_party(object(), "p@example.test", CLUSTER_ID, "oak_other") is True
+    assert len(calls) == 2, "another key of the same creator is read on its own"
 
 
 # ── every door ─────────────────────────────────────────────────────────────────────────────────

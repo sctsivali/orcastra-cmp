@@ -15,6 +15,11 @@ organization only through an owner row that lends a party (organization_owners.P
 so an enrolled or Administrator-added co-owner key never widens who manages, revokes or rotates a
 key.
 
+A key itself also counts the synced organizations it sold onto a cluster (key_sale_orgs), for the
+rules that judge that key alone (key_held_by_another_party): its bound, its view-only `default` and
+whether its purchase skips the whole-cluster audit. Who manages a key and the browser keep the
+party above.
+
 Known limits, narrowing except the last: a teammate of a partner whose home is local does not run
 the buyers its key provisioned; a synced buyer under a key no run organization carries is another
 party's; a rotation to a new key leaves organizations on the old one (rotate the secret in place);
@@ -23,7 +28,7 @@ is created_by on every buyer it provisioned, so a minter who left the team still
 """
 
 from datetime import datetime
-from typing import Dict, FrozenSet, Iterable, Optional, Set
+from typing import Any, Dict, FrozenSet, Iterable, Mapping, Optional, Set
 
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -213,8 +218,10 @@ async def member_orgs(db: AsyncSession, email: str) -> Set[int]:
 async def default_view_only_clusters(db: AsyncSession, email: str, cluster_ids: Iterable[str]) -> Set[str]:
     """The clusters among `cluster_ids` where `default` is view only for this user's side.
 
-    The one rule the browser (org_scope._default_view_only), API keys and snapshot schedules read:
-    another party holds the cluster, counting the user's teammate member rows as its own side.
+    The rule the browser (org_scope._default_view_only) and snapshot schedules read: another party
+    holds the cluster, counting the user's teammate member rows as its own side. A key reads
+    key_held_by_another_party with the same teammates (key_default_view_only), so the buyers that
+    key sold onto the cluster count on its side too.
     """
     wanted = set(cluster_ids)
     if not wanted:
@@ -222,6 +229,82 @@ async def default_view_only_clusters(db: AsyncSession, email: str, cluster_ids: 
     teammates = await member_orgs(db, email)
     held = await clusters_held_by_another_party(db, email, wanted, also_runs=teammates)
     return held & wanted
+
+
+def party_key_id(api_key: Mapping[str, Any]) -> str:
+    """The id whose sale organizations join a key's party (key_sale_orgs): "" for an add-on
+    credential, which a third party holds and whose bound is judged by its installer alone."""
+    from app.services.add_on_credential_edits import is_add_on_credential
+
+    if is_add_on_credential(api_key):
+        return ""
+    return str(api_key.get("id") or "")
+
+
+async def key_sale_orgs(db: AsyncSession, api_key_id: Optional[str], cluster_ids: Iterable[str]) -> Set[int]:
+    """The synced organizations this key sold onto one of these clusters, which join its party there.
+
+    An active OrcaHub organization counts when the key owns it through an owner row that lends a
+    party (organization_owners.PARTY_ADDED_VIA; with owner sets off it must also be the primary,
+    as organization_owners.owned_by_clause has it) and it holds the cluster by a binding
+    provisioning made (no registrant and no grantor, core/sale_term.py). A buyer the sync created
+    (created_by "system") otherwise joins the seller's party only through home_partner_keys,
+    which fails closed, so the key that sold to it read it as another party's.
+
+    important: pass the id from party_key_id, never an add-on credential's. Callers judge one
+    cluster per call: an organization counts only on the cluster it holds by sale. An enrolled or
+    Administrator-added owner row, a registered or granted binding, a local organization and an
+    inactive one never count, so another key's buyer, an unbound registration and anything an
+    Administrator bound still make the cluster another party's.
+    """
+    from app.models.db_models import Organization, OrganizationCluster, OrganizationOwnerKey
+    from app.services.organization_owners import lends_party, owned_by_clause
+
+    wanted = sorted(set(cluster_ids))
+    if not api_key_id or not wanted:
+        return set()
+    rows = (await db.execute(
+        select(Organization.id)
+        .join(OrganizationCluster, OrganizationCluster.organization_id == Organization.id)
+        .where(
+            Organization.is_active == True,  # noqa: E712 - SQLAlchemy column comparison
+            Organization.source == "orcahub",
+            OrganizationCluster.cluster_id.in_(wanted),
+            OrganizationCluster.registered_by.is_(None),
+            OrganizationCluster.granted_by.is_(None),
+            owned_by_clause([api_key_id]),
+            exists().where(
+                OrganizationOwnerKey.organization_id == Organization.id,
+                OrganizationOwnerKey.api_key_id == api_key_id,
+                lends_party(),
+            ),
+        )
+        .distinct()
+    )).scalars().all()
+    return set(rows)
+
+
+async def key_held_by_another_party(
+    db: AsyncSession, creator: str, api_key_id: Optional[str], cluster_id: str, *, also_runs: Iterable[int] = (),
+) -> bool:
+    """Whether a key acting for `creator` is judged as on a cluster another party holds.
+
+    The one rule a key's bound (key_party_bound), its view-only `default` (key_default_view_only)
+    and the provisioning share audit (integrations._held_outside_the_key_party) read: some holder
+    is outside the creator's party once the key's own sale organizations (key_sale_orgs) join it,
+    or the creator reaches the cluster only through a purchase (sale_term.reaches_only_by_purchase),
+    which keeps a buyer founder's key held whatever the key owns. `also_runs` adds organizations
+    for one rule only (the view-only rule's teammates). A key with no known creator has no party,
+    so its sale organizations do not count for it.
+    """
+    from app.core.sale_term import reaches_only_by_purchase
+
+    side = set(also_runs)
+    if (creator or "").strip():
+        side |= await key_sale_orgs(db, api_key_id, {cluster_id})
+    if cluster_id in await clusters_held_by_another_party(db, creator, {cluster_id}, also_runs=side):
+        return True
+    return await reaches_only_by_purchase(db, creator, cluster_id)
 
 
 async def clusters_held_by_another_party(

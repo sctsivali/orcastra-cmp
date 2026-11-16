@@ -40,7 +40,7 @@ def held(monkeypatch):
     async def is_admin(_email, *, roles=None):
         return state["admin"]
 
-    async def fresh(_db, _creator, _cluster_id):
+    async def fresh(_db, _creator, _cluster_id, _key_id):
         return state.get("fresh", state["bound"])
 
     monkeypatch.setattr(kpb, "_bound", bound)
@@ -103,16 +103,17 @@ async def test_the_bound_is_read_once_per_creator_and_cluster(monkeypatch) -> No
     kpb.forget_party_bounds()
     reads: List[str] = []
 
-    async def held_elsewhere(_db, email, cluster_ids):
+    async def held_elsewhere(_db, email, key_id, cluster_id, also_runs=()):
         reads.append(email)
-        return set(cluster_ids)
+        assert key_id == "oak_test", "the key's own id is judged with its creator"
+        return True
 
     async def own(_db, email, cluster_ids):
         return {c: set(BOUND) for c in cluster_ids}
 
-    monkeypatch.setattr(cluster_parties, "clusters_held_by_another_party", held_elsewhere)
+    monkeypatch.setattr(cluster_parties, "key_held_by_another_party", held_elsewhere)
     monkeypatch.setattr(org_scope, "partner_projects_on", own)
-    first = await REAL_READ(object(), "p@example.test", CLUSTER_ID)
+    first = await REAL_READ(object(), "p@example.test", CLUSTER_ID, "oak_test")
     assert first == BOUND
     monkeypatch.setattr(kpb, "_creator", lambda api_key, db: _async(str(api_key.get("created_by"))))
     monkeypatch.setattr(kpb, "_bound", REAL_BOUND)
@@ -363,7 +364,7 @@ async def test_a_bound_change_on_another_worker_is_seen_on_the_next_request(monk
     kpb.forget_party_bounds()
     reads: List[int] = []
 
-    async def read(_db, _creator, _cluster):
+    async def read(_db, _creator, _cluster, _key_id):
         reads.append(1)
         return BOUND
 

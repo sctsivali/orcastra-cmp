@@ -8,6 +8,10 @@ from Authentik.
 
 An add-on's key is judged by the person who installed it. Rotating the key rewrites `created_by`
 to whoever rotated it, so the installation row is the stable record.
+
+The party is the one a key's bound reads (cluster_parties.key_held_by_another_party: the buyers the
+key itself sold onto the cluster join it, a creator who reaches the cluster only by a purchase stays
+held), plus the creator's teammate member rows, as the browser rule counts them.
 """
 
 from __future__ import annotations
@@ -38,7 +42,8 @@ CREATOR_ROLE_UNAVAILABLE = {
 }
 
 _lock = threading.Lock()
-_held: Dict[Tuple[str, str], Tuple[float, bool]] = {}
+# (creator, cluster, party key id) -> (read at, wall clock then, held)
+_held: Dict[Tuple[str, str, str], Tuple[float, float, bool]] = {}
 
 
 class CreatorRoleUnavailable(Exception):
@@ -61,22 +66,31 @@ async def _creator(api_key: Mapping[str, Any], db: Any) -> str:
     return str(api_key.get("created_by") or "")
 
 
-async def _held_by_another_party(db: Any, creator: str, cluster_id: str) -> bool:
-    from app.services.cluster_parties import default_view_only_clusters
+async def _held_by_another_party(db: Any, creator: str, cluster_id: str, key_id: str) -> bool:
+    """`key_id` is cluster_parties.party_key_id: "" for an add-on credential."""
+    from app.services.cluster_parties import key_held_by_another_party, member_orgs
+    # important: the same shared stamp as the key's bound, published wherever a binding or project
+    # on the cluster changes (key_party_bound.forget_cluster_bounds), so a "not held" verdict does
+    # not outlive a foreign bind on another worker. Imported here: key_party_bound imports this.
+    from app.services.key_party_bound import _changed_since
 
-    cache_key = (creator.strip().lower(), cluster_id)
+    cache_key = (creator.strip().lower(), cluster_id, key_id)
     now = time.monotonic()
     with _lock:
         cached = _held.get(cache_key)
-    if cached is not None and now - cached[0] < PARTY_SECONDS:
-        return cached[1]
-    held = cluster_id in await default_view_only_clusters(db, creator, {cluster_id})
+    if cached is not None and now - cached[0] < PARTY_SECONDS and not _changed_since(cluster_id, cached[1]):
+        return cached[2]
+    wall = time.time()
+    teammates = await member_orgs(db, creator)
+    held = await key_held_by_another_party(db, creator, key_id, cluster_id, also_runs=teammates)
     with _lock:
-        _held[cache_key] = (now, held)
+        _held[cache_key] = (now, wall, held)
     return held
 
 
 async def _judge(api_key: Mapping[str, Any], cluster_id: str, db: Any) -> Tuple[str, bool]:
+    from app.services.cluster_parties import party_key_id
+
     if db is None:
         # Opened only here, so a key route that never touches `default` costs no session.
         from app.core.database import async_session_maker
@@ -84,7 +98,7 @@ async def _judge(api_key: Mapping[str, Any], cluster_id: str, db: Any) -> Tuple[
         async with async_session_maker() as session:
             return await _judge(api_key, cluster_id, session)
     creator = await _creator(api_key, db)
-    return creator, await _held_by_another_party(db, creator, cluster_id)
+    return creator, await _held_by_another_party(db, creator, cluster_id, party_key_id(api_key))
 
 
 async def refuse_key_default_operation(
@@ -139,6 +153,13 @@ async def refuse_key_default_operation(
             status_code=503, detail=dict(CREATOR_ROLE_UNAVAILABLE), headers={"Retry-After": "30"}
         ) from CreatorRoleUnavailable()
     raise HTTPException(status_code=403, detail=DEFAULT_VIEW_ONLY_KEY_DETAIL.format(cluster=cluster_id))
+
+
+def forget_cluster_verdicts(cluster_id: str) -> None:
+    """Drop this worker's cached verdicts on one cluster (key_party_bound.forget_cluster_bounds)."""
+    with _lock:
+        for cache_key in [k for k in _held if k[1] == cluster_id]:
+            _held.pop(cache_key, None)
 
 
 def forget_key_default_verdicts() -> None:

@@ -160,11 +160,18 @@ class OrganizationService:
 
     async def delete_organization(self, org_id: int) -> bool:
         """Delete organization (cascades members + cluster bindings)."""
+        from app.services.key_party_bound import forget_cluster_bounds
+
         org = await self.get_organization(org_id)
         if not org:
             return False
+        bound_clusters = sorted({binding.cluster_id for binding in org.clusters})
         await self.db.delete(org)
         await self.db.commit()
+        # Its bindings went with it, which moves who holds those clusters for every key's cached
+        # bound (services/key_party_bound.py).
+        for cluster_id in bound_clusters:
+            forget_cluster_bounds(cluster_id)
         return True
 
     # ------------------------------------------------------------------

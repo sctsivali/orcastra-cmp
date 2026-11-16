@@ -8005,16 +8005,22 @@ def _iso(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat() if value is not None else None
 
 
-async def _held_outside_the_key_party(db: AsyncSession, cluster_id: str, key_minter: Optional[str]) -> bool:
+async def _held_outside_the_key_party(
+    db: AsyncSession, cluster_id: str, key_minter: Optional[str], api_key_id: Optional[str] = None,
+) -> bool:
     """Whether some holder of the cluster is outside the party of the provisioning key's minter.
 
-    A key with no known minter has no party, so every holder counts as outside it.
+    The rule the key's bound reads (cluster_parties.key_held_by_another_party): the buyers this key
+    already sold onto the cluster join the minter's party, so a second purchase after a synced first
+    buyer is inside it, and a minter who reaches the cluster only by a purchase is outside. A key
+    with no known minter has no party, so every holder counts as outside it. `api_key_id` is
+    cluster_parties.party_key_id ("" for an add-on credential).
     """
-    from app.services.cluster_parties import clusters_held_by_another_party
+    from app.services.cluster_parties import key_held_by_another_party
 
     if not (key_minter or "").strip():
         return True
-    return cluster_id in await clusters_held_by_another_party(db, key_minter, {cluster_id})
+    return await key_held_by_another_party(db, key_minter, api_key_id or "", cluster_id)
 
 
 async def _org_carries_the_key(db: AsyncSession, org_id: int, api_key_id: Optional[str]) -> bool:
@@ -8040,11 +8046,13 @@ async def _ensure_provision_cluster_mapping(
     key_minter: Optional[str],
     project_name: Optional[str] = None,
     carries_the_key: bool = False,
+    api_key_id: Optional[str] = None,
 ) -> bool:
     """Add the provisioning binding under the shared ownership/configuration lock.
 
     `carries_the_key`: the provisioning key is in the organization's owner set (never an add-on
-    credential), which is what makes the organization part of that key's party.
+    credential), which is what makes the organization part of that key's party. `api_key_id`: that
+    key (cluster_parties.party_key_id), whose earlier sales on the cluster join its party.
     """
 
     from app.models.db_models import OrganizationCluster
@@ -8073,7 +8081,7 @@ async def _ensure_provision_cluster_mapping(
         inside_the_party = (
             carries_the_key
             and bool((project_name or "").strip())
-            and not await _held_outside_the_key_party(db, cluster_id, key_minter)
+            and not await _held_outside_the_key_party(db, cluster_id, key_minter, api_key_id)
         )
         if inside_the_party:
             await assert_purchase_reach_safe(cluster_id, project_name)
@@ -8092,6 +8100,17 @@ async def _ensure_provision_cluster_mapping(
         )
         await db.flush()
         return True
+
+
+def _provision_binding_changed(cluster_id: str) -> None:
+    """A new holder moves every key's bound on the cluster: drop the cached verdicts here and on
+    every worker once the binding is committed (key_party_bound.forget_cluster_bounds)."""
+    from app.services.key_party_bound import forget_cluster_bounds
+
+    try:
+        forget_cluster_bounds(cluster_id)
+    except Exception as exc:  # noqa: BLE001 - the purchase stands; the verdicts expire in 30 s
+        logger.warning("Could not drop the key bounds on %s after a provision: %s", cluster_id, type(exc).__name__)
 
 
 @external_router.post(
@@ -8299,6 +8318,7 @@ async def provision_tenant_access(
             key_minter=api_key.get("created_by"),
             project_name=body.project_name,
             carries_the_key=(not is_add_on_credential(api_key)) and await _org_carries_the_key(db, org.id, api_key_id),
+            api_key_id=cluster_parties.party_key_id(api_key),
         )
     except SharedClusterGuardError as exc:
         await db.rollback()
@@ -8456,6 +8476,8 @@ async def provision_tenant_access(
         assignments_created += 1
 
     await db.commit()
+    if cluster_mapped:
+        _provision_binding_changed(body.cluster_id)
 
     # Invalidate caches so tenants see access immediately.
     try:

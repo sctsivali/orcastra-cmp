@@ -54,6 +54,7 @@ from app.core.type_utils import (
 )
 from app.services import cluster_generations
 from app.services.cluster_records import forget_cluster_records
+from app.services.key_party_bound import forget_cluster_bounds
 from app.services.activity_logger import get_activity_logger
 from app.services.registration_budget import spend_registration_budget
 from app.services.lxd_certs import lifetime as cert_lifetime
@@ -470,6 +471,8 @@ async def register_cluster(
                     "persisted. Retry registration before using this cluster."
                 ),
             ) from exc
+        # A new holder moves every key's bound on the cluster (services/key_party_bound.py).
+        forget_cluster_bounds(cluster_id)
 
         if share_serialization is not None:
             closing_serialization = share_serialization
@@ -1398,6 +1401,7 @@ async def delete_cluster(
 
             deleted_rows = await asyncio.wait_for(_delete_binding(), timeout=DB_DELETE_TIMEOUT)
             if deleted_rows > 0:
+                forget_cluster_bounds(cluster_id)
                 logger.info(f"Deleted {deleted_rows} OrganizationCluster binding(s) for {cluster_id}")
             else:
                 logger.info(f"No OrganizationCluster binding found for {cluster_id}")

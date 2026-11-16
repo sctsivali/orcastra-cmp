@@ -6,8 +6,10 @@ sets, so a key holding `*` there would reach another party's projects, pools and
 acts for its creator, so every request narrows its grants, in a copy, to the creator's bound
 (org_scope.partner_projects_on); the key routes then apply their project-limited rules as usual.
 An add-on credential's creator is its installer (key_default_view_only). Only clusters another
-party holds are bounded, the rule a key is minted under (api_key_grant_bound), so a seller's key
-beside its own buyers keeps its grant. Inside the bound
+party holds are bounded, so a seller's key beside its own buyers keeps its grant: the buyers the
+key itself sold onto the cluster join the creator's party here (cluster_parties.key_sale_orgs), and
+a creator who reaches the cluster only by a purchase is bounded whatever the key owns
+(cluster_parties.key_held_by_another_party). Inside the bound
 a key may create and delete projects under the browser's project policy
 (`project_change_refusal`, `shared_project_config`, `refuse_an_unisolated_project`).
 """
@@ -43,8 +45,9 @@ BIND_SCREEN = "Settings > Integrations > Synced Organizations > Manage clusters"
 _CHANGED_NS = "key_party_bound_changed"
 
 _lock = threading.Lock()
-# (creator, cluster) -> (read at, wall clock then, None when no other party holds it, else the bound)
-_bounds: Dict[Tuple[str, str], Tuple[float, float, Optional[FrozenSet[str]]]] = {}
+# (creator, cluster, party key id) -> (read at, wall clock then, None when no other party holds it,
+# else the bound). The key id is part of it: a key's own sale organizations join its party.
+_bounds: Dict[Tuple[str, str, str], Tuple[float, float, Optional[FrozenSet[str]]]] = {}
 
 
 def _changed_since(cluster_id: str, wall: float) -> bool:
@@ -70,34 +73,41 @@ def _publish_change(cluster_id: str) -> None:
         logger.warning("Could not publish a party bound change on %s: %s", cluster_id, type(exc).__name__)
 
 
-async def _read_bound(db: Any, creator: str, cluster_id: str) -> Optional[FrozenSet[str]]:
-    from app.core.org_scope import partner_projects_on
-    from app.services.cluster_parties import clusters_held_by_another_party
+async def _read_bound(db: Any, creator: str, cluster_id: str, key_id: str) -> Optional[FrozenSet[str]]:
+    """None when no other party holds the cluster for this key, else the creator's bound there.
 
-    if cluster_id not in await clusters_held_by_another_party(db, creator, {cluster_id}):
+    `key_id` is cluster_parties.party_key_id: "" for an add-on credential, so only its installer's
+    party counts."""
+    from app.core.org_scope import partner_projects_on
+    from app.services.cluster_parties import key_held_by_another_party
+
+    if not await key_held_by_another_party(db, creator, key_id, cluster_id):
         return None
     return frozenset((await partner_projects_on(db, creator, {cluster_id})).get(cluster_id, {"default"}))
 
 
 async def _bound(api_key: Mapping[str, Any], cluster_id: str, db: Any) -> Tuple[str, Optional[FrozenSet[str]]]:
+    from app.services.cluster_parties import party_key_id
+
     if db is None:
         from app.core.database import async_session_maker
 
         async with async_session_maker() as session:
             return await _bound(api_key, cluster_id, session)
     creator = await _creator(api_key, db)
-    cache_key = (creator.strip().lower(), cluster_id)
+    key_id = party_key_id(api_key)
+    cache_key = (creator.strip().lower(), cluster_id, key_id)
     now = time.monotonic()
     with _lock:
         cached = _bounds.get(cache_key)
-    # Only a held cluster's bound is checked against the shared stamp, so a key on clusters no other
-    # party holds pays no cache read for it.
-    if cached is not None and now - cached[0] < BOUND_SECONDS and not (
-        cached[2] is not None and _changed_since(cluster_id, cached[1])
-    ):
+    # important: every cached verdict is checked against the shared stamp, an unbounded one too. A
+    # binding created or removed on another worker (forget_cluster_bounds) can make the cluster
+    # another party's, and an unbounded `*` key must not outlive that by the window. One shared
+    # cache read per granted cluster per request.
+    if cached is not None and now - cached[0] < BOUND_SECONDS and not _changed_since(cluster_id, cached[1]):
         return creator, cached[2]
     wall = time.time()
-    bound = await _read_bound(db, creator, cluster_id)
+    bound = await _read_bound(db, creator, cluster_id, key_id)
     with _lock:
         _bounds[cache_key] = (now, wall, bound)
     return creator, bound
@@ -229,6 +239,7 @@ async def project_change_refusal(
     """
     from app.core.org_scope import org_to_hold_project_grant
     from app.services.api_key_grant_bound import refuse_a_project_another_party_holds
+    from app.services.cluster_parties import party_key_id
 
     grant = next(
         (g for g in api_key.get("cluster_permissions") or [] if isinstance(g, dict) and g.get("cluster_id") == cluster_id),
@@ -239,7 +250,7 @@ async def project_change_refusal(
     if not creating:
         # important: read again, not from the cache: a project deleted moments ago may be a name
         # another party has just created, and a stale bound would hand it to this key.
-        fresh = await _read_bound(db, creator, cluster_id) or frozenset()
+        fresh = await _read_bound(db, creator, cluster_id, party_key_id(api_key)) or frozenset()
         if project_name in held and project_name in fresh and project_name != "default":
             return None
         return HTTPException(status_code=404, detail=f"Project '{project_name}' not found in cluster '{cluster_id}'")
@@ -347,12 +358,16 @@ async def record_key_created_project(
 
 
 def forget_cluster_bounds(cluster_id: str) -> None:
-    """Drop every cached bound on `cluster_id`, here and on every worker. Called wherever a project
-    on the cluster is created or deleted, whoever did it: a deleted name may be another party's
-    next, and any creator's cached bound could still list it."""
+    """Drop every cached bound and view-only `default` verdict on `cluster_id`, here and on every
+    worker. Called wherever a project on the cluster is created or deleted, whoever did it (a
+    deleted name may be another party's next, and any creator's cached bound could still list it),
+    and wherever a binding to the cluster is created or removed (it moves who holds the cluster)."""
+    from app.services.key_default_view_only import forget_cluster_verdicts
+
     with _lock:
         for cache_key in [k for k in _bounds if k[1] == cluster_id]:
             _bounds.pop(cache_key, None)
+    forget_cluster_verdicts(cluster_id)
     _publish_change(cluster_id)
 
 
@@ -362,9 +377,12 @@ def forget_creator_bound_of(api_key: Mapping[str, Any], cluster_id: str) -> None
 
 
 def forget_creator_bound(creator: str, cluster_id: str) -> None:
-    """Drop a creator's cached bound on one cluster after a project create, here and on every worker."""
+    """Drop a creator's cached bounds on one cluster, every key of theirs, after a project create,
+    here and on every worker."""
+    who = (creator or "").strip().lower()
     with _lock:
-        _bounds.pop(((creator or "").strip().lower(), cluster_id), None)
+        for cache_key in [k for k in _bounds if k[0] == who and k[1] == cluster_id]:
+            _bounds.pop(cache_key, None)
     _publish_change(cluster_id)
 
 
