@@ -43,6 +43,7 @@ from .exceptions import (
     LXDLocalStorageError,
     LXDOperationError,
     LXDGracefulTimeoutError,
+    LXDRebuildOutcomeUnknown,
     LXDSnapshotExistsError,
     LXDProjectLimitError,
 )
@@ -1777,6 +1778,9 @@ class InstanceManager:
         )
         # LXD answered: the rebuild was refused or failed. A timeout or a full pool is not this.
         refused: list = []
+        # The id of the operation LXD accepted: from here on the daemon may rewrite the disk
+        # whatever happens to this connection.
+        accepted: list = []
 
         def _do_rebuild() -> str:
             resp = session.post(
@@ -1793,6 +1797,7 @@ class InstanceManager:
             if not op_path:
                 return ""  # completed synchronously
             op_id = op_path.rstrip("/").rsplit("/", 1)[-1]
+            accepted.append(op_id)
             # (connect, read): a scalar would grant the same 1800s budget to the connect leg,
             # so a peer that never completes the handshake would pin this thread for half an
             # hour. Only the read leg needs to be long, since a rebuild is slow.
@@ -1834,6 +1839,12 @@ class InstanceManager:
                 max_in_flight=_REBUILD_MAX_IN_FLIGHT,
             )
         except BlockingTimeout as exc:
+            if accepted:
+                raise LXDRebuildOutcomeUnknown(
+                    f"Rebuild of {name} on {host} did not report within {wait_timeout}s; "
+                    f"LXD operation {accepted[0]} may still be running",
+                    accepted[0],
+                ) from exc
             raise LXDOperationError(
                 f"Rebuild of {name} on {host} did not complete within {wait_timeout}s"
             ) from exc
@@ -1845,6 +1856,16 @@ class InstanceManager:
             ) from exc
         except LXDOperationError:
             await _put_user_data_back()
+            raise
+        except Exception as exc:
+            # important: once LXD accepted the rebuild, a broken wait (a reset connection, a read
+            # timeout, a garbled answer) says nothing about the rebuild itself.
+            if accepted:
+                raise LXDRebuildOutcomeUnknown(
+                    f"The result of LXD operation {accepted[0]} rebuilding {name} on {host} could not "
+                    f"be read ({type(exc).__name__}); it may still be running",
+                    accepted[0],
+                ) from exc
             raise
         logger.info("Rebuilt instance %s on %s (project=%s, op=%s)", name, host, project_name, op_id)
         return op_id

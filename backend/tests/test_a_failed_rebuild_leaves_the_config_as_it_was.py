@@ -120,3 +120,65 @@ async def test_the_rebuild_url_escapes_the_project(patched):
     await _rebuild(patched(world), project="cust a/b", cloud_init=None)
     assert world.posts == ["https://lxd.example.org:8443/1.0/instances/vm1/rebuild?project=cust%20a%2Fb"]
     assert world.patches == []
+
+
+# ── an accepted rebuild whose result could not be read ────────────────────────────────────────
+# Once LXD accepted the rebuild, a broken wait says nothing about the rebuild: the daemon may still
+# be rewriting the disk, so the error is typed, carries the operation id, and keeps the new
+# user-data. A failure before LXD accepted anything stays an ordinary failure.
+
+def test_a_wait_that_breaks_after_lxd_accepted_is_an_unknown_outcome(patched):
+    import asyncio
+    from requests import exceptions as requests_exc
+    from app.services.lxd.exceptions import LXDRebuildOutcomeUnknown
+
+    world = _World()
+
+    def broken_wait(url, verify, timeout):
+        raise requests_exc.ConnectionError("connection reset by peer")
+
+    world.client.api.session.get = broken_wait
+    with pytest.raises(LXDRebuildOutcomeUnknown) as caught:
+        asyncio.run(_rebuild(patched(world)))
+    assert caught.value.operation_id == "op-1"
+    assert "may still be running" in str(caught.value)
+    assert _user_data(world.patches) == ["#cloud-config\nnew: true\n"]
+
+
+def test_a_post_lxd_never_answered_is_an_ordinary_failure(patched):
+    import asyncio
+    from requests import exceptions as requests_exc
+    from app.services.lxd.exceptions import LXDRebuildOutcomeUnknown
+
+    world = _World()
+
+    def unreachable(url, json, verify, timeout):
+        raise requests_exc.ConnectionError("connection refused")
+
+    world.client.api.session.post = unreachable
+    with pytest.raises(Exception) as caught:
+        asyncio.run(_rebuild(patched(world)))
+    assert not isinstance(caught.value, LXDRebuildOutcomeUnknown)
+
+
+async def test_a_wait_that_runs_out_after_lxd_accepted_is_an_unknown_outcome(patched, monkeypatch):
+    from app.services.lxd.exceptions import LXDRebuildOutcomeUnknown
+
+    world = _World()
+
+    def still_waiting(url, verify, timeout):
+        raise TimeoutError("the thread is still waiting when the caller gives up")
+
+    world.client.api.session.get = still_waiting
+
+    async def gives_up(fn, **kwargs):
+        try:
+            fn()
+        except TimeoutError:
+            pass
+        raise BlockingTimeout("rebuild", 1800)
+
+    monkeypatch.setattr(lxd_instance, "run_blocking", gives_up)
+    with pytest.raises(LXDRebuildOutcomeUnknown) as caught:
+        await _rebuild(patched(world))
+    assert caught.value.operation_id == "op-1"

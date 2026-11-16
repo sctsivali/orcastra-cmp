@@ -78,6 +78,17 @@ class LXDGracefulTimeoutError(LXDOperationError):
     pass
 
 
+class LXDRebuildOutcomeUnknown(LXDOperationError):
+    """LXD accepted a rebuild and its result could not be read (the wait broke or ran out).
+
+    The daemon may still be rewriting the root disk, so the job keeps blocking the instance until
+    LXD's own wait is over instead of reading as failed.
+    """
+    def __init__(self, message: str, operation_id: str = ""):
+        self.operation_id = operation_id
+        super().__init__(message)
+
+
 class LXDSnapshotExistsError(LXDOperationError):
     """A rebuild was blocked because the instance still has snapshots.
 

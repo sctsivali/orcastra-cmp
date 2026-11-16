@@ -90,12 +90,21 @@ async def test_the_delete_wait_runs_off_the_event_loop_and_outlasts_the_pooled_r
 
 
 def test_the_rebuild_recovery_sweep_only_claims_what_no_worker_can_be_driving():
-    """LXD's own rebuild wait runs to 1800s, so a younger row may still be live elsewhere."""
-    from app.routers.instance_rebuild import _IN_FLIGHT_STATUSES
-    from app.services.rebuild_admission import STRANDED_AFTER
+    """LXD's own rebuild wait runs to 1800s, longer than the stranded window, so a live rebuild must
+    keep its row fresh: the worker driving it refreshes it every HEARTBEAT, and only a row silent for
+    several beats can have no worker behind it (test_a_rebuild_row_tells_the_truth_about_its_driver)."""
+    from datetime import timedelta
 
-    assert STRANDED_AFTER.total_seconds() > 1800, (
-        "a window shorter than LXD's rebuild wait would fail jobs that are still running"
+    from app.routers.instance_rebuild import _HEARTBEAT_SECONDS, _IN_FLIGHT_STATUSES
+    from app.services.rebuild_admission import HEARTBEAT, REBUILD_OP_WINDOW, STRANDED_AFTER, silent_window
+
+    assert _HEARTBEAT_SECONDS == HEARTBEAT.total_seconds()
+    assert STRANDED_AFTER >= HEARTBEAT * 5, (
+        "a window of fewer than five missed beats would fail jobs that are still running"
+    )
+    # A worker that died in `rebuilding` may leave a daemon rebuild LXD accepted and still runs.
+    assert silent_window("rebuilding") == REBUILD_OP_WINDOW > timedelta(seconds=1800), (
+        "a silent rebuilding row must outlast LXD's own rebuild wait"
     )
     assert "ready" not in _IN_FLIGHT_STATUSES and "failed" not in _IN_FLIGHT_STATUSES, (
         "a settled job must never be reopened by the sweep"

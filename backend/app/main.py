@@ -359,13 +359,12 @@ async def lifespan(app: FastAPI):
         start_import_recovery()
         logger.info("Custom-image import recovery loop started")
 
-        # Same guarantee for a rebuild whose driver died with the process it ran in. The job is
-        # an unreferenced asyncio task, so a restart loses it while the row stays mid-flight and
-        # the instance stays stopped, with nothing to revisit either.
-        from app.routers.instance_rebuild import recover_stranded_rebuilds
-        stranded = await recover_stranded_rebuilds()
-        if stranded:
-            logger.warning("Marked %d stranded rebuild job(s) failed at startup", stranded)
+        # Same guarantee for a rebuild whose driver died with the process it ran in (a kill the
+        # job could not record): once its heartbeat has been silent for the stranded window, the
+        # sweep fails the row, so the instance and Migration Center stop reading it as running.
+        from app.routers.instance_rebuild import start_stranded_rebuild_sweep
+        start_stranded_rebuild_sweep()
+        logger.info("Stranded rebuild sweep started")
 
         # Specification changes are resumable rather than marked failed. Each row is claimed
         # through a database lease, so every API worker may run this recovery pass safely.

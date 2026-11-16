@@ -25,9 +25,16 @@ from sqlalchemy import select
 from app.models.db_models import RebuildJob
 
 IN_FLIGHT_STATUSES = ("pending", "stopping", "rebuilding", "starting", "provisioning")
-# LXD's own rebuild wait is up to 1800 s. A row untouched for longer than a rebuild can take has no
-# worker behind it (recover_stranded_rebuilds fails it at startup) and blocks nothing.
-STRANDED_AFTER = timedelta(hours=2)
+# The worker driving a rebuild refreshes its row every HEARTBEAT while LXD works, however long the
+# image pull takes (routers/instance_rebuild._heartbeat). A row nobody refreshed for STRANDED_AFTER
+# has no worker behind it: it blocks nothing, and recover_stranded_rebuilds fails it.
+HEARTBEAT = timedelta(seconds=30)
+STRANDED_AFTER = timedelta(minutes=5)
+# important: a row whose worker died in `rebuilding` may name a daemon rebuild LXD accepted and is
+# still running (the advisory lock died with the worker's connection; LXD's wait is up to 1800 s,
+# services/lxd/instance.rebuild_instance). It keeps blocking a second rebuild and Migration Center
+# (migrations/planning.py) until that wait is over.
+REBUILD_OP_WINDOW = timedelta(seconds=1800) + STRANDED_AFTER
 BUDGET_WINDOW = timedelta(hours=1)
 
 
@@ -37,9 +44,14 @@ def _aware(moment: Optional[datetime]) -> Optional[datetime]:
     return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
 
+def silent_window(status: Optional[str]) -> timedelta:
+    """How long a row in `status` may go unrefreshed before no worker or daemon can be behind it."""
+    return REBUILD_OP_WINDOW if status == "rebuilding" else STRANDED_AFTER
+
+
 def _live(row: RebuildJob, now: datetime) -> bool:
     updated = _aware(row.updated_at) or _aware(row.created_at)
-    return updated is not None and now - updated < STRANDED_AFTER
+    return updated is not None and now - updated < silent_window(row.status)
 
 
 def plain_wait(seconds: int) -> str:

@@ -15,7 +15,7 @@ from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import get_cache_manager
@@ -45,6 +45,7 @@ from app.services.lxd_service import (
 )
 from app.routers.instances import _target_engine, _validate_image_server
 from app.services.activity_logger import get_activity_logger
+from app.services.lxd.exceptions import LXDRebuildOutcomeUnknown
 from app.services.migration_fence import (
     MigrationFenceConflict,
     guard_instance_mutation,
@@ -88,6 +89,23 @@ router = APIRouter(
 # timing out does not fail the rebuild, which already succeeded.
 _PROVISION_TIMEOUT_SECONDS = 180
 _PROVISION_POLL_SECONDS = 5
+_HEARTBEAT_SECONDS = rebuild_admission.HEARTBEAT.total_seconds()
+_STRANDED_SWEEP_SECONDS = 60
+# A detached job the event loop holds only weakly could be collected mid-run; keep a reference.
+_RUNNING_JOBS: "set[asyncio.Task]" = set()
+_INTERRUPTED_BEFORE_REBUILD = (
+    "The backend stopped before the root disk was rebuilt (a restart or a deploy). The instance may "
+    "be stopped with its old disk; start it or rebuild again."
+)
+_INTERRUPTED_AFTER_REBUILD = (
+    "The backend stopped after the root disk was rebuilt (a restart or a deploy). Check that the "
+    "instance started."
+)
+_STRANDED_ERROR = (
+    "The rebuild did not finish and no worker is still driving it, most likely a "
+    "backend restart. Check the instance on the cluster before retrying: it may be "
+    "stopped with a partially written root disk."
+)
 
 
 # 64 KiB, as the larger public clouds cap instance user-data. The value lands in the instance config
@@ -159,23 +177,33 @@ def _job_payload(row: RebuildJob) -> Dict[str, Any]:
     }
 
 
-async def _set_status(job_id: str, status: Optional[str] = None, **fields: Any) -> None:
+async def _set_status(job_id: str, status: Optional[str] = None, **fields: Any) -> bool:
+    """Write to a job still in flight; False when the row is gone or already settled.
+
+    important: the stranded sweep may have failed the row while this worker was cut off from the
+    database. A settled row is never reopened, so it cannot read `ready` beside a stranded error.
+    """
+    values: Dict[str, Any] = dict(fields)
+    if status is not None:
+        values["status"] = status
+    values["updated_at"] = datetime.now(timezone.utc)
     async with async_session_maker() as db:
-        row = (
-            await db.execute(select(RebuildJob).where(RebuildJob.job_id == job_id))
-        ).scalar_one_or_none()
-        if row is None:
-            return
-        if status is not None:
-            row.status = status
-        for k, v in fields.items():
-            setattr(row, k, v)
+        # One conditional UPDATE: a sweep that settles the row between a read and a write here
+        # could otherwise be overwritten.
+        result = await db.execute(
+            update(RebuildJob)
+            .where(RebuildJob.job_id == job_id, RebuildJob.status.in_(_IN_FLIGHT_STATUSES))
+            .values(**values)
+        )
         await db.commit()
+    if not result.rowcount:
+        return False
 
     # The instance list carries the rebuild status (stopping, rebuilding, starting, ready), so
     # every transition invalidates it; that also covers the failure path.
     if status is not None:
         get_cache_manager().invalidate_instance_cache()
+    return True
 
 
 async def _wait_for_provisioning(lxd_service: LXDService, name: str, host: str, project: str) -> None:
@@ -191,6 +219,44 @@ async def _wait_for_provisioning(lxd_service: LXDService, name: str, host: str, 
             pass
         await asyncio.sleep(_PROVISION_POLL_SECONDS)
         waited += _PROVISION_POLL_SECONDS
+
+
+async def _heartbeat(job_id: str) -> None:
+    """Refresh the row while the job runs, so admission and the stranded sweep see a live driver."""
+    missed = 0
+    while True:
+        await asyncio.sleep(_HEARTBEAT_SECONDS)
+        try:
+            async with async_session_maker() as db:
+                await db.execute(
+                    update(RebuildJob)
+                    .where(RebuildJob.job_id == job_id, RebuildJob.status.in_(_IN_FLIGHT_STATUSES))
+                    .values(updated_at=datetime.now(timezone.utc))
+                )
+                await db.commit()
+            missed = 0
+        except Exception as exc:  # noqa: BLE001 - a missed beat is caught up by the next one
+            missed += 1
+            # Two in a row is a minute of silence: the stranded sweep acts on five.
+            log = logger.warning if missed >= 2 else logger.debug
+            log("Rebuild heartbeat for %s missed %d time(s): %s", job_id, missed, type(exc).__name__)
+
+
+class _SettledElsewhere(Exception):
+    """The row was settled (the stranded sweep failed it) while this worker was cut off."""
+
+
+async def _advance(job_id: str, status: str) -> None:
+    # A job whose row another worker settled acts no further: the instance is no longer blocked,
+    # and a second rebuild admitted since must not meet this one's start.
+    if not await _set_status(job_id, status):
+        raise _SettledElsewhere(status)
+
+
+def _says_already_stopped(error: Exception) -> bool:
+    # LXD and Incus answer a stop of an instance that is not running (Stopped, or Error after a
+    # failed start) with "The instance is already stopped"; the rebuild accepts such an instance.
+    return "already stopped" in str(error).lower()
 
 
 async def _run_rebuild(job_id: str, run_provisioning: bool) -> None:
@@ -211,6 +277,8 @@ async def _run_rebuild(job_id: str, run_provisioning: bool) -> None:
         mode, source, cloud_init = row.mode, row.source, row.cloud_init
 
     op_id: Optional[str] = None
+    phase = "pending"
+    beat = asyncio.create_task(_heartbeat(job_id))
     try:
         # Hold the same cluster advisory lock used by migration execution through the final
         # daemon mutation/readback. A migration that wins first fences this job before stop;
@@ -222,17 +290,21 @@ async def _run_rebuild(job_id: str, run_provisioning: bool) -> None:
         ):
             # 1. Stop (rebuild requires the instance stopped). Force-stop covers a
             #    running or frozen guest.
-            await _set_status(job_id, "stopping")
+            phase = "stopping"
+            await _advance(job_id, phase)
             # stop_vm answers a Stopped instance without a request and reads the state after a
-            # refused stop, so whatever it raises is a real failure: rebuilding a guest that is
-            # still running would fail later with a less clear LXD error.
+            # refused stop, so what it raises is a real failure (rebuilding a guest that is still
+            # running would fail later with a less clear LXD error), except "already stopped".
             try:
                 await lxd_service.stop_vm(name, host, force=True, project=project)
             except LXDOperationError as e:
-                raise LXDOperationError(f"Could not stop the instance before the rebuild: {e}") from e
+                if not _says_already_stopped(e):
+                    raise LXDOperationError(f"Could not stop the instance before the rebuild: {e}") from e
+                logger.info("Rebuild job %s: %s reads already stopped; rebuilding it", job_id, name)
 
             # 2. Rebuild the root disk and wait for the accepted operation to settle.
-            await _set_status(job_id, "rebuilding")
+            phase = "rebuilding"
+            await _advance(job_id, phase)
             op_id = await lxd_service.rebuild_instance(
                 name, host, source, project=project, cloud_init=cloud_init
             )
@@ -241,20 +313,62 @@ async def _run_rebuild(job_id: str, run_provisioning: bool) -> None:
             if mode != "empty":
                 # 3. Start. Provisioning below is read-only, so it does not extend the
                 #    cluster-wide mutation lock after start readback has completed.
-                await _set_status(job_id, "starting")
+                phase = "starting"
+                await _advance(job_id, phase)
                 await lxd_service.start_vm(name, host, project=project)
 
         if mode != "empty" and run_provisioning:
-            await _set_status(job_id, "provisioning")
+            phase = "provisioning"
+            await _advance(job_id, phase)
             await _wait_for_provisioning(lxd_service, name, host, project)
-        await _set_status(job_id, "ready")
+        recorded = await _set_status(job_id, "ready")
 
+        details = {"mode": mode, "job_id": job_id, "operation_id": op_id, "project": project}
+        if not recorded:
+            # The sweep failed the row while this worker could not reach the database; the
+            # rebuild itself finished. The row keeps its failure, the audit says what happened.
+            details["after_marked_stranded"] = True
+            logger.warning("Rebuild job %s finished after it was marked stranded: instance=%s", job_id, name)
         activity_logger.log_activity(
             action="instance.rebuild", target_type="instance", target_id=name,
-            target_host=host, target_project=project, result="success",
-            details={"mode": mode, "job_id": job_id, "operation_id": op_id, "project": project},
+            target_host=host, target_project=project, result="success", details=details,
         )
         logger.info("Rebuild job %s completed: instance=%s mode=%s", job_id, name, mode)
+    except LXDRebuildOutcomeUnknown as unknown:
+        # important: LXD accepted the rebuild and may still be rewriting the disk. The row stays
+        # `rebuilding` (with the reason) and keeps blocking a second rebuild and Migration Center
+        # until LXD's wait is over; the stranded sweep settles it then.
+        await _set_status(job_id, error=str(unknown)[:1000], operation_id=unknown.operation_id or None)
+        logger.warning("Rebuild job %s: outcome unknown, the row blocks until the sweep: %s", job_id, unknown)
+    except _SettledElsewhere as settled:
+        logger.warning(
+            "Rebuild job %s was settled elsewhere before %s; acting no further on %s", job_id, settled, name,
+        )
+    except asyncio.CancelledError:
+        # important: the backend is stopping (a deploy, an upgrade, a restart). In `rebuilding` LXD
+        # may still run the rebuild it accepted, so the row stays in flight and keeps blocking a
+        # second rebuild and Migration Center until LXD's wait is over (the sweep fails it then).
+        # In any other phase no daemon rebuild is running: fail the row now, so the instance is
+        # free at once.
+        if phase == "rebuilding":
+            logger.warning(
+                "Rebuild job %s interrupted by shutdown while LXD rebuilds %s; the row blocks until the sweep",
+                job_id, name,
+            )
+            raise
+        error = _INTERRUPTED_AFTER_REBUILD if phase in ("starting", "provisioning") else _INTERRUPTED_BEFORE_REBUILD
+        try:
+            await asyncio.wait_for(_set_status(job_id, "failed", error=error), timeout=10)
+        except BaseException:  # noqa: BLE001 - shutting down; the stranded sweep is the fallback
+            pass
+        activity_logger.log_activity(
+            action="instance.rebuild", target_type="instance", target_id=name,
+            target_host=host, target_project=project, result="failure", error_message=error,
+            details={"mode": mode, "job_id": job_id, "operation_id": op_id, "project": project,
+                     "interrupted": True, "phase": phase},
+        )
+        logger.warning("Rebuild job %s interrupted by shutdown in %s: instance=%s", job_id, phase, name)
+        raise
     except Exception as e:  # noqa: BLE001 - record the failure for the operator
         await _set_status(job_id, "failed", error=str(e)[:1000])
         activity_logger.log_activity(
@@ -263,6 +377,8 @@ async def _run_rebuild(job_id: str, run_provisioning: bool) -> None:
             details={"mode": mode, "job_id": job_id, "operation_id": op_id, "project": project},
         )
         logger.error("Rebuild job %s failed: instance=%s error=%s", job_id, name, e)
+    finally:
+        beat.cancel()
 
 
 async def _project_config(lxd_service: LXDService, host: str, project: str) -> Dict[str, Any]:
@@ -529,7 +645,9 @@ async def rebuild_instance(
         target_host=body.host, target_project=row.project, result="success",
         details={"mode": body.mode, "job_id": job_id, "image": row.requested_image, "project": row.project},
     )
-    asyncio.create_task(_run_rebuild(job_id, body.run_provisioning))
+    task = asyncio.create_task(_run_rebuild(job_id, body.run_provisioning))
+    _RUNNING_JOBS.add(task)
+    task.add_done_callback(_RUNNING_JOBS.discard)
     # Readers hold a cached list; without this the change is invisible until the TTL.
     get_cache_manager().invalidate_instance_cache()
     return _job_payload(row)
@@ -615,12 +733,13 @@ async def get_latest_rebuild_job(
 
 # ── recovery ────────────────────────────────────────────────────────────────────────────────
 
-# A rebuild is driven by a bare `asyncio.create_task`, so a backend restart loses the driver while
+# A rebuild is driven by a detached task, so a kill (out of memory, SIGKILL) loses the driver while
 # the row stays mid-flight and the instance stays stopped. Without this sweep the operator would
 # see "rebuilding" forever on an instance that is not being rebuilt.
 #
-# LXD's own rebuild wait is up to 1800s, so a younger row could still be a live job on another
-# worker. Only rows older than the longest a real rebuild can take are declared stranded.
+# A live driver refreshes its row every heartbeat, so silence means no worker is behind it. Only
+# `rebuilding` waits longer, for the daemon rebuild LXD may still run (rebuild_admission.silent_window).
+
 _IN_FLIGHT_STATUSES = rebuild_admission.IN_FLIGHT_STATUSES
 
 
@@ -633,34 +752,64 @@ async def recover_stranded_rebuilds() -> int:
     """
     from app.core.database import async_session_maker
 
-    cutoff = datetime.now(timezone.utc) - rebuild_admission.STRANDED_AFTER
+    now = datetime.now(timezone.utc)
+    others = [s for s in _IN_FLIGHT_STATUSES if s != "rebuilding"]
     async with async_session_maker() as db:
+        # One UPDATE claims each row: every worker runs this sweep, and only the one whose
+        # statement changed a row reads it back, so each failure is audited once.
         rows = (
             await db.execute(
-                select(RebuildJob).where(
-                    RebuildJob.status.in_(_IN_FLIGHT_STATUSES),
-                    RebuildJob.updated_at < cutoff,
+                update(RebuildJob)
+                .where(or_(
+                    and_(
+                        RebuildJob.status == "rebuilding",
+                        RebuildJob.updated_at < now - rebuild_admission.silent_window("rebuilding"),
+                    ),
+                    and_(
+                        RebuildJob.status.in_(others),
+                        RebuildJob.updated_at < now - rebuild_admission.silent_window(None),
+                    ),
+                ))
+                .values(status="failed", error=_STRANDED_ERROR, updated_at=now)
+                .returning(
+                    RebuildJob.job_id, RebuildJob.instance_name, RebuildJob.cluster_id,
+                    RebuildJob.project, RebuildJob.mode,
                 )
+                .execution_options(synchronize_session=False)
             )
-        ).scalars().all()
+        ).all()
+        await db.commit()
+    if rows:
+        get_cache_manager().invalidate_instance_cache()
+        logger.warning(
+            "Marked %d stranded rebuild job(s) failed", len(rows),
+            extra={"job_ids": [r.job_id for r in rows]},
+        )
         for row in rows:
-            row.status = "failed"
-            row.error = (
-                "The rebuild did not finish and no worker is still driving it, most likely a "
-                "backend restart. Check the instance on the cluster before retrying: it may be "
-                "stopped with a partially written root disk."
+            activity_logger.log_activity(
+                action="instance.rebuild", target_type="instance", target_id=row.instance_name,
+                target_host=row.cluster_id, target_project=row.project, result="failure",
+                error_message=_STRANDED_ERROR,
+                details={"mode": row.mode, "job_id": row.job_id, "stranded": True, "project": row.project},
             )
-        if rows:
-            await db.commit()
-            logger.warning(
-                "Marked %d stranded rebuild job(s) failed", len(rows),
-                extra={"job_ids": [r.job_id for r in rows]},
-            )
-            for row in rows:
-                activity_logger.log_activity(
-                    action="instance.rebuild", target_type="instance", target_id=row.instance_name,
-                    target_host=row.cluster_id, target_project=row.project, result="failure",
-                    error_message=row.error,
-                    details={"mode": row.mode, "job_id": row.job_id, "stranded": True, "project": row.project},
-                )
-        return len(rows)
+    return len(rows)
+
+
+async def stranded_rebuild_loop() -> None:
+    """Runs in every worker; the first pass runs at once, so a restart frees what its kill left."""
+    while True:
+        try:
+            await recover_stranded_rebuilds()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Stranded rebuild sweep error: %s", exc)
+        await asyncio.sleep(_STRANDED_SWEEP_SECONDS)
+
+
+_sweep_task: "Optional[asyncio.Task]" = None
+
+
+def start_stranded_rebuild_sweep() -> None:
+    """Idempotent: safe to call more than once per worker."""
+    global _sweep_task
+    if _sweep_task is None or _sweep_task.done():
+        _sweep_task = asyncio.create_task(stranded_rebuild_loop())
