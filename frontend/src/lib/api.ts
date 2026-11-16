@@ -118,8 +118,9 @@ let _authActorScope: string | null = null;
 let _authActorId: string | null = null;
 // The account's byte units, sent as X-Byte-Units so the size text the server writes into a
 // refusal or a check follows them. PersonalizationProvider sets it.
-// A type-only import above: this transport takes no runtime dependency (check-instance-create-orchestration).
-let _byteUnits: ByteUnitSystem = "decimal";
+// A type-only import above: this transport takes no runtime dependency (check-instance-create-orchestration),
+// so the default is written out; check-byte-units.mjs holds it equal to DEFAULT_BYTE_UNITS.
+let _byteUnits: ByteUnitSystem = "binary";
 
 /**
  * important: browser only. On the server this module is shared by every request being rendered at

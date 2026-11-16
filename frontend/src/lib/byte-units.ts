@@ -1,6 +1,7 @@
 /**
  * The two byte unit systems a person can read the console in, and the units a size field offers in
- * each. Decimal is the default: 1 GB is 1,000,000,000 bytes. Binary: 1 GiB is 1,073,741,824 bytes.
+ * each. Binary is the default: 1 GiB is 1,073,741,824 bytes, as LXD and free -h count. Decimal:
+ * 1 GB is 1,000,000,000 bytes.
  *
  * important: this is the only display module allowed to name a binary unit
  * (scripts/checks/check-byte-units.mjs). Every screen reads one system at a time, the one the
@@ -9,9 +10,10 @@
 
 export type ByteUnitSystem = "decimal" | "binary";
 
-export const BYTE_UNIT_SYSTEMS: readonly ByteUnitSystem[] = ["decimal", "binary"];
+// The default first: Settings lists them in this order.
+export const BYTE_UNIT_SYSTEMS: readonly ByteUnitSystem[] = ["binary", "decimal"];
 
-export const DEFAULT_BYTE_UNITS: ByteUnitSystem = "decimal";
+export const DEFAULT_BYTE_UNITS: ByteUnitSystem = "binary";
 
 export function isByteUnitSystem(value: unknown): value is ByteUnitSystem {
   return value === "decimal" || value === "binary";

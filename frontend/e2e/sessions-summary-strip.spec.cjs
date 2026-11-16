@@ -56,7 +56,8 @@ async function expectFigure(page, label, text) {
 
 test("the sessions summary keeps every figure on one line, clear of its icon", async ({ page, context }) => {
   await authenticate(context, "partner");
-  await installApiFixtures(page, "partner");
+  // Decimal prints the longest figures (999.99 GB), which is what this layout check needs.
+  await installApiFixtures(page, "partner", { byteUnits: "decimal" });
   await page.route(/\/api\/v1\/console\/sessions\/active/, (route) => route.fulfill({ json: [] }));
   await page.route(/\/api\/v1\/console\/sessions\/audit/, (route) => route.fulfill({ json: LONG_AUDIT }));
   await page.goto("/inventory/sessions");

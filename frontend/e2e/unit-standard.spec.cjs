@@ -9,7 +9,8 @@ const gib = 1024 ** 3;
 
 async function openSpecificationDialog(page, context, fixtureOptions = {}) {
   await authenticate(context, "admin");
-  await installApiFixtures(page, "admin", { snapshotInstancePage: true, ...fixtureOptions });
+  // An account that chose decimal, unless a test says otherwise: binary is the default.
+  await installApiFixtures(page, "admin", { snapshotInstancePage: true, byteUnits: "decimal", ...fixtureOptions });
   const previews = [];
   await page.route(/\/api\/v1\/instances\/tenant-owned-vm\/specification(?:\/preflight)?(?:\?.*)?$/, async (route) => {
     const request = route.request();
@@ -37,9 +38,18 @@ async function openSpecificationDialog(page, context, fixtureOptions = {}) {
   return { dialog, previews };
 }
 
-test("a disk created in GiB reads in GB in the table", async ({ page, context }) => {
+test("an account that never chose reads the disk in GiB", async ({ page, context }) => {
   await authenticate(context, "admin");
   await installApiFixtures(page, "admin", { snapshotInstancePage: true });
+  await page.goto("/inventory/instances");
+  const row = page.getByRole("row", { name: /tenant-owned-vm/ });
+  await expect(row).toContainText("80 GiB");
+  await expect(row).not.toContainText("85.9 GB");
+});
+
+test("a disk created in GiB reads in GB in the table for a decimal account", async ({ page, context }) => {
+  await authenticate(context, "admin");
+  await installApiFixtures(page, "admin", { snapshotInstancePage: true, byteUnits: "decimal" });
   await page.goto("/inventory/instances");
   const row = page.getByRole("row", { name: /tenant-owned-vm/ });
   await expect(row).toContainText("85.9 GB");

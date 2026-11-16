@@ -3,7 +3,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { usePersonalization } from "@/components/personalization-provider";
-import { BYTE_SCALES, BYTE_UNIT_SYSTEMS, type ByteUnitSystem } from "@/lib/byte-units";
+import { BYTE_SCALES, BYTE_UNIT_SYSTEMS, DEFAULT_BYTE_UNITS, type ByteUnitSystem } from "@/lib/byte-units";
 import { byteFormat } from "@/lib/byte-format";
 import { cn, formatCount } from "@/lib/utils";
 
@@ -65,6 +65,9 @@ export function ByteUnitsSettings() {
                 <span className="min-w-0 space-y-0.5">
                   <span className="block text-sm font-medium">
                     {OPTIONS[units].name} ({unitList(units)})
+                    {units === DEFAULT_BYTE_UNITS && (
+                      <span className="ml-1.5 text-xs font-normal text-muted-foreground">Default</span>
+                    )}
                   </span>
                   <span className="block text-xs text-muted-foreground">
                     {oneUnit(units)}. {OPTIONS[units].counts}

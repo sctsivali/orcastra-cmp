@@ -370,6 +370,7 @@ test("an instance without limits says so instead of showing the host's size", as
   const api = await installApiFixtures(page, "partner", { monitoringInstanceList: true,
     monitoringDashboard: unlimitedDashboard,
     instanceMetrics: unlimitedMetrics,
+    byteUnits: "decimal",
   });
   await page.goto("/inventory/monitoring");
   const consumer = page.getByRole("button", {

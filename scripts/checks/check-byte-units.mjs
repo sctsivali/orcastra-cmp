@@ -95,7 +95,7 @@ const requiredUtilsContracts = [
 for (const [needle, label] of [
   ['decimal: { base: 1000, units: ["B", "kB", "MB", "GB", "TB", "PB"] }', "the decimal unit table"],
   ['binary: { base: 1024, units: ["B", "KiB", "MiB", "GiB", "TiB", "PiB"] }', "the binary unit table"],
-  ['export const DEFAULT_BYTE_UNITS: ByteUnitSystem = "decimal";', "decimal as the default"],
+  ['export const DEFAULT_BYTE_UNITS: ByteUnitSystem = "binary";', "binary as the default"],
 ]) {
   if (!byteUnitsSource.includes(needle)) failures.push(`frontend/src/lib/byte-units.ts: missing ${label}`);
 }
@@ -257,9 +257,10 @@ for (const format of [numeric.formatBytes, numeric.formatNetworkRate]) {
 }
 assert.equal(numeric.formatBytes(0.5), "0.5 B");
 assert.equal(numeric.formatNetworkRate(0.5), "0.5 B/s");
-assert.equal(numeric.formatBytes(1000), "1 kB");
-assert.equal(numeric.formatBytes(8589934592), "8.59 GB");
-assert.equal(numeric.formatNetworkRate(12500), "12.5 kB/s");
+assert.equal(numeric.formatBytes(1000, { units: "decimal" }), "1 kB");
+assert.equal(numeric.formatBytes(8589934592, { units: "decimal" }), "8.59 GB");
+assert.equal(numeric.formatBytes(8589934592), "8 GiB", "no system given reads the default, binary");
+assert.equal(numeric.formatNetworkRate(12500, 2, "decimal"), "12.5 kB/s");
 assert.equal(numeric.formatBytes(0), "0 B");
 assert.equal(numeric.formatBytes(0, { zeroDisplay: "empty" }), "\u2014");
 assert.equal(numeric.formatBytes(NaN, { split: true }).unit, "");
@@ -285,7 +286,7 @@ assert.equal(numeric.formatBytes(0, { ...binary, zeroDisplay: "empty" }), "\u201
 assert.equal(numeric.formatBytes(NaN, binary), "\u2014");
 assert.deepEqual(numeric.formatBytes(4294967296, { ...binary, split: true }), { value: "4", unit: "GiB" });
 assert.equal(numeric.formatBytes(8589934592, { units: "decimal" }), "8.59 GB");
-assert.equal(numeric.formatBytes(8589934592, { units: "bogus" }), "8.59 GB", "an unknown system reads decimal");
+assert.equal(numeric.formatBytes(8589934592, { units: "bogus" }), "8 GiB", "an unknown system reads the default, binary");
 assert.equal(numeric.formatNetworkRate(12800, 2, "binary"), "12.5 KiB/s");
 assert.equal(numeric.formatNetworkRate(12500, 2, "decimal"), "12.5 kB/s");
 assert.deepEqual(numeric.formatByteQuota(2 * 1024 ** 3, 8 * 1024 ** 3, 1, "binary"), { value: "2 of 8", unit: "GiB" });
@@ -307,25 +308,27 @@ const limits = loadNumericModule(join(src, "lib", "lxd-limits.ts"), (specifier) 
   throw new Error(`Unexpected runtime import in LXD limits: ${specifier}`);
 });
 const { editableLimit, formatLxdSize, formatConfigValue } = limits;
-assert.deepEqual(editableLimit(undefined), { value: 0, unit: "GB", preservedRaw: null });
-assert.deepEqual(editableLimit("8GB"), { value: 8, unit: "GB", preservedRaw: "8GB" });
-assert.deepEqual(editableLimit("512MB"), { value: 512, unit: "MB", preservedRaw: "512MB" });
-assert.deepEqual(editableLimit("2TB"), { value: 2, unit: "TB", preservedRaw: "2TB" });
-assert.deepEqual(editableLimit("50%"), { value: 0, unit: "GB", preservedRaw: "50%" });
-assert.equal(editableLimit("8GiB").preservedRaw, "8GiB", "an untouched binary limit stays as stored");
-assert.ok(Math.abs(editableLimit("8GiB").value - 8.589934592) < 1e-10);
-assert.equal(editableLimit("1024").preservedRaw, "1024");
-assert.equal(formatLxdSize("8GiB"), "8.59 GB");
-assert.equal(formatLxdSize("10GB"), "10 GB");
-assert.equal(formatLxdSize("8589934592B"), "8.59 GB", "a spec edit stores bare bytes");
-assert.equal(formatLxdSize("512 MiB"), "536.87 MB");
-assert.equal(formatLxdSize("50%"), "50%");
-assert.equal(formatLxdSize("not a size"), "not a size");
-assert.equal(formatLxdSize(undefined), "");
-assert.equal(formatConfigValue("limits.memory", "8GiB"), "8.59 GB");
-assert.equal(formatConfigValue("limits.cpu", "4"), "4", "a count is not bytes");
-assert.equal(formatConfigValue("limits.read", "30iops"), "30iops");
-assert.equal(formatConfigValue("user.note", "8GiB"), "8GiB", "an authored value is left alone");
+assert.deepEqual(editableLimit(undefined), { value: 0, unit: "GiB", preservedRaw: null }, "a new limit starts in the default, GiB");
+assert.equal(formatLxdSize("8GiB"), "8 GiB", "no system given reads the default, binary");
+assert.deepEqual(editableLimit(undefined, "decimal"), { value: 0, unit: "GB", preservedRaw: null });
+assert.deepEqual(editableLimit("8GB", "decimal"), { value: 8, unit: "GB", preservedRaw: "8GB" });
+assert.deepEqual(editableLimit("512MB", "decimal"), { value: 512, unit: "MB", preservedRaw: "512MB" });
+assert.deepEqual(editableLimit("2TB", "decimal"), { value: 2, unit: "TB", preservedRaw: "2TB" });
+assert.deepEqual(editableLimit("50%", "decimal"), { value: 0, unit: "GB", preservedRaw: "50%" });
+assert.equal(editableLimit("8GiB", "decimal").preservedRaw, "8GiB", "an untouched binary limit stays as stored");
+assert.ok(Math.abs(editableLimit("8GiB", "decimal").value - 8.589934592) < 1e-10);
+assert.equal(editableLimit("1024", "decimal").preservedRaw, "1024");
+assert.equal(formatLxdSize("8GiB", "decimal"), "8.59 GB");
+assert.equal(formatLxdSize("10GB", "decimal"), "10 GB");
+assert.equal(formatLxdSize("8589934592B", "decimal"), "8.59 GB", "a spec edit stores bare bytes");
+assert.equal(formatLxdSize("512 MiB", "decimal"), "536.87 MB");
+assert.equal(formatLxdSize("50%", "decimal"), "50%");
+assert.equal(formatLxdSize("not a size", "decimal"), "not a size");
+assert.equal(formatLxdSize(undefined, "decimal"), "");
+assert.equal(formatConfigValue("limits.memory", "8GiB", "decimal"), "8.59 GB");
+assert.equal(formatConfigValue("limits.cpu", "4", "decimal"), "4", "a count is not bytes");
+assert.equal(formatConfigValue("limits.read", "30iops", "decimal"), "30iops");
+assert.equal(formatConfigValue("user.note", "8GiB", "decimal"), "8GiB", "an authored value is left alone");
 // The binary system reads a binary limit exactly and keeps the stored spelling until the field changes.
 assert.deepEqual(editableLimit(undefined, "binary"), { value: 0, unit: "GiB", preservedRaw: null });
 assert.deepEqual(editableLimit("8GiB", "binary"), { value: 8, unit: "GiB", preservedRaw: "8GiB" });
@@ -347,7 +350,17 @@ const bound = loadNumericModule(join(src, "lib", "byte-format.ts"), (specifier) 
   throw new Error(`Unexpected runtime import in byte format: ${specifier}`);
 });
 assert.equal(bound.byteFormat("binary"), bound.byteFormat("binary"), "one bound object per system");
-assert.equal(bound.byteFormat("nonsense"), bound.byteFormat("decimal"), "an unknown system reads decimal");
+assert.equal(bound.byteFormat("nonsense"), bound.byteFormat("binary"), "an unknown system reads the default, binary");
+
+// One default, written in three places that cannot import each other at runtime: the unit table,
+// the request transport (type-only import) and the backend's personal view.
+const defaultOf = (path, pattern) => pattern.exec(readFileSync(join(root, path), "utf8"))?.[1];
+const defaults = {
+  "frontend/src/lib/byte-units.ts": defaultOf("frontend/src/lib/byte-units.ts", /DEFAULT_BYTE_UNITS: ByteUnitSystem = "(\w+)"/),
+  "frontend/src/lib/api.ts": defaultOf("frontend/src/lib/api.ts", /let _byteUnits: ByteUnitSystem = "(\w+)"/),
+  "backend/app/routers/user_preferences.py": defaultOf("backend/app/routers/user_preferences.py", /^DEFAULT_BYTE_UNITS = "(\w+)"/m),
+};
+assert.deepEqual(new Set(Object.values(defaults)), new Set(["binary"]), `the byte units default differs: ${JSON.stringify(defaults)}`);
 assert.equal(bound.byteFormat("binary").formatBytes(8589934592), "8 GiB");
 assert.equal(bound.byteFormat("binary").formatBytes(1536, 0), "2 KiB", "a number argument is still the decimals");
 assert.deepEqual(bound.byteFormat("binary").formatBytes(2048, { split: true }), { value: "2", unit: "KiB" });

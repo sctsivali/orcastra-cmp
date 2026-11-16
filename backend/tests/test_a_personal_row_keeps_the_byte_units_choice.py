@@ -1,4 +1,4 @@
-"""An account's own row can also hold how it reads sizes: decimal (GB) or binary (GiB).
+"""An account's own row can also hold how it reads sizes: binary (GiB, the default) or decimal (GB).
 
 The choice is the reader's alone, so it lives beside the theme in the personal row. It must not
 mark the theme as chosen: `lastModified` is what tells the console the theme is the account's own
@@ -68,38 +68,46 @@ async def test_both_choices_can_be_sent_together() -> None:
 
 async def test_null_clears_the_units_choice_only() -> None:
     db = _db()
-    await routes.update_user_preferences({"theme": "dark", "byteUnits": "binary"}, Response(), db=db, user=ME)
+    await routes.update_user_preferences({"theme": "dark", "byteUnits": "decimal"}, Response(), db=db, user=ME)
     answer = await routes.update_user_preferences({"byteUnits": None}, Response(), db=db, user=ME)
 
     assert (await _row(db)).settings.keys() == {"theme", "lastModified"}
-    assert answer["byteUnits"] == "decimal" and answer["theme"] == "dark"
+    assert answer["byteUnits"] == "binary" and answer["theme"] == "dark"
 
 
 async def test_clearing_the_last_choice_deletes_the_row() -> None:
     db = _db()
-    await routes.update_user_preferences({"byteUnits": "binary"}, Response(), db=db, user=ME)
+    await routes.update_user_preferences({"byteUnits": "decimal"}, Response(), db=db, user=ME)
     answer = await routes.update_user_preferences({"byteUnits": None}, Response(), db=db, user=ME)
 
     assert await _row(db) is None
-    assert answer["byteUnits"] == "decimal"
+    assert answer["byteUnits"] == "binary"
 
 
-async def test_an_account_that_never_chose_reads_decimal() -> None:
+async def test_an_account_that_never_chose_reads_binary() -> None:
     db = _db()
-    assert (await routes.get_user_preferences(Response(), db=db, user=ME))["byteUnits"] == "decimal"
+    assert (await routes.get_user_preferences(Response(), db=db, user=ME))["byteUnits"] == "binary"
 
     db.add(UserPreferences(user_id="sub-1", user_email="me@example.test", settings={"theme": "dark", "lastModified": "x"}))
     await db.commit()
+    assert (await routes.get_user_preferences(Response(), db=db, user=ME))["byteUnits"] == "binary"
+
+
+async def test_an_account_that_chose_decimal_keeps_it() -> None:
+    db = _db()
+    db.add(UserPreferences(user_id="sub-1", user_email="me@example.test", settings={"byteUnits": "decimal"}))
+    await db.commit()
+
     assert (await routes.get_user_preferences(Response(), db=db, user=ME))["byteUnits"] == "decimal"
 
 
-async def test_a_stored_value_this_build_does_not_know_reads_decimal() -> None:
+async def test_a_stored_value_this_build_does_not_know_reads_binary() -> None:
     db = _db()
-    db.add(UserPreferences(user_id="sub-1", user_email="me@example.test", settings={"byteUnits": "<b>binary</b>"}))
+    db.add(UserPreferences(user_id="sub-1", user_email="me@example.test", settings={"byteUnits": "<b>decimal</b>"}))
     await db.commit()
 
     read = await routes.get_user_preferences(Response(), db=db, user=ME)
-    assert read["byteUnits"] == "decimal"
+    assert read["byteUnits"] == "binary"
 
 
 @pytest.mark.parametrize("value", [

@@ -144,7 +144,10 @@ def get_default_settings() -> Dict[str, Any]:
 
 THEMES = ("light", "dark", "system")
 BYTE_UNIT_SYSTEMS = ("decimal", "binary")
-DEFAULT_BYTE_UNITS = "decimal"
+# An account that never chose reads binary, as LXD, the lxc command and free -h count. Only the
+# console's reading changes: a caller that sends no X-Byte-Units header still reads decimal
+# (core/units.py).
+DEFAULT_BYTE_UNITS = "binary"
 # The keys a personal row may hold, each a single choice that null clears.
 PERSONAL_CHOICES = {"theme": THEMES, "byteUnits": BYTE_UNIT_SYSTEMS}
 

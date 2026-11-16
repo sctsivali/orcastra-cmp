@@ -12,7 +12,7 @@ export const personalizationAPI = {
 
   /**
    * The account's own choices. Send either or both; a null theme clears it so the organization's
-   * default applies, a null byteUnits returns to decimal.
+   * default applies, a null byteUnits returns to the default (binary).
    */
   update: (
     body: { theme?: ThemePreference | null; byteUnits?: ByteUnitSystem | null },
