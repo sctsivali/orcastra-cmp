@@ -61,7 +61,8 @@ def endpoint_host_port(endpoint: str) -> Tuple[str, int]:
     if not parsed.hostname:
         raise ValueError(f"Cannot parse an LXD endpoint out of {endpoint!r}")
     scheme = (parsed.scheme or "https").lower()
-    return parsed.hostname, parsed.port or (80 if scheme == "http" else 443)
+    # `wss://` and `ws://` are the same sockets as `https://` and `http://` (lxd_ws.ws_base).
+    return parsed.hostname, parsed.port or (80 if scheme in ("http", "ws") else 443)
 
 
 def _is_https(endpoint: str) -> bool:

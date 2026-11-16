@@ -69,6 +69,15 @@ function TreeNode({ target, current, showHidden, onNavigate, path, name, level, 
           <span className="whitespace-nowrap font-mono">{guestText(name)}</span>
         </button>
       </div>
+      {/* The list pane carries the reason and the Retry; the tree only stops looking empty. */}
+      {expanded && listing.isError && !listing.data && (
+        <p
+          className="py-0.5 text-xs text-muted-foreground"
+          style={{ paddingLeft: Math.min(level, 12) * 12 + 22 }}
+        >
+          Could not load
+        </p>
+      )}
       {expanded && children.length > 0 && (
         <ul role="group">
           {children.map((entry) => {

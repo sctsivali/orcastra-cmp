@@ -98,15 +98,21 @@ def _is_registered_cluster(server: str) -> bool:
     if parsed.scheme != "https" or not parsed.hostname:
         return False
     try:
-        # The daemon dials `https://host` on 443; only a registered endpoint defaults to 8443.
-        wanted = (parsed.hostname.lower(), parsed.port or 443)
+        # Both sides follow the scheme's default port, as the daemon and the REST client do: a
+        # cluster registered as `https://host` is served on 443.
+        from app.services.lxd_certs.pinning import endpoint_host_port
         from app.services.lxd_service import get_lxd_service
 
+        wanted = (parsed.hostname.lower(), parsed.port or 443)
         manager = get_lxd_service().cert_manager
         for cluster_id in manager.list_clusters():
             metadata = manager.vault.vault_read(f"{manager.clusters_path}/{cluster_id}/metadata", use_cache=True) or {}
-            endpoint = urlparse(str(metadata.get("endpoint") or ""))
-            if endpoint.hostname and (endpoint.hostname.lower(), endpoint.port or 8443) == wanted:
+            endpoint = str(metadata.get("endpoint") or "")
+            try:
+                host, port = endpoint_host_port(endpoint)
+            except ValueError:
+                continue
+            if (host.lower(), port) == wanted:
                 return True
     except Exception:  # noqa: BLE001 - not knowing is not a yes
         return False
