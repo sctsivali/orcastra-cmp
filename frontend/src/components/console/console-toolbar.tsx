@@ -53,6 +53,8 @@ import { FORCE_OFF_HINT, FORCE_ON_HINT, FORCE_OPTION_LABEL, POWER_ACTION_PAST } 
 import type { InstanceStatus } from "@/lib/console-store";
 import { toast } from "@/hooks/use-toast";
 import { useManualRefresh } from "@/hooks/use-manual-refresh";
+import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
+import { useRebuildOffered } from "@/hooks/use-rebuild-offered";
 import { isActorScopeChangedError, useInstancePowerAction } from "@/hooks/use-instance-power-action";
 import type { ConsoleZoom } from "./graphics-console";
 
@@ -184,6 +186,9 @@ export function ConsoleToolbar({
   };
 
   const powerReason = operateReason ?? "You do not have permission to change this instance's power state";
+  const { isReadOnly } = useReadOnlyMode();
+  // The same rule as the Instances row menu (lib/rebuild-access.ts).
+  const rebuildIsOffered = useRebuildOffered(host, project, instanceName);
   const isRunning = instanceStatus === "Running";
   const isStopped = instanceStatus === "Stopped";
   const isFrozen = instanceStatus === "Frozen";
@@ -259,13 +264,13 @@ export function ConsoleToolbar({
             () => setConfirm({ operation: "restart", force: false }),
             canOperate ? "Restart Instance" : powerReason,
           )}
-          {powerButton(
+          {rebuildIsOffered && powerButton(
             "rebuild",
             "Rebuild instance",
             <RefreshCw className="h-4 w-4 text-status-pending" aria-hidden="true" />,
-            !canOperate || isTransitioning || busy,
+            !canOperate || isReadOnly || isTransitioning || busy,
             () => setRebuildOpen(true),
-            canOperate ? "Rebuild Instance (reinstall root disk)" : powerReason,
+            !canOperate ? powerReason : isReadOnly ? "Disabled in read-only mode" : "Rebuild Instance (reinstall root disk)",
           )}
         </div>
 
@@ -469,7 +474,7 @@ export function ConsoleToolbar({
           onOpenChange={setRebuildOpen}
           instance={{ name: instanceName, host, project }}
           // The root disk was reinstalled: empty mode leaves it stopped, the image modes running.
-          onDone={() => onInstanceStatus("Stopped")}
+          onDone={(result) => onInstanceStatus(result?.mode === "empty" ? "Stopped" : "Running")}
         />
       )}
     </TooltipProvider>

@@ -56,6 +56,7 @@ import { useTableFilters } from "@/hooks/use-table-filters";
 import { Plus } from "lucide-react";
 
 import { RebuildDialog } from "@/components/rebuild-dialog";
+import { rebuildOffered } from "@/lib/rebuild-access";
 
 
 import { PageReadError } from "@/components/ui/read-error-state";
@@ -71,7 +72,7 @@ import { useInstanceActions } from "./components/use-instance-actions";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { InstanceSpecificationDialog } from "@/components/instance-specification/instance-specification-dialog";
 import { inventoryLinks } from "@/lib/inventory-links";
-import { useMigrationCapabilities } from "@/hooks/use-read-only-mode";
+import { useMigrationCapabilities, useTenantRebuildEnabled } from "@/hooks/use-read-only-mode";
 import { collectedAtMs } from "@/lib/utils";
 
 function instanceRecordId(instance: VMInfo): string {
@@ -201,11 +202,18 @@ function InstancesContent() {
       : hasPermission(host, project, name, permission)
         ? undefined
         : termReadOnlyReason(host, project, name)
-          ?? (permission === "console" ? "No console permission" : "No operate permission");
+          ?? `No ${permission} permission`;
   const { hasRole } = usePermissions();
   const canCreateInstance = hasRole(Role.PARTNER);
   // Deletion is Partner+ on the backend too (DELETE /vms requires Partner).
   const canDeleteInstance = hasRole(Role.PARTNER);
+  const tenantRebuildEnabled = useTenantRebuildEnabled();
+  const canRebuild = (host: string, project: string, name: string) =>
+    rebuildOffered({
+      isPartner: canDeleteInstance,
+      hasPermission: (permission) => hasPermission(host, project, name, permission),
+      tenantRebuildEnabled,
+    });
   const migrationCapabilities = useMigrationCapabilities();
   const migrationPlanningUnavailableReason = migrationCapabilities.planningUnavailableReason;
   const migrationCopyUnavailableReason = migrationPlanningUnavailableReason
@@ -387,6 +395,7 @@ function InstancesContent() {
             permissionReason={permissionReason}
             termReadOnlyReason={termReadOnlyReason}
             canDeleteInstance={canDeleteInstance}
+            canRebuild={canRebuild}
             deletePending={actions.deletePending}
             onEditSpecification={(instance) => {
               setIsMonitoringModalOpen(false);

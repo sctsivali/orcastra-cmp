@@ -1519,6 +1519,8 @@ export interface SystemSettings {
   instance_files_max_transfer_bytes?: number;
   /** Whether the guest credentials routes answer (off: 503 feature_disabled). Same three-state rule. */
   guest_credentials_enabled?: boolean;
+  /** Whether a Tenant with the Rebuild grant may rebuild (off when an operator set a limit to 0). */
+  tenant_rebuild_enabled?: boolean;
   /** Whether this deployment mounted the task journal routes. Same three-state rule. */
   task_journal_enabled?: boolean;
   /** Read-only Migration Center planning and history capability. */
@@ -2973,7 +2975,7 @@ export interface AuthentikSyncStatus {
 // ========== Tenant Access Policy Types (ACL) ==========
 
 /** Valid permission types for tenant policies */
-export type TenantPermission = "view" | "operate" | "console" | "snapshot" | "file_transfer";
+export type TenantPermission = "view" | "operate" | "console" | "snapshot" | "file_transfer" | "rebuild";
 
 export const TENANT_PERMISSION_LABELS: Record<TenantPermission, string> = {
   view: "View",
@@ -2981,6 +2983,7 @@ export const TENANT_PERMISSION_LABELS: Record<TenantPermission, string> = {
   console: "Console & Terminal",
   snapshot: "Snapshots",
   file_transfer: "File Transfer",
+  rebuild: "Rebuild",
 };
 
 export const TENANT_PERMISSION_DESCRIPTIONS: Record<TenantPermission, string> = {
@@ -2989,11 +2992,17 @@ export const TENANT_PERMISSION_DESCRIPTIONS: Record<TenantPermission, string> = 
   console: "Open graphical console or terminal to VM",
   snapshot: "Create, restore, and delete snapshots",
   file_transfer: "Browse, change, upload and download files in the instance, as root",
+  rebuild: "Reinstall the instance from an image, erasing its root disk. Needs View and Operate; cloud-init also needs Console",
 };
 
 export const ALL_TENANT_PERMISSIONS: TenantPermission[] = [
-  "view", "operate", "console", "snapshot", "file_transfer",
+  "view", "operate", "console", "snapshot", "file_transfer", "rebuild",
 ];
+
+/** A grant that only works with others beside it: the server checks all of them (core/instance_access.py). */
+export const TENANT_PERMISSION_REQUIRES: Partial<Record<TenantPermission, TenantPermission[]>> = {
+  rebuild: ["view", "operate"],
+};
 
 export interface PolicyRule {
   id?: number;

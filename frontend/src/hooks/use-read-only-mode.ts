@@ -83,6 +83,11 @@ export function useInstanceFilesEnabled(): boolean | undefined {
   return useSystemSettings().data?.instance_files_enabled;
 }
 
+/** Whether a Tenant with the Rebuild grant may rebuild here; see lib/rebuild-access.ts for its rule. */
+export function useTenantRebuildEnabled(): boolean | undefined {
+  return useSystemSettings().data?.tenant_rebuild_enabled;
+}
+
 /** Whether this deployment offers the guest credentials panel, on the same three-state rule. */
 export function useGuestCredentialsEnabled(): boolean | undefined {
   return useSystemSettings().data?.guest_credentials_enabled;

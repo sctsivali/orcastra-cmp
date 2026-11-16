@@ -267,6 +267,10 @@ jobs:
       - name: Brand mark untinted
         run: node scripts/checks/check-brand-mark-untinted.mjs .
 
+      # Rebuild is offered by one rule on every surface, and the server checks the same grants.
+      - name: Rebuild gate parity
+        run: node scripts/checks/check-rebuild-gate-parity.mjs .
+
       # The branding editor must target the same organization the sidebar shows.
       - name: Organization branding target
         run: node scripts/checks/check-org-branding-target.mjs .

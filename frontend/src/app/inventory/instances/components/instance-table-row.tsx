@@ -40,6 +40,8 @@ export interface InstanceTableRowProps {
   /** Why the instance is view only because its paid term ended (hooks/use-tenant-access.ts). */
   termReadOnlyReason?: (host: string, project: string, name: string) => string | undefined;
   canDeleteInstance: boolean;
+  /** lib/rebuild-access.ts for this row's instance. */
+  canRebuild: (host: string, project: string, name: string) => boolean;
   /** True only for the row whose delete is in flight, so the other rows stay live. */
   deletePending: boolean;
   onEditSpecification: (instance: VMInfo) => void;
@@ -113,6 +115,7 @@ export function InstanceTableRow({
   permissionReason,
   termReadOnlyReason,
   canDeleteInstance,
+  canRebuild,
   deletePending,
   onEditSpecification,
   onCopy,
@@ -135,6 +138,7 @@ export function InstanceTableRow({
     isReadOnly,
     writeDisabledReason,
     canManage: canDeleteInstance,
+    rebuildOffered: canRebuild(instance.host, project, instance.name),
     migrationMoveUnavailableReason,
     migrationCopyUnavailableReason,
     pendingActions,

@@ -97,6 +97,7 @@ interface InstancesTableProps {
   permissionReason: Parameters<typeof InstanceTableRow>[0]["permissionReason"];
   termReadOnlyReason?: Parameters<typeof InstanceTableRow>[0]["termReadOnlyReason"];
   canDeleteInstance: boolean;
+  canRebuild: Parameters<typeof InstanceTableRow>[0]["canRebuild"];
   deletePending: (instance: VMInfo) => boolean;
   onEditSpecification: (instance: VMInfo) => void;
   onCopy: (instance: VMInfo) => void;
@@ -177,6 +178,7 @@ export function InstancesTable(props: InstancesTableProps) {
             permissionReason={props.permissionReason}
             termReadOnlyReason={props.termReadOnlyReason}
             canDeleteInstance={props.canDeleteInstance}
+            canRebuild={props.canRebuild}
             deletePending={props.deletePending(instance)}
             onEditSpecification={props.onEditSpecification}
             onCopy={props.onCopy}

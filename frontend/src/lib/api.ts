@@ -755,7 +755,13 @@ async function _fetchAPIInternal<T>(
       // The same-origin proxy forwards upstream headers, so Retry-After reaches the browser.
       // The picker notices count down from it.
       const retryAfter = parseRetryAfter(response.headers.get('Retry-After'));
-      if (response.status === 429) {
+      // A 429 with its own sentence (a rebuild budget, a per-organization cap) keeps it: it says
+      // what was limited and when to try again. Only the bare rate limiter gets the generic line.
+      const carriesSentence =
+        typeof errorDetail === 'object' &&
+        errorDetail !== null &&
+        typeof (errorDetail as { message?: unknown }).message === 'string';
+      if (response.status === 429 && !carriesSentence) {
         errorMessage = `Rate limited by the API. Try again in ${retryAfter ?? 30}s.`;
       }
 

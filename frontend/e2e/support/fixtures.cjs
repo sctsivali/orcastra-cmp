@@ -325,6 +325,7 @@ async function installApiFixtures(page, role, options = {}) {
         debug: false,
         snapshot_schedules_enabled: true,
         task_journal_enabled: false,
+        ...(options.tenantRebuildEnabled === undefined ? {} : { tenant_rebuild_enabled: options.tenantRebuildEnabled }),
       };
     } else if (path === "/system/vault-status") {
       // The shell's Vault notice reads this on every page; a healthy Vault shows nothing.
@@ -462,7 +463,7 @@ async function installApiFixtures(page, role, options = {}) {
             cluster_id: "cluster-a",
             project_name: "tenant-a",
             instance_name: "tenant-owned-vm",
-            permissions: ["view", "operate", "console"],
+            permissions: options.tenantPermissions ?? ["view", "operate", "console"],
           },
         ],
         total_clusters: 1,

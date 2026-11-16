@@ -18,7 +18,7 @@ import { useActorQueryScope } from "@/hooks/use-query-scope";
 import type { ClusterStatus } from "@/types/api";
 import type { PolicyRule, TenantPermission } from "@/types";
 import {
-  ALL_TENANT_PERMISSIONS, TENANT_PERMISSION_DESCRIPTIONS, TENANT_PERMISSION_LABELS,
+  ALL_TENANT_PERMISSIONS, TENANT_PERMISSION_DESCRIPTIONS, TENANT_PERMISSION_LABELS, TENANT_PERMISSION_REQUIRES,
 } from "@/types";
 
 /** A cluster as the rule picker offers it. */
@@ -48,12 +48,15 @@ function PermissionCheckboxGroup({
   const baseId = useId();
   const toggle = (perm: TenantPermission) => {
     if (selected.includes(perm)) {
-      // A rule must grant something; the last permission stays until another is ticked.
-      if (selected.length > 1) {
-        onChange(selected.filter((p) => p !== perm));
-      }
+      // A rule must grant something; the last permission stays until another is ticked. Taking
+      // away a grant another one needs takes that one too (Operate takes Rebuild).
+      const dependents = ALL_TENANT_PERMISSIONS.filter((p) => TENANT_PERMISSION_REQUIRES[p]?.includes(perm));
+      const next = selected.filter((p) => p !== perm && !dependents.includes(p));
+      if (next.length > 0) onChange(next);
     } else {
-      onChange([...selected, perm]);
+      // Ticking a grant ticks what it needs, so a rule never stores one the server cannot honour.
+      const needed = TENANT_PERMISSION_REQUIRES[perm] ?? [];
+      onChange(Array.from(new Set([...selected, ...needed, perm])));
     }
   };
 

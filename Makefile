@@ -336,6 +336,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-personalization-defaults.mjs
 	@echo "$(COLOR_GREEN)Checking the orca mark keeps its colours...$(COLOR_RESET)"
 	@node scripts/checks/check-brand-mark-untinted.mjs
+	@echo "$(COLOR_GREEN)Checking every Rebuild surface asks the same question...$(COLOR_RESET)"
+	@node scripts/checks/check-rebuild-gate-parity.mjs
 	@echo "$(COLOR_GREEN)Checking the org branding target...$(COLOR_RESET)"
 	@node scripts/checks/check-org-branding-target.mjs
 	@echo "$(COLOR_GREEN)Checking Settings routes, cache and branding synchronization...$(COLOR_RESET)"

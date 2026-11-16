@@ -17,6 +17,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
+import { RebuildWarning } from "@/components/rebuild/rebuild-warning";
+import { usePermissions } from "@/hooks/use-permissions";
+import { useTenantAccess } from "@/hooks/use-tenant-access";
+import { Role } from "@/types/rbac";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useToast } from "@/hooks/use-toast";
 import { useByteFormat } from "@/hooks/use-byte-format";
@@ -39,7 +43,6 @@ import {
   RefreshCw,
   AlertTriangle,
   Disc3,
-  ShieldCheck,
   CheckCircle2,
   XCircle,
 } from "lucide-react";
@@ -48,7 +51,8 @@ interface RebuildDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   instance: { name: string; host: string; project?: string };
-  onDone?: () => void;
+  /** The rebuild finished: the empty mode leaves the instance stopped, the image modes running. */
+  onDone?: (result: { mode: Mode }) => void;
 }
 
 type Mode = "image" | "empty" | "cloud-init";
@@ -113,6 +117,13 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
   }
   const pollAbortRef = useRef<AbortController | null>(null);
   const runInFlightRef = useRef(false);
+  // A Tenant cannot attach an install ISO, so the empty mode would leave it an instance it cannot
+  // boot; the server refuses it too (routers/instance_rebuild.py).
+  const { hasRole } = usePermissions();
+  const isTenant = !hasRole(Role.PARTNER);
+  // Cloud-init user-data runs as root on first boot, so for a Tenant it needs Console as well.
+  const { hasPermission } = useTenantAccess();
+  const canCloudInit = !isTenant || hasPermission(instance.host, instance.project || "default", instance.name, "console");
 
   const [phase, setPhase] = useState<Phase>("loading");
   const [preflight, setPreflight] = useState<RebuildPreflight | null>(null);
@@ -123,6 +134,9 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
   const [cloudInit, setCloudInit] = useState<string>("");
   const [runProvisioning, setRunProvisioning] = useState(true);
   const [confirmName, setConfirmName] = useState("");
+  const [acknowledged, setAcknowledged] = useState(false);
+  // A refusal before anything started (a limit, a running rebuild, a permission): nothing changed.
+  const [refusal, setRefusal] = useState<string | null>(null);
 
   const [jobStatus, setJobStatus] = useState<RebuildStatus>("pending");
   const [runError, setRunError] = useState<string | null>(null);
@@ -140,6 +154,8 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
     setCloudInit("");
     setRunProvisioning(true);
     setConfirmName("");
+    setAcknowledged(false);
+    setRefusal(null);
     setJobStatus("pending");
     setRunError(null);
     setRemoteImageIntent(false);
@@ -233,7 +249,8 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
   const nameMatches = confirmName.trim() === instance.name;
   const imageOk = !needsImage || !!selectedRow;
   const cloudInitOk = mode !== "cloud-init" || !!cloudInit.trim();
-  const canSubmit = phase === "form" && !blocked && nameMatches && imageOk && cloudInitOk;
+  const modeAllowed = !(isTenant && mode === "empty") && (mode !== "cloud-init" || canCloudInit);
+  const canSubmit = phase === "form" && !blocked && acknowledged && nameMatches && imageOk && cloudInitOk && modeAllowed;
 
   const startRebuild = async () => {
     if (runInFlightRef.current) return;
@@ -274,6 +291,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
     setPhase("running");
     setJobStatus("pending");
     setRunError(null);
+    setRefusal(null);
     let accepted = false;
     try {
       const job = await api.instances.rebuild(instance.name, body);
@@ -344,9 +362,15 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
             ? `"${instance.name}" now has a blank root disk. Open the console to attach an ISO and install.`
             : `"${instance.name}" was rebuilt successfully.`,
       });
-      onDone?.();
+      onDone?.({ mode });
     } catch (e: unknown) {
       if (!isCurrentRequest() || pollController.signal.aborted) return;
+      if (!accepted) {
+        // Refused before any job existed: the form stays as filled in, with the reason above it.
+        setPhase("form");
+        setRefusal(e instanceof Error ? e.message : String(e));
+        return;
+      }
       if (accepted) {
         // A failed or unreadable terminal job can still have changed the root disk or power
         // state. Reconcile actual state, and never replay the destructive rebuild automatically.
@@ -429,8 +453,8 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
                 <p className="font-medium">Delete snapshots before rebuilding</p>
                 <p className="mt-1 text-muted-foreground">
                   LXD cannot rebuild an instance that has snapshots. Delete the{" "}
-                  {plural(snapshots.length, "snapshot")} below, then reopen
-                  this dialog.
+                  {plural(snapshots.length, "snapshot")} below{isTenant ? ", or ask your provider to" : ""}, then
+                  reopen this dialog.
                 </p>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {snapshots.map((s) => (
@@ -450,8 +474,8 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
               <Label>Rebuild from</Label>
               <div className="flex gap-2">
                 {modeButton("image", "Image", "Reinstall from a base image")}
-                {modeButton("cloud-init", "Cloud-init", "Image + provisioning")}
-                {modeButton("empty", "Empty / ISO", "Blank disk, install via ISO")}
+                {canCloudInit && modeButton("cloud-init", "Cloud-init", "Image + provisioning")}
+                {!isTenant && modeButton("empty", "Empty / ISO", "Blank disk, install via ISO")}
               </div>
             </div>
 
@@ -533,25 +557,6 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
               </div>
             )}
 
-            <div className="flex gap-2 rounded-md border bg-muted/30 p-3 text-sm">
-              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-status-online" aria-hidden="true" />
-              <div className="space-y-1 text-muted-foreground">
-                <p>Kept: name, profiles/config, network config and the instance&apos;s IP.</p>
-                {volumes.length > 0 ? (
-                  <p>
-                    Attached data volume{volumes.length === 1 ? "" : "s"} preserved:{" "}
-                    {volumes.map((v) => (
-                      <Badge key={v} variant="outline" className="ml-1 font-mono text-xs">
-                        {v}
-                      </Badge>
-                    ))}
-                  </p>
-                ) : (
-                  <p>Only the root disk is replaced. Attached data volumes are preserved.</p>
-                )}
-              </div>
-            </div>
-
             {mode !== "empty" && (
               <label className="flex items-start gap-2 text-sm">
                 <input
@@ -570,23 +575,22 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
               </label>
             )}
 
-            <div className="space-y-2 rounded-md border border-destructive/40 p-3">
-              <div className="flex gap-2 text-sm text-destructive">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                <p>
-                  This <span className="font-semibold">erases the root filesystem</span>. Anything on
-                  the root disk (not on a separate data volume) is lost. Type the instance name to
-                  confirm.
-                </p>
-              </div>
-              <Input
-                value={confirmName}
-                onChange={(e) => setConfirmName(e.target.value)}
-                placeholder={instance.name}
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </div>
+            <RebuildWarning
+              instanceName={instance.name}
+              mode={mode}
+              volumes={volumes}
+              acknowledged={acknowledged}
+              onAcknowledgedChange={setAcknowledged}
+              confirmName={confirmName}
+              onConfirmNameChange={setConfirmName}
+            />
+
+            {refusal && (
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" aria-hidden />
+                <AlertDescription className="break-words">Rebuild not started. {refusal}</AlertDescription>
+              </Alert>
+            )}
           </div>
         )}
 

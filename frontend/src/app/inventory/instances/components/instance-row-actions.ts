@@ -3,7 +3,7 @@ import type { RowAction } from "@/components/ui/row-actions";
 import type { VMInfo } from "@/types/api";
 import { actionKey, type InstanceAction } from "./use-instance-actions";
 
-export type InstancePermission = "view" | "operate" | "console";
+export type InstancePermission = "view" | "operate" | "console" | "rebuild";
 
 /** The wording every read-only refusal in a row menu uses; specs match on it. */
 export const READ_ONLY_REASON = "Disabled in read-only mode";
@@ -20,8 +20,10 @@ export interface InstanceRowActionsInput {
   isReadOnly: boolean;
   /** Fail-closed reason while global write availability is not established. */
   writeDisabledReason?: string;
-  /** Partner and above. The backend refuses copy, rebuild and delete below that. */
+  /** Partner and above. The backend refuses edit, copy, move and delete below that. */
   canManage: boolean;
+  /** lib/rebuild-access.ts: Partner and above, or a Tenant holding the Rebuild grant. */
+  rebuildOffered: boolean;
   /** Fail-closed reason while Migration Center planning availability is not established. */
   migrationMoveUnavailableReason?: string;
   /** Copy and Move open the Migration Center wizard. Each has its own deployment switch. */
@@ -47,9 +49,9 @@ export interface InstanceRowActionsInput {
  * The row menu for one instance: lifecycle, then access, then management, then delete.
  *
  * Items are offered by state (Start only when not Running; Stop, Restart, Terminal and Console
- * only when Running) and by role (Edit Specifications, Copy, Move, Rebuild and Delete only for
- * canManage). A refusal is a reason under the label instead of a greyed item: pending beats
- * read-only, which beats the permission answer.
+ * only when Running) and by role (Edit Specifications, Copy, Move and Delete only for canManage;
+ * Rebuild when rebuildOffered). A refusal is a reason under the label instead of a greyed item:
+ * pending beats read-only, which beats the permission answer.
  */
 export function instanceRowActions(input: InstanceRowActionsInput): RowAction[] {
   const {
@@ -57,6 +59,7 @@ export function instanceRowActions(input: InstanceRowActionsInput): RowAction[] 
     isReadOnly,
     writeDisabledReason,
     canManage,
+    rebuildOffered,
     migrationMoveUnavailableReason,
     migrationCopyUnavailableReason,
     pendingActions,
@@ -119,7 +122,24 @@ export function instanceRowActions(input: InstanceRowActionsInput): RowAction[] 
         onSelect: input.onMove,
         unavailableReason: plan ?? migrationMoveUnavailableReason,
       },
-      { id: "rebuild", label: "Rebuild Instance", icon: RefreshCw, onSelect: input.onRebuild, unavailableReason: manage },
+    );
+  }
+
+  if (rebuildOffered) {
+    actions.push({
+      id: "rebuild",
+      label: "Rebuild Instance",
+      icon: RefreshCw,
+      onSelect: input.onRebuild,
+      // It erases the root disk, so it reads like Delete; a Tenant's starts the management group.
+      destructive: true,
+      separatorBefore: !canManage,
+      unavailableReason: readOnly ?? permissionReason("operate") ?? permissionReason("rebuild"),
+    });
+  }
+
+  if (canManage) {
+    actions.push(
       {
         id: "delete",
         label: "Delete Instance",
