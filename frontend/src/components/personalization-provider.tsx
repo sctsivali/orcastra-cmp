@@ -136,7 +136,7 @@ export function PersonalizationProvider({ children, initialSettings, initialByte
       root.style.setProperty("--personalization-accent-foreground", foreground);
       const foregroundTriplet = hslTriplet(foreground);
       if (foregroundTriplet) root.style.setProperty("--primary-foreground", foregroundTriplet);
-      // Brand artwork (loader, card illustrations) turns by this many degrees.
+      // The card illustrations turn by this many degrees; the orca loader keeps its drawn colours.
       root.style.setProperty("--personalization-accent-hue-shift", `${accentHueShift(accentColor)}deg`);
     }
 

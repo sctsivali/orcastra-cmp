@@ -69,14 +69,21 @@ export function mutedForText(textColor: string): string {
 }
 
 /**
+ * Below this saturation (percent) an accent has no hue worth following: grey, black and white
+ * read as hue 0 in HSL, which would turn the illustrations yellow-green. The pre-paint script in
+ * app/layout.tsx repeats the number (scripts/checks/check-brand-mark-untinted.mjs holds them equal).
+ */
+export const ACHROMATIC_SATURATION = 10;
+
+/**
  * How far the accent's hue sits from the shipped accent's, in degrees within (-180, 180].
- * Brand artwork (the loader, the card illustrations) rotates by this, so the default accent
- * leaves it exactly as drawn and any other accent turns it to the same hue family.
+ * The card illustrations rotate by this, so the default accent leaves them exactly as drawn and
+ * any other accent turns them to the same hue family. The orca mark never follows it.
  */
 export function accentHueShift(accent: string): number {
   const current = hexToHSL(accent);
   const shipped = hexToHSL(DEFAULT_PERSONALIZATION.colors.accentColor);
-  if (!current || !shipped) return 0;
+  if (!current || !shipped || current.s < ACHROMATIC_SATURATION) return 0;
   let shift = current.h - shipped.h;
   if (shift > 180) shift -= 360;
   if (shift <= -180) shift += 360;
@@ -87,35 +94,4 @@ export function accentHueShift(accent: string): number {
 export function hslTriplet(hex: string): string | null {
   const hsl = hexToHSL(hex);
   return hsl ? `${hsl.h} ${hsl.s}% ${hsl.l}%` : null;
-}
-
-/** An [r, g, b] colour in 0..1 with its hue turned by `degrees`, saturation and lightness kept. */
-export function rotateRgbHue(rgb: readonly number[], degrees: number): number[] {
-  const [r, g, b] = rgb;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const l = (max + min) / 2;
-  if (max === min || !degrees) return [r, g, b];
-  const d = max - min;
-  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-  let h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
-  h = (((h / 6) * 360 + degrees) % 360 + 360) % 360 / 360;
-  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-  const p = 2 * l - q;
-  const channel = (t: number) => {
-    const u = t < 0 ? t + 1 : t > 1 ? t - 1 : t;
-    if (u < 1 / 6) return p + (q - p) * 6 * u;
-    if (u < 1 / 2) return q;
-    if (u < 2 / 3) return p + (q - p) * (2 / 3 - u) * 6;
-    return p;
-  };
-  return [channel(h + 1 / 3), channel(h), channel(h - 1 / 3)];
-}
-
-/** The accent hue shift the root carries now (set by the provider and the pre-paint script). */
-export function currentAccentHueShift(): number {
-  if (typeof document === "undefined") return 0;
-  const raw = getComputedStyle(document.documentElement).getPropertyValue("--personalization-accent-hue-shift");
-  const value = parseFloat(raw);
-  return Number.isFinite(value) ? value : 0;
 }

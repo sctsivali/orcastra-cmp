@@ -93,8 +93,9 @@
        ground to derive from before the cookie exists. */
     --personalization-sidebar-text: #f8fafc;
     --personalization-sidebar-muted: rgba(248,250,252,0.6);
-    /* Text on the accent (white on the shipped accent), and how far brand artwork turns from its
-       drawn hue (none for the shipped accent). The provider and the pre-paint script set both. */
+    /* Text on the accent (white on the shipped accent), and how far the card illustrations turn
+       from their drawn hue (none for the shipped accent or a grey one; the orca mark never turns).
+       The provider and the pre-paint script set both. */
     --personalization-accent-foreground: #ffffff;
     --personalization-accent-hue-shift: 0deg;
   }

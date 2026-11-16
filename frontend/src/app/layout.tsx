@@ -116,14 +116,15 @@ const personalizationInitScript = `
       r.style.setProperty('--personalization-accent-h', String(a[0]));
       r.style.setProperty('--personalization-accent-s', a[1] + '%');
       r.style.setProperty('--personalization-accent-l', a[2] + '%');
-      // The accent's own text (personalization-colors.accentForeground) and the hue brand
-      // artwork turns by (accentHueShift), as the provider sets them after hydration.
+      // The accent's own text (personalization-colors.accentForeground) and the hue the card
+      // illustrations turn by (accentHueShift, 0 below ACHROMATIC_SATURATION), as the provider
+      // sets them after hydration.
       var dark = rgb('#1e293b');
       var fg = ratio(dark, ac) > ratio([1,1,1], ac) ? '#1e293b' : '#ffffff';
       var f = hsl(rgb(fg));
       r.style.setProperty('--personalization-accent-foreground', fg);
       r.style.setProperty('--primary-foreground', f[0] + ' ' + f[1] + '% ' + f[2] + '%');
-      var shift = a[0] - hsl(rgb('#8467e4'))[0];
+      var shift = a[1] < 10 ? 0 : a[0] - hsl(rgb('#8467e4'))[0];
       if (shift > 180) shift -= 360;
       if (shift <= -180) shift += 360;
       r.style.setProperty('--personalization-accent-hue-shift', shift + 'deg');

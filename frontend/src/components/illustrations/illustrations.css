@@ -3,7 +3,8 @@
    The palette is the orcastra.io brand: indigo #321D71, its lavender accent #B7A6FF for dark
    panels, and the tints between them. Every hue turns by --personalization-accent-hue-shift (0deg
    for the shipped accent, so the default draws exactly these values), so a deployment branded red
-   gets red scenes. Saturation and lightness stay as drawn; the contrast figures below are measured
+   gets red scenes; a grey accent has no hue and leaves them as drawn. The orca loader is the brand
+   mark and never turns. Saturation and lightness stay as drawn; the contrast figures below are measured
    on the shipped hue and move a little with another one.
 
    Each object has three faces lit from the top left (top lightest, right darkest) and a hairline

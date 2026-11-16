@@ -263,6 +263,10 @@ jobs:
       - name: Personalization defaults
         run: node scripts/checks/check-personalization-defaults.mjs .
 
+      # The orca loader is the brand mark: no accent, seller colour or filter recolours it.
+      - name: Brand mark untinted
+        run: node scripts/checks/check-brand-mark-untinted.mjs .
+
       # The branding editor must target the same organization the sidebar shows.
       - name: Organization branding target
         run: node scripts/checks/check-org-branding-target.mjs .

@@ -31,7 +31,14 @@ const UNREADABLE = "Could not be read";
 export default function HomePage() {
   const { settings } = usePersonalization();
   const { isPartner } = usePermissions();
-  
+  const appName = settings.branding.appName || DEFAULT_PERSONALIZATION.branding.appName;
+  // A seller's own name takes its accent; the built-in Orcastra name is the brand and keeps
+  // the brand purple, as the orca loader does.
+  const appNameColor =
+    appName === DEFAULT_PERSONALIZATION.branding.appName
+      ? DEFAULT_PERSONALIZATION.colors.accentColor
+      : settings.colors.accentColor || DEFAULT_PERSONALIZATION.colors.accentColor;
+
   // important: read through the owning hooks. A bare useQuery on the same key with other options
   // makes whether these counters refresh depend on which other component is mounted.
   const { data: nodesData, isLoading: isLoadingNodes, isError: nodesError } = useNodeAvailability();
@@ -126,9 +133,7 @@ export default function HomePage() {
         <div className="space-y-4">
           <h1 className="text-5xl md:text-6xl font-bold tracking-tight">
             Welcome to{" "}
-            <span style={{ color: settings.colors.accentColor || DEFAULT_PERSONALIZATION.colors.accentColor }}>
-              {settings.branding.appName || DEFAULT_PERSONALIZATION.branding.appName}
-            </span>
+            <span style={{ color: appNameColor }}>{appName}</span>
           </h1>
           <p className="text-xl text-muted-foreground max-w-3xl mx-auto">
             {settings.branding.tagline}
