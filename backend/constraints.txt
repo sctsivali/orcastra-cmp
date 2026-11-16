@@ -16,7 +16,7 @@ cffi==2.1.1
 charset-normalizer==3.5.1
 click==8.5.0
 cryptography==50.0.1
-dnspython==2.9.0
+dnspython==2.9.2
 email-validator==2.3.0
 fastapi==0.141.1
 greenlet==3.5.6
@@ -33,7 +33,7 @@ Mako==1.4.3
 MarkupSafe==3.0.3
 mcp==2.2.0
 mcp-types==2.2.0
-opentelemetry-api==1.45.1
+opentelemetry-api==1.45.2
 psutil==7.2.2
 pycparser==3.0
 pydantic==2.13.5
