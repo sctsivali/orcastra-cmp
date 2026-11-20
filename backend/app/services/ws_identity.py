@@ -42,12 +42,28 @@ async def _read(email: str) -> RoleReading:
     return await get_authentik_sync().read_current_roles(email)
 
 
+async def _session_ended(user: AuthenticatedUser) -> Optional[str]:
+    """An edition directory that can tell this session (not only the account) is over says why.
+
+    A directory that signs sessions to a credential, such as one certificate of several, ends the
+    sockets opened with a credential it revoked while the account itself stays live. Not cached:
+    such a directory answers from its own cache.
+    """
+    from app.services.authentik_sync import get_authentik_sync
+
+    session_ended = getattr(get_authentik_sync(), "session_ended", None)
+    return await session_ended(user) if session_ended is not None else None
+
+
 async def check_identity(user: AuthenticatedUser) -> IdentityCheck:
     email = (user.email or "").strip().lower()
     if not email:
         # important: without an email the account can never be re-checked, so the session ends
         # rather than running unchecked (the mint refuses these too).
         return IdentityCheck(True, "email_missing")
+    ended = await _session_ended(user)
+    if ended:
+        return IdentityCheck(True, ended)
     now = time.monotonic()
     cached = _readings.get(email)
     if cached is not None and now - cached[0] < IDENTITY_CACHE_SECONDS:

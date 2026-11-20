@@ -55,6 +55,11 @@ def feeds() -> List[Tuple[str, str, frozenset, tuple]]:
     if custom:
         host = (urlsplit(custom).hostname or "").lower()
         return [("mirror_custom", custom, frozenset({host}), release_feed_exemptions())]
+    from app.editions import current_edition
+
+    edition_feeds = current_edition().release_feeds
+    if edition_feeds:
+        return [(source, url, PUBLIC_HOSTS, ()) for source, url in edition_feeds]
     return [("github", PRIMARY_URL, PUBLIC_HOSTS, ()), ("docs", MIRROR_URL, PUBLIC_HOSTS, ())]
 
 

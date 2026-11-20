@@ -20,6 +20,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ExternalLink, LogOut, User, Shield, Loader2 } from "lucide-react";
 import { IDP_ACCOUNT_SETTINGS_URL } from "@/lib/identity-provider";
 import { federatedSignOut } from "@/lib/sign-out";
+import { EditionProfileItem } from "@/components/edition-slots";
 
 export function UserNav() {
   const { data: session, status } = useSession();
@@ -112,7 +113,9 @@ export function UserNav() {
         {/* The account lives on the identity provider, so Profile opens it in a new tab and the
             console stays where the user was. noreferrer keeps the console URL out of the IdP's
             logs and noopener stops the new tab reaching back into this one. */}
-        {IDP_ACCOUNT_SETTINGS_URL ? (
+        {EditionProfileItem ? (
+          <EditionProfileItem />
+        ) : IDP_ACCOUNT_SETTINGS_URL ? (
           <DropdownMenuItem className="cursor-pointer" asChild>
             <a
               href={IDP_ACCOUNT_SETTINGS_URL}

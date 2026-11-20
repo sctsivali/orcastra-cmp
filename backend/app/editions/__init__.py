@@ -16,6 +16,7 @@ costs one attribute read:
 - ``authority_verifier``: builds Migration Center's actor verifier (``migrations/authority.py``).
 - ``db_reconcilers``: recognise an unstamped database shape before the bootstrap refuses it.
 - ``host_health_checks``: replace a Host Health check by id, keeping its id and place.
+- ``release_feeds``: where the release notice reads this edition's manifest.
 - ``blocked_path_prefixes``: API paths of Full features the edition does not offer; they answer
   404 before any route runs (included routers cannot be removed after mounting).
 - ``validate_settings``, ``configure_app``, ``on_startup``, ``on_shutdown``, ``health_fields``:
@@ -72,6 +73,9 @@ class Edition:
     db_reconcilers: Tuple[DbReconciler, ...] = ()
     host_health_checks: Dict[str, Tuple[str, Callable[..., Any]]] = field(default_factory=dict)
     blocked_path_prefixes: Tuple[str, ...] = ()
+    # (source, url) feeds of this edition's release manifest, tried in order; RELEASE_FEED_URL
+    # still overrides them. Hosts must be among the release check's public hosts.
+    release_feeds: Tuple[Tuple[str, str], ...] = ()
     validate_settings: Optional[Callable[["Settings"], None]] = None
     configure_app: Optional[Callable[[Any, "Settings"], None]] = None
     on_startup: Optional[Callable[[Any], Awaitable[None]]] = None
