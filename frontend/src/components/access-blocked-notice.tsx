@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { signIn } from "next-auth/react";
+import { AUTH_PROVIDER_ID } from "@/lib/edition";
 import { KeyRound, Loader2, LogIn, LogOut, RefreshCw, UserX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -55,7 +56,7 @@ export function AccessBlockedNotice({ state, email, endedAt, rechecking, onCheck
 
   const signInAgain = () => {
     setLeaving("sign-in");
-    void signIn("authentik", { callbackUrl: `${window.location.pathname}${window.location.search}` });
+    void signIn(AUTH_PROVIDER_ID, { callbackUrl: `${window.location.pathname}${window.location.search}` });
   };
 
   const signOut = async () => {

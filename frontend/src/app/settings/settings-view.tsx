@@ -19,6 +19,7 @@ import { ByteUnitsSettings } from "./components/byte-units-settings";
 import { CacheSettings } from "./components/cache-settings";
 import { useSettingsNotice } from "./components/settings-notice";
 import { settingsTabPath, type SettingsTab } from "./settings-tabs";
+import { editionShows } from "@/lib/edition";
 
 export function SettingsView({ tab }: { tab: SettingsTab }) {
   const { navigate } = useNavigationProgress();
@@ -65,7 +66,7 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
             <span>Integrations</span>
           </TabsTrigger>
           )}
-          {isPartner && (
+          {isPartner && editionShows("settings.user-groups") && (
           <TabsTrigger value="user-groups" className="gap-2 text-xs sm:text-sm px-3 sm:px-4 py-1.5">
             <Users className="h-4 w-4 shrink-0" />
             <span>User Groups</span>
@@ -194,7 +195,7 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
         </TabsContent>
         )}
 
-        {isPartner && (
+        {isPartner && editionShows("settings.user-groups") && (
         <TabsContent value="user-groups">
           <UserGroupsSettings />
         </TabsContent>

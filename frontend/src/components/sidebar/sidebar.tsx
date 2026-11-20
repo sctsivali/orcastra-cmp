@@ -15,7 +15,7 @@ import { usePersonalization, useCurrentLogo } from "../personalization-provider"
 import { usePermissions } from "@/hooks/use-permissions";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { useRouteIntent, linkIntentProps } from "@/components/navigation/route-intent";
-import { NAV_GROUPS, filterGroups, buildPrefetchMap } from "./nav-config";
+import { NAV_GROUPS, filterGroups, buildPrefetchMap, withEditionGroups } from "./nav-config";
 import { resolveActiveHref } from "./use-active-path";
 import { NavSection } from "./nav-group";
 import { CollapsedRail } from "./collapsed-flyout";
@@ -46,7 +46,7 @@ export function Sidebar({ className }: SidebarProps) {
     [isPartner, queryClient, scopeKey],
   );
   const groups = React.useMemo(
-    () => filterGroups(NAV_GROUPS, { isAdmin, isPartner, isTenant }),
+    () => filterGroups(withEditionGroups(NAV_GROUPS), { isAdmin, isPartner, isTenant }),
     [isAdmin, isPartner, isTenant]
   );
   const allHrefs = React.useMemo(

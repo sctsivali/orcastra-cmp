@@ -30,6 +30,7 @@ export interface NavGroup {
   role?: RoleGate; // gate the whole group
   icon?: LucideIcon; // rail icon shown when collapsed (labeled groups become flyouts)
   items: NavItem[];
+  insertAfter?: string; // an edition's group: the id of the group it follows (edition-nav.ts)
 }
 
 export interface PermissionFlags {

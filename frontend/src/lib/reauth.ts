@@ -8,6 +8,7 @@
  * did not stick, and a second would only bounce between the two hosts, so the button shows.
  */
 import { signIn } from "next-auth/react";
+import { AUTH_PROVIDER_ID } from "@/lib/edition";
 import { safeCallbackPath } from "@/lib/auth-redirect";
 
 const LAST_AUTO_KEY = "orcastra:reauth:last";
@@ -59,7 +60,7 @@ export function reauthenticate({ auto }: { auto: boolean }): boolean {
   }
   leaving = true;
   const here = safeCallbackPath(`${window.location.pathname}${window.location.search}`) ?? "/";
-  signIn("authentik", { callbackUrl: here }).catch(() => {
+  signIn(AUTH_PROVIDER_ID, { callbackUrl: here }).catch(() => {
     leaving = false;
   });
   return true;

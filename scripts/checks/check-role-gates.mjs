@@ -31,7 +31,9 @@ const GATED = new Map([
 // Routes whose page is ungated by design, with the reason. Anything not listed must gate.
 const UNGATED_BY_DESIGN = new Map();
 
-const source = readFileSync(navConfig, 'utf8');
+// The edition's own groups use the same literal shape in edition-nav.ts.
+const editionNav = join(src, 'components', 'sidebar', 'edition-nav.ts');
+const source = [navConfig, editionNav].filter(existsSync).map((file) => readFileSync(file, 'utf8')).join('\n');
 
 // A group literal opens at two-space indent and its `role:` covers every item inside it. An
 // item may also carry its own. Reset at each group, or a gated group's role leaks onto the
@@ -74,10 +76,23 @@ if (required.size < 7) {
 // The server half: every page that gates itself in the browser is also refused by the
 // authorized() callback in auth.ts, so a tenant deep link never mounts the page shell.
 const authSource = readFileSync(join(src, 'auth.ts'), 'utf8');
-const serverPaths = (name) => {
-  const block = authSource.match(new RegExp(`const ${name} = \\[([\\s\\S]*?)\\];`));
+// An edition's own pages are refused by the same callback through the lists in lib/edition.ts.
+const editionSource = readFileSync(join(src, 'lib', 'edition.ts'), 'utf8');
+const quotedEntries = (source, pattern) => {
+  const block = source.match(pattern);
   // Comments go first: a quoted path inside a `//` note is not an entry.
   return block ? [...block[1].replace(/\/\/.*$/gm, '').matchAll(/"([^"]+)"/g)].map((m) => m[1]) : null;
+};
+const EDITION_LISTS = new Map([
+  ['adminOrPartnerPaths', 'EDITION_ADMIN_OR_PARTNER_PATHS'],
+  ['adminOnlyPaths', 'EDITION_ADMIN_ONLY_PATHS'],
+]);
+const serverPaths = (name) => {
+  const own = quotedEntries(authSource, new RegExp(`const ${name} = \\[([\\s\\S]*?)\\];`));
+  if (!own) return null;
+  const edition = EDITION_LISTS.get(name);
+  const extra = edition ? quotedEntries(editionSource, new RegExp(`const ${edition}: readonly string\\[\\] = \\[([\\s\\S]*?)\\];`)) : [];
+  return [...own, ...(extra ?? [])];
 };
 const SERVER_LISTS = new Map([
   ['PARTNER', 'adminOrPartnerPaths'],

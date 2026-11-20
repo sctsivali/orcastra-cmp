@@ -12,6 +12,8 @@ import { forget, grantOnce, holdTombstones, upgradeSpent, type GrantOutcome, typ
 import { REFRESH_FAILED, REFRESH_TOKEN_REVOKED, createIdpClient } from "@/lib/auth-refresh";
 import { tokenStamp } from "@/lib/token-stamp";
 import { pinnedSessionCookies } from "@/lib/session-cookie";
+import { editionAuth } from "@/lib/edition-auth";
+import { EDITION_ADMIN_ONLY_PATHS, EDITION_ADMIN_OR_PARTNER_PATHS } from "@/lib/edition";
 
 // The custom fields this app keeps on the session, user and JWT.
 declare module "next-auth" {
@@ -165,6 +167,8 @@ function revoked(token: JWT): JWT {
 }
 
 async function refresh(token: JWT): Promise<JWT | null> {
+  // An edition that signs in without the identity provider renews its sessions its own way.
+  if (editionAuth) return editionAuth.refresh(token);
   const refreshToken = token.refreshToken;
   if (!refreshToken) return revoked(token);
   const { outcome } = await grantOnce(sessionSubject(token), refreshToken, async () => {
@@ -217,6 +221,7 @@ const FORCE_REFRESH_FLOOR_S = 30;
 async function jwtCallback({ token, user, account, trigger, session }: JwtParams): Promise<JWT | null> {
   // Initial sign in
   if (account && user) {
+    if (editionAuth) return editionAuth.signedIn(token, user, account);
     // The email is the persistent user id; the Authentik sub can change per session.
     const persistentUserId = user.email || user.id;
     // The backend decides on the access token's claim, so the session starts from the same one.
@@ -278,7 +283,7 @@ const PUBLIC_ASSET_EXTENSION =
   /^\/[^/]+\.(?:js|mjs|css|map|ico|png|jpe?g|gif|svg|webp|avif|woff2?|ttf|otf|txt|webmanifest|wasm|json)$/i;
 
 export const authConfig: NextAuthConfig = {
-  providers: [authentikProvider],
+  providers: editionAuth?.providers ?? [authentikProvider],
 
   // On an https deployment the session cookie is `__Host-` (lib/session-cookie.ts), which the
   // /api/v1 proxy reads by the same rule. Other cookies keep NextAuth's own names.
@@ -386,6 +391,7 @@ export const authConfig: NextAuthConfig = {
         // Installing an add-on hands a third party a credential into an organization, so the
         // gate is a real redirect here rather than a component that renders null.
         "/extensions",
+        ...EDITION_ADMIN_OR_PARTNER_PATHS,
       ];
 
       const isAdminOrPartnerRoute = adminOrPartnerPaths.some(
@@ -394,7 +400,7 @@ export const authConfig: NextAuthConfig = {
 
       // Host Health names internal addresses and unseals Vault: a platform operator's page.
       // The API refuses a non-admin on its own; this keeps the page shell from loading at all.
-      const adminOnlyPaths = ["/inventory/warnings/host-health"];
+      const adminOnlyPaths = ["/inventory/warnings/host-health", ...EDITION_ADMIN_ONLY_PATHS];
       const isAdminOnlyRoute = adminOnlyPaths.some(
         (p) => nextUrl.pathname === p || nextUrl.pathname.startsWith(p + "/")
       );

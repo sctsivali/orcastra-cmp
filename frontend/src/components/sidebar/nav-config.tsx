@@ -31,14 +31,15 @@ import { api } from "@/lib/api";
 import { readInstanceList } from "@/lib/instance-reconciliation";
 import { queryKeys, readStoragePools } from "@/hooks/use-lxd";
 import type { NavGroup, NavItem, PermissionFlags, RoleGate } from "./types";
+import { EDITION_NAV_GROUPS } from "./edition-nav";
 
 // Single source of truth for the sidebar information architecture. Pinned top-level
 // destinations plus titled groups (Compute / Networking / Storage / Cluster / Access /
 // Platform). Gates are data: the renderer never sees role logic, it receives an
 // already-filtered tree.
 //
-// There is no deploymentMode gate. NEXT_PUBLIC_AUTH_MODE is not a variable this app defines
-// (next.config.js exposes only two public vars), and the app is OIDC-only.
+// There is no runtime deploymentMode gate. An edition built from its own branch adds its groups
+// through edition-nav.ts (withEditionGroups below); nothing is read from the environment.
 export const NAV_GROUPS: NavGroup[] = [
   {
     id: "top",
@@ -138,6 +139,18 @@ function roleAllowed(role: RoleGate | undefined, perms: PermissionFlags): boolea
 
 export function itemVisible(item: NavItem, perms: PermissionFlags): boolean {
   return roleAllowed(item.role, perms);
+}
+
+// NAV_GROUPS with the edition's groups placed after the group each names (last otherwise).
+export function withEditionGroups(base: NavGroup[], extra: NavGroup[] = EDITION_NAV_GROUPS): NavGroup[] {
+  if (extra.length === 0) return base;
+  const out = [...base];
+  for (const group of extra) {
+    const at = group.insertAfter ? out.findIndex((g) => g.id === group.insertAfter) : -1;
+    if (at < 0) out.push(group);
+    else out.splice(at + 1, 0, group);
+  }
+  return out;
 }
 
 // Returns the IA filtered by role; groups with no visible items are dropped.

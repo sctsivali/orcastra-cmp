@@ -3,6 +3,8 @@
 import * as React from "react";
 import dynamic from "next/dynamic";
 import { Header } from "./header";
+import { EditionLayoutExtras } from "./edition-slots";
+import { footerVersion } from "@/lib/edition";
 import { Sidebar } from "./sidebar/sidebar";
 import { useLayout } from "./layout-provider";
 import { usePersonalization } from "./personalization-provider";
@@ -124,6 +126,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
         {!isFullPageTerminalOrConsole && <SecretsNotice />}
         {/* A Tenant's paid term: read-only or ending projects, said on every page */}
         {!isFullPageTerminalOrConsole && <TenantTermNotice summary={access.tenantAccess} />}
+        {!isFullPageTerminalOrConsole && <EditionLayoutExtras />}
         <main
           aria-busy={navPending || undefined}
           className={cn(
@@ -142,7 +145,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
                   <p className="text-center sm:text-left">{appName}</p>
                   {!isLandingPage && (
                     <span className="text-xs opacity-70">
-                      v{APP_VERSION}
+                      {footerVersion(APP_VERSION)}
                     </span>
                   )}
                   {!isLandingPage && <FooterReleaseHint />}

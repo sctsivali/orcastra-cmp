@@ -174,6 +174,8 @@ function world() {
     '@/types/rbac': load('frontend/src/types/rbac.ts'),
     '@/lib/token-stamp': load('frontend/src/lib/token-stamp.ts'),
     '@/lib/session-cookie': { pinnedSessionCookies: () => undefined },
+    '@/lib/edition-auth': load('frontend/src/lib/edition-auth.ts'),
+    '@/lib/edition': load('frontend/src/lib/edition.ts'),
   });
   return { jwt: auth.authConfig.callbacks.jwt, authorized: auth.authConfig.callbacks.authorized };
 }

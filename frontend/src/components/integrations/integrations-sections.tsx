@@ -19,6 +19,7 @@ import { api } from "@/lib/api";
 import { organizationIsFrozen, openSyncedOrganizations } from "@/lib/key-ownership-display";
 import { retryUnlessUnavailable } from "@/lib/read-error";
 import { plural } from "@/lib/utils";
+import { editionShows } from "@/lib/edition";
 import {
   INTEGRATIONS_SECTIONS, RevealIntegrationsSectionContext, type IntegrationsSection,
 } from "./integrations-section-context";
@@ -29,9 +30,16 @@ import {
  * Three sections behind a switcher: stacked, the key grid would push Synced Organizations and
  * Desktop Control far below the fold. The frozen owner key warning shows on the other sections.
  */
+// Synced Organizations exists only where organizations arrive from a marketplace federation; an
+// edition without one leaves the section, its read and its warning out.
+const SHOWS_SYNCED = editionShows("integrations.synced-organizations");
+const SECTIONS: readonly IntegrationsSection[] = SHOWS_SYNCED
+  ? INTEGRATIONS_SECTIONS
+  : INTEGRATIONS_SECTIONS.filter((id) => id !== "organizations");
+
 function IntegrationsSectionsContent() {
   const { isAdmin } = usePermissions();
-  const { section, select, hrefFor } = useSettingsSection(INTEGRATIONS_SECTIONS, "keys");
+  const { section, select, hrefFor } = useSettingsSection(SECTIONS, "keys");
   const visited = useVisitedSections(section);
   const navRef = useRef<HTMLElement>(null);
   useSectionChangeEffects(section, navRef);
@@ -48,6 +56,7 @@ function IntegrationsSectionsContent() {
     queryFn: () => api.integrations.listOrganizations(),
     staleTime: 30000,
     retry: retryUnlessUnavailable,
+    enabled: SHOWS_SYNCED,
   });
   // Only an administrator is told an owner key's state; a partner reads null and counts nothing.
   const frozen = isAdmin ? (orgsQuery.data ?? []).filter(organizationIsFrozen).length : 0;
@@ -67,7 +76,7 @@ function IntegrationsSectionsContent() {
     if (section === "organizations") requestAnimationFrame(() => openSyncedOrganizations());
   }, [focusPending, section]);
 
-  const items: SectionSwitcherItem<IntegrationsSection>[] = [
+  const allItems: SectionSwitcherItem<IntegrationsSection>[] = [
     { id: "keys", label: "API Keys", icon: KeyRound, count: keysQuery.data?.total },
     {
       id: "organizations",
@@ -80,6 +89,7 @@ function IntegrationsSectionsContent() {
     },
     { id: "desktop-control", label: "Desktop Control", icon: Monitor },
   ];
+  const items = allItems.filter((item) => SECTIONS.includes(item.id));
 
   return (
     <RevealIntegrationsSectionContext.Provider value={reveal}>
@@ -120,6 +130,7 @@ function IntegrationsSectionsContent() {
         <SectionPanel id="keys" label="API Keys" active={section === "keys"} visited={visited.has("keys")}>
           <IntegrationsSettings />
         </SectionPanel>
+        {SHOWS_SYNCED && (
         <SectionPanel
           id="organizations"
           label="Synced Organizations"
@@ -130,6 +141,7 @@ function IntegrationsSectionsContent() {
               stopped working freezes it, and this is where an administrator moves it. */}
           <SyncedOrganizationsPanel />
         </SectionPanel>
+        )}
         <SectionPanel
           id="desktop-control"
           label="Desktop Control"

@@ -12,6 +12,7 @@
  */
 
 import { SessionProvider, useSession, signIn, __NEXTAUTH } from "next-auth/react";
+import { AUTH_PROVIDER_ID } from "@/lib/edition";
 import type { Session } from "next-auth";
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { getActorQueryScope } from "@/hooks/use-query-scope";
@@ -229,7 +230,7 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
         <div className="fixed top-0 inset-x-0 z-[100] bg-destructive/90 text-destructive-foreground px-4 py-2.5 text-sm flex items-center justify-center gap-3">
           <span>Your session could not be refreshed. Sign in again to continue.</span>
           <button
-            onClick={() => signIn("authentik")}
+            onClick={() => signIn(AUTH_PROVIDER_ID)}
             className="underline font-medium hover:opacity-80"
           >
             Sign in again

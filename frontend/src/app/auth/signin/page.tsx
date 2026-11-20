@@ -3,6 +3,7 @@
 /** Sign-in page: hands off to Authentik automatically and explains a failed attempt. */
 
 import { signIn } from "next-auth/react";
+import { AUTH_PROVIDER_ID } from "@/lib/edition";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,7 @@ import { AuthBrandMark, BUILT_IN_NAME, useAuthFooterText } from "@/components/br
 import { usePublicBranding } from "@/components/branding/public-branding-context";
 import { safeCallbackPath } from "@/lib/auth-redirect";
 import { forgetReturnPath, recallReturnPath, rememberReturnPath } from "@/lib/auth-return";
+import { EditionSignIn } from "@/components/edition-slots";
 
 const errorMessages: Record<string, string> = {
   OAuthSignin: "Error starting OAuth sign-in flow. Try again.",
@@ -94,7 +96,7 @@ function SignInContent() {
     setIsLoading(true);
     setAutoRedirect(false);
     try {
-      await signIn("authentik", { callbackUrl: resolveCallbackUrl() });
+      await signIn(AUTH_PROVIDER_ID, { callbackUrl: resolveCallbackUrl() });
     } catch (err) {
       console.error("Sign in error:", err);
       setIsLoading(false);
@@ -176,6 +178,7 @@ function SignInContent() {
 }
 
 export default function SignInPage() {
+  if (EditionSignIn) return <EditionSignIn />;
   return (
     <Suspense
       fallback={

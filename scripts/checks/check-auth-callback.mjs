@@ -101,7 +101,7 @@ delete globalThis.window;
 const auth = readFileSync(join(root, "frontend/src/auth.ts"), "utf8");
 assert.match(auth, /safeCallbackPath\(nextUrl\.searchParams\.get\("callbackUrl"\), nextUrl\.origin\) \?\? "\/"/);
 const signin = readFileSync(join(root, "frontend/src/app/auth/signin/page.tsx"), "utf8");
-assert.doesNotMatch(signin, /signIn\("authentik", \{ callbackUrl \}\)/, "the raw parameter is never followed");
+assert.doesNotMatch(signin, /signIn\([^,()]+, \{ callbackUrl \}\)/, "the raw parameter is never followed");
 assert.match(signin, /safeCallbackPath\(requested, window\.location\.origin\)/);
 
 console.log("auth callback: ok");

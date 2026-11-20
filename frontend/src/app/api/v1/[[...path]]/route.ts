@@ -20,6 +20,7 @@ import {
   resolveProxyAuth,
 } from "@/lib/api-proxy-auth";
 import { inspectRequestTarget } from "@/lib/request-security";
+import { editionAuth } from "@/lib/edition-auth";
 import { sessionSecret } from "@/lib/session-cookie-echo";
 import {
   gzipBody,
@@ -180,6 +181,10 @@ function buildForwardHeaders(req: NextRequest): Headers {
   headers.set("x-forwarded-host", req.headers.get("host") || req.nextUrl.host);
   headers.set("x-forwarded-proto", req.nextUrl.protocol.replace(":", ""));
   headers.set("accept-encoding", "identity");
+
+  // An edition whose sign-in rides on the edge in front of this server adds what the backend
+  // needs from it, after the rules above.
+  editionAuth?.forwardHeaders?.(req, headers);
 
   return headers;
 }

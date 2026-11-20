@@ -10,6 +10,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { CreateMenu } from "./create-menu/create-menu";
 import { visibleCreateActions } from "./create-menu/create-menu-config";
+import { EditionHeaderStart } from "./edition-slots";
 
 export function Header() {
   const pathname = usePathname();
@@ -37,6 +38,7 @@ export function Header() {
           >
             <Menu className="h-5 w-5" />
           </Button>
+          <EditionHeaderStart />
         </div>
 
         {/* One set of actions at every width, so the desktop and mobile menus cannot drift

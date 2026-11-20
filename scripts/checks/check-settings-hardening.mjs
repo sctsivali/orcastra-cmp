@@ -33,13 +33,17 @@ const preferences = load("frontend/src/components/personalization/preferences.ts
 const cache = load("frontend/src/app/settings/components/browser-cache.ts", {
   "@tanstack/react-query": frontendRequire("@tanstack/react-query"),
 });
-const tabs = load("frontend/src/app/settings/settings-tabs.ts");
+const tabs = load("frontend/src/app/settings/settings-tabs.ts", {
+  "@/lib/edition": load("frontend/src/lib/edition.ts"),
+});
 
 assert.equal(tabs.settingsTabPath("general"), "/settings");
 assert.equal(tabs.settingsTabPath("dashboard-host"), "/settings/dashboard-host");
 assert.equal(tabs.isSettingsTab("general"), true);
 assert.equal(tabs.isSettingsTab("system-info"), false);
 assert.equal(tabs.isSettingsTab("unknown"), false);
+// Full leaves no tab out, so User Groups is a tab here.
+assert.equal(tabs.isSettingsTab("user-groups"), true);
 
 globalThis.crypto ??= (await import("node:crypto")).webcrypto;
 // NextResponse.next: a pass-through answer that carries the request headers it was given.
