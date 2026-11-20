@@ -284,6 +284,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-banner-role-gate.mjs
 	@echo "$(COLOR_GREEN)Checking role gates...$(COLOR_RESET)"
 	@node scripts/checks/check-role-gates.mjs
+	@echo "$(COLOR_GREEN)Checking identity calls go through the edition seams...$(COLOR_RESET)"
+	@node scripts/checks/check-identity-seams.mjs
 	@echo "$(COLOR_GREEN)Checking auth transition isolation...$(COLOR_RESET)"
 	@node scripts/checks/check-auth-transition-isolation.mjs
 	@echo "$(COLOR_GREEN)Checking Migration Center authority read errors...$(COLOR_RESET)"

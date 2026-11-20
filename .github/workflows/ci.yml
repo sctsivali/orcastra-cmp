@@ -172,6 +172,9 @@ jobs:
       # A route hidden from a role in the nav must also refuse that role itself.
       - name: Role gates
         run: node scripts/checks/check-role-gates.mjs .
+      # Sign-in and identity reads go through the edition seams, so another edition can swap them.
+      - name: Identity seams
+        run: node scripts/checks/check-identity-seams.mjs .
       # Logout or a role change clears every role-scoped query and live transport before the
       # next identity renders, so operator data cannot leak into a Tenant view.
       - name: Auth transition isolation
