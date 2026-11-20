@@ -324,7 +324,8 @@ assert.deepEqual(await decide("GET", { [ACTOR_HEADER]: "anyone" }, undefined), {
     });
   })(src);
   const offenders = files
-    .filter((file) => !SERVER_SIDE.has(file) && !file.startsWith("app/api/"))
+    // An edition's server-side session module (loaded by auth.ts through lib/edition-auth.ts).
+    .filter((file) => !SERVER_SIDE.has(file) && !file.startsWith("app/api/") && !/^editions\/[a-z0-9_]+\/auth\.ts$/.test(file))
     .filter((file) => /accessToken|["']?Authorization["']?\s*[:\]]|Bearer \$\{/.test(readFileSync(join(src, file), "utf8")));
   assert.deepEqual(offenders, [], "page code names the access token or sets a bearer");
   const apiSource = readFileSync(join(src, "lib/api.ts"), "utf8");
