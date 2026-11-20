@@ -90,12 +90,11 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
   }
   if (access.state !== "allowed" && EDITION_GATE_EXEMPT_PATHS.includes(pathname)) {
     return (
-      <main className="min-h-[100dvh] bg-background">
-        <div className="px-4 pt-4 sm:px-8">
-          <Link href="/" className="text-sm font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">
-            Back
-          </Link>
-        </div>
+      // The shell's own content padding, so the page reads the same with or without the shell.
+      <main className="container min-h-[100dvh] space-y-4 bg-background px-4 py-4 md:px-6 md:py-6 lg:px-8 lg:py-8">
+        <Link href="/" className="inline-block text-sm font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">
+          Back
+        </Link>
         {children}
       </main>
     );
