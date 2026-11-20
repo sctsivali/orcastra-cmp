@@ -3,7 +3,8 @@
 import * as React from "react";
 import dynamic from "next/dynamic";
 import { Header } from "./header";
-import { EditionLayoutExtras } from "./edition-slots";
+import Link from "next/link";
+import { EDITION_GATE_EXEMPT_PATHS, EditionLayoutExtras } from "./edition-slots";
 import { footerVersion } from "@/lib/edition";
 import { Sidebar } from "./sidebar/sidebar";
 import { useLayout } from "./layout-provider";
@@ -86,6 +87,18 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
   // sidebar, the task panel or a page whose reads the backend would refuse.
   if (access.state === "checking") {
     return <LoadingLottiePage />;
+  }
+  if (access.state !== "allowed" && EDITION_GATE_EXEMPT_PATHS.includes(pathname)) {
+    return (
+      <main className="min-h-[100dvh] bg-background">
+        <div className="px-4 pt-4 sm:px-8">
+          <Link href="/" className="text-sm font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">
+            Back
+          </Link>
+        </div>
+        {children}
+      </main>
+    );
   }
   if (access.state !== "allowed") {
     return (

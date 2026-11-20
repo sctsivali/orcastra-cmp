@@ -22,6 +22,28 @@ export function MiniProfileItem(): JSX.Element {
   );
 }
 
+/** Inside the access gate: when the certificate expires, and the way to see or renew it. */
+export function MiniAccessGateExtras(): JSX.Element | null {
+  const { status } = useSession();
+  const { scopeKey } = useActorQueryScope();
+  const query = useQuery({
+    queryKey: ["mini-my-certificate", scopeKey],
+    queryFn: () => miniApi.myCertificate(),
+    enabled: status === "authenticated",
+    staleTime: 15 * 60_000,
+  });
+  const me = query.data;
+  if (!me) return null;
+  return (
+    <p className="text-sm text-muted-foreground">
+      {me.not_after ? <>Your certificate expires on {formatDate(me.not_after)}. </> : null}
+      <Link href="/my-certificate" className="font-medium text-foreground underline underline-offset-4">
+        {me.renew_available ? "Renew it" : "My Certificate"}
+      </Link>
+    </p>
+  );
+}
+
 /** A notice on every page while the signed-in certificate is about to expire. */
 export function MiniLayoutExtras(): JSX.Element | null {
   const { status } = useSession();

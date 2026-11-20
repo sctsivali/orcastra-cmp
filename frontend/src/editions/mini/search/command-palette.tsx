@@ -258,15 +258,17 @@ function ProjectHits({ query, onPick }: { query: string; onPick: (href: string) 
 
 function ClusterHits({ query, onPick }: { query: string; onPick: (href: string) => void }): JSX.Element | null {
   const nodes = useNodesStatus();
+  // The display name lives in the availability read, as on every other cluster label.
+  const clusterLabel = useClusterLabel();
   const ranked = rank(nodes.data?.nodes ?? [], query, (n) => [
-    [n.display_name, 1],
+    [clusterLabel(n.name), 1],
     [n.name, 1],
     [n.endpoint, 0.7],
     [(n.tags ?? []).join(" "), 0.9],
   ], PER_GROUP);
   const hits = ranked.items.map((n) => ({
     key: `cluster:${n.name}`,
-    title: n.display_name || n.name,
+    title: clusterLabel(n.name),
     detail: n.connected ? "Connected" : "Not connected",
     href: inventoryLinks.clusters({ q: n.name }),
     icon: Server,

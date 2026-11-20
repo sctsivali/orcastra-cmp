@@ -187,14 +187,22 @@ _capture: contextvars.ContextVar[Optional[List[Dict[str, Any]]]] = contextvars.C
 
 # Reads the backend makes on its own (the cluster registry and cluster credentials, every few
 # seconds) would be about 20,000 rows a day per cluster and bury what operators did. A successful
-# read with no actor is left out; a read an operator caused, any failure, and every write stay.
+# read with no actor and any successful listing are left out; a secret an operator caused to be
+# read, any failure, and every write stay.
 ROUTINE_SYSTEM_READS = frozenset({"vault.kv.list", "vault.secret.read", "vault.cert.list", "vault.health.check"})
+# A listing names keys and never returns secret material, and a page load that refreshes the cluster
+# registry lists it under the operator who happened to ask (about once a minute per open session).
+NEVER_RECORDED_WHEN_SUCCESSFUL = frozenset({"vault.kv.list", "vault.health.check"})
 
 
 def is_routine_system_read(data: Dict[str, Any]) -> bool:
+    action = data.get("action")
+    if data.get("result", "success") != "success":
+        return False
+    if action in NEVER_RECORDED_WHEN_SUCCESSFUL:
+        return True
     actor = data.get("actor") or {}
-    return (data.get("action") in ROUTINE_SYSTEM_READS and data.get("result", "success") == "success"
-            and not (actor.get("user_id") or actor.get("email")))
+    return action in ROUTINE_SYSTEM_READS and not (actor.get("user_id") or actor.get("email"))
 
 
 class AuditSink(logging.Handler):

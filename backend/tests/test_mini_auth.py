@@ -427,5 +427,7 @@ def test_routine_system_vault_reads_stay_out_of_the_audit_log_and_everything_els
     # an operator caused it, it failed, or it wrote: recorded
     assert not is_routine_system_read({"action": "vault.secret.read", "result": "success", "actor": {"user_id": "a@example.org"}})
     assert not is_routine_system_read({"action": "vault.kv.list", "result": "failure", "actor": system})
+    # a listing names keys only: routine even under the operator whose page load triggered it
+    assert is_routine_system_read({"action": "vault.kv.list", "result": "success", "actor": {"user_id": "a@example.org"}})
     assert not is_routine_system_read({"action": "vault.secret.write", "result": "success", "actor": system})
     assert not is_routine_system_read({"action": "auth.cert_login", "result": "success", "actor": system})

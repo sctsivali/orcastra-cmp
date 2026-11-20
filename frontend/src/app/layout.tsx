@@ -17,8 +17,9 @@ import { DEFAULT_PERSONALIZATION } from "@/types/personalization";
 import { DOCK_COOKIE, parseDockCookie } from "@/lib/dock-cookie";
 import { readHydratableSession } from "@/auth-session";
 import { getPublicBranding } from "@/lib/server/public-branding";
+import { PRODUCT_NAME } from "@/lib/edition";
 
-const DEFAULT_TITLE = "Orcastra CMP";
+const DEFAULT_TITLE = PRODUCT_NAME;
 const DEFAULT_ICONS: Metadata["icons"] = {
   icon: [
     { url: "/favicon-light.ico", media: "(prefers-color-scheme: light)" },
