@@ -29,6 +29,7 @@ from app.models import trust_cleanup_models  # noqa: F401
 from app.models import tenant_rule_models  # noqa: F401
 from app.models import my_key_models  # noqa: F401
 from app.models import branding_models  # noqa: F401
+from app.models import mini_identity_models  # noqa: F401
 
 config = context.config
 
