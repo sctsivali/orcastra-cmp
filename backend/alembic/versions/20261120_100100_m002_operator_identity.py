@@ -172,6 +172,21 @@ def _move_access_rows(bind, assignments, display_counts):
                          {"new": email, "tmp": f"m002-move-{identity_id}@m002.invalid"})
 
 
+def _keep_partners_running_their_organizations(bind):
+    """In 1.0.0-RC1 a membership's role decided nothing: a Partner ran every organization it
+    belonged to. CMP decides that by the membership role, so an RC1 Partner's memberships become
+    Partner memberships; without it the upgrade would quietly take its organizations away."""
+    if not _has_table(bind, "organization_members"):
+        return
+    result = bind.execute(sa.text(
+        "UPDATE organization_members SET role = 'partner' FROM local_identities li "
+        "WHERE lower(organization_members.user_email) = lower(li.email) AND li.role = 'partner' "
+        "AND organization_members.role = 'member'"
+    ))
+    if result.rowcount:
+        log.info("%d memberships of RC1 Partners now carry the Partner role", result.rowcount)
+
+
 def upgrade() -> None:
     bind = op.get_bind()
 
@@ -206,6 +221,7 @@ def upgrade() -> None:
 
     assignments, display_counts = _assign_emails(bind)
     _move_access_rows(bind, assignments, display_counts)
+    _keep_partners_running_their_organizations(bind)
 
     # Each identity's one certificate becomes its first certificate row. "pending" from the first
     # release never issued a usable session, so it is carried as revoked.

@@ -416,3 +416,16 @@ def test_the_csv_export_never_writes_a_cell_a_spreadsheet_would_run():
     values.update(target_id="=HYPERLINK(\"http://x\")", actor_email="+cmd@example.org", action="identity.issue")
     line = audit.csv_line(values)
     assert "'=HYPERLINK" in line and "'+cmd@example.org" in line and ",identity.issue," in line
+
+
+def test_routine_system_vault_reads_stay_out_of_the_audit_log_and_everything_else_stays_in():
+    from app.editions.mini.audit import is_routine_system_read
+
+    system = {"user_id": None, "user_type": None}
+    assert is_routine_system_read({"action": "vault.kv.list", "result": "success", "actor": system})
+    assert is_routine_system_read({"action": "vault.secret.read", "result": "success", "actor": None})
+    # an operator caused it, it failed, or it wrote: recorded
+    assert not is_routine_system_read({"action": "vault.secret.read", "result": "success", "actor": {"user_id": "a@example.org"}})
+    assert not is_routine_system_read({"action": "vault.kv.list", "result": "failure", "actor": system})
+    assert not is_routine_system_read({"action": "vault.secret.write", "result": "success", "actor": system})
+    assert not is_routine_system_read({"action": "auth.cert_login", "result": "success", "actor": system})

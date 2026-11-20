@@ -143,3 +143,18 @@ def test_rows_keyed_on_a_shared_display_name_stay_where_they_are():
     with engine.begin() as conn:
         m002._move_access_rows(conn, plan, counts)
     assert _members(engine) == [(1, "QA Tenant")]
+
+
+def test_an_rc1_partner_keeps_running_the_organizations_it_belongs_to():
+    import sqlalchemy as sa
+
+    m002 = _m002()
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(sa.text("CREATE TABLE organization_members (id INTEGER PRIMARY KEY, user_email TEXT, role TEXT)"))
+        conn.execute(sa.text("CREATE TABLE local_identities (id INTEGER PRIMARY KEY, email TEXT, role TEXT)"))
+        conn.execute(sa.text("INSERT INTO local_identities (email, role) VALUES ('p@example.org', 'partner'), ('t@example.org', 'tenant')"))
+        conn.execute(sa.text("INSERT INTO organization_members (user_email, role) VALUES ('P@example.org', 'member'), ('t@example.org', 'member')"))
+        m002._keep_partners_running_their_organizations(conn)
+        rows = sorted(conn.execute(sa.text("SELECT user_email, role FROM organization_members")).all())
+    assert rows == [("P@example.org", "partner"), ("t@example.org", "member")]

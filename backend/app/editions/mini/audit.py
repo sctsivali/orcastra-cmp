@@ -185,12 +185,25 @@ def get_writer() -> AuditWriter:
 _capture: contextvars.ContextVar[Optional[List[Dict[str, Any]]]] = contextvars.ContextVar("mini_audit_capture", default=None)
 
 
+# Reads the backend makes on its own (the cluster registry and cluster credentials, every few
+# seconds) would be about 20,000 rows a day per cluster and bury what operators did. A successful
+# read with no actor is left out; a read an operator caused, any failure, and every write stay.
+ROUTINE_SYSTEM_READS = frozenset({"vault.kv.list", "vault.secret.read", "vault.cert.list", "vault.health.check"})
+
+
+def is_routine_system_read(data: Dict[str, Any]) -> bool:
+    actor = data.get("actor") or {}
+    return (data.get("action") in ROUTINE_SYSTEM_READS and data.get("result", "success") == "success"
+            and not (actor.get("user_id") or actor.get("email")))
+
+
 class AuditSink(logging.Handler):
-    """Copies every ``orcastra.audit`` record into the chain. Never raises, never blocks."""
+    """Copies every ``orcastra.audit`` record into the chain, except routine system reads.
+    Never raises, never blocks."""
 
     def emit(self, record: logging.LogRecord) -> None:
         data = getattr(record, "audit_log_data", None)
-        if not isinstance(data, dict):
+        if not isinstance(data, dict) or is_routine_system_read(data):
             return
         try:
             data = _with_request_context(data)
