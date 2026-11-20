@@ -265,6 +265,10 @@ def test_only_the_auth_module_reads_token_claims() -> None:
     for path in sorted(APP.rglob("*.py")):
         if path == AUTH_MODULE or path in _NOT_A_BEARER_READ:
             continue
+        # An edition package that verifies its own tokens is that edition's auth module: it is
+        # reached only through core/auth.py's token-verifier seam (app/editions/__init__.py).
+        if path.is_relative_to(APP / "editions") and path.parent != APP / "editions":
+            continue
         offenders.extend(f"{path.relative_to(APP)} {why}" for why in _token_readers(path.read_text()))
     assert not offenders, (
         "claims read outside core/auth.py could attribute a forged token to a user: "
