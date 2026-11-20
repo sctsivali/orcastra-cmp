@@ -50,7 +50,7 @@ def _settings(**over):
 
 
 class _Conn:
-    def __init__(self, pem=None, secret=PROXY, peer="172.20.0.5"):
+    def __init__(self, pem=None, secret=PROXY, peer="10.0.0.5"):
         self.headers = {}
         if secret is not None:
             self.headers["x-auth-proxy-secret"] = secret
@@ -141,9 +141,9 @@ def test_certificate_headers_count_only_with_the_proxy_secret():
 
 def test_a_peer_outside_the_trusted_networks_is_ignored():
     pem = _cert()
-    ms = _settings(trusted_auth_proxy_cidrs="172.20.0.0/16")
-    assert client_cert.presented_certificate(_Conn(pem, peer="172.20.0.9"), ms) is not None
-    assert client_cert.presented_certificate(_Conn(pem, peer="10.9.9.9"), ms) is None
+    ms = _settings(trusted_auth_proxy_cidrs="10.0.0.0/24")
+    assert client_cert.presented_certificate(_Conn(pem, peer="10.0.0.9"), ms) is not None
+    assert client_cert.presented_certificate(_Conn(pem, peer="192.0.2.9"), ms) is None
 
 
 def test_garbage_or_oversized_certificate_headers_are_no_certificate():

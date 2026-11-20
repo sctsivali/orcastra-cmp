@@ -28,4 +28,4 @@ export interface EditionAuth {
   forwardHeaders?(request: Request, headers: Headers): void;
 }
 
-export const editionAuth: EditionAuth | null = null;
+export { miniAuth as editionAuth } from "@/editions/mini/auth";

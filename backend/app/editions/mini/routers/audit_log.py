@@ -56,7 +56,7 @@ async def list_audit(
     _user: AuthenticatedUser = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
     page: int = Query(1, ge=1, le=100_000),
-    page_size: int = Query(50, ge=1, le=200),
+    page_size: int = Query(50, ge=1, le=1000),
     action: Optional[str] = Query(None, max_length=120),
     actor: Optional[str] = Query(None, max_length=255),
     result: Optional[str] = Query(None, pattern="^(success|failure|denied)$"),
