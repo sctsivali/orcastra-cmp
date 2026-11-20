@@ -66,6 +66,35 @@ async def recover_admin(email: str, out_dir: str, force: bool) -> int:
     return 0
 
 
+async def verify(as_json: bool) -> int:
+    """What an upgrade or a support check needs, read from inside the backend: operators that can
+    sign in, Administrators among them, and whether the audit chain verifies."""
+    import json
+
+    from app.core.database import async_session_maker
+    from app.editions.mini import audit, identities
+    from app.models.mini_identity_models import LocalIdentity
+
+    async with async_session_maker() as db:
+        operators = (await db.execute(select(func.count()).select_from(LocalIdentity))).scalar_one()
+        active = (await db.execute(
+            select(func.count()).select_from(LocalIdentity).where(LocalIdentity.status == "active")
+        )).scalar_one()
+    report = {
+        "operators": operators,
+        "active_operators": active,
+        "administrator_can_sign_in": await identities.active_admin_exists(),
+        "audit": await audit.verify(advance_anchor=False),
+    }
+    if as_json:
+        print(json.dumps(report, default=str))
+    else:
+        print(f"operators: {operators} ({active} active)")
+        print(f"an Administrator can sign in: {report['administrator_can_sign_in']}")
+        print(f"audit chain valid: {report['audit']['valid']} ({report['audit']['checked']} rows)")
+    return 0 if report["audit"]["valid"] else 3
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.editions.mini.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -73,9 +102,13 @@ def main(argv=None) -> int:
     rec.add_argument("--email", required=True)
     rec.add_argument("--out-dir", default="/app/config")
     rec.add_argument("--force", action="store_true")
+    ver = sub.add_parser("verify", help="operators, Administrators and the audit chain, for upgrades and support")
+    ver.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "recover-admin":
         return asyncio.run(recover_admin(args.email, args.out_dir, args.force))
+    if args.command == "verify":
+        return asyncio.run(verify(args.json))
     return 1
 
 
