@@ -33,8 +33,9 @@ const preferences = load("frontend/src/components/personalization/preferences.ts
 const cache = load("frontend/src/app/settings/components/browser-cache.ts", {
   "@tanstack/react-query": frontendRequire("@tanstack/react-query"),
 });
+// Every tab shown, as in Full; an edition that leaves one out tests that in its own checks.
 const tabs = load("frontend/src/app/settings/settings-tabs.ts", {
-  "@/lib/edition": load("frontend/src/lib/edition.ts"),
+  "@/lib/edition": { editionShows: () => true },
 });
 
 assert.equal(tabs.settingsTabPath("general"), "/settings");
@@ -42,7 +43,7 @@ assert.equal(tabs.settingsTabPath("dashboard-host"), "/settings/dashboard-host")
 assert.equal(tabs.isSettingsTab("general"), true);
 assert.equal(tabs.isSettingsTab("system-info"), false);
 assert.equal(tabs.isSettingsTab("unknown"), false);
-// Full leaves no tab out, so User Groups is a tab here.
+// With every surface shown, User Groups is a tab.
 assert.equal(tabs.isSettingsTab("user-groups"), true);
 
 globalThis.crypto ??= (await import("node:crypto")).webcrypto;
