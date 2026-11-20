@@ -102,7 +102,7 @@ async def tick() -> None:
             seeded = await asyncio.to_thread(_seed_display_names)
             _names_seeded = True
             if seeded:
-                logger.info("Restored the display names of %d clusters from their registration", seeded)
+                logger.info("Restored %d cluster display name(s) from their registration", seeded)
         except Exception as exc:  # noqa: BLE001 - Vault sealed or unreachable: try again next tick
             logger.debug("Cluster display names not seeded yet: %s", type(exc).__name__)
     if time.time() - _last_maintenance >= TICK_SECONDS:
