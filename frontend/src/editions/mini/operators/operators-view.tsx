@@ -63,7 +63,9 @@ const OPERATORS = defineTable<Operator>()({
     { field: "status", label: "Status", sort: (o) => o.status, facet: (o) => STATUS_LABEL[o.status], facetSpec: { primary: true } },
     {
       field: "expires", label: "Certificate Expires", sort: (o) => (o.expires_at ? new Date(o.expires_at).getTime() : 0),
-      facet: (o) => (o.expiring ? "Expiring soon" : null), filter: fromSort("date", { horizon: "future" }),
+      // A date range ("within the next 30 days") covers expiring certificates; a facet beside it is
+      // refused by defineTable.
+      filter: fromSort("date", { horizon: "future" }),
     },
     { field: "last", label: "Last Sign-In", sort: (o) => (o.last_login_at ? new Date(o.last_login_at).getTime() : 0), filter: fromSort("date", { horizon: "past" }) },
   ],

@@ -5,7 +5,7 @@
 # it, with AUTH_PROXY_SECRET, to the frontend and backend, which are reachable only on the
 # compose network. Vault runs beside them and answers on loopback for init and unseal.
 #
-#   docker compose -p "$CONTAINER_PREFIX" -f docker-compose.mini.yml --env-file .env up -d
+#   docker compose up -d     (from the deployment directory; .env names the project)
 #
 # Names kept from Mini 1.0.0-RC1 so an upgrade reuses the same project, services and volumes:
 # the project is CONTAINER_PREFIX, the services postgres/redis/vault/backend/frontend/nginx, the

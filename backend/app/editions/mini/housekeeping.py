@@ -20,12 +20,16 @@ from app.models.mini_identity_models import LocalIdentity, LocalIdentityCertific
 logger = logging.getLogger(__name__)
 
 TICK_SECONDS = 600
+# Host Health reads the figures every 30 s and says so; collecting them only with the ten-minute
+# maintenance left "No Administrator can sign in" on screen for minutes after an enrollment.
+COLLECT_SECONDS = 30
 PRUNE_EVERY_SECONDS = 24 * 3600
 
 # What the Host Health checks read (they run in threads and must not touch the event loop).
 STATE: Dict[str, Any] = {"collected_at": None}
 _task: Optional[asyncio.Task] = None
 _last_prune = 0.0
+_last_maintenance = 0.0
 
 
 async def collect() -> None:
@@ -61,8 +65,19 @@ async def collect() -> None:
 
 
 async def tick() -> None:
-    global _last_prune
+    global _last_maintenance
     ms = mini_settings()
+    if time.time() - _last_maintenance >= TICK_SECONDS:
+        _last_maintenance = time.time()
+        await _maintain(ms)
+    try:
+        await collect()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Collecting Mini health figures failed: %s", type(exc).__name__)
+
+
+async def _maintain(ms) -> None:
+    global _last_prune
     try:
         await identities.retire_overlapping(ms.cert_renew_overlap_hours)
     except Exception as exc:  # noqa: BLE001
@@ -75,16 +90,12 @@ async def tick() -> None:
                 logger.info("Audit retention removed %s rows through id %s", result["pruned"], result.get("through_id"))
         except Exception as exc:  # noqa: BLE001
             logger.error("Audit retention failed: %s", type(exc).__name__)
-    try:
-        await collect()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Collecting Mini health figures failed: %s", type(exc).__name__)
 
 
 async def _loop() -> None:
     while True:
         await tick()
-        await asyncio.sleep(TICK_SECONDS)
+        await asyncio.sleep(COLLECT_SECONDS)
 
 
 def start() -> None:
