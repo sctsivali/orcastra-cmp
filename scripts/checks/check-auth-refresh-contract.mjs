@@ -174,8 +174,9 @@ function world() {
     '@/types/rbac': load('frontend/src/types/rbac.ts'),
     '@/lib/token-stamp': load('frontend/src/lib/token-stamp.ts'),
     '@/lib/session-cookie': { pinnedSessionCookies: () => undefined },
-    '@/lib/edition-auth': load('frontend/src/lib/edition-auth.ts'),
-    '@/lib/edition': load('frontend/src/lib/edition.ts'),
+    // The identity-provider refresh path, which runs when no edition supplies its own sign-in.
+    '@/lib/edition-auth': { editionAuth: null },
+    '@/lib/edition': { EDITION_ADMIN_OR_PARTNER_PATHS: [], EDITION_ADMIN_ONLY_PATHS: [] },
   });
   return { jwt: auth.authConfig.callbacks.jwt, authorized: auth.authConfig.callbacks.authorized };
 }
