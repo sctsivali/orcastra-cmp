@@ -17,7 +17,7 @@ from typing import Awaitable, Callable, Optional
 
 from fastapi import Depends, WebSocket, WebSocketException, status
 
-from app.core.auth import AuthenticatedUser, get_ws_user
+from app.core.auth import AuthenticatedUser, admit_socket, get_ws_user, token_verification_configured
 from app.core import ws_close
 from app.core.config import Settings, get_settings
 from app.core.rbac import session_has_role
@@ -93,7 +93,7 @@ def ws_user(kind: str) -> Callable[..., Awaitable[Optional[AuthenticatedUser]]]:
     ) -> Optional[AuthenticatedUser]:
         if not settings.auth_enabled:
             return None
-        if not settings.authentik_issuer:
+        if not token_verification_configured(settings):
             logger.error(
                 "AUTH_ENABLED=true but AUTHENTIK_ISSUER is not configured; refusing every WebSocket "
                 "until it is set, rather than serving them unauthenticated"
@@ -106,6 +106,11 @@ def ws_user(kind: str) -> Callable[..., Awaitable[Optional[AuthenticatedUser]]]:
         presented_token = "token" in websocket.query_params
         if ticket:
             user = await _redeemed(kind, websocket, ticket)
+            refusal = await admit_socket(user, websocket) if user is not None else None
+            if refusal is not None:
+                logger.warning("WebSocket refused: a %s ticket's holder was not admitted (%s)", kind, refusal)
+                _refuse_as(websocket, ws_close.AUTH, refusal)
+                return None
             if presented_token and not settings.ws_query_token_enabled:
                 logger.warning("WebSocket refused: a %s socket presented a token beside its ticket", kind)
                 _refuse_as(websocket, ws_close.AUTH, "token_refused")

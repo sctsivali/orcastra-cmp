@@ -29,8 +29,9 @@ INTERACTIVE_KINDS = frozenset({"terminal", "console"})
 TICKET_TTL_SECONDS = 30
 # A SPICE display opens one socket per channel: main, display, inputs and cursor.
 SPICE_CHANNELS = 4
-# Claims kept from the access token: what RBAC and the migration authority read, nothing else.
-_KEPT_CLAIMS = ("iss", "sub", "aud", "exp", "iat", "email", "name", "preferred_username", "groups")
+# Claims kept from the access token: what RBAC and the migration authority read, plus `cnf`, the
+# key a holder-bound token is tied to (RFC 7800), which an edition re-checks when the socket opens.
+_KEPT_CLAIMS = ("iss", "sub", "aud", "exp", "iat", "email", "name", "preferred_username", "groups", "cnf")
 
 
 @dataclass(frozen=True)

@@ -307,8 +307,15 @@ _instance: Optional[AuthentikSyncService] = None
 
 
 def get_authentik_sync() -> AuthentikSyncService:
-    """Get or create the Authentik sync service singleton."""
+    """Get or create the identity directory singleton: Authentik, unless the edition supplies one.
+
+    An edition's directory answers the same methods (role reads and writes, sync status), so every
+    caller stays unaware of which one runs.
+    """
     global _instance
     if _instance is None:
-        _instance = AuthentikSyncService()
+        from app.editions import current_edition
+
+        factory = current_edition().identity_directory
+        _instance = factory() if factory is not None else AuthentikSyncService()
     return _instance

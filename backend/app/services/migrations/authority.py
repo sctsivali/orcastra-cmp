@@ -631,3 +631,16 @@ class AuthentikAuthorityVerifier:
             role=current.role,
             mapped_groups=current.mapped_groups,
         )
+
+
+def authority_verifier(settings: Any | None = None) -> Any:
+    """Migration Center's actor verifier: Authentik's, unless the edition supplies its own.
+
+    An edition's verifier answers ``pin_user`` and ``revalidate`` with the same results and errors.
+    """
+    from app.editions import current_edition
+
+    factory = current_edition().authority_verifier
+    if factory is not None:
+        return factory(settings or get_settings())
+    return AuthentikAuthorityVerifier(settings)

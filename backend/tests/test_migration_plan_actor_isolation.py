@@ -246,7 +246,7 @@ async def test_locked_patch_cannot_repin_another_actors_plan(
     monkeypatch.setattr(repository, "replace_plan", replace_plan)
     monkeypatch.setattr(
         planning,
-        "AuthentikAuthorityVerifier",
+        "authority_verifier",
         _verifier_returning(_other_authority()),
     )
     service = planning.MigrationPlanningMixin(
@@ -288,7 +288,7 @@ async def test_locked_execute_rejects_another_actor_before_job_creation(
     monkeypatch.setattr(repository, "create_job", create_job)
     monkeypatch.setattr(
         planning,
-        "AuthentikAuthorityVerifier",
+        "authority_verifier",
         _verifier_returning(_other_authority()),
     )
     service = planning.MigrationPlanningMixin(
@@ -378,7 +378,7 @@ async def test_compatibility_replay_rejects_a_replacement_actor_before_digest_or
     )
     monkeypatch.setattr(
         planning,
-        "AuthentikAuthorityVerifier",
+        "authority_verifier",
         _verifier_returning(replacement),
     )
     request = MigrationPlanCreateRequest.model_validate(

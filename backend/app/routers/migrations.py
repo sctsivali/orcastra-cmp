@@ -44,7 +44,7 @@ from app.services.migrations.authority import (
     AuthorityDeniedError,
     AuthorityIdentityError,
     CurrentAuthorityError,
-    AuthentikAuthorityVerifier,
+    authority_verifier,
 )
 from app.services.migrations.orchestrator import (
     MigrationAuthorityError,
@@ -216,7 +216,7 @@ def _authorize_row(row: Any) -> None:
 
 
 async def _current_authority(user: AuthenticatedUser) -> Any:
-    return await _service_call(AuthentikAuthorityVerifier().pin_user(user))
+    return await _service_call(authority_verifier().pin_user(user))
 
 
 def _list_visibility(authority: Any) -> MigrationListVisibility:

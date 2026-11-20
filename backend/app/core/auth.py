@@ -9,6 +9,7 @@ from typing import Optional
 import jwt
 from fastapi import Depends, HTTPException, Request, WebSocket, WebSocketException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.requests import HTTPConnection
 
 from app.core.config import Settings, get_settings
 from app.core.jwks import JWKSClient
@@ -141,6 +142,48 @@ def validate_jwt(token: str, settings: Settings) -> AuthenticatedUser:
         )
 
 
+def _edition_verifier():
+    from app.editions import current_edition
+
+    return current_edition().token_verifier
+
+
+def token_verification_configured(settings: Settings) -> bool:
+    """Whether this server can verify an access token: the edition's verifier, else the IdP issuer."""
+    verifier = _edition_verifier()
+    if verifier is not None:
+        return verifier.configured(settings)
+    return bool(settings.authentik_issuer)
+
+
+async def verify_access_token(token: str, settings: Settings, connection: HTTPConnection) -> AuthenticatedUser:
+    """The caller behind a bearer token, or an HTTPException.
+
+    The identity provider's keys are refreshed first, asynchronously and never raising, so
+    validate_jwt makes no network call and an IdP outage cannot block this worker's event loop.
+    """
+    verifier = _edition_verifier()
+    if verifier is not None:
+        user = await verifier.verify(token, settings, connection)
+        # important: every caller reads a missing principal as "no authentication expected".
+        if not isinstance(user, AuthenticatedUser):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication is enabled but not configured on this server",
+            )
+        return user
+    await _jwks_client.ensure_keys(token, settings)
+    return validate_jwt(token, settings)
+
+
+async def admit_socket(user: AuthenticatedUser, websocket: WebSocket) -> Optional[str]:
+    """None to admit a socket opened with a redeemed ticket, else the edition's refusal reason."""
+    verifier = _edition_verifier()
+    if verifier is None:
+        return None
+    return await verifier.admit_socket(user, websocket)
+
+
 async def get_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(oauth2_scheme),
@@ -154,7 +197,7 @@ async def get_current_user(
     if not settings.auth_enabled:
         return None
 
-    if not settings.authentik_issuer:
+    if not token_verification_configured(settings):
         # important: never return None here; every RBAC dependency reads None as dev mode and
         # grants a full Admin. A deployment that asks for auth and cannot verify it refuses, and
         # 503 puts the fault on the server's configuration.
@@ -174,10 +217,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # The keys are refreshed here, asynchronously and never raising, so validate_jwt below makes
-    # no network call and an IdP outage cannot block this worker's event loop.
-    await _jwks_client.ensure_keys(credentials.credentials, settings)
-    user = validate_jwt(credentials.credentials, settings)
+    user = await verify_access_token(credentials.credentials, settings, request)
 
     # For middleware and logging. The RBAC dependency fills user_role later
     # (_populate_request_state).
@@ -214,7 +254,7 @@ async def get_ws_user(
     if not settings.auth_enabled:
         return None
 
-    if not settings.authentik_issuer:
+    if not token_verification_configured(settings):
         logger.error(
             "AUTH_ENABLED=true but AUTHENTIK_ISSUER is not configured; refusing every WebSocket "
             "until it is set, rather than serving them unauthenticated"
@@ -229,10 +269,8 @@ async def get_ws_user(
         logger.warning("WebSocket connection rejected: no token in query params")
         return None
 
-    await _jwks_client.ensure_keys(token, settings)
     try:
-        user = validate_jwt(token, settings)
-        return user
+        return await verify_access_token(token, settings, websocket)
     except HTTPException as exc:
         if exc.status_code >= 500:
             # A server that could not verify the token closes with 1011: the fault is on this

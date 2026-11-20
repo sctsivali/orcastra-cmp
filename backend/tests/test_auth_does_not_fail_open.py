@@ -32,6 +32,9 @@ AUTH_ENTRY_POINTS = (
     "get_current_user",
     "get_ws_user",
     "validate_jwt",
+    # The dispatcher the two entry points call: the edition's verifier, else the JWKS path into
+    # validate_jwt. Like validate_jwt it takes the token as required and cannot return None.
+    "verify_access_token",
     # ws_auth.py: ws_user builds the ticket dependency every socket uses ("dependency"), which
     # runs the redeem step only after its own issuer refusal; the tests at the end cover them.
     "ws_user",
@@ -47,14 +50,19 @@ def _code_only(src: str) -> str:
     return "\n".join(line for line in src.split("\n") if not line.strip().startswith("#"))
 
 
+# The configuration gate: `token_verification_configured` is the issuer check (or the edition
+# verifier's own), and a bare issuer check is accepted for an entry point that still reads it.
+_GATES = ("authentik_issuer", "token_verification_configured")
+
+
 def _issuer_branch(func) -> str:
-    """The block that runs when `authentik_issuer` is falsy."""
+    """The block that runs when the server cannot verify tokens (no issuer, no edition verifier)."""
     tree = ast.parse(inspect.getsource(func).lstrip())
     for node in ast.walk(tree):
         if not isinstance(node, ast.If):
             continue
         test = ast.unparse(node.test)
-        if "authentik_issuer" in test and "not " in test:
+        if any(gate in test for gate in _GATES) and "not " in test:
             return _code_only(ast.unparse(node.body))
     return ""
 
@@ -94,19 +102,20 @@ def test_every_auth_entry_point_is_covered_by_this_file() -> None:
     )
 
 
-def test_the_verifier_itself_cannot_return_an_unverified_principal() -> None:
-    """Why `validate_jwt` is exempt from the refusal rule: it has no way to fail open.
+@pytest.mark.parametrize("name", ["validate_jwt", "verify_access_token"])
+def test_the_verifier_itself_cannot_return_an_unverified_principal(name: str) -> None:
+    """Why the verifiers are exempt from the refusal rule: they have no way to fail open.
 
-    It takes the token as a required argument, so there is no "auth is off" case to get wrong,
+    Each takes the token as a required argument, so there is no "auth is off" case to get wrong,
     and every path out of it either returns a principal built from verified claims or raises.
     """
-    source = _code_only(inspect.getsource(auth_module.validate_jwt))
+    source = _code_only(inspect.getsource(getattr(auth_module, name)))
     assert "return None" not in source, (
-        "validate_jwt gained a None return; it is the verifier every entry point trusts, so a "
+        f"{name} gained a None return; it is a verifier every entry point trusts, so a "
         "caller would read that as an authenticated principal"
     )
     assert "auth_enabled" not in source, (
-        "validate_jwt gained a configuration branch; the refusal rule now applies to it too"
+        f"{name} gained a configuration branch; the refusal rule now applies to it too"
     )
 
 
@@ -200,7 +209,7 @@ def test_the_ticket_dependency_refuses_before_redeeming() -> None:
     branch = _issuer_branch(dependency)
     assert branch and "raise" in branch and "return None" not in branch
     source = _code_only(inspect.getsource(dependency))
-    assert source.index("authentik_issuer") < source.index("_redeemed(")
+    assert source.index("token_verification_configured") < source.index("_redeemed(")
 
 
 @pytest.mark.asyncio

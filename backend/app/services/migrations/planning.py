@@ -38,7 +38,7 @@ from app.services.lxd_service import LXDService, get_lxd_service
 from app.services.shared_cluster_audit import serialize_cluster_configuration
 
 from . import preflight, project_policy, repository
-from .authority import AuthentikAuthorityVerifier
+from .authority import authority_verifier
 from .billing import (
     enforce_migration_billing_policy,
     report_has_running_source,
@@ -680,7 +680,7 @@ class MigrationPlanningMixin:
         user: Any,
         requester_role: str,
     ) -> MigrationPlan:
-        authority = await AuthentikAuthorityVerifier(self.settings).pin_user(user)
+        authority = await authority_verifier(self.settings).pin_user(user)
         requester_role = authority.role.value
         if await repository.count_open_plans(self.db, authority.pin.identity.email) >= repository.OPEN_PLAN_LIMIT:
             raise MigrationConflict(
@@ -775,7 +775,7 @@ class MigrationPlanningMixin:
         row = await repository.get_plan(self.db, plan_id, lock=True)
         if row is None:
             raise MigrationNotFound("Migration plan not found.")
-        authority = await AuthentikAuthorityVerifier(self.settings).pin_user(user)
+        authority = await authority_verifier(self.settings).pin_user(user)
         _require_plan_actor(row, authority)
         merged = dict(row.request_payload or {})
         requester_role = authority.role.value
@@ -975,7 +975,7 @@ class MigrationPlanningMixin:
         requester_role: str,
     ) -> tuple[MigrationJob, bool]:
         del requester_role
-        authority = await AuthentikAuthorityVerifier(self.settings).pin_user(user)
+        authority = await authority_verifier(self.settings).pin_user(user)
         digest = canonical_json_hash(
             {
                 "plan_id": plan_id,
@@ -1012,7 +1012,7 @@ class MigrationPlanningMixin:
         """
         if _enum_value(request.scope) != "instance" or _enum_value(request.intent) != "copy":
             raise MigrationConflict("The compatibility adapter accepts instance copy only.")
-        authority = await AuthentikAuthorityVerifier(self.settings).pin_user(user)
+        authority = await authority_verifier(self.settings).pin_user(user)
         normalized_acknowledgements = sorted(set(acknowledgements))
         digest = canonical_json_hash(
             {

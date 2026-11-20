@@ -18,7 +18,7 @@ from app.services.lxd_service import get_lxd_service
 from app.services.snapshots.schedule_authority import standing_authority_refusal
 
 from . import preflight, repository
-from .authority import AuthentikAuthorityVerifier, CurrentAuthorityError
+from .authority import CurrentAuthorityError, authority_verifier
 from .contracts import (
     MigrationAuthorityError,
     MigrationAuthorityUnavailable,
@@ -37,7 +37,7 @@ async def _authoritative_clients(
 ) -> tuple[Any, Any]:
     if current_authority is None:
         try:
-            current_authority = await AuthentikAuthorityVerifier().revalidate(
+            current_authority = await authority_verifier().revalidate(
                 _authority_pin(job)
             )
         except CurrentAuthorityError as exc:

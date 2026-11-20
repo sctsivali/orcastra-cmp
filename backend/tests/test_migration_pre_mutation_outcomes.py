@@ -354,7 +354,7 @@ def _actions_world(
     monkeypatch.setattr(actions.repository, "set_job", set_job)
     monkeypatch.setattr(actions.repository, "list_resources", list_resources)
     monkeypatch.setattr(actions, "_job_plan", job_plan)
-    monkeypatch.setattr(actions, "AuthentikAuthorityVerifier", Verifier)
+    monkeypatch.setattr(actions, "authority_verifier", Verifier)
     monkeypatch.setattr(actions, "_authoritative_clients", clients)
     monkeypatch.setattr(actions, "get_user_org_ids", org_ids)
     monkeypatch.setattr(actions, "_prove_job_authority", prove)

@@ -502,7 +502,7 @@ async def test_compatibility_copy_replay_reauthorizes_before_disclosure(
         calls.append("authority")
         raise MigrationAuthorityError("revoked")
 
-    monkeypatch.setattr(planning, "AuthentikAuthorityVerifier", Verifier)
+    monkeypatch.setattr(planning, "authority_verifier", Verifier)
     monkeypatch.setattr(planning.repository, "get_job_by_request", get_replay)
     monkeypatch.setattr(context, "_job_plan", pinned_plan)
     monkeypatch.setattr(context, "_authoritative_clients", denied)

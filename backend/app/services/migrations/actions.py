@@ -13,7 +13,7 @@ from app.models.migration_models import MigrationJob
 from app.services.shared_cluster_audit import serialize_cluster_configuration
 
 from . import repository
-from .authority import AuthentikAuthorityVerifier
+from .authority import authority_verifier
 from .context import _authoritative_clients, _job_plan, _prove_job_authority
 from .contracts import (
     MigrationAuthorityError,
@@ -112,7 +112,7 @@ class MigrationActionsMixin:
         if row.revision != expected_revision:
             raise MigrationConflict("The migration changed. Reload it before acting.")
         await _job_plan(row)
-        authority = await AuthentikAuthorityVerifier(self.settings).pin_user(user)
+        authority = await authority_verifier(self.settings).pin_user(user)
         requester_role = authority.role.value
         if requester_role == "partner":
             organization_ids = set(await get_user_org_ids(user, self.db))

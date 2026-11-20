@@ -126,7 +126,7 @@ async def test_a_new_plan_is_refused_once_the_operator_holds_the_limit(monkeypat
     planner = planning.MigrationPlanningMixin.__new__(planning.MigrationPlanningMixin)
     planner.db = object()
     planner.settings = SimpleNamespace()
-    monkeypatch.setattr(planning, "AuthentikAuthorityVerifier", Verifier)
+    monkeypatch.setattr(planning, "authority_verifier", Verifier)
     monkeypatch.setattr(planning.repository, "count_open_plans", count)
     monkeypatch.setattr(planner, "_organizations", must_not_plan, raising=False)
 

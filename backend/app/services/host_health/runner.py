@@ -64,10 +64,20 @@ async def _guarded(check_id: str, label: str, run: Awaitable[CheckResult], ctx: 
         return _unknown(check_id, label, ctx, type(exc).__name__)
 
 
+def _with_edition(rows: tuple) -> tuple:
+    """The checks with any the edition replaces swapped in, keeping each id, place and deadline."""
+    from app.editions import current_edition
+
+    replaced = current_edition().host_health_checks
+    if not replaced:
+        return rows
+    return tuple((cid, *replaced.get(cid, (label, fn)), deadline) for cid, label, fn, deadline in rows)
+
+
 async def run_checks(ctx: CheckContext) -> List[CheckResult]:
-    runs = [_blocking(cid, label, fn, deadline, ctx) for cid, label, fn, deadline in _BLOCKING]
+    runs = [_blocking(cid, label, fn, deadline, ctx) for cid, label, fn, deadline in _with_edition(_BLOCKING)]
     runs.append(_guarded("database", database.LABEL, database.check(ctx), ctx))
-    runs += [_blocking(cid, label, fn, deadline, ctx) for cid, label, fn, deadline in _AFTER]
+    runs += [_blocking(cid, label, fn, deadline, ctx) for cid, label, fn, deadline in _with_edition(_AFTER)]
     return list(await asyncio.gather(*runs))
 
 

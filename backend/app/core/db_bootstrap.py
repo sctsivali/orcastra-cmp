@@ -110,6 +110,15 @@ def main() -> None:
         return
 
     tables, stamped = asyncio.run(_live_tables_and_stamp(_asyncpg_dsn(url)))
+
+    # An edition recognises its own legacy shapes first; one that returns True has reconciled the
+    # database (stamped it, or found nothing to do) and the upgrade proceeds.
+    from app.editions import current_edition
+
+    for reconcile in current_edition().db_reconcilers:
+        if reconcile(tables, stamped, url):
+            return
+
     plan = _plan(tables, stamped)
 
     if plan == "managed":

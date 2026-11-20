@@ -23,6 +23,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from app.core import build_identity, vault_probe, vault_status, vault_token
 from app.core.config import get_settings
+from app.editions import current_edition
 from app.core.logging_config import setup_logging
 from app.middleware import (
     AccessLogMiddleware,
@@ -184,8 +185,9 @@ async def lifespan(app: FastAPI):
             settings.rate_limit_requests,
         )
 
-    # Pre-warm JWKS cache to avoid blocking first auth request (~5s savings)
-    if settings.auth_enabled and settings.authentik_issuer:
+    # Pre-warm JWKS cache to avoid blocking first auth request (~5s savings). An edition that
+    # verifies its own tokens never reads the identity provider's keys.
+    if settings.auth_enabled and settings.authentik_issuer and current_edition().token_verifier is None:
         try:
             from app.core.auth import _jwks_client
             await _jwks_client.warm_up(settings)
@@ -749,9 +751,19 @@ async def lifespan(app: FastAPI):
         except Exception as mcp_err:
             logger.error(f"MCP session manager failed to start: {mcp_err}")
 
+    edition = current_edition()
+    if edition.on_startup is not None:
+        await edition.on_startup(app)
+
     logger.info("Orcastra CMP API started successfully")
     
     yield
+
+    if edition.on_shutdown is not None:
+        try:
+            await edition.on_shutdown(app)
+        except Exception as edition_stop_err:  # noqa: BLE001 - the rest of shutdown must still run
+            logger.warning("Edition %s did not stop cleanly: %s", edition.name, edition_stop_err)
 
     # Guarded because this runs before the rest of shutdown: an exception escaping here would skip
     # the database close and the background collectors below.
@@ -970,6 +982,11 @@ Ensure your client certificates are properly configured.
         lifespan=lifespan,
     )
     
+    # An edition refuses settings it cannot run safely before anything is mounted.
+    edition = current_edition()
+    if edition.validate_settings is not None:
+        edition.validate_settings(settings)
+
     # CORS origins come from the environment. "*" uses the custom middleware below so that
     # credentials still work.
     cors_origins = settings.get_cors_origins()
@@ -1054,6 +1071,13 @@ Ensure your client certificates are properly configured.
     # The reader's byte units for size text the server writes (core/units.py). Exception handlers
     # run inside it, so a refusal's sizes follow the reader too.
     app.add_middleware(ByteUnitsMiddleware)
+
+    # Full features an edition does not offer answer 404 here, inside the request ID and security
+    # headers so the refusal carries both, and before auth or any route runs.
+    if edition.blocked_path_prefixes:
+        from app.middleware.edition_paths import EditionBlockedPaths
+
+        app.add_middleware(EditionBlockedPaths, prefixes=edition.blocked_path_prefixes)
 
     # Request IDs. Added after the access log so it wraps it and the ID exists when the access
     # log runs (the last middleware added is the outermost).
@@ -1303,6 +1327,11 @@ Ensure your client certificates are properly configured.
         app.include_router(archive_router, prefix=settings.api_prefix)
         logger.info("Archive management API enabled")
     
+    # After the Full routers, so an edition's own routes sit beside them. It adds routes only:
+    # a Full feature it does not offer is refused by path (blocked_path_prefixes) instead.
+    if edition.configure_app is not None:
+        edition.configure_app(app, settings)
+
     # Health check endpoint
     @app.get("/health", tags=["Health"])
     async def health_check():
@@ -1379,7 +1408,18 @@ Ensure your client certificates are properly configured.
             # Whether signed-in requests are being verified from keys the IdP could not refresh,
             # and for how long. A field, never a status, like `vault`: the error is a class name.
             "identity_provider": _identity_provider_health(),
+            **_edition_health(),
         }
+
+    def _edition_health() -> Dict[str, Any]:
+        # Nested and guarded: this route always answers 200 with Full's fields intact.
+        if edition.health_fields is None:
+            return {}
+        try:
+            return {"edition": {"name": edition.name, **edition.health_fields()}}
+        except Exception as exc:  # noqa: BLE001 - a broken edition field must not fail liveness
+            logger.warning("Edition %s health fields failed: %s", edition.name, type(exc).__name__)
+            return {"edition": {"name": edition.name, "error": type(exc).__name__}}
     
     def _identity_provider_health() -> Dict[str, Any]:
         settings = get_settings()
