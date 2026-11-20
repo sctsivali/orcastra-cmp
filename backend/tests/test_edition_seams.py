@@ -412,3 +412,45 @@ def test_a_verifier_that_returns_no_principal_is_a_server_fault():
 
 def _full_auth_edition(verifier) -> Edition:
     return Edition(name="test", token_verifier=verifier, identity_directory=object, authority_verifier=lambda s: None)
+
+
+def test_an_edition_directory_can_end_one_session_while_the_account_stays_live(monkeypatch):
+    from app.services import authentik_sync, ws_identity
+
+    class Directory:
+        async def session_ended(self, user):
+            return "credential_revoked" if user.raw_claims.get("cnf") else None
+
+        async def read_current_roles(self, email):  # pragma: no cover - not reached
+            raise AssertionError("an ended session is not read further")
+
+    monkeypatch.setattr(authentik_sync, "_instance", Directory())
+    ws_identity.forget_identities()
+    check = asyncio.run(ws_identity.check_identity(_user()))
+    assert check.ended and check.reason == "credential_revoked"
+
+
+def test_full_directory_has_no_session_check_and_reads_the_account(monkeypatch):
+    from app.services import authentik_sync, ws_identity
+    from app.services.authentik_role_reading import known_roles
+
+    class Directory:
+        async def read_current_roles(self, email):
+            return known_roles(["role_admin"])
+
+    monkeypatch.setattr(authentik_sync, "_instance", Directory())
+    ws_identity.forget_identities()
+    check = asyncio.run(ws_identity.check_identity(_user()))
+    assert not check.ended
+
+
+def test_an_edition_reads_its_own_release_manifest_and_full_keeps_the_cmp_one(monkeypatch):
+    from app.services.release_check import service
+
+    monkeypatch.setattr(service, "get_settings", lambda: SimpleNamespace(release_feed_url=""))
+    assert [f[0] for f in service.feeds()] == ["github", "docs"]
+    use_edition(Edition(name="test", release_feeds=(("github", "https://raw.githubusercontent.com/x/y/main/m.json"),)))
+    feeds = service.feeds()
+    assert [(f[0], f[1]) for f in feeds] == [("github", "https://raw.githubusercontent.com/x/y/main/m.json")]
+    monkeypatch.setattr(service, "get_settings", lambda: SimpleNamespace(release_feed_url="https://mirror.example/m.json"))
+    assert service.feeds()[0][0] == "mirror_custom"
