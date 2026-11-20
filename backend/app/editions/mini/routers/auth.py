@@ -128,7 +128,7 @@ async def cert_login(request: Request) -> CertLoginResponse:
                          actor_user_id=snapshot.email,
                          details={"role": snapshot.role, "fingerprint": presented.fingerprint})
     await identities.record_login(snapshot, presented.fingerprint)
-    cert_state = snapshot.certificates.get(presented.fingerprint)
+    cert_state = snapshot.certs.get(presented.fingerprint)
     return CertLoginResponse(
         access_token=token, expires_in=expires - int(now.timestamp()), expires_at=expires,
         role=snapshot.role, email=snapshot.email, display_name=snapshot.display_name,

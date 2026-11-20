@@ -63,7 +63,7 @@ def _snapshot(fingerprint, *, role="admin", status="active", floor=None, cert_st
     return identities.IdentitySnapshot(
         id=1, uuid="11111111-1111-4111-8111-111111111111", email="alice@example.org", display_name="Alice",
         common_name="alice", role=role, status=status, owner_org_id=None, tokens_valid_after=floor,
-        certificates={fingerprint: identities.CertificateState(7, cert_status, not_after or datetime.now(timezone.utc) + timedelta(days=10), None)},
+        certs={fingerprint: identities.CertificateState(7, cert_status, not_after or datetime.now(timezone.utc) + timedelta(days=10), None)},
     )
 
 

@@ -259,13 +259,13 @@ def walk_chain(rows, prev: str):
 
 async def verify(advance_anchor: bool = True) -> Dict[str, Any]:
     """Recompute the whole chain in batches; detect edits, reorders, gaps and a deleted tail."""
-    async with async_session_maker() as session:
-        anchor = await session.get(AuditLogAnchor, 1)
+    async with async_session_maker() as db:
+        anchor = await db.get(AuditLogAnchor, 1)
         start_id = anchor.pruned_through_id if anchor else 0
         prev = (anchor.pruned_head_hash or "") if anchor and start_id else ""
         last_id, checked, broken_at = start_id, 0, None
         while broken_at is None:
-            rows = (await session.execute(
+            rows = (await db.execute(
                 select(AuditLogEntry).where(AuditLogEntry.id > last_id).order_by(AuditLogEntry.id).limit(VERIFY_BATCH)
             )).scalars().all()
             if not rows:
@@ -273,11 +273,11 @@ async def verify(advance_anchor: bool = True) -> Dict[str, Any]:
             prev, walked_to, walked, broken_at = walk_chain(rows, prev)
             checked += walked
             last_id = walked_to if walked_to is not None else last_id
-            session.expunge_all()
-        count = (await session.execute(
+            db.expunge_all()
+        count = (await db.execute(
             select(func.count()).select_from(AuditLogEntry).where(AuditLogEntry.id > start_id)
         )).scalar_one()
-        max_id = (await session.execute(select(func.max(AuditLogEntry.id)))).scalar_one() or start_id
+        max_id = (await db.execute(select(func.max(AuditLogEntry.id)))).scalar_one() or start_id
         result: Dict[str, Any] = {
             "valid": broken_at is None, "checked": checked, "broken_at_id": broken_at,
             "count": count, "max_id": max_id, "head_hash": prev or None,
@@ -292,13 +292,13 @@ async def verify(advance_anchor: bool = True) -> Dict[str, Any]:
                 f"the last verified state was {anchor.row_count} rows up to id {anchor.max_id}"
             )
         if result["valid"] and advance_anchor:
-            await session.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": CHAIN_LOCK})
-            anchor = await session.get(AuditLogAnchor, 1)
+            await db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": CHAIN_LOCK})
+            anchor = await db.get(AuditLogAnchor, 1)
             if anchor is None:
                 anchor = AuditLogAnchor(id=1, max_id=0, row_count=0, pruned_through_id=0)
-                session.add(anchor)
+                db.add(anchor)
             anchor.max_id, anchor.row_count, anchor.head_hash = max_id, count, prev or None
-            await session.commit()
+            await db.commit()
         return result
 
 
@@ -307,37 +307,37 @@ async def prune(retention_days: int) -> Dict[str, Any]:
     if retention_days <= 0:
         return {"pruned": 0}
     cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
-    async with async_session_maker() as session:
-        await session.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": CHAIN_LOCK})
-        last = (await session.execute(
+    async with async_session_maker() as db:
+        await db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": CHAIN_LOCK})
+        last = (await db.execute(
             select(AuditLogEntry.id, AuditLogEntry.row_hash).where(AuditLogEntry.occurred_at < cutoff)
             .order_by(AuditLogEntry.id.desc()).limit(1)
         )).first()
         if last is None:
             return {"pruned": 0}
         through_id, through_hash = last
-        deleted = (await session.execute(delete(AuditLogEntry).where(AuditLogEntry.id <= through_id))).rowcount or 0
-        anchor = await session.get(AuditLogAnchor, 1)
+        deleted = (await db.execute(delete(AuditLogEntry).where(AuditLogEntry.id <= through_id))).rowcount or 0
+        anchor = await db.get(AuditLogAnchor, 1)
         if anchor is None:
             anchor = AuditLogAnchor(id=1, max_id=0, row_count=0)
-            session.add(anchor)
+            db.add(anchor)
         anchor.pruned_through_id, anchor.pruned_head_hash = through_id, through_hash
         anchor.row_count = max(0, (anchor.row_count or 0) - deleted)
-        await session.flush()
+        await db.flush()
         await security_event(
             "audit.prune", target_type="audit_log", target_id=str(through_id), severity="high",
             details={"deleted_rows": deleted, "older_than_days": retention_days, "through_id": through_id},
-            session=session,
+            session=db,
         )
-        await session.commit()
+        await db.commit()
     return {"pruned": deleted, "through_id": through_id}
 
 
 async def rows(*, start: Optional[datetime], end: Optional[datetime], action: Optional[str],
                actor: Optional[str], result: Optional[str], cap: int = EXPORT_CAP) -> AsyncIterator[AuditLogEntry]:
     """Rows in id order up to the id that was the head when the export began, at most `cap`."""
-    async with async_session_maker() as session:
-        head = (await session.execute(select(func.max(AuditLogEntry.id)))).scalar_one() or 0
+    async with async_session_maker() as db:
+        head = (await db.execute(select(func.max(AuditLogEntry.id)))).scalar_one() or 0
         last_id, sent = 0, 0
         while sent < cap:
             query = select(AuditLogEntry).where(AuditLogEntry.id > last_id, AuditLogEntry.id <= head)
@@ -351,14 +351,14 @@ async def rows(*, start: Optional[datetime], end: Optional[datetime], action: Op
                 query = query.where(func.lower(AuditLogEntry.actor_email).contains(actor.lower()))
             if result:
                 query = query.where(AuditLogEntry.result == result)
-            batch = (await session.execute(query.order_by(AuditLogEntry.id).limit(min(VERIFY_BATCH, cap - sent)))).scalars().all()
+            batch = (await db.execute(query.order_by(AuditLogEntry.id).limit(min(VERIFY_BATCH, cap - sent)))).scalars().all()
             if not batch:
                 return
             for row in batch:
                 yield row
             sent += len(batch)
             last_id = batch[-1].id
-            session.expunge_all()
+            db.expunge_all()
 
 
 EXPORT_COLUMNS = ("id",) + HASH_FIELDS + ("prev_hash", "row_hash", "chain_version")

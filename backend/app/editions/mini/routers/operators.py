@@ -356,11 +356,11 @@ async def my_certificate(request: Request, user: AuthenticatedUser = Depends(req
     snapshot = await identities.snapshot_by_uuid((user.raw_claims or {}).get("sub", ""))
     if snapshot is None or presented is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No certificate for this session")
-    cert = snapshot.certificates.get(presented.fingerprint)
+    cert = snapshot.certs.get(presented.fingerprint)
     not_after = cert.not_after if cert and cert.not_after else presented.not_after
     now = now_utc()
     opens = not_after - timedelta(days=ms.cert_renew_window_days)
-    renewed_already = any(c.renewed_from_id == (cert.id if cert else None) for c in snapshot.certificates.values())
+    renewed_already = any(c.renewed_from_id == (cert.id if cert else None) for c in snapshot.certs.values())
     return MyCertificate(
         email=snapshot.email, display_name=snapshot.display_name, role=snapshot.role,
         fingerprint=presented.fingerprint, common_name=presented.common_name, not_after=not_after,
@@ -368,7 +368,7 @@ async def my_certificate(request: Request, user: AuthenticatedUser = Depends(req
         expiring=not_after - now < timedelta(days=ms.cert_expiry_warning_days),
         renew_available=ms.cert_self_renew_enabled and now >= opens and not renewed_already,
         renew_opens_at=opens,
-        other_active_certificates=sum(1 for fp, c in snapshot.certificates.items()
+        other_active_certificates=sum(1 for fp, c in snapshot.certs.items()
                                       if fp != presented.fingerprint and c.status == "active"),
     )
 

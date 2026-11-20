@@ -57,7 +57,7 @@ def _fingerprint_for_thumbprint(snapshot: identities.IdentitySnapshot, thumb: st
         digest = base64.urlsafe_b64decode(thumb + "=" * (-len(thumb) % 4)).hex()
     except (ValueError, TypeError):
         return None
-    return digest if digest in snapshot.certificates else None
+    return digest if digest in snapshot.certs else None
 
 
 class CertificateTokenVerifier:

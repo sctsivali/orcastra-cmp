@@ -48,7 +48,7 @@ class IdentitySnapshot:
     status: str
     owner_org_id: Optional[int]
     tokens_valid_after: Optional[datetime]
-    certificates: Dict[str, CertificateState] = field(default_factory=dict)
+    certs: Dict[str, CertificateState] = field(default_factory=dict)
 
     @property
     def active(self) -> bool:
@@ -61,7 +61,7 @@ class IdentitySnapshot:
         return int(self.tokens_valid_after.timestamp())
 
     def certificate_usable(self, fingerprint: str, when: datetime) -> bool:
-        cert = self.certificates.get(fingerprint)
+        cert = self.certs.get(fingerprint)
         if cert is None or cert.status != "active":
             return False
         return cert.not_after is None or when <= cert.not_after
@@ -82,7 +82,7 @@ def _snapshot(identity: LocalIdentity, certificates) -> IdentitySnapshot:
         id=identity.id, uuid=identity.uuid, email=identity.email, display_name=identity.display_name,
         common_name=identity.common_name, role=identity.role, status=identity.status,
         owner_org_id=identity.owner_org_id, tokens_valid_after=identity.tokens_valid_after,
-        certificates={
+        certs={
             c.fingerprint: CertificateState(c.id, c.status, c.not_after, c.renewed_from_id) for c in certificates
         },
     )
@@ -206,7 +206,7 @@ async def add_certificate(identity_id: int, *, fingerprint: str, serial: Optiona
 async def record_login(snapshot: IdentitySnapshot, fingerprint: str) -> None:
     """Stamp the login; the first use of a renewed certificate retires the one it replaced."""
     now = datetime.now(timezone.utc)
-    cert = snapshot.certificates.get(fingerprint)
+    cert = snapshot.certs.get(fingerprint)
     async with async_session_maker() as s:
         await s.execute(update(LocalIdentity).where(LocalIdentity.id == snapshot.id).values(last_login_at=now))
         if cert is not None:
