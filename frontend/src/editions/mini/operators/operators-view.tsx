@@ -41,7 +41,6 @@ const ROLE_LABEL: Record<OperatorRole, string> = { admin: "Administrator", partn
 const STATUS_LABEL: Record<Operator["status"], string> = { active: "Active", revoked: "Revoked", deleted: "Deleted" };
 
 const OPERATORS = defineTable<Operator>()({
-  id: "mini-operators",
   searchPlaceholder: "Search operators",
   defaultSort: { field: "operator", direction: "asc" },
   columns: [

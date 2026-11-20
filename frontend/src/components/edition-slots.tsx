@@ -4,9 +4,10 @@
 // header, notices and global dialogs beside the layout's). Full renders nothing in either.
 
 import { MiniLayoutExtras } from "@/editions/mini/slots";
+import { MiniHeaderSearch } from "@/editions/mini/search/command-palette";
 
 export function EditionHeaderStart(): JSX.Element | null {
-  return null;
+  return <MiniHeaderSearch />;
 }
 
 export function EditionLayoutExtras(): JSX.Element | null {

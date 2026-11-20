@@ -28,6 +28,10 @@ const ALLOWED_CLUSTERS_CALLERS = new Map([
     'app/inventory/warnings/components/warning-detail-dialog.tsx',
     'footer button of a Partner-gated dialog, a Button rather than a cell',
   ],
+  [
+    'editions/mini/search/command-palette.tsx',
+    'Mini command palette: its Clusters group renders for Partner and Admin only',
+  ],
 ]);
 
 const HEADER_LABEL = '(?:Node|Cluster|Clusters)';

@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { api } from "@/lib/api";
 import { miniApi, type IssuedBundle, type OperatorRole } from "../api";
 import { BundleReveal } from "./bundle-reveal";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 
 const NO_ORG = "none";
 
@@ -29,7 +30,8 @@ export function IssueDialog({ open, onOpenChange, isAdmin, onIssued }: {
   const [error, setError] = useState<string | null>(null);
   const [issued, setIssued] = useState<{ bundle: IssuedBundle; email: string } | null>(null);
   const emailRef = useRef<HTMLInputElement>(null);
-  const orgs = useQuery({ queryKey: ["mini", "organizations"], queryFn: () => api.organizations.list(), enabled: open });
+  const { scopeKey } = useActorQueryScope();
+  const orgs = useQuery({ queryKey: ["mini-organizations", scopeKey], queryFn: () => api.organizations.list(), enabled: open });
 
   useEffect(() => {
     if (open) {

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "next-auth/react";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { BadgeCheck, AlertTriangle } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -24,8 +25,9 @@ export function MiniProfileItem(): JSX.Element {
 /** A notice on every page while the signed-in certificate is about to expire. */
 export function MiniLayoutExtras(): JSX.Element | null {
   const { status } = useSession();
+  const { scopeKey } = useActorQueryScope();
   const query = useQuery({
-    queryKey: ["mini", "my-certificate"],
+    queryKey: ["mini-my-certificate", scopeKey],
     queryFn: () => miniApi.myCertificate(),
     enabled: status === "authenticated",
     staleTime: 15 * 60_000,

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { KeyRound, RefreshCw } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -15,7 +16,8 @@ import { BundleReveal } from "./operators/bundle-reveal";
 const ROLE_LABEL: Record<string, string> = { admin: "Administrator", partner: "Partner", tenant: "Tenant" };
 
 export function MyCertificateView() {
-  const query = useQuery({ queryKey: ["mini", "my-certificate"], queryFn: () => miniApi.myCertificate() });
+  const { scopeKey } = useActorQueryScope();
+  const query = useQuery({ queryKey: ["mini-my-certificate", scopeKey], queryFn: () => miniApi.myCertificate() });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [renewed, setRenewed] = useState<IssuedBundle | null>(null);
