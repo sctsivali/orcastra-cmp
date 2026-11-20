@@ -140,6 +140,18 @@ async def active_admin_exists() -> bool:
     return found > 0
 
 
+async def bootstrap_open() -> bool:
+    """First-administrator enrollment is for a deployment that never had one. Once any
+    Administrator was enrolled (even one since revoked, deleted or expired) the token stays shut,
+    so a token left in .env cannot reopen it; a lost Administrator is recovered on the host with
+    `python -m app.editions.mini.cli recover-admin`."""
+    async with async_session_maker() as session:
+        found = (await session.execute(
+            select(func.count()).select_from(LocalIdentity).where(LocalIdentity.role == "admin")
+        )).scalar_one()
+    return found == 0
+
+
 def default_email(common_name: str, suffix: str) -> str:
     label = _LABEL.sub("-", (common_name or "").split(".", 1)[0].lower()).strip("-") or "operator"
     return f"{label[:64]}@{suffix}"

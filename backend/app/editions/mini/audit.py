@@ -370,10 +370,21 @@ def row_dict(row: AuditLogEntry) -> Dict[str, Any]:
     return out
 
 
+_FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _spreadsheet_safe(value: Any) -> Any:
+    # A cell a spreadsheet would run as a formula (an operator-chosen name such as
+    # "=HYPERLINK(...)") is written as text. The JSON export keeps the exact values the chain hashes.
+    if isinstance(value, str) and value.startswith(_FORMULA_START):
+        return "'" + value
+    return value
+
+
 def csv_line(values: Dict[str, Any]) -> str:
     buffer = io.StringIO()
     csv.writer(buffer).writerow([
-        json.dumps(values[c], sort_keys=True) if isinstance(values.get(c), (dict, list)) else values.get(c)
+        _spreadsheet_safe(json.dumps(values[c], sort_keys=True) if isinstance(values.get(c), (dict, list)) else values.get(c))
         for c in EXPORT_COLUMNS
     ])
     return buffer.getvalue()

@@ -13,7 +13,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthenticatedUser
@@ -25,7 +25,7 @@ from app.editions.mini.audit import security_event
 from app.editions.mini.client_cert import now_utc, presented_certificate
 from app.editions.mini.issuing import bundle_response, issue_bundle
 from app.editions.mini.settings import mini_settings
-from app.models.db_models import Organization, OrganizationMember
+from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
 from app.models.mini_identity_models import LocalIdentity, LocalIdentityCertificate
 from app.services.cluster_parties import RUNNING_ROLES
 from app.services.organization_service import OrganizationService
@@ -79,6 +79,10 @@ def _role(user: AuthenticatedUser) -> Role:
     return get_highest_role(resolve_roles(user))
 
 
+def _role_name(user: AuthenticatedUser) -> str:
+    return _role(user).value
+
+
 async def _orgs_run_by(db: AsyncSession, email: str) -> set[int]:
     created = select(Organization.id).where(Organization.created_by == email)
     member = select(OrganizationMember.organization_id).where(
@@ -95,6 +99,48 @@ async def _may_manage(db: AsyncSession, user: AuthenticatedUser, identity: Local
     if role != Role.PARTNER or identity.role != "tenant" or identity.owner_org_id is None:
         return False
     return identity.owner_org_id in await _orgs_run_by(db, user.email)
+
+
+RANK = {"tenant": 1, "partner": 2, "admin": 3}
+
+
+def _rank(role: Optional[str]) -> int:
+    return RANK.get(role or "", 0)
+
+
+async def _foreign_footprint(db: AsyncSession, email: str, own_orgs: set[int]) -> bool:
+    """Whether the address already grants access outside the caller's organizations.
+
+    Access is keyed by email, so whoever holds a certificate for an address inherits every row
+    that names it. A Partner may not mint one for an address another organization already
+    trusts (a membership, an organization or a cluster registration it holds).
+    """
+    e = email.lower()
+    member = select(OrganizationMember.id).where(func.lower(OrganizationMember.user_email) == e)
+    if own_orgs:
+        member = member.where(OrganizationMember.organization_id.not_in(own_orgs))
+    probes = (
+        member,
+        select(Organization.id).where(func.lower(Organization.created_by) == e),
+        select(OrganizationCluster.id).where(or_(func.lower(OrganizationCluster.registered_by) == e,
+                                                 func.lower(OrganizationCluster.granted_by) == e)),
+    )
+    for probe in probes:
+        if (await db.execute(probe.limit(1))).first() is not None:
+            return True
+    return False
+
+
+async def _lock_operators(db: AsyncSession) -> None:
+    """Serialise changes that can take an Administrator away, so two at once cannot both pass the
+    last-Administrator check. Held until the transaction ends."""
+    await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": 0x4F505253})
+
+
+def _revoke_all(identity: LocalIdentity, db_now) -> object:
+    return update(LocalIdentityCertificate).where(
+        LocalIdentityCertificate.identity_id == identity.id, LocalIdentityCertificate.status == "active"
+    ).values(status="revoked", revoked_at=db_now)
 
 
 async def _get(db: AsyncSession, uuid: str) -> LocalIdentity:
@@ -171,8 +217,12 @@ async def issue_operator(body: IssueRequest, user: AuthenticatedUser = Depends(r
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail="A Partner issues Tenant certificates only")
         if body.organization_id is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Choose the organization the Tenant belongs to")
-        if body.organization_id not in await _orgs_run_by(db, user.email):
+        own_orgs = await _orgs_run_by(db, user.email)
+        if body.organization_id not in own_orgs:
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail="You do not run that organization")
+        if await _foreign_footprint(db, str(body.email), own_orgs):
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                detail="That email already has access elsewhere; ask an Administrator to issue it")
     if body.organization_id is not None and await db.get(Organization, body.organization_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Organization not found")
     email = str(body.email).lower()
@@ -194,15 +244,17 @@ async def issue_operator(body: IssueRequest, user: AuthenticatedUser = Depends(r
         )
     except identities.IdentityConflict:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="An operator with that email already exists")
+    # The audit row first: add_member commits, and the identity, its membership and the record of
+    # who issued it must land in that one commit or not at all.
+    await security_event("identity.issue", target_type="identity", target_id=snapshot.uuid, severity="high",
+                         details={"email": email, "role": body.role, "organization_id": body.organization_id,
+                                  "fingerprint": bundle.certificate.fingerprint}, session=db)
     if body.organization_id is not None:
         try:
             await OrganizationService(db).add_member(org_id=body.organization_id, user_email=email,
                                                     role="member", invited_by=user.email)
         except ValueError:
             pass  # already a member under this address
-    await security_event("identity.issue", target_type="identity", target_id=snapshot.uuid, severity="high",
-                         details={"email": email, "role": body.role, "organization_id": body.organization_id,
-                                  "fingerprint": bundle.certificate.fingerprint}, session=db)
     await db.commit()
     return bundle_response(bundle, operator_uuid=snapshot.uuid)
 
@@ -218,6 +270,10 @@ async def update_operator(uuid: str, body: UpdateRequest, user: AuthenticatedUse
     admin = _role(user) == Role.ADMIN
     if body.role is not None and body.role != identity.role and not admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Only an Administrator changes a role")
+    reactivating = body.status == "active" and identity.status != "active"
+    if reactivating and _rank(identity.status_changed_by_role) > _rank(_role_name(user)):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="An Administrator revoked this operator; ask one to reactivate it")
+    await _lock_operators(db)
     losing_admin = identity.role == "admin" and ((body.role and body.role != "admin") or body.status == "revoked")
     if losing_admin and await _usable_admins(db, excluding_id=identity.id) == 0:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="This is the last Administrator who can sign in")
@@ -228,12 +284,23 @@ async def update_operator(uuid: str, body: UpdateRequest, user: AuthenticatedUse
         changes["role"] = body.role
     if body.status is not None and body.status != identity.status:
         changes["status"] = body.status
+    promoted = "role" in changes and _rank(changes["role"]) > _rank(identity.role)
     if changes:
+        now = now_utc()
         if "role" in changes or changes.get("status") == "revoked":
             # important: every session minted before this moment is refused from the next request.
-            identity.tokens_valid_after = now_utc()
+            identity.tokens_valid_after = now
+        if promoted:
+            # important: whoever issued the existing certificates (a Partner, for a Tenant) holds
+            # their keys too. A promotion must not hand that issuer the higher role: every
+            # certificate is revoked and the Administrator issues a new one to the operator.
+            await db.execute(_revoke_all(identity, now))
+            changes["certificates_revoked"] = True
+        if "status" in changes:
+            identity.status_changed_by_role = _role_name(user)
         for key, value in changes.items():
-            setattr(identity, key, value)
+            if key != "certificates_revoked":
+                setattr(identity, key, value)
         action = "identity.revoke" if changes.get("status") == "revoked" else "identity.update"
         await security_event(action, target_type="identity", target_id=identity.uuid, severity="high",
                              details={"email": identity.email, **changes}, session=db)
@@ -251,6 +318,11 @@ async def reissue_certificate(uuid: str, user: AuthenticatedUser = Depends(requi
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Operator not found")
     if identity.status != "active":
         raise HTTPException(status.HTTP_409_CONFLICT, detail="Only an active operator gets a certificate")
+    if _role(user) != Role.ADMIN and await _foreign_footprint(db, identity.email, await _orgs_run_by(db, user.email)):
+        # The Tenant also belongs to another organization; a certificate from this Partner would
+        # carry that access too.
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            detail="This operator also has access elsewhere; ask an Administrator for a certificate")
     bundle = await issue_bundle(identity.email)
     await identities.add_certificate(identity.id, fingerprint=bundle.certificate.fingerprint,
                                      serial=bundle.certificate.serial, not_after=bundle.certificate.not_after,
@@ -274,6 +346,7 @@ async def revoke_certificate(uuid: str, fingerprint: str, user: AuthenticatedUse
     if cert is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Certificate not found")
     if cert.status == "active":
+        await _lock_operators(db)
         if identity.role == "admin" and await _usable_admins(db, excluding_id=None) <= 1:
             others = (await db.execute(select(func.count()).select_from(LocalIdentityCertificate).where(
                 LocalIdentityCertificate.identity_id == identity.id, LocalIdentityCertificate.status == "active",
@@ -299,14 +372,14 @@ async def delete_operator(uuid: str, user: AuthenticatedUser = Depends(require_p
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Operator not found")
     if identity.email == (user.email or "").lower():
         raise HTTPException(status.HTTP_409_CONFLICT, detail="You cannot delete yourself")
+    await _lock_operators(db)
     if identity.role == "admin" and await _usable_admins(db, excluding_id=identity.id) == 0:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="This is the last Administrator who can sign in")
     if identity.status != "deleted":
         now = now_utc()
         identity.status, identity.tokens_valid_after = "deleted", now
-        await db.execute(update(LocalIdentityCertificate).where(
-            LocalIdentityCertificate.identity_id == identity.id, LocalIdentityCertificate.status == "active"
-        ).values(status="revoked", revoked_at=now))
+        identity.status_changed_by_role = _role_name(user)
+        await db.execute(_revoke_all(identity, now))
         await security_event("identity.delete", target_type="identity", target_id=identity.uuid, severity="high",
                              details={"email": identity.email}, session=db)
         await db.commit()
@@ -321,8 +394,11 @@ async def restore_operator(uuid: str, user: AuthenticatedUser = Depends(require_
     identity = await _get(db, uuid)
     if not await _may_manage(db, user, identity):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Operator not found")
+    if _rank(identity.status_changed_by_role) > _rank(_role_name(user)):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="An Administrator removed this operator; ask one to restore it")
     if identity.status != "active":
         identity.status = "active"
+        identity.status_changed_by_role = _role_name(user)
         await security_event("identity.restore", target_type="identity", target_id=identity.uuid, severity="high",
                              details={"email": identity.email}, session=db)
         await db.commit()
@@ -402,7 +478,10 @@ async def renew_my_certificate(request: Request, user: AuthenticatedUser = Depen
         LocalIdentityCertificate.renewed_from_id == cert.id))).scalar_one()
     if already:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="This certificate was already renewed; import the new one")
-    bundle = await issue_bundle(identity.email)
+    # The renewal lasts as long as the certificate it replaces: a short-lived certificate an issuer
+    # chose stays short-lived instead of renewing into the default lifetime.
+    lifetime_days = max(1, (presented.not_after - presented.not_before).days)
+    bundle = await issue_bundle(identity.email, ttl_days=lifetime_days)
     await identities.add_certificate(identity.id, fingerprint=bundle.certificate.fingerprint,
                                      serial=bundle.certificate.serial, not_after=bundle.certificate.not_after,
                                      cert_common_name=bundle.certificate.common_name, renewed_from_id=cert.id, session=db)

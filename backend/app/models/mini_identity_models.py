@@ -49,6 +49,8 @@ class LocalIdentity(Base):
     # moves it forward, so no older token outlives the change.
     tokens_valid_after = Column(DateTime(timezone=True), nullable=True)
     last_login_at = Column(DateTime(timezone=True), nullable=True)
+    # The rank of whoever last revoked or deleted this operator; a lower rank may not undo it.
+    status_changed_by_role = Column(String(20), nullable=True)
     # The first release keyed identities on one certificate; that certificate now lives in
     # local_identity_certificates and these columns are kept, unused, for a downgrade.
     fingerprint = Column(String(64), nullable=True, index=True)

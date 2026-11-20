@@ -81,7 +81,7 @@ async def cert_status(request: Request) -> CertStatusResponse:
     presented = presented_certificate(request, ms)
     snapshot = await identities.snapshot_by_certificate(presented.fingerprint) if presented else None
     usable = bool(snapshot and snapshot.active and snapshot.certificate_usable(presented.fingerprint, now_utc()))
-    bootstrap = bool(ms.bootstrap_admin_token) and not await identities.active_admin_exists()
+    bootstrap = bool(ms.bootstrap_admin_token) and await identities.bootstrap_open()
     return CertStatusResponse(
         certificate_presented=presented is not None,
         enrolled=snapshot is not None,
@@ -157,7 +157,7 @@ async def cert_bootstrap(request: Request, body: BootstrapRequest) -> CertLoginR
     presented = presented_certificate(request, ms)
     if presented is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="No client certificate was presented")
-    if await identities.active_admin_exists():
+    if not await identities.bootstrap_open():
         raise HTTPException(status.HTTP_409_CONFLICT, detail="An Administrator already exists; ask them to issue a certificate")
     email = (str(body.email) if body.email else identities.default_email(presented.common_name, ms.client_cert_cn_suffix))
     from app.core.database import async_session_maker

@@ -38,6 +38,13 @@ import { BundleReveal } from "./bundle-reveal";
 import { IssueDialog } from "./issue-dialog";
 
 const ROLE_LABEL: Record<OperatorRole, string> = { admin: "Administrator", partner: "Partner", tenant: "Tenant" };
+const ROLE_RANK: Record<OperatorRole, number> = { tenant: 1, partner: 2, admin: 3 };
+
+// A promotion revokes every certificate (the backend does it): whoever issued them holds the keys
+// too, and must not gain the higher role with them.
+function isPromotion(confirm: Confirm | null): boolean {
+  return confirm?.kind === "role" && ROLE_RANK[confirm.role] > ROLE_RANK[confirm.operator.role];
+}
 const STATUS_LABEL: Record<Operator["status"], string> = { active: "Active", revoked: "Revoked", deleted: "Deleted" };
 
 const OPERATORS = defineTable<Operator>()({
@@ -117,7 +124,11 @@ function OperatorsContent() {
     if (confirm.kind === "reactivate") return run(() => miniApi.updateOperator(operator.uuid, { status: "active" }), `${operator.email} reactivated`);
     if (confirm.kind === "delete") return run(() => miniApi.deleteOperator(operator.uuid), `${operator.email} deleted`);
     if (confirm.kind === "restore") return run(() => miniApi.restoreOperator(operator.uuid), `${operator.email} restored; issue a certificate to sign in`);
-    if (confirm.kind === "role") return run(() => miniApi.updateOperator(operator.uuid, { role: confirm.role }), `${operator.email} is now ${ROLE_LABEL[confirm.role]}`);
+    if (confirm.kind === "role") {
+      const done = `${operator.email} is now ${ROLE_LABEL[confirm.role]}`;
+      return run(() => miniApi.updateOperator(operator.uuid, { role: confirm.role }),
+        isPromotion(confirm) ? `${done}. Issue a new certificate and hand it to them.` : done);
+    }
     if (confirm.kind === "revoke-cert") return run(() => miniApi.revokeCertificate(operator.uuid, confirm.fingerprint), "Certificate revoked");
   };
 
@@ -144,7 +155,11 @@ function OperatorsContent() {
     "revoke-cert": { title: "Revoke Certificate", body: "Sessions signed in with this certificate end on the next request. The operator's other certificates keep working.", action: "Revoke Certificate", destructive: true },
     role: { title: "Change Role", body: "Every session of this operator ends on the next request and signs in again with the new role.", action: "Change Role", destructive: false },
   };
-  const copy = confirm ? confirmCopy[confirm.kind] : null;
+  const promotionCopy = {
+    ...confirmCopy.role,
+    body: "Every certificate this operator holds is revoked and every session ends: whoever issued those certificates holds their keys too. After the change, issue a new certificate and hand it to the operator.",
+  };
+  const copy = confirm ? (isPromotion(confirm) ? promotionCopy : confirmCopy[confirm.kind]) : null;
 
   return (
     <div className="space-y-6 p-4 sm:p-8">

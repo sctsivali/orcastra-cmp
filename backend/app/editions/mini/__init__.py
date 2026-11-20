@@ -53,6 +53,10 @@ def validate_settings(settings) -> None:
         problems.append(f"AUTH_PROXY_SECRET must be at least {_MIN_SECRET} characters")
     if not settings.vault_enabled:
         problems.append("VAULT_ENABLED must be true: certificates and the cluster registry live in Vault")
+    if not ms.audit_db_enabled:
+        # Sign-ins and operator changes are recorded before they take effect (fail closed);
+        # without the audit log every sign-in would fail instead.
+        problems.append("AUDIT_DB_ENABLED must be true: sign-ins and operator changes are recorded there first")
     if problems:
         raise RuntimeError("Orcastra Mini refuses to start: " + "; ".join(problems))
     if settings.authentik_issuer:

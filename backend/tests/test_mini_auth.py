@@ -407,3 +407,12 @@ def test_a_record_maps_to_columns_that_hash_the_way_verification_reads_them():
     assert columns["actor_email"] == "a@example.org"
     assert columns["details"] == {"when": "2026-01-01 00:00:00+00:00", "n": 1}
     assert columns["occurred_at"].tzinfo is not None
+
+
+def test_the_csv_export_never_writes_a_cell_a_spreadsheet_would_run():
+    from app.editions.mini import audit
+
+    values = {name: None for name in audit.EXPORT_COLUMNS}
+    values.update(target_id="=HYPERLINK(\"http://x\")", actor_email="+cmd@example.org", action="identity.issue")
+    line = audit.csv_line(values)
+    assert "'=HYPERLINK" in line and "'+cmd@example.org" in line and ",identity.issue," in line

@@ -99,3 +99,47 @@ def test_a_synthetic_address_is_valid_for_the_validator_the_api_uses():
 
     plan, _ = _m002().plan_emails([_row(1, "Weird Name!!.users.orcastra.internal", None)], {})
     assert validate_email(plan[0][1], check_deliverability=False).normalized == plan[0][1]
+
+
+def _access_db(rows):
+    import sqlalchemy as sa
+
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(sa.text("CREATE TABLE organization_members (id INTEGER PRIMARY KEY, organization_id INTEGER, user_email TEXT)"))
+        conn.execute(sa.text("CREATE TABLE organizations (id INTEGER PRIMARY KEY, created_by TEXT)"))
+        for org, email in rows:
+            conn.execute(sa.text("INSERT INTO organization_members (organization_id, user_email) VALUES (:o, :e)"),
+                         {"o": org, "e": email})
+    return engine
+
+
+def _members(engine):
+    import sqlalchemy as sa
+
+    with engine.connect() as conn:
+        return sorted(conn.execute(sa.text("SELECT organization_id, user_email FROM organization_members")).all())
+
+
+def test_a_move_never_carries_rows_another_move_just_wrote():
+    # A is mapped to the address that was C's display name. Moving one identity at a time would
+    # hand A's org 1 membership to C; every row must follow the key it had before the upgrade.
+    m002 = _m002()
+    a, c = _row(1, "a.users.orcastra.internal", "Alice"), _row(2, "c.users.orcastra.internal", "alice@example.com")
+    plan, counts = m002.plan_emails([a, c], {a["fingerprint"]: "alice@example.com"})
+    emails = {row["id"]: email for row, email in plan}
+    assert emails[1] == "alice@example.com" and emails[2].endswith("@users.orcastra.internal")
+    engine = _access_db([(1, "Alice"), (2, "alice@example.com")])
+    with engine.begin() as conn:
+        m002._move_access_rows(conn, plan, counts)
+    assert _members(engine) == [(1, "alice@example.com"), (2, emails[2])]
+
+
+def test_rows_keyed_on_a_shared_display_name_stay_where_they_are():
+    m002 = _m002()
+    rows = [_row(1, "t1.users.orcastra.internal", "QA Tenant"), _row(2, "t2.users.orcastra.internal", "QA Tenant")]
+    plan, counts = m002.plan_emails(rows, {})
+    engine = _access_db([(1, "QA Tenant")])
+    with engine.begin() as conn:
+        m002._move_access_rows(conn, plan, counts)
+    assert _members(engine) == [(1, "QA Tenant")]

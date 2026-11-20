@@ -4,7 +4,7 @@
  * Mini's sign-in page: the browser's client certificate is the credential.
  *
  * It first asks the backend what this browser presented, then explains the one next step: import
- * a certificate, send an unenrolled fingerprint to an Administrator, enroll the first Administrator
+ * a certificate, show an unenrolled certificate's fingerprint to report, enroll the first Administrator
  * with the bootstrap token, or sign in. A visit that was redirected here from a page signs in on its
  * own; a plain visit (after signing out, for one) waits for the button, so signing out sticks.
  */
@@ -259,8 +259,9 @@ function MiniSignInContent() {
         <Alert>
           <ShieldAlert className="h-4 w-4" aria-hidden="true" />
           <AlertDescription>
-            This certificate is not enrolled. Send its fingerprint to an Administrator, who can enroll
-            it, or ask them for a certificate issued from the Operators page.
+            This certificate is not enrolled. Ask an Administrator, or the Partner who runs your
+            organization, for a certificate from the Operators page. If you report this, include the
+            fingerprint below.
           </AlertDescription>
         </Alert>
         {status.fingerprint && <Fingerprint value={status.fingerprint} />}

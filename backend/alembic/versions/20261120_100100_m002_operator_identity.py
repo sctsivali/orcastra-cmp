@@ -144,6 +144,7 @@ def _assign_emails(bind):
 
 
 def _move_access_rows(bind, assignments, display_counts):
+    moves = []  # (identity id, old key, new email)
     for row, email in assignments:
         old = (row["display_name"] or "").strip()
         if not old or old.lower() == email:
@@ -155,11 +156,20 @@ def _move_access_rows(bind, assignments, display_counts):
                 row["id"], old, display_counts[old], email,
             )
             continue
-        for table, column in ACCESS_COLUMNS:
-            if not _has_table(bind, table) or column not in _columns(bind, table):
-                continue
-            bind.execute(sa.text(f'UPDATE "{table}" SET "{column}" = :new WHERE "{column}" = :old'),
-                         {"new": email, "old": old})
+        moves.append((row["id"], old, email))
+    # important: two passes. Every old key first becomes a placeholder no real key can equal, then
+    # each placeholder becomes its new email. One pass per identity would let a later move pick up
+    # rows an earlier one just wrote (identity A takes "alice@example.com", then identity C, whose
+    # old key was "alice@example.com", carries A's rows away) and could trip a unique index midway.
+    for table, column in ACCESS_COLUMNS:
+        if not _has_table(bind, table) or column not in _columns(bind, table):
+            continue
+        for identity_id, old, _email in moves:
+            bind.execute(sa.text(f'UPDATE "{table}" SET "{column}" = :tmp WHERE "{column}" = :old'),
+                         {"tmp": f"m002-move-{identity_id}@m002.invalid", "old": old})
+        for identity_id, _old, email in moves:
+            bind.execute(sa.text(f'UPDATE "{table}" SET "{column}" = :new WHERE "{column}" = :tmp'),
+                         {"new": email, "tmp": f"m002-move-{identity_id}@m002.invalid"})
 
 
 def upgrade() -> None:
@@ -172,6 +182,8 @@ def upgrade() -> None:
     op.add_column("local_identities", sa.Column("issued_by", sa.String(320), nullable=True))
     op.add_column("local_identities", sa.Column("tokens_valid_after", sa.DateTime(timezone=True), nullable=True))
     op.add_column("local_identities", sa.Column("last_login_at", sa.DateTime(timezone=True), nullable=True))
+    # The rank of whoever last revoked or deleted the operator: a lower rank may not undo it.
+    op.add_column("local_identities", sa.Column("status_changed_by_role", sa.String(20), nullable=True))
 
     op.create_table(
         "local_identity_certificates",
@@ -269,5 +281,6 @@ def downgrade() -> None:
     op.drop_table("local_identity_certificates")
     op.drop_index("uq_local_identities_email", table_name="local_identities")
     op.drop_constraint("uq_local_identities_uuid", "local_identities", type_="unique")
-    for column in ("last_login_at", "tokens_valid_after", "issued_by", "owner_org_id", "email", "uuid"):
+    for column in ("status_changed_by_role", "last_login_at", "tokens_valid_after", "issued_by", "owner_org_id",
+                   "email", "uuid"):
         op.drop_column("local_identities", column)

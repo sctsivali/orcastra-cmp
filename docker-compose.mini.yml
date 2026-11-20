@@ -107,9 +107,12 @@ services:
       - ALLOW_PRIVATE_FORWARDED_IPS=true
       - SECRET_KEY=${SECRET_KEY}
       - CORS_ORIGINS=${CORS_ORIGINS}
+      # The address integrators reach: the add-on API document's servers entry and webhook source.
+      - PUBLIC_API_BASE_URL=${NEXTAUTH_URL}
       - ORCASTRA_DOMAIN=${ORCASTRA_DOMAIN:-orcastra.io}
     volumes:
-      - ./config:/app/config:rw
+      # Only config/backend: the rest of config/ (nginx's key, vault.hcl) stays out of the backend.
+      - ./config/backend:/app/config:rw
       - ${UPLOADS_DIR:-/var/orcastra/uploads}:/app/uploads:rw
     networks: [orcastra-mini]
     extra_hosts:

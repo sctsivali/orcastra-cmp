@@ -51,9 +51,24 @@ export function edgeCertificate(source: HeaderSource): string | null {
   return source.get(CERT_HEADER) || null;
 }
 
+/**
+ * nginx's view of the client, only when nginx's secret came with the request. The backend
+ * rate-limits and audits on it; without it every sign-in and renewal would share this
+ * container's address, and one caller's flood would lock everyone out.
+ */
+export function edgeClientIp(source: HeaderSource): string | null {
+  if (!sameSecret(source.get(SECRET_HEADER), secret())) return null;
+  const ip = source.get("x-real-ip");
+  return ip && /^[0-9a-f:.]{2,45}$/i.test(ip) ? ip : null;
+}
+
+function clientIpHeaders(ip: string | null): Record<string, string> {
+  return ip ? { "x-orcastra-client-ip": ip, "x-orcastra-client-ip-source": "edge" } : {};
+}
+
 type LoginOutcome = { ok: true; login: CertLogin } | { ok: false; revoked: boolean };
 
-async function certLogin(certificate: string): Promise<LoginOutcome> {
+async function certLogin(certificate: string, clientIp: string | null): Promise<LoginOutcome> {
   try {
     const response = await fetch(`${BACKEND_URL}/api/v1/auth/cert-login`, {
       method: "POST",
@@ -61,6 +76,7 @@ async function certLogin(certificate: string): Promise<LoginOutcome> {
         "content-type": "application/json",
         [CERT_HEADER]: certificate,
         [SECRET_HEADER]: secret(),
+        ...clientIpHeaders(clientIp),
       },
       body: "{}",
       cache: "no-store",
@@ -94,7 +110,8 @@ const inFlight = new Map<string, Promise<LoginOutcome>>();
 async function renew(token: JWT): Promise<JWT | null> {
   const subject = token.authentikId ?? token.sub ?? "";
   const { headers } = await import("next/headers");
-  const certificate = edgeCertificate(await headers());
+  const incoming = await headers();
+  const certificate = edgeCertificate(incoming);
   if (!certificate) {
     // No certificate on this request (the browser stopped sending it, or the request did not
     // come through nginx): this session cannot be renewed.
@@ -102,7 +119,7 @@ async function renew(token: JWT): Promise<JWT | null> {
   }
   let pending = inFlight.get(subject);
   if (!pending) {
-    pending = certLogin(certificate).finally(() => inFlight.delete(subject));
+    pending = certLogin(certificate, edgeClientIp(incoming)).finally(() => inFlight.delete(subject));
     inFlight.set(subject, pending);
   }
   const outcome = await pending;
@@ -126,7 +143,7 @@ export const miniAuth: EditionAuth = {
       async authorize(_credentials, request) {
         const certificate = edgeCertificate(request.headers);
         if (!certificate) return null;
-        const outcome = await certLogin(certificate);
+        const outcome = await certLogin(certificate, edgeClientIp(request.headers));
         if (!outcome.ok) return null;
         const { login } = outcome;
         return {
@@ -160,14 +177,11 @@ export const miniAuth: EditionAuth = {
     const certificate = edgeCertificate(request.headers);
     // Whatever the browser sent under these names is dropped; only nginx's copy goes on.
     for (const name of EDGE_HEADERS) headers.delete(name);
+    // The client address goes on with or without a certificate, so a caller without one is
+    // rate-limited on its own address instead of on the bucket every operator shares.
+    for (const [name, value] of Object.entries(clientIpHeaders(edgeClientIp(request.headers)))) headers.set(name, value);
     if (!certificate) return;
     headers.set(CERT_HEADER, certificate);
     headers.set(SECRET_HEADER, secret());
-    // nginx's view of the client, so the backend audits and rate-limits the real address.
-    const realIp = request.headers.get("x-real-ip");
-    if (realIp && /^[0-9a-f:.]{2,45}$/i.test(realIp)) {
-      headers.set("x-orcastra-client-ip", realIp);
-      headers.set("x-orcastra-client-ip-source", "edge");
-    }
   },
 };

@@ -3,7 +3,7 @@
     docker exec -it <prefix>-backend python -m app.editions.mini.cli recover-admin --email you@example.org
 
 Issues a new Administrator certificate when no Administrator can sign in (every Administrator
-certificate lost, revoked or expired). The .p12 is written to /app/config (the deployment's config
+certificate lost, revoked or expired). The .p12 is written to /app/config (the deployment's config/backend
 directory on the host) and its password printed once on this terminal. Shell access to the host is
 the authority here, the same authority that can read the database and Vault keys.
 """
@@ -16,7 +16,7 @@ import os
 import sys
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 
 async def recover_admin(email: str, out_dir: str, force: bool) -> int:
@@ -24,7 +24,7 @@ async def recover_admin(email: str, out_dir: str, force: bool) -> int:
     from app.editions.mini import identities
     from app.editions.mini.audit import security_event
     from app.editions.mini.issuing import issue_bundle
-    from app.models.mini_identity_models import LocalIdentity
+    from app.models.mini_identity_models import LocalIdentity, LocalIdentityCertificate
 
     if await identities.active_admin_exists() and not force:
         print("An Administrator can still sign in; ask them to issue a certificate instead "
@@ -45,8 +45,14 @@ async def recover_admin(email: str, out_dir: str, force: bool) -> int:
             )
             target = snapshot.uuid
         else:
-            identity.role, identity.status = "admin", "active"
-            identity.tokens_valid_after = datetime.now(timezone.utc)
+            now = datetime.now(timezone.utc)
+            # important: certificates issued before this promotion may sit with someone else (the
+            # Partner who issued a Tenant's, a lost laptop). Only the one written here gets the role.
+            await session.execute(update(LocalIdentityCertificate).where(
+                LocalIdentityCertificate.identity_id == identity.id, LocalIdentityCertificate.status == "active"
+            ).values(status="revoked", revoked_at=now))
+            identity.role, identity.status, identity.status_changed_by_role = "admin", "active", "admin"
+            identity.tokens_valid_after = now
             await identities.add_certificate(identity.id, fingerprint=bundle.certificate.fingerprint,
                                              serial=bundle.certificate.serial, not_after=bundle.certificate.not_after,
                                              cert_common_name=bundle.certificate.common_name, renewed_from_id=None,
@@ -60,7 +66,7 @@ async def recover_admin(email: str, out_dir: str, force: bool) -> int:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "wb") as fh:
         fh.write(bundle.pfx)
-    print(f"Administrator certificate for {email} written to {path} (on the host: the deployment's config directory).")
+    print(f"Administrator certificate for {email} written to {path} (on the host: the deployment's config/backend directory).")
     print(f"Import password (shown once): {bundle.password}")
     print("Import it into your browser, sign in, then delete the file.")
     return 0
