@@ -424,6 +424,8 @@ const RAW_FETCH_WRITE_ALLOWLIST = [
   },
 ];
 const seenRawFetchWrites = new Set();
+// The sign-in modules an edition plugs in through lib/edition-auth.ts and the sign-in page slot.
+const EDITION_SIGN_IN = /^frontend\/src\/editions\/[a-z0-9_]+\/(?:auth\.ts|sign-in\.tsx)$/;
 
 /**
  * A few call sites authoritatively patch or invalidate a narrower cache themselves. Keeping these
@@ -678,6 +680,16 @@ function inspectDirectWriteSites(absolutePath) {
 
     const call = node.getText(sourceFile);
     const scope = reconciliationScope(node, sourceFile).getText(sourceFile);
+    // An edition's sign-in modules exchange a credential for a session, like the OIDC exchange
+    // above: no cached resource changes, so there is nothing to reconcile. They must still read
+    // the outcome rather than assume it.
+    if (EDITION_SIGN_IN.test(path)) {
+      if (!scope.includes("response.ok")) {
+        const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+        failures.push(`${path}:${line}: an edition sign-in fetch must check response.ok`);
+      }
+      return;
+    }
     const matches = RAW_FETCH_WRITE_ALLOWLIST.filter(
       (entry) =>
         entry.path === path &&
