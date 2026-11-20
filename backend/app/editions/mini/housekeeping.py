@@ -30,6 +30,36 @@ STATE: Dict[str, Any] = {"collected_at": None}
 _task: Optional[asyncio.Task] = None
 _last_prune = 0.0
 _last_maintenance = 0.0
+_names_seeded = False
+
+
+def _seed_display_names() -> int:
+    """Copy each registered cluster's display name from its Vault record into the node metadata
+    every label reads, where the deployment has none. 1.0.0-RC1 could not write that file (its
+    directory belonged to root), so after an upgrade every cluster showed its id. Never
+    overwrites a name already there."""
+    from app.core.config import get_settings
+    from app.core.node_metadata import get_node_metadata_store
+    from app.core.vault_client import get_vault_client
+    from app.services.lxd_cert_manager import LXDCertificateManager
+
+    settings = get_settings()
+    manager = LXDCertificateManager(vault_client=get_vault_client(settings.vault_addr, settings.vault_token),
+                                    clusters_path=settings.vault_clusters_path)
+    store = get_node_metadata_store()
+    seeded = 0
+    registry = manager.read_registry(True)
+    if not registry.readable:
+        # Sealed or unreachable: a remembered or empty list is not the registry. Try again.
+        raise RuntimeError("the cluster registry is not readable yet")
+    for cluster_id in registry.cluster_ids:
+        if store.get_node_display_name(cluster_id):
+            continue
+        name = ((manager.get_cluster_info(cluster_id) or {}).get("metadata") or {}).get("display_name")
+        if name and name != cluster_id:
+            store.set_node_display_name(cluster_id, name)
+            seeded += 1
+    return seeded
 
 
 async def collect() -> None:
@@ -65,8 +95,16 @@ async def collect() -> None:
 
 
 async def tick() -> None:
-    global _last_maintenance
+    global _last_maintenance, _names_seeded
     ms = mini_settings()
+    if not _names_seeded:
+        try:
+            seeded = await asyncio.to_thread(_seed_display_names)
+            _names_seeded = True
+            if seeded:
+                logger.info("Restored the display names of %d clusters from their registration", seeded)
+        except Exception as exc:  # noqa: BLE001 - Vault sealed or unreachable: try again next tick
+            logger.debug("Cluster display names not seeded yet: %s", type(exc).__name__)
     if time.time() - _last_maintenance >= TICK_SECONDS:
         _last_maintenance = time.time()
         await _maintain(ms)
