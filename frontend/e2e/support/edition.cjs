@@ -1,7 +1,9 @@
 // The edition this tree builds, read from src/lib/edition.ts, and the optional pieces an edition
 // branch adds under e2e/editions/<edition>/ (they exist only on that branch; Full adds none):
-//   config.cjs  { testIgnore, webServerEnv }  CMP specs the edition does not ship, server env
-//   routes.cjs  { answer(request) }           the edition's own API endpoints, see fixtures.cjs
+//   config.cjs  { testIgnore, grepInvert, webServerEnv }  CMP specs or tests of features the
+//                                                        edition does not ship, server env
+//   routes.cjs  { answer(request), shellReads }  the edition's own API endpoints (see fixtures.cjs)
+//                                                and the paths its shell reads on every page
 const { existsSync, readFileSync } = require("node:fs");
 const path = require("node:path");
 

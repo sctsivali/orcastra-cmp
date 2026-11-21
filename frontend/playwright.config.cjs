@@ -19,6 +19,7 @@ const otherEditionSpecs = new RegExp(`[\\\\/]e2e[\\\\/]editions[\\\\/](?!${EDITI
 module.exports = defineConfig({
   testDir: "./e2e",
   testIgnore: [otherEditionSpecs, ...(editionConfig.testIgnore ?? [])],
+  ...(editionConfig.grepInvert ? { grepInvert: editionConfig.grepInvert } : {}),
   outputDir,
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
