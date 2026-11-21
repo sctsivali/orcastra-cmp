@@ -179,6 +179,14 @@ for (const file of walk(src)) {
         );
       }
 
+      // Rule 0b: defineTable refuses a column with both a facet and a filter, at render time, so
+      // the page shows the error screen instead of the table. tsc cannot see it. A hard ban.
+      if (column.hasFacet && column.hasFilter) {
+        offenders.push(
+          `${rel}: column "${column.field}" declares both facet and filter; defineTable throws on render. Pick one.`,
+        );
+      }
+
       // Rule 1: a rendered column is filterable, searchable, or carries a written waiver.
       //
       // important: the waiver is per column. A file-wide `// filter-coverage:` would silently
