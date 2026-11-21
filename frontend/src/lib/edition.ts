@@ -8,6 +8,9 @@
 
 export const EDITION: string = "full";
 
+/** The product name a deployment without its own branding shows (tab title, sign-in card). */
+export const PRODUCT_NAME: string = "Orcastra CMP";
+
 /** The NextAuth provider every sign-in call names. */
 export const AUTH_PROVIDER_ID: string = "authentik";
 

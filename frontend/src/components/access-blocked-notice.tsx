@@ -4,6 +4,7 @@ import { useState } from "react";
 import { signIn } from "next-auth/react";
 import { AUTH_PROVIDER_ID } from "@/lib/edition";
 import { KeyRound, Loader2, LogIn, LogOut, RefreshCw, UserX } from "lucide-react";
+import { EditionAccessGateExtras } from "@/components/edition-slots";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { IllustrationFallback } from "@/components/illustrations/illustration-frame";
@@ -87,6 +88,7 @@ export function AccessBlockedNotice({ state, email, endedAt, rechecking, onCheck
                 Signed in as <span className="font-medium break-all">{email}</span>
               </p>
             )}
+            <EditionAccessGateExtras />
           </div>
 
           <div className="flex flex-col gap-2">

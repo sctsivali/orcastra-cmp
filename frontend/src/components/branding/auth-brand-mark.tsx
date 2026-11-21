@@ -3,8 +3,9 @@
 import Image from "next/image";
 import { ShieldCheck } from "lucide-react";
 import { usePublicBranding } from "./public-branding-context";
+import { PRODUCT_NAME } from "@/lib/edition";
 
-export const BUILT_IN_NAME = "Orcastra CMP";
+export const BUILT_IN_NAME = PRODUCT_NAME;
 
 /** The deployment's name and logo on the sign-in and error pages, or the built-in mark. */
 export function AuthBrandMark({ withoutLogo = "icon" }: { withoutLogo?: "icon" | "nothing" }) {
