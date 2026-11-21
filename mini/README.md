@@ -41,8 +41,13 @@ make mini-up                         # MINI_PROJECT=orcastra-mini by default
 
 Every CMP release is merged into this branch:
 
-1. `git merge v<cmp-version>` (the CMP tag). Conflicts appear only where CMP changed a seam file;
-   keep CMP's change and re-apply the one Mini line beside it.
+1. `git merge v<cmp-version>` (the CMP tag). Outside its own folders Mini changes only the edition
+   switchboards (`frontend/src/lib/edition.ts`, `edition-auth.ts`, `components/edition-slots.tsx`,
+   `components/sidebar/edition-nav.ts`) and adds entries below the edition anchor comments in
+   `backend/alembic/env.py`, `frontend/src/lib/inventory-links.ts` and
+   `scripts/checks/check-node-link.mjs`. CMP adds above those anchors, so a conflict appears only
+   where CMP changed a switchboard itself: keep CMP's change and re-apply Mini's value beside it.
+   Mini's make targets live in `edition.mk`.
 2. If CMP added Alembic revisions, the graph now has two heads. Add
    `backend/alembic/versions/<date>_m00N_mini_merge_<cmp-head>.py` with
    `down_revision = ("<cmp head>", "<previous mini head>")` and no operations.
@@ -50,7 +55,11 @@ Every CMP release is merged into this branch:
    to the Mini release that will ship.
 4. Run the gates: `make test-backend` (includes the migration graph and the Mini tests),
    `make test-frontend` (includes `check-identity-seams` and `check-role-gates`),
-   `make lint-backend lint-frontend`, and `make ci-local`.
+   `make lint-backend lint-frontend`, and `make ci-local`. The browser stage runs every CMP spec on
+   the Mini build plus Mini's own under `frontend/e2e/editions/mini/`. A new CMP spec that tests a
+   feature Mini does not ship goes to `testIgnore` in `frontend/e2e/editions/mini/config.cjs` with
+   the reason; a Mini endpoint a CMP page now reads gets an answer in `routes.cjs` there. GitHub CI
+   runs the same jobs on every push to `orcastra-mini`.
 5. Upgrade a copy of the previous Mini release's database and a fresh install in a lab, sign in
    with each role, and verify the audit chain before releasing.
 
