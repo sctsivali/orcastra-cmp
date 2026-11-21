@@ -8,6 +8,9 @@
 # Runs on pushes to dev and main and on pull requests with one browser project, or by hand with
 # the full four-project matrix. `make ci-local` runs every job below locally from this same file
 # and is the gate before a direct push.
+#
+# Jobs name ubuntu-24.04 rather than ubuntu-latest: the pinned Playwright cannot install Chromium
+# on 26.04, so a moving label would break the browser job without any change in this repository.
 
 name: CI
 
@@ -32,7 +35,7 @@ concurrency:
 jobs:
   backend:
     name: Backend tests and lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:17-alpine
@@ -86,7 +89,7 @@ jobs:
 
   frontend:
     name: Frontend types, lint and build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -119,7 +122,7 @@ jobs:
 
   guards:
     name: Structural guards
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -380,7 +383,7 @@ jobs:
 
   commit-format:
     name: Conventional commits
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
@@ -404,7 +407,7 @@ jobs:
   # .gitleaksignore by fingerprint.
   secrets:
     name: Secret scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       GITLEAKS_VERSION: '8.21.2'
       GITLEAKS_SHA256_X64: '5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba'
@@ -435,7 +438,7 @@ jobs:
   # workflow_dispatch.
   browser-e2e:
     name: Browser role and behavior QA (${{ matrix.project }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: frontend
     timeout-minutes: 30
     strategy:
