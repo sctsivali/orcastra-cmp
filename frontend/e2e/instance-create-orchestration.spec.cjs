@@ -1,5 +1,6 @@
 const { test, expect } = require("@playwright/test");
 const {
+  EDITION_SHELL_READS,
   authenticate,
   expectCleanHarness,
   installApiFixtures,
@@ -20,6 +21,7 @@ const INITIAL_ALLOWED_PATHS = new Set([
   "/system/host-health",
   // An Administrator's release notice; other roles never send it.
   "/system/release-status",
+  ...EDITION_SHELL_READS,
 ]);
 const OPTIONAL_CREATE_PATHS = [
   "/images/remote",

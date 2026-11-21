@@ -25,6 +25,9 @@ const { editionModule } = require("./edition.cjs");
 // An edition's own endpoints (e2e/editions/<edition>/routes.cjs). Asked only for a request no CMP
 // fixture below answers, so Full and every CMP endpoint behave the same on any edition.
 const editionRoutes = editionModule("routes");
+// Paths an edition's shell reads on every page, beside /system/settings and the others, for the specs
+// that pin a page's exact reads.
+const EDITION_SHELL_READS = Object.freeze([...(editionRoutes?.shellReads ?? [])]);
 
 const BASE_URL = process.env.ORCASTRA_E2E_BASE_URL || "http://127.0.0.1:2025";
 const AUTH_SECRET =
@@ -651,6 +654,7 @@ const NO_ROLE_VERDICT = Object.freeze({ role: null, has_role: false, blocked_rea
 
 module.exports = {
   ACTOR_HEADER,
+  EDITION_SHELL_READS,
   NO_ROLE_VERDICT,
   BASE_URL,
   actorOf,
