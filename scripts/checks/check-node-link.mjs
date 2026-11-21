@@ -28,6 +28,7 @@ const ALLOWED_CLUSTERS_CALLERS = new Map([
     'app/inventory/warnings/components/warning-detail-dialog.tsx',
     'footer button of a Partner-gated dialog, a Button rather than a cell',
   ],
+  // An edition's callers go below this line and CMP's above it, so a port never mixes them.
   [
     'editions/mini/search/command-palette.tsx',
     'Mini command palette: its Clusters group renders for Partner and Admin only',

@@ -31,6 +31,7 @@ export const LINK_TARGETS = {
   storageVolumes: { path: "/inventory/storage-volumes", search: true, facets: ["node"] },
   isoImages: { path: "/inventory/iso-images", search: true, facets: ["node"] },
   networkDetail: { path: "/inventory/networks/[name]", search: false, facets: [], reserved: ["host", "project"] },
+  // Edition targets go below this line and CMP targets above it, so a port never mixes the two.
   // Mini edition: the Operators page (its table lives in editions/mini/operators).
   operators: { path: "/operators", search: true, facets: [] },
 } as const;
@@ -217,5 +218,6 @@ export const inventoryLinks = {
       reserved: { host, project: project && project !== "default" ? project : undefined },
     }),
 
+  // Edition builders go below this line and CMP builders above it (as in LINK_TARGETS).
   operators: (link: { q?: string | null }) => build("operators", { q: link.q }),
 } as const;

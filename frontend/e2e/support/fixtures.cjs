@@ -20,6 +20,11 @@ const {
   snapshotReadDescriptor,
   snapshotTarget,
 } = require("./snapshot-fixtures.cjs");
+const { editionModule } = require("./edition.cjs");
+
+// An edition's own endpoints (e2e/editions/<edition>/routes.cjs). Asked only for a request no CMP
+// fixture below answers, so Full and every CMP endpoint behave the same on any edition.
+const editionRoutes = editionModule("routes");
 
 const BASE_URL = process.env.ORCASTRA_E2E_BASE_URL || "http://127.0.0.1:2025";
 const AUTH_SECRET =
@@ -551,9 +556,14 @@ async function installApiFixtures(page, role, options = {}) {
           : instanceMetrics(call, state.instanceStatus);
       }
     } else {
-      state.unexpected.push(entry);
-      status = 599;
-      body = { detail: `Unexpected E2E endpoint: ${method} ${path}${url.search}` };
+      const answer = editionRoutes?.answer({ method, path, url, role, options, state });
+      if (answer === undefined) {
+        state.unexpected.push(entry);
+        status = 599;
+        body = { detail: `Unexpected E2E endpoint: ${method} ${path}${url.search}` };
+      } else {
+        ({ status = 200, headers = {}, body } = answer);
+      }
     }
 
     await route.fulfill({

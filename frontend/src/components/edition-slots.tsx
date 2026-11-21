@@ -19,7 +19,7 @@ export function EditionAccessGateExtras(): JSX.Element | null {
   return <MiniAccessGateExtras />;
 }
 
-// Pages an edition keeps open to a signed-in account the access gate stops: they render on their
+// Pages an edition keeps open to a signed-in account the access gate stops. They render on their
 // own, without the shell, whose reads the backend would refuse. Mini: an operator whose project
 // access ended can still see and renew the certificate it signs in with.
 export const EDITION_GATE_EXEMPT_PATHS: readonly string[] = ["/my-certificate"];
