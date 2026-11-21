@@ -1,5 +1,6 @@
 const { defineConfig, devices } = require("@playwright/test");
 const path = require("node:path");
+const { EDITION, editionModule } = require("./e2e/support/edition.cjs");
 
 const baseURL = process.env.ORCASTRA_E2E_BASE_URL || "http://127.0.0.1:2025";
 const parsedBaseURL = new URL(baseURL);
@@ -11,9 +12,13 @@ const artifactRoot = process.env.ORCASTRA_E2E_ARTIFACT_ROOT || "/tmp/orcastra-pl
 const outputDir = process.env.ORCASTRA_E2E_OUTPUT_DIR || path.join(artifactRoot, "test-results");
 const upstreamPort = Number(process.env.ORCASTRA_E2E_UPSTREAM_PORT || 47391);
 const reportDir = process.env.ORCASTRA_E2E_REPORT_DIR || path.join(artifactRoot, "playwright-report");
+const editionConfig = editionModule("config") ?? {};
+// Another edition's specs, in e2e/editions/<name>/, run only on that edition's build.
+const otherEditionSpecs = new RegExp(`[\\\\/]e2e[\\\\/]editions[\\\\/](?!${EDITION}[\\\\/])`);
 
 module.exports = defineConfig({
   testDir: "./e2e",
+  testIgnore: [otherEditionSpecs, ...(editionConfig.testIgnore ?? [])],
   outputDir,
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
@@ -92,6 +97,7 @@ module.exports = defineConfig({
       INTERNAL_BACKEND_URL: `http://127.0.0.1:${upstreamPort}`,
       NEXT_PUBLIC_API_URL: "",
       NEXT_TELEMETRY_DISABLED: "1",
+      ...(editionConfig.webServerEnv ?? {}),
     },
   },
 });

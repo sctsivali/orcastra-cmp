@@ -5,9 +5,9 @@
 # credentials. Checks that need a running deployment (make test-backend-docker, the credentialed
 # browser harness) are not part of CI.
 #
-# Runs on pushes to dev and main and on pull requests with one browser project, or by hand with
-# the full four-project matrix. `make ci-local` runs every job below locally from this same file
-# and is the gate before a direct push.
+# Runs on pushes to dev, main and orcastra-mini and on pull requests with one browser project, or
+# by hand with the full four-project matrix. `make ci-local` runs every job below locally from this
+# same file and is the gate before a direct push.
 #
 # Jobs name ubuntu-24.04 rather than ubuntu-latest: the pinned Playwright cannot install Chromium
 # on 26.04, so a moving label would break the browser job without any change in this repository.
@@ -16,7 +16,9 @@ name: CI
 
 on:
   push:
-    branches: [dev, main]
+    # orcastra-mini: the Mini edition's branch runs this same file; its browser job picks the
+    # edition's specs (frontend/e2e/support/edition.cjs).
+    branches: [dev, main, orcastra-mini]
   pull_request:
   workflow_dispatch:
     inputs:
