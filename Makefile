@@ -505,3 +505,7 @@ quick-rebuild: down build-nc up ## Quick rebuild without cache and restart
 # Optional local.mk for operator targets whose tooling lives outside this repository (releases,
 # Vault PKI and similar). A plain clone has only the targets that work from the repository.
 -include local.mk
+
+# An edition branch's own targets (Full has none). Kept in their own file so a port of CMP's
+# Makefile never meets them.
+-include edition.mk

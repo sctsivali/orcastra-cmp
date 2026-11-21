@@ -70,7 +70,7 @@ if (manifestStart === -1 || manifestEnd === -1) {
 }
 const manifest = registrySource.slice(manifestStart, manifestEnd);
 const ENTRY_RE =
-  /^\s*(\w+):\s*\{\s*path:\s*"(\/inventory\/[^"]+)",\s*search:\s*(true|false),\s*facets:\s*\[([^\]]*)\](?:,\s*reserved:\s*\[([^\]]*)\])?\s*\},?$/gm;
+  /^\s*(\w+):\s*\{\s*path:\s*"(\/[^"]+)",\s*search:\s*(true|false),\s*facets:\s*\[([^\]]*)\](?:,\s*reserved:\s*\[([^\]]*)\])?\s*\},?$/gm;
 const declared = (manifest.match(/path:/g) ?? []).length;
 const targets = [];
 for (const match of manifest.matchAll(ENTRY_RE)) {
@@ -103,6 +103,14 @@ function routeSources(routeDir) {
     }
   };
   take(routeDir);
+  // An edition's page is a thin route over its module: follow those imports one level.
+  for (const file of [...files]) {
+    for (const m of readFileSync(file, 'utf8').matchAll(/from\s+"@\/(editions\/[^"]+)"/g)) {
+      const base = join(src, m[1]);
+      const hit = ['.tsx', '.ts'].map((ext) => base + ext).find((f) => existsSync(f));
+      if (hit && !files.includes(hit)) files.push(hit);
+    }
+  }
   return files;
 }
 
